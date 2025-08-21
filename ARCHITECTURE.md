@@ -33,19 +33,20 @@ class Term(BaseModel):
 
 ### URLCache & PageFetcher
 **URLCache**: Low-level file-based caching system
-- Methods: `get_html()`, `set_html()`, `get_pdf()`, `set_pdf()`, `get_markdown()`, `set_markdown()`
+- Methods: `get_html()`, `set_html()`, `get_pdf()`, `set_pdf()`, `get_markdown()`, `set_markdown()`, `get_chunks()`, `set_chunks()`
 - Cache management: `has_url()`, `has_path()`, `clear_url()`, `list_cached_urls()`
 - Base36 hashed filenames for URL collision avoidance
-- Supports multiple content types per URL with separate file extensions
+- Supports multiple content types per URL with separate file extensions (`.html`, `.pdf`, `.md`, `.chunks`, `.doi`, `.redir`)
 - Automatic redirect handling with `.redir` sidecar files for final URL tracking
 
 **PageFetcher**: High-level async web content fetcher with intelligent caching
-- Single URL methods: `get_html()`, `get_pdf()`, `get_markdown()`, `get_raw()`
+- Single URL methods: `get_html()`, `get_pdf()`, `get_markdown()`, `get_chunks()`, `get_raw()`
 - Batch URL support: All methods accept `Union[str, List[str]]` for concurrent fetching
 - Automatic PDF vs HTML detection based on URL extension and headers
 - Rich progress displays with granular crawl4ai status updates
 - DOI extraction from HTML using XPath selectors (citation_doi, publication_doi)
 - Reference section removal from markdown content
+- **Text chunking**: Automatic chunking of markdown content using chonkie RecursiveChunker
 - Configurable concurrency limits and progress display options
 
 ### AI Agents
@@ -68,6 +69,7 @@ class Term(BaseModel):
 
 - **pydantic/pydantic-ai**: Data models and AI agents
 - **crawl4ai/httpx**: Web scraping and fetching  
+- **chonkie**: Text chunking with RecursiveChunker
 - **tomli**: TOML configuration parsing
 
 ## Usage Patterns
@@ -87,13 +89,17 @@ markdown = await fetcher.get_markdown("https://paper.url")  # Auto-cached
 html = await fetcher.get_html("https://example.com")
 pdf_content = await fetcher.get_pdf("https://paper.pdf")
 
+# Text chunking - returns simple list of strings
+chunks = await fetcher.get_chunks("https://paper.url")  # ["chunk1", "chunk2", ...]
+
 # Batch URL fetching with automatic concurrency
 urls = ["https://paper1.url", "https://paper2.url"] 
 markdowns = await fetcher.get_markdown(urls)  # Returns list of content
+all_chunks = await fetcher.get_chunks(urls)    # Returns list of lists [["chunk1", "chunk2"], ["chunk3"]]
 
 # Standalone batch functions with progress bars
 results = await fetch_urls_with_progress(urls, config, "markdown")
-results = await fetch_urls_concurrent_with_progress(urls, config, "html", max_concurrent=10)
+results = await fetch_urls_concurrent_with_progress(urls, config, "chunks", max_concurrent=10)
 ```
 
 **Term Processing**:
@@ -135,6 +141,8 @@ terms = create_gene_extraction_terms(result)
 
 **DOI Metadata Extraction**: Automatic DOI detection and caching from HTML meta tags for academic paper tracking
 
+**Automatic Text Chunking**: Built-in chunking capabilities using chonkie RecursiveChunker for preparing content for LLM processing
+
 **Factory Pattern for Agents**: Agent creation via factory functions rather than inheritance for flexible configuration
 
 **Pydantic Validation Boundaries**: Type safety and validation at all system boundaries (config, models, results)
@@ -151,7 +159,8 @@ terms = create_gene_extraction_terms(result)
 4. **Parsers**: Add new term formats in `term_parser.py`
 5. **Tools**: Configure external tools via TOML sections
 6. **Fetching Strategies**: Add new crawl4ai configurations or extraction strategies in PageFetcher
-7. **Progress Displays**: Customize Rich progress bars for different use cases
-8. **CLI Commands**: Extend the main() function or add new console script entry points
+7. **Chunking Strategies**: Customize chunking parameters or add new chunkers beyond RecursiveChunker
+8. **Progress Displays**: Customize Rich progress bars for different use cases
+9. **CLI Commands**: Extend the main() function or add new console script entry points
 
 The architecture prioritizes research iteration speed with expensive LLM operations through comprehensive caching, async concurrency, and configuration flexibility.

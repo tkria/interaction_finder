@@ -110,7 +110,7 @@ class TestBasicCaching:
         retrieved = await cache.get_markdown(url)
 
         assert retrieved == content
-        assert await cache.has_path(url, "md")
+        assert await cache.has_path(url, "markdown")
 
     @pytest.mark.asyncio
     async def test_store_and_retrieve_pdf(self, cache):
@@ -137,7 +137,7 @@ class TestBasicCaching:
         assert await cache.get_html(url) == html_content
         assert await cache.get_markdown(url) == markdown_content
         assert await cache.has_path(url, "html")
-        assert await cache.has_path(url, "md")
+        assert await cache.has_path(url, "markdown")
 
     @pytest.mark.asyncio
     async def test_content_not_found_raises_keyerror(self, cache):
@@ -152,7 +152,7 @@ class TestBasicCaching:
             await cache.get_pdf(url)
 
         assert not await cache.has_path(url, "html")
-        assert not await cache.has_path(url, "md")
+        assert not await cache.has_path(url, "markdown")
         assert not await cache.has_path(url, "pdf")
 
     @pytest.mark.asyncio
@@ -396,8 +396,8 @@ class TestCacheManagement:
         # Both should be cached
         assert await cache.has_path(url1, "html")
         assert await cache.has_path(url2, "html")
-        assert await cache.has_path(url1, "md")
-        assert await cache.has_path(url2, "md")
+        assert await cache.has_path(url1, "markdown")
+        assert await cache.has_path(url2, "markdown")
 
         # Clear one URL
         await cache.clear_url(url2)
@@ -461,7 +461,7 @@ class TestEdgeCases:
         assert await cache.get_html(url) == ""
         assert await cache.get_markdown(url) == ""
         assert await cache.has_path(url, "html")
-        assert await cache.has_path(url, "md")
+        assert await cache.has_path(url, "markdown")
 
     @pytest.mark.asyncio
     async def test_very_large_content(self, cache):
@@ -662,7 +662,7 @@ This should remain.
 
         # Create various cached files
         await cache.set_path(url, "html", "<html>test</html>")
-        await cache.set_path(url, "md", "# Test")
+        await cache.set_path(url, "markdown", "# Test")
         await cache.set_path(url, "doi", "10.1234/test")
 
         # Verify files exist
@@ -831,7 +831,7 @@ class TestIntegrationWithHTTPServer:
         assert isinstance(markdown_content, str)
 
         # Should be cached
-        assert await fetcher.cache.has_path(url, "md")
+        assert await fetcher.cache.has_path(url, "markdown")
 
 
 class TestMultipleURLFetching:

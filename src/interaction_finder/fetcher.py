@@ -14,9 +14,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 from pathlib import Path
-from typing import Optional, TYPE_CHECKING, Union, List
+from typing import Optional, TYPE_CHECKING, Union, List, Any
 import aiofiles
 import aiofiles.os
 from rich.console import Console
@@ -24,9 +23,372 @@ from rich.console import Console
 if TYPE_CHECKING:
     from .settings import IfetcherConfig
 
+import re
+
+# Content type configurations for serialization/deserialization
+CONTENT_TYPE_CONFIG = {
+    "html": {"extension": "html", "serialize": str, "deserialize": str},
+    "pdf": {"extension": "pdf", "serialize": str, "deserialize": str},
+    "markdown": {"extension": "md", "serialize": str, "deserialize": str},
+    "raw_markdown": {"extension": "raw.md", "serialize": str, "deserialize": str},
+    "chunks": {
+        "extension": "json",
+        "serialize": lambda x: json.dumps(x, indent=2, ensure_ascii=False),
+        "deserialize": lambda x: json.loads(x)
+    },
+    "doi": {"extension": "doi", "serialize": str, "deserialize": lambda x: x.strip()}
+}
+
+# Heading classification for academic content processing
+RELEVANT_HEADINGS = {
+    'abstract', 'summary', 'introduction', 'methods', 'methodology', 'results',
+    'discussion', 'conclusion', 'conclusions', 'background', 'objectives',
+    'findings', 'analysis', 'materials', 'procedure', 'approach',
+    'appendix', 'appendices', 'limitations', 'future work', 'implications',
+    'main text'
+}
+
+IRRELEVANT_HEADINGS = {
+    'references', 'keywords', 'bibliography', 'citations', 'authors', 'author',
+    'acknowledgements', 'acknowledgments', 'share', 'sharing',
+    'funding', 'conflicts', 'conflict of interest', 'competing interests',
+    'data availability', 'supplementary', 'supporting information',
+    'copyright', 'license', 'permissions', 'ethics', 'rights',
+    'affiliations', 'corresponding', 'cite this', 'reprints',
+    'related articles',
+}
+
+# Pattern lists for content classification
+IRRELEVANT_PATTERNS = [
+    r'.*login.*', r'.*sign\s*in.*', r'.*sign\s*up.*', r'.*register.*',
+    r'.*cookies?.*', r'.*privacy.*', r'.*terms.*', r'.*subscribe.*',
+    r'.*newsletter.*', r'.*follow.*', r'.*social.*', r'.*menu.*',
+    r'.*navigation.*', r'.*search.*', r'.*contact.*', r'.*about.*',
+    r'.*create.*account.*', r'.*free.*account.*', r'.*read.*content.*',
+    r'similar content.*', r'.*viewed by others', r'recommended.*',
+    r'supplementary\s+.*', r'supplemental\s+.*', r'.*metrics.*',
+    r'declaration\s+.*', r'.*availability.*', r'.*privacy.*'
+]
+
+PAYWALL_PATTERNS = [
+    r'.*login.*', r'.*sign\s*in.*', r'.*sign\s*up.*', r'.*register.*',
+    r'.*create.*account.*', r'.*free.*account.*', r'.*subscription.*',
+    r'.*paywall.*', r'.*access.*denied.*', r'.*premium.*content.*',
+    r'.*unlock.*content.*', r'.*full.*access.*'
+]
+
+# DOI extraction schema for XPath-based extraction from academic publishers
+DOI_EXTRACTION_SCHEMA = {
+    "name": "DOI extractor (XPath)",
+    "baseSelector": "/html",
+    "fields": [
+        {
+            "name": "doi_meta_cite",
+            "selector": "//meta[@name='citation_doi']",
+            "type": "attribute",
+            "attribute": "content"
+        },
+        {
+            "name": "doi_meta_pub",
+            "selector": "//meta[@name='publication_doi']",
+            "type": "attribute",
+            "attribute": "content"
+        },
+        {
+            "name": "doi_dc",
+            "selector": "//meta[translate(@name,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz')='dc.identifier' and contains(@content, 'doi.org/')]",
+            "type": "attribute",
+            "attribute": "content"
+        },
+        {
+            "name": "doi_dc_doi",
+            "selector": "//meta[translate(@name,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz')='dc.identifier.doi']",
+            "type": "attribute",
+            "attribute": "content"
+        },
+        {
+            "name": "doi_canonical",
+            "selector": "//link[@rel='canonical' and contains(@href, 'doi.org/')]",
+            "type": "attribute",
+            "attribute": "href"
+        }
+    ]
+}
+
+# =============================================================================
+# Content Processing Helper Functions
+# =============================================================================
+
+def refine_article_content(markdown: str) -> str:
+    """
+    Refine article content by removing irrelevant sections using intelligent heading analysis.
+
+    Identifies relevant academic sections (Abstract, Methods, Results, Discussion, Conclusion)
+    and irrelevant sections (References, Authors, Acknowledgements, navigation elements).
+    Removes irrelevant content before first relevant section and after last relevant section.
+
+    Args:
+        markdown: Raw markdown content from academic article webpage
+
+    Returns:
+        Cleaned markdown content with only relevant academic sections
+
+    Example:
+        >>> content = "# Title\\n## Abstract\\nContent...\\n## Authors\\nMore content..."
+        >>> refined = refine_article_content(content)
+        >>> # Returns: "# Title\\n## Abstract\\nContent..."
+    """
+
+    # Use module-level constants
+    relevant_headings = RELEVANT_HEADINGS
+    irrelevant_headings = IRRELEVANT_HEADINGS
+    irrelevant_patterns = IRRELEVANT_PATTERNS
+    paywall_patterns = PAYWALL_PATTERNS
+
+    # Find all headings with their positions and levels
+    heading_pattern = r'^(#{1,6})\s+(.+?)(?:\s*\{[^}]*\})?\s*$'
+    headings = []
+
+    for match in re.finditer(heading_pattern, markdown, re.MULTILINE):
+        level = len(match.group(1))  # Number of # characters
+        text = match.group(2).strip()
+        start_pos = match.start()
+        end_pos = match.end()
+
+        # Classify heading as relevant or irrelevant
+        text_lower = text.lower()
+
+        # Check for irrelevant patterns first (higher priority)
+        is_irrelevant = (
+            any(irrel in text_lower for irrel in irrelevant_headings) or
+            any(re.match(pattern, text_lower, re.IGNORECASE) for pattern in irrelevant_patterns)
+        )
+
+        # Check for paywall patterns
+        is_paywall = any(re.match(pattern, text_lower, re.IGNORECASE) for pattern in paywall_patterns)
+
+        # Only check for relevant patterns if not already marked as irrelevant
+        is_relevant = not is_irrelevant and any(rel in text_lower for rel in relevant_headings)
+
+        headings.append({
+            'text': text,
+            'level': level,
+            'start_pos': start_pos,
+            'end_pos': end_pos,
+            'is_relevant': is_relevant,
+            'is_irrelevant': is_irrelevant,
+            'is_paywall': is_paywall,
+            'full_match': match.group(0)
+        })
+
+    if not headings:
+        return markdown
+
+    # Find first and last relevant headings
+    relevant_headings_list = [h for h in headings if h['is_relevant']]
+    irrelevant_headings_list = [h for h in headings if h['is_irrelevant']]
+    paywall_headings_list = [h for h in headings if h['is_paywall']]
+
+    # Build list of sections to remove
+    sections_to_remove = []
+
+    if not relevant_headings_list:
+        # No relevant headings found - check if this is paywall content
+        if paywall_headings_list:
+            # Paywall content detected with no scientific content - remove everything
+            return ""
+        else:
+            # No relevant headings found - be more aggressive with irrelevant section removal
+            for heading in irrelevant_headings_list:
+                # Find end of this irrelevant section (next heading of same/higher level or end of doc)
+                section_end = len(markdown)
+                for next_heading in headings:
+                    if (next_heading['start_pos'] > heading['start_pos'] and
+                        next_heading['level'] <= heading['level']):
+                        section_end = next_heading['start_pos']
+                        break
+                sections_to_remove.append((heading['start_pos'], section_end))
+    else:
+        first_relevant = relevant_headings_list[0]
+        last_relevant = relevant_headings_list[-1]
+
+        # Look for Abstract, Summary, or Introduction section first
+        abstract_heading = None
+        for heading in relevant_headings_list:
+            text_lower = heading['text'].lower()
+            if ('abstract' in text_lower) or ('summary' in text_lower) or ('introduction' in text_lower):
+                abstract_heading = heading
+                break
+
+        # If Abstract exists, try to preserve title before it
+        title_to_preserve = None
+        if abstract_heading is not None:
+            # Look for a larger heading immediately before Abstract
+            for heading in reversed(headings):  # Start from closest to Abstract
+                if (heading['start_pos'] < abstract_heading['start_pos'] and
+                    heading['level'] < abstract_heading['level']):  # Any heading larger than Abstract
+                    # Check if there are any RELEVANT headings between this title and the Abstract
+                    # Ignore irrelevant headings like "Permissions", "Copyright", etc.
+                    has_headings_between = False
+                    for between_heading in headings:
+                        if (heading['end_pos'] < between_heading['start_pos'] < abstract_heading['start_pos']):
+                            # Only consider this heading as blocking if it's not clearly irrelevant
+                            # and is of equal or higher importance than the Abstract (level <= Abstract level)
+                            between_text_lower = between_heading['text'].lower()
+                            is_between_irrelevant = (
+                                any(irrel in between_text_lower for irrel in irrelevant_headings) or
+                                any(re.match(pattern, between_text_lower, re.IGNORECASE) for pattern in irrelevant_patterns) or
+                                between_heading.get('is_paywall', False)
+                            )
+                            is_blocking_level = between_heading['level'] <= abstract_heading['level']
+                            if not is_between_irrelevant and is_blocking_level:
+                                has_headings_between = True
+                                break
+
+                    if not has_headings_between:
+                        # Found title with no headings in between - preserve it
+                        title_to_preserve = heading
+                        break
+
+            # Apply title preservation logic for Abstract papers
+            if title_to_preserve is not None:
+                # Remove content before title
+                sections_to_remove.append((0, title_to_preserve['start_pos']))
+                # Remove content between title and Abstract, but preserve the newline after title
+                title_line_end = title_to_preserve['end_pos']
+                while title_line_end < len(markdown) and markdown[title_line_end] != '\n':
+                    title_line_end += 1
+                if title_line_end < len(markdown):
+                    title_line_end += 1  # Include the newline
+                sections_to_remove.append((title_line_end, abstract_heading['start_pos']))
+            else:
+                # No title found, remove everything before Abstract
+                sections_to_remove.append((0, abstract_heading['start_pos']))
+
+        else:
+            # No Abstract/Summary/Introduction section - start at the first
+            # non-irrelevant, non-paywall heading regardless of level.
+            first_academic_heading = None
+            for heading in headings:
+                if (not heading['is_irrelevant'] and not heading['is_paywall']):
+                    first_academic_heading = heading
+                    break
+
+            if first_academic_heading is not None:
+                sections_to_remove.append((0, first_academic_heading['start_pos']))
+            else:
+                # Fallback: remove before first relevant heading if no academic heading found
+                sections_to_remove.append((0, first_relevant['start_pos']))
+
+        # Remove irrelevant sections after last relevant heading
+        for heading in headings:
+            if heading['start_pos'] <= last_relevant['start_pos']:
+                continue
+            if heading['is_irrelevant']:
+                # Remove from this heading to end of document
+                sections_to_remove.append((heading['start_pos'], len(markdown)))
+                break  # Once we find the first irrelevant heading after last relevant, remove everything
+
+    # Apply removals in reverse order to maintain position accuracy
+    sections_to_remove.sort(key=lambda x: x[0], reverse=True)
+    result = markdown
+
+    for start_pos, end_pos in sections_to_remove:
+        result = result[:start_pos] + result[end_pos:]
+
+    # Safety check: only apply when we don't have clear academic structure
+    # For content with clear relevant sections and many irrelevant sections, aggressive removal is desired
+    has_clear_academic_structure = (
+        len(relevant_headings_list) > 0 and
+        len(irrelevant_headings_list) > 5 and
+        any((('abstract' in h['text'].lower()) or ('summary' in h['text'].lower()) or ('introduction' in h['text'].lower())) for h in relevant_headings_list)
+    )
+
+    # Alternative academic structure: papers without Abstract but with standard sections
+    has_alternative_academic_structure = (
+        len(relevant_headings_list) >= 3 and  # At least 3 relevant sections
+        len(irrelevant_headings_list) > 5 and  # Many irrelevant sections to remove
+        any(section in h['text'].lower() for h in relevant_headings_list
+            for section in ['methods', 'results', 'discussion', 'conclusion'])
+    )
+
+    # Skip safety check for clear academic content (e.g., abstract pages with lots of website chrome)
+    if not has_clear_academic_structure and not has_alternative_academic_structure:
+        reduction_ratio = len(result.strip()) / len(markdown.strip()) if len(markdown.strip()) > 0 else 1
+        if markdown.strip() and result.strip() and reduction_ratio < 0.3:
+            return markdown.strip()
+
+    return result.strip()
+
+def extract_headings(markdown: str) -> List[dict]:
+    """
+    Extract all headings from markdown content with metadata.
+
+    Args:
+        markdown: Markdown content to analyze
+
+    Returns:
+        List of heading dictionaries with text, level, and position information
+    """
+    heading_pattern = r'^(#{1,6})\s+(.+?)(?:\s*\{[^}]*\})?\s*$'
+    headings = []
+
+    for match in re.finditer(heading_pattern, markdown, re.MULTILINE):
+        level = len(match.group(1))
+        text = match.group(2).strip()
+        start_pos = match.start()
+        end_pos = match.end()
+
+        headings.append({
+            'text': text,
+            'level': level,
+            'start_pos': start_pos,
+            'end_pos': end_pos,
+            'full_match': match.group(0)
+        })
+
+    return headings
+
+def classify_heading_relevance(heading_text: str) -> dict:
+    """
+    Classify a heading as relevant, irrelevant, or paywall content.
+
+    Args:
+        heading_text: The text content of the heading
+
+    Returns:
+        Dictionary with 'is_relevant', 'is_irrelevant', 'is_paywall' boolean flags
+    """
+    # Use module-level constants
+    relevant_headings = RELEVANT_HEADINGS
+    irrelevant_headings = IRRELEVANT_HEADINGS
+    irrelevant_patterns = IRRELEVANT_PATTERNS
+    paywall_patterns = PAYWALL_PATTERNS
+
+    text_lower = heading_text.lower()
+
+    is_irrelevant = (
+        any(irrel in text_lower for irrel in irrelevant_headings) or
+        any(re.match(pattern, text_lower, re.IGNORECASE) for pattern in irrelevant_patterns)
+    )
+
+    is_paywall = any(re.match(pattern, text_lower, re.IGNORECASE) for pattern in paywall_patterns)
+    is_relevant = not is_irrelevant and any(rel in text_lower for rel in relevant_headings)
+
+    return {
+        'is_relevant': is_relevant,
+        'is_irrelevant': is_irrelevant,
+        'is_paywall': is_paywall
+    }
+
+# =============================================================================
+# Lazy Import Cache Variables
+# =============================================================================
+
 _crawl4ai_html_imports = None
 _crawl4ai_pdf_imports = None
 _quiet_logger = None
+_chunker = None
 
 def _get_crawl4ai_imports():
     """Lazy import crawl4ai modules with simple caching."""
@@ -97,6 +459,20 @@ def _get_granular_logger(status_display=None):
 
     return GranularLogger(status_display)
 
+def _get_chunker():
+    """Lazy import and initialize chonkie chunker with simple caching."""
+    global _chunker
+    if _chunker is None:
+        from chonkie import SDPMChunker
+        _chunker = SDPMChunker(
+            embedding_model="minishlab/potion-base-8M", # Default model
+            threshold=0.5,                              # Similarity threshold (0-1)
+            chunk_size=4096,                            # Maximum tokens per chunk
+            min_sentences=2,                            # Initial sentences per chunk
+            skip_window=1                               # Number of chunks to skip when looking for similarities
+        )
+    return _chunker
+
 def _get_quiet_logger():
     """Get a silent logger for crawl4ai when no status updates are needed."""
     global _quiet_logger
@@ -142,11 +518,23 @@ class DummyStatus:
         pass
 def url_to_hash(url: str) -> str:
     """Convert URL to a filesystem-safe hash (backward compatibility)."""
-    return hashlib.sha256(url.encode('utf-8')).hexdigest()[:16]
+    normalized_url = normalize_url(url)
+    return hashlib.sha256(normalized_url.encode('utf-8')).hexdigest()[:16]
+
+def normalize_url(url: str) -> str:
+    """Normalize URL by removing fragment and other client-side only components."""
+    from urllib.parse import urlparse, urlunparse
+    parsed = urlparse(url)
+    # Remove fragment (everything after #) as it's client-side only
+    return urlunparse(parsed._replace(fragment=''))
 
 def url_to_hash_base36(url: str) -> str:
     """Convert URL to a base36 hash for compact representation."""
-    hash_int = hash(url) & ((1 << 63) - 1)  # Make positive
+    normalized_url = normalize_url(url)
+    # Use deterministic SHA256 hash instead of Python's non-deterministic hash()
+    hash_bytes = hashlib.sha256(normalized_url.encode('utf-8')).digest()
+    hash_int = int.from_bytes(hash_bytes[:8], byteorder='big')  # Use first 8 bytes
+
     # Manual base36 conversion
     if hash_int == 0:
         return "0"
@@ -168,6 +556,7 @@ class URLCache:
 
     async def _get_paths(self, url: str, *extensions: str) -> tuple[Path, ...]:
         """Get file paths for specific extensions with collision resolution."""
+        normalized_url = normalize_url(url)
         base_hash = url_to_hash_base36(url)
         probe = 0
 
@@ -187,7 +576,7 @@ class URLCache:
             try:
                 async with aiofiles.open(url_path, 'r', encoding='utf-8') as f:
                     stored_url = (await f.read()).strip()
-                if stored_url == url:
+                if stored_url == normalized_url:
                     # Found existing entry for this URL
                     return tuple(self.base_path / f"{hash_str}.{ext}" for ext in extensions)
             except (OSError, UnicodeDecodeError):
@@ -200,13 +589,14 @@ class URLCache:
 
     async def _store_url_mapping(self, url: str, final_url: Optional[str] = None) -> None:
         """Store the URL mapping and redirect info in sidecar files with atomic operations."""
+        normalized_url = normalize_url(url)
         url_path, redir_path = await self._get_paths(url, "url", "redir")
 
         # Atomic file creation: write to temp file then rename
         temp_url_path = url_path.with_suffix('.url.tmp')
         try:
             async with aiofiles.open(temp_url_path, 'w', encoding='utf-8') as f:
-                await f.write(url)
+                await f.write(normalized_url)
             # Atomic rename - prevents race conditions
             await aiofiles.os.rename(temp_url_path, url_path)
         except Exception:
@@ -216,11 +606,11 @@ class URLCache:
             raise
 
         # Store redirect mapping if final URL differs from original
-        if final_url and final_url != url:
+        if final_url and normalize_url(final_url) != normalized_url:
             temp_redir_path = redir_path.with_suffix('.redir.tmp')
             try:
                 async with aiofiles.open(temp_redir_path, 'w', encoding='utf-8') as f:
-                    await f.write(final_url)
+                    await f.write(normalize_url(final_url))
                 await aiofiles.os.rename(temp_redir_path, redir_path)
             except Exception:
                 if temp_redir_path.exists():
@@ -232,33 +622,46 @@ class URLCache:
 
     async def _verify_url_mapping(self, url: str) -> bool:
         """Verify the URL mapping matches what's stored."""
+        normalized_url = normalize_url(url)
         url_path, = await self._get_paths(url, "url")
         if url_path.exists():
             try:
                 async with aiofiles.open(url_path, 'r', encoding='utf-8') as f:
                     stored_url = (await f.read()).strip()
-                return stored_url == url
+                return stored_url == normalized_url
             except (OSError, UnicodeDecodeError):
                 return False
         return False
 
-    async def has_path(self, url: str, extension: str) -> bool:
-        """Check if content with given extension is cached for URL (including redirected URLs)."""
+    async def has_path(self, url: str, content_type: str) -> bool:
+        """Check if content with given content type is cached for URL (including redirected URLs)."""
+        if content_type not in CONTENT_TYPE_CONFIG:
+            available = ", ".join(CONTENT_TYPE_CONFIG.keys())
+            raise ValueError(f"Unknown content type '{content_type}'. Available: {available}")
+
+        extension = CONTENT_TYPE_CONFIG[content_type]["extension"]
         content_path, redir_path = await self._get_paths(url, extension, "redir")
         if content_path.exists():
-            return True
+            if await self._verify_url_mapping(url):
+                return True
         # Check if this URL redirected to another URL that has content
         if redir_path.exists():
             try:
-                final_url = redir_path.read_text(encoding='utf-8').strip()
-                final_content_path, = self._get_paths(final_url, extension)
+                async with aiofiles.open(redir_path, 'r', encoding='utf-8') as f:
+                    final_url = (await f.read()).strip()
+                final_content_path, = await self._get_paths(final_url, extension)
                 return final_content_path.exists()
             except (OSError, UnicodeDecodeError):
                 pass
         return False
 
-    async def get_path(self, url: str, extension: str) -> str:
-        """Get cached content for URL with given extension (following redirects if needed)."""
+    async def get_path(self, url: str, content_type: str) -> str:
+        """Get cached content for URL with given content type (following redirects if needed)."""
+        if content_type not in CONTENT_TYPE_CONFIG:
+            available = ", ".join(CONTENT_TYPE_CONFIG.keys())
+            raise ValueError(f"Unknown content type '{content_type}'. Available: {available}")
+
+        extension = CONTENT_TYPE_CONFIG[content_type]["extension"]
         content_path, redir_path = await self._get_paths(url, extension, "redir")
 
         # Check if content exists
@@ -281,9 +684,16 @@ class URLCache:
 
         raise KeyError(f"Content with extension '{extension}' not cached for URL: {url}")
 
-    async def set_path(self, url: str, extension: str, content: str, final_url: Optional[str] = None) -> None:
-        """Store content for URL and extension with atomic operations."""
-        path, = await self._get_paths(url, extension)
+    async def set_path(self, url: str, content_type: str, content: str, final_url: Optional[str] = None) -> None:
+        """Store content for URL and content type with atomic operations."""
+        if content_type not in CONTENT_TYPE_CONFIG:
+            available = ", ".join(CONTENT_TYPE_CONFIG.keys())
+            raise ValueError(f"Unknown content type '{content_type}'. Available: {available}")
+
+        extension = CONTENT_TYPE_CONFIG[content_type]["extension"]
+        # If there's a redirect, store content at the final URL location
+        storage_url = final_url if final_url else url
+        path, = await self._get_paths(storage_url, extension)
 
         # Atomic content write
         temp_path = path.with_suffix(f'.{extension}.tmp')
@@ -296,50 +706,47 @@ class URLCache:
                 temp_path.unlink()
             raise
 
+        # Store URL mapping for both original and final URLs
         await self._store_url_mapping(url, final_url)
+        if final_url and final_url != url:
+            # Also store mapping for final URL to itself (for direct access)
+            await self._store_url_mapping(final_url, None)
 
-    async def get_html(self, url: str) -> str:
-        """Get cached HTML content for URL (following redirects if needed)."""
-        return await self.get_path(url, "html")
+    async def get_content(self, url: str, content_type: str):
+        """Get cached content for URL with given type (following redirects if needed)."""
+        if content_type not in CONTENT_TYPE_CONFIG:
+            available = ", ".join(CONTENT_TYPE_CONFIG.keys())
+            raise ValueError(f"Unknown content type '{content_type}'. Available: {available}")
 
-    async def set_html(self, url: str, content: str, final_url: Optional[str] = None) -> None:
-        """Store HTML content for URL."""
-        await self.set_path(url, "html", content, final_url)
+        if content_type == "doi":
+            try:
+                raw_content = await self.get_path(url, content_type)
+                return CONTENT_TYPE_CONFIG[content_type]["deserialize"](raw_content)
+            except KeyError:
+                return None
+        else:
+            raw_content = await self.get_path(url, content_type)
+            return CONTENT_TYPE_CONFIG[content_type]["deserialize"](raw_content)
 
-    async def get_pdf(self, url: str) -> str:
-        """Get cached PDF content for URL (following redirects if needed)."""
-        return await self.get_path(url, "pdf")
+    async def set_content(self, url: str, content_type: str, content, final_url: Optional[str] = None) -> None:
+        """Store content for URL with given type."""
+        if content_type not in CONTENT_TYPE_CONFIG:
+            available = ", ".join(CONTENT_TYPE_CONFIG.keys())
+            raise ValueError(f"Unknown content type '{content_type}'. Available: {available}")
 
-    async def set_pdf(self, url: str, content: str, final_url: Optional[str] = None) -> None:
-        """Store PDF content for URL."""
-        await self.set_path(url, "pdf", content, final_url)
+        serialized_content = CONTENT_TYPE_CONFIG[content_type]["serialize"](content)
+        await self.set_path(url, content_type, serialized_content, final_url)
 
-    async def get_markdown(self, url: str) -> str:
-        """Get cached Markdown content for URL (following redirects if needed)."""
-        return await self.get_path(url, "md")
-
-    async def set_markdown(self, url: str, content: str, final_url: Optional[str] = None) -> None:
-        """Store Markdown content for URL."""
-        await self.set_path(url, "md", content, final_url)
-
-    async def get_doi(self, url: str) -> Optional[str]:
-        """Get cached DOI for URL (following redirects if needed)."""
-        try:
-            content = await self.get_path(url, "doi")
-            return content.strip()
-        except KeyError:
-            return None
-
-    async def set_doi(self, url: str, doi: str, final_url: Optional[str] = None) -> None:
-        """Store DOI for URL."""
-        await self.set_path(url, "doi", doi, final_url)
+    def _get_extension(self, content_type: str) -> str:
+        """Get file extension for a content type."""
+        return CONTENT_TYPE_CONFIG[content_type]["extension"]
 
     async def has_url(self, url: str) -> bool:
         """Check if URL is cached in any format."""
-        return (await self.has_path(url, "html") or
-                await self.has_path(url, "pdf") or
-                await self.has_path(url, "md") or
-                await self.has_path(url, "doi"))
+        for content_type in CONTENT_TYPE_CONFIG.keys():
+            if await self.has_path(url, content_type):
+                return True
+        return False
 
     async def get_source_type(self, url: str) -> Optional[str]:
         """Get the source content type for a URL ('html' or 'pdf')."""
@@ -352,14 +759,16 @@ class URLCache:
     async def get_source_content(self, url: str) -> Optional[str]:
         """Get the raw source content (HTML or PDF) for a URL."""
         if await self.has_path(url, "html"):
-            return await self.get_html(url)
+            return await self.get_content(url, "html")
         elif await self.has_path(url, "pdf"):
-            return await self.get_pdf(url)
+            return await self.get_content(url, "pdf")
         return None
 
     async def clear_url(self, url: str) -> None:
         """Remove all cached content for a URL."""
-        paths = await self._get_paths(url, "html", "pdf", "md", "url", "doi", "redir")
+        extensions = [config["extension"] for config in CONTENT_TYPE_CONFIG.values()]
+        extensions.extend(["url", "redir"])  # Add metadata file extensions
+        paths = await self._get_paths(url, *extensions)
         for path in paths:
             if path.exists():
                 path.unlink()
@@ -431,47 +840,13 @@ class PageFetcher:
         AsyncWebCrawler, CrawlerRunConfig, JsonXPathExtractionStrategy, _ = _get_crawl4ai_imports()
         domain = url.split('//')[1].split('/')[0] if '//' in url else url
 
-        doi_schema = {
-            "name": "DOI extractor (XPath)",
-            "baseSelector": "/html",
-            "fields": [
-                {
-                    "name": "doi_meta_cite",
-                    "selector": "//meta[@name='citation_doi']",
-                    "type": "attribute",
-                    "attribute": "content"
-                },
-                {
-                    "name": "doi_meta_pub",
-                    "selector": "//meta[@name='publication_doi']",
-                    "type": "attribute",
-                    "attribute": "content"
-                },
-                {
-                    "name": "doi_dc",
-                    "selector": "//meta[translate(@name,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz')='dc.identifier' and contains(@content, 'doi.org/')]",
-                    "type": "attribute",
-                    "attribute": "content"
-                },
-                {
-                    "name": "doi_dc_doi",
-                    "selector": "//meta[translate(@name,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz')='dc.identifier.doi']",
-                    "type": "attribute",
-                    "attribute": "content"
-                },
-                {
-                    "name": "doi_canonical",
-                    "selector": "//link[@rel='canonical' and contains(@href, 'doi.org/')]",
-                    "type": "attribute",
-                    "attribute": "href"
-                }
-            ]
-        }
-
         # Create crawler configuration with DOI extraction and proper timeouts
         cfg = CrawlerRunConfig(
-            extraction_strategy=JsonXPathExtractionStrategy(doi_schema, verbose=False),
+            extraction_strategy=JsonXPathExtractionStrategy(DOI_EXTRACTION_SCHEMA, verbose=False),
             page_timeout=self.config.tools.crawl4ai.timeout * 1000,
+            word_count_threshold = 10,
+            excluded_tags = ["nav", "footer", "aside", "form", "dialog"],
+            excluded_selector = "[role=dialog]",
             verbose=False
         )
 
@@ -493,11 +868,13 @@ class PageFetcher:
 
         final_url = self._extract_final_url(result, url)
         raw_content = result.html or ''
-        markdown_content = self._extract_and_clean_markdown(result)
+        raw_markdown_content = result.markdown.raw_markdown
+        markdown_content = self._refine_article_content(raw_markdown_content)
         doi = self._extract_doi(result)
 
         return {
             'raw_content': raw_content,
+            'raw_markdown_content': raw_markdown_content,
             'markdown_content': markdown_content,
             'final_url': final_url,
             'doi': doi
@@ -543,11 +920,13 @@ class PageFetcher:
                         raise RuntimeError(f"{result.status_code} error fetching PDF {url}: {result.error_message}")
 
         final_url = result.url
-        markdown_content = self._extract_and_clean_markdown(result)
-        raw_content = markdown_content
+        raw_markdown_content = result.markdown.raw_content
+        markdown_content = self._refine_article_content(raw_markdown_content)
+        raw_content = result.pdf or ''
 
         return {
             'raw_content': raw_content,
+            'raw_markdown_content': raw_markdown_content,
             'markdown_content': markdown_content,
             'content_type': 'application/pdf',
             'final_url': final_url,
@@ -568,17 +947,6 @@ class PageFetcher:
             final_url = result.url
 
         return final_url
-
-    def _extract_and_clean_markdown(self, result) -> str:
-        """Extract markdown content from crawl result and clean it."""
-        markdown_content = ''
-        if hasattr(result, 'markdown') and result.markdown:
-            if hasattr(result.markdown, 'raw_markdown'):
-                markdown_content = result.markdown.raw_markdown or ''
-            else:
-                markdown_content = str(result.markdown)
-
-        return self._remove_references_section(markdown_content)
 
     def _extract_doi(self, result) -> str:
         """Extract DOI from crawl4ai extracted content."""
@@ -604,25 +972,36 @@ class PageFetcher:
             pass
         return doi
 
-    def _remove_references_section(self, markdown: str) -> str:
+    def _refine_article_content(self, markdown: str) -> str:
         """
-        Remove 'References' sections from markdown content.
+        Refine article content by removing irrelevant sections using intelligent heading analysis.
 
-        Identifies any heading containing 'References' and removes all content
-        from that heading up to the next heading or end of document.
+        Delegates to the global refine_article_content function.
         """
-        pattern = r'(^|\n)(#{1,6}\s+references.*?)(\n#{1,6}\s+|\Z)'
-
-        def remove_section(match):
-            start, heading, end = match.groups()
-            return start + end if end.startswith('\n') else start
-
-        return re.sub(pattern, remove_section, markdown, flags=re.MULTILINE | re.DOTALL | re.IGNORECASE)
+        return refine_article_content(markdown)
 
     def _is_pdf_url(self, url: str) -> bool:
         """Check if URL points to a PDF file based on extension."""
         from urllib.parse import urlparse
         return urlparse(url).path.lower().endswith('.pdf')
+
+    def _create_chunks(self, markdown_content: str) -> List[str]:
+        """
+        Chunk markdown content and return as list of strings.
+
+        Args:
+            markdown_content: The markdown content to chunk
+
+        Returns:
+            List of chunk strings
+        """
+        chunker = _get_chunker()
+
+        # Chunk the content
+        chunks = chunker(markdown_content)
+
+        # Return just the text content of each chunk
+        return [chunk.text for chunk in chunks]
 
     async def _fetch_and_cache(self, url: str, progress=True, progress_info=None) -> dict[str, str]:
         """
@@ -669,14 +1048,18 @@ class PageFetcher:
 
         with self.status_display.create_status(f"[yellow]Caching content[/yellow]", progress_info):
             if is_pdf:
-                await self.cache.set_path(url, "pdf", content_info['raw_content'], final_url)
+                await self.cache.set_content(url, "pdf", content_info['raw_content'], final_url)
             else:
-                await self.cache.set_path(url, "html", content_info['raw_content'], final_url)
+                await self.cache.set_content(url, "html", content_info['raw_content'], final_url)
 
-            await self.cache.set_path(url, "md", content_info['markdown_content'], final_url)
+            await self.cache.set_content(url, "markdown", content_info['markdown_content'], final_url)
+
+            # Store raw markdown if available (for both HTML and PDF sources)
+            if content_info.get('raw_markdown_content'):
+                await self.cache.set_content(url, "raw_markdown", content_info['raw_markdown_content'], final_url)
 
             if content_info.get('doi'):
-                await self.cache.set_path(url, "doi", content_info['doi'], final_url)
+                await self.cache.set_content(url, "doi", content_info['doi'], final_url)
 
         return content_info
 
@@ -694,20 +1077,18 @@ class PageFetcher:
         if isinstance(url, str):
             if not await self.cache.has_path(url, "html"):
                 await self._fetch_and_cache(url, progress=progress)
-            return await self.cache.get_path(url, "html")
+            return await self.cache.get_content(url, "html")
 
         elif isinstance(url, list):
             if len(url) == 0:
                 return []
 
-            if progress is True:
-                results = await self._fetch_multiple_concurrent(url, "html", show_progress=True)
-            elif progress is False:
-                results = await self._fetch_multiple_concurrent(url, "html", show_progress=False)
-            else:
-                return await self._fetch_multiple_with_custom_progress(url, "html", progress)
+            results = await self._fetch_multiple(url, "html", progress=progress)
+            if isinstance(progress, tuple):
+                # Custom progress returns content directly
+                return results
 
-            return [result["content"] for result in results if result["status"] == "success"]
+            return self._process_multiple_results(results, progress)
 
         else:
             raise TypeError(f"url must be str or list[str], got {type(url)}")
@@ -726,20 +1107,18 @@ class PageFetcher:
         if isinstance(url, str):
             if not await self.cache.has_path(url, "pdf"):
                 await self._fetch_and_cache(url, progress=progress)
-            return await self.cache.get_path(url, "pdf")
+            return await self.cache.get_content(url, "pdf")
 
         elif isinstance(url, list):
             if len(url) == 0:
                 return []
 
-            if progress is True:
-                results = await self._fetch_multiple_concurrent(url, "pdf", show_progress=True)
-            elif progress is False:
-                results = await self._fetch_multiple_concurrent(url, "pdf", show_progress=False)
-            else:
-                return await self._fetch_multiple_with_custom_progress(url, "pdf", progress)
+            results = await self._fetch_multiple(url, "pdf", progress=progress)
+            if isinstance(progress, tuple):
+                # Custom progress returns content directly
+                return results
 
-            return [result["content"] for result in results if result["status"] == "success"]
+            return self._process_multiple_results(results, progress)
 
         else:
             raise TypeError(f"url must be str or list[str], got {type(url)}")
@@ -757,24 +1136,86 @@ class PageFetcher:
             Single content string for single URL, list of content strings for multiple URLs
         """
         if isinstance(url, str):
-            if await self.cache.has_path(url, "md"):
-                return await self.cache.get_path(url, "md")
+            if await self.cache.has_path(url, "markdown"):
+                return await self.cache.get_path(url, "markdown")
 
-            await self._fetch_and_cache(url, progress=progress)
-            return await self.cache.get_path(url, "md")
+            # Check if HTML already exists - if so, convert it instead of re-fetching
+            if await self.cache.has_path(url, "html"):
+                html_content = await self.cache.get_content(url, "html")
+
+                # Create a temporary file with the HTML content
+                import tempfile
+                import os
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.html', delete=False, encoding='utf-8') as temp_file:
+                    temp_file.write(html_content)
+                    temp_file_path = temp_file.name
+
+                try:
+                    # Convert the file:// URL to markdown using existing infrastructure
+                    file_url = f"file://{temp_file_path}"
+                    content_info = await self._fetch_html_url(file_url, progress_info=progress if isinstance(progress, tuple) else None)
+
+                    # Get redirect info if this URL was originally redirected
+                    final_url = await self.cache.get_redirect_info(url)
+
+                    # Store the markdown
+                    await self.cache.set_path(url, "markdown", content_info['markdown_content'], final_url)
+
+                    # Also store the raw (pre-processed) markdown sidecar if available
+                    if content_info.get('raw_markdown_content'):
+                        await self.cache.set_content(url, "raw_markdown", content_info['raw_markdown_content'], final_url)
+
+                    return content_info['markdown_content']
+                finally:
+                    # Clean up temporary file
+                    try:
+                        os.unlink(temp_file_path)
+                    except:
+                        pass
+            else:
+                # No HTML cached, fetch from scratch
+                await self._fetch_and_cache(url, progress=progress)
+                return await self.cache.get_path(url, "markdown")
 
         elif isinstance(url, list):
             if len(url) == 0:
                 return []
 
-            if progress is True:
-                results = await self._fetch_multiple_concurrent(url, "markdown", show_progress=True)
-            elif progress is False:
-                results = await self._fetch_multiple_concurrent(url, "markdown", show_progress=False)
-            else:
-                return await self._fetch_multiple_with_custom_progress(url, "markdown", progress)
+            # Check which URLs need fetching vs are already cached
+            urls_to_fetch = []
+            results = {}
 
-            return [result["content"] for result in results if result["status"] == "success"]
+            for u in url:
+                if await self.cache.has_path(u, "markdown"):
+                    # Already cached, get from cache
+                    try:
+                        results[u] = await self.cache.get_path(u, "markdown")
+                    except KeyError:
+                        urls_to_fetch.append(u)
+                else:
+                    urls_to_fetch.append(u)
+
+            # Fetch any URLs that aren't cached
+            if urls_to_fetch:
+                fetch_results = await self._fetch_multiple(urls_to_fetch, "markdown", progress=progress)
+
+                # Handle different return formats
+                if isinstance(progress, tuple):
+                    # Custom progress returns content directly
+                    for i, u in enumerate(urls_to_fetch):
+                        if i < len(fetch_results):
+                            results[u] = fetch_results[i]
+                else:
+                    # Default/silent progress returns result dictionaries
+                    for i, u in enumerate(urls_to_fetch):
+                        if i < len(fetch_results) and not isinstance(fetch_results[i], Exception):
+                            if isinstance(fetch_results[i], dict) and "content" in fetch_results[i]:
+                                results[u] = fetch_results[i]["content"]
+                            else:
+                                results[u] = fetch_results[i]
+
+            # Return results in original order
+            return [results[u] for u in url if u in results]
 
         else:
             raise TypeError(f"url must be str or list[str], got {type(url)}")
@@ -790,6 +1231,44 @@ class PageFetcher:
         content_info = await self._fetch_and_cache(url)
         return content_info['raw_content']
 
+    def _process_multiple_results(self, results: List, progress) -> List:
+        """
+        Process mixed results from _fetch_multiple, filtering out Exception objects.
+
+        Args:
+            results: List containing mix of Exception objects and success data
+            progress: Progress mode (tuple means custom progress with direct content)
+
+        Returns:
+            List of successful content only
+        """
+        if isinstance(progress, tuple):
+            # Custom progress returns content directly, just filter exceptions
+            return [result for result in results if not isinstance(result, Exception)]
+
+        # Default/silent progress returns dicts or exceptions
+        successful_content = []
+        for result in results:
+            if not isinstance(result, Exception):
+                if isinstance(result, dict) and "content" in result:
+                    successful_content.append(result["content"])
+                else:
+                    # Handle other success formats
+                    successful_content.append(result)
+        return successful_content
+
+
+
+    async def get_raw_markdown(self, url: str) -> str:
+        """Get raw (pre-cleaned) markdown content for URL, fetching if necessary."""
+        # Check cache first
+        if await self.cache.has_path(url, "raw_markdown"):
+            return await self.cache.get_path(url, "raw_markdown")
+
+        # Not cached, fetch it
+        content_info = await self._fetch_and_cache(url)
+        return content_info.get('raw_markdown_content', '')
+
     async def is_cached(self, url: str) -> bool:
         """Check if URL is cached (any content type)."""
         return await self.cache.has_url(url)
@@ -799,8 +1278,48 @@ class PageFetcher:
         return await self.cache.get_source_type(url)
 
     async def clear_cache(self, url: str) -> None:
-        """Clear all cached content for a URL."""
+        """Clear cached content for URL."""
         await self.cache.clear_url(url)
+
+    async def get_chunks(self, url: Union[str, List[str]], progress=True) -> Union[List[str], List[List[str]]]:
+        """
+        Get chunked content for single URL or multiple URLs as lists of strings.
+        Automatically fetches markdown first if not cached, then chunks it.
+
+        Args:
+            url: Single URL string or list of URLs to fetch
+            progress: True for status display, False for silent, tuple for progress bar integration
+
+        Returns:
+            Single list of strings for single URL, list of lists of strings for multiple URLs
+        """
+        if isinstance(url, str):
+            # Check if chunks are already cached
+            if await self.cache.has_path(url, "chunks"):
+                return await self.cache.get_content(url, "chunks")
+
+            # Get markdown content first
+            markdown_content = await self.get_markdown(url, progress=progress)
+
+            # Get final URL from redirect info if it exists
+            final_url = await self.cache.get_redirect_info(url)
+
+            # Chunk it and cache
+            with self.status_display.create_status(f"[blue]Chunking content[/blue]") as status:
+                chunks = self._create_chunks(markdown_content)
+                await self.cache.set_content(url, "chunks", chunks, final_url)
+
+            return chunks
+
+        elif isinstance(url, list):
+            if len(url) == 0:
+                return []
+
+            results = await self._fetch_multiple(url, "chunks", progress=progress)
+            return self._process_multiple_results(results, progress)
+
+        else:
+            raise TypeError(f"url must be str or list[str], got {type(url)}")
 
     async def prefetch(self, urls: list[str], progress=True) -> None:
         """
@@ -828,125 +1347,125 @@ class PageFetcher:
         """
         if not await self.cache.has_path(url, "doi") and not await self.cache.has_url(url):
             await self._fetch_and_cache(url)
-        return await self.cache.get_doi(url)
+        return await self.cache.get_content(url, "doi")
 
-    async def _fetch_multiple_concurrent(self, urls: List[str], content_type: str, show_progress: bool = True, max_concurrent: int = 5) -> List[dict]:
+    async def _get_content_by_type(self, url: str, content_type: str, progress_info=None) -> Any:
+        """Get content of specified type, fetching if necessary."""
+        if content_type == "html":
+            if not await self.cache.has_path(url, "html"):
+                await self._fetch_and_cache(url, progress=progress_info)
+            return await self.cache.get_path(url, "html")
+        elif content_type == "pdf":
+            if not await self.cache.has_path(url, "pdf"):
+                await self._fetch_and_cache(url, progress=progress_info)
+            return await self.cache.get_path(url, "pdf")
+        elif content_type == "markdown":
+            if await self.cache.has_path(url, "markdown"):
+                return await self.cache.get_path(url, "markdown")
+            else:
+                # Fetch appropriate content type to generate markdown
+                if self._is_pdf_url(url):
+                    if not await self.cache.has_path(url, "pdf"):
+                        await self._fetch_and_cache(url, progress=progress_info)
+                else:
+                    if not await self.cache.has_path(url, "html"):
+                        await self._fetch_and_cache(url, progress=progress_info)
+                return await self.cache.get_path(url, "markdown")
+        elif content_type == "chunks":
+            if await self.cache.has_path(url, "chunks"):
+                return await self.cache.get_content(url, "chunks")
+            else:
+                # Get markdown content first
+                if await self.cache.has_path(url, "markdown"):
+                    markdown_content = await self.cache.get_path(url, "markdown")
+                else:
+                    # Fetch appropriate content type to generate markdown
+                    if self._is_pdf_url(url):
+                        if not await self.cache.has_path(url, "pdf"):
+                            await self._fetch_and_cache(url, progress=progress_info)
+                    else:
+                        if not await self.cache.has_path(url, "html"):
+                            await self._fetch_and_cache(url, progress=progress_info)
+                    markdown_content = await self.cache.get_path(url, "markdown")
+
+                # Chunk the markdown content
+                chunks = self._create_chunks(markdown_content)
+                await self.cache.set_content(url, "chunks", chunks)
+                return chunks
+        else:
+            return await self.get_raw(url)
+
+    def _calculate_content_size(self, content: Any, content_type: str) -> int:
+        """Calculate appropriate size for different content types."""
+        if content_type == "chunks":
+            return sum(len(chunk) for chunk in content)
+        return len(content)
+
+    async def _fetch_multiple(self, urls: List[str], content_type: str, progress=None, max_concurrent: int = 5) -> Union[List[dict], List[str]]:
         """
-        Fetch multiple URLs concurrently, reusing existing batch logic.
+        Unified method to fetch multiple URLs with different progress modes.
 
         Args:
             urls: List of URLs to fetch
-            content_type: Type of content ("html", "pdf", "markdown")
-            show_progress: Whether to show progress bar
+            content_type: Type of content ("html", "pdf", "markdown", "chunks")
+            progress: True for default progress, False for silent, tuple for custom progress
             max_concurrent: Maximum concurrent fetches
 
         Returns:
-            List of result dictionaries
+            List of result dictionaries for default progress, list of content for custom progress
         """
-        if show_progress:
+        if progress is True:
+            # Default progress with concurrent processing
             return await fetch_urls_concurrent_with_progress(
                 urls,
                 self.config,
                 content_type=content_type,
                 max_concurrent=max_concurrent
             )
-        else:
-            # Implement silent concurrent fetching
+        elif progress is False:
+            # Silent concurrent processing
             import asyncio
-
             semaphore = asyncio.Semaphore(max_concurrent)
 
             async def fetch_one(url: str):
                 async with semaphore:
                     try:
-                        if content_type == "html":
-                            if not await self.cache.has_path(url, "html"):
-                                await self._fetch_and_cache(url)
-                            content = await self.cache.get_path(url, "html")
-                        elif content_type == "pdf":
-                            if not await self.cache.has_path(url, "pdf"):
-                                await self._fetch_and_cache(url)
-                            content = await self.cache.get_path(url, "pdf")
-                        elif content_type == "markdown":
-                            if await self.cache.has_path(url, "md"):
-                                content = await self.cache.get_path(url, "md")
-                            else:
-                                # Fetch appropriate content type to generate markdown
-                                if self._is_pdf_url(url):
-                                    if not await self.cache.has_path(url, "pdf"):
-                                        await self._fetch_and_cache(url)
-                                else:
-                                    if not await self.cache.has_path(url, "html"):
-                                        await self._fetch_and_cache(url)
-                                content = await self.cache.get_path(url, "md")
-                        else:
-                            content = await self.get_raw(url)
-
+                        content = await self._get_content_by_type(url, content_type, progress_info=False)
+                        size = self._calculate_content_size(content, content_type)
                         return {
                             "url": url,
                             "content": content,
-                            "size": len(content),
+                            "size": size,
                             "status": "success"
                         }
                     except Exception as e:
-                        return {
-                            "url": url,
-                            "error": str(e),
-                            "status": "error"
-                        }
+                        return e
 
             tasks = [fetch_one(url) for url in urls]
             return await asyncio.gather(*tasks)
+        else:
+            # Custom progress (sequential processing)
+            progress_instance, task_id = progress
+            results = []
 
-    async def _fetch_multiple_with_custom_progress(self, urls: List[str], content_type: str, progress_info) -> List[str]:
-        """
-        Fetch multiple URLs with custom progress bar integration.
+            for i, url in enumerate(urls):
+                try:
+                    domain = url.split('//')[1].split('/')[0] if '//' in url else url
+                    progress_instance.update(task_id, description=f"[blue]Fetching {content_type} from[/blue] [bold]{domain}[/bold] ({i+1}/{len(urls)})")
 
-        Args:
-            urls: List of URLs to fetch
-            content_type: Type of content ("html", "pdf", "markdown")
-            progress_info: Tuple of (progress_instance, task_id)
-
-        Returns:
-            List of content strings for successful fetches
-        """
-        progress_instance, task_id = progress_info
-        results = []
-
-        for i, url in enumerate(urls):
-            try:
-                domain = url.split('//')[1].split('/')[0] if '//' in url else url
-                progress_instance.update(task_id, description=f"[blue]Fetching {content_type} from[/blue] [bold]{domain}[/bold] ({i+1}/{len(urls)})")
-                if content_type == "html":
-                    if not await self.cache.has_path(url, "html"):
-                        await self._fetch_and_cache(url)
-                    content = await self.cache.get_path(url, "html")
-                elif content_type == "pdf":
-                    if not await self.cache.has_path(url, "pdf"):
-                        await self._fetch_and_cache(url)
-                    content = await self.cache.get_path(url, "pdf")
-                elif content_type == "markdown":
-                    if await self.cache.has_path(url, "md"):
-                        content = await self.cache.get_path(url, "md")
+                    # Handle chunking progress separately
+                    if content_type == "chunks" and not await self.cache.has_path(url, "chunks"):
+                        content = await self._get_content_by_type(url, content_type, progress)
+                        progress_instance.update(task_id, description=f"[blue]Chunking content from[/blue] [bold]{domain}[/bold] ({i+1}/{len(urls)})")
                     else:
-                        # Fetch appropriate content type to generate markdown
-                        if self._is_pdf_url(url):
-                            if not await self.cache.has_path(url, "pdf"):
-                                await self._fetch_and_cache(url)
-                        else:
-                            if not await self.cache.has_path(url, "html"):
-                                await self._fetch_and_cache(url)
-                        content = await self.cache.get_path(url, "md")
-                else:
-                    content = await self.get_raw(url)
+                        content = await self._get_content_by_type(url, content_type, progress)
 
-                results.append(content)
+                    results.append(content)
+                except Exception as e:
+                    # Return exception directly instead of hiding it
+                    results.append(e)
 
-            except Exception as e:
-                print(f"Failed to fetch {url}: {e}")
-                results.append("")
-
-        return results
+            return results
 async def fetch_urls_with_progress(
     urls: list[str],
     config: 'IfetcherConfig',
@@ -966,43 +1485,68 @@ async def fetch_urls_with_progress(
         List of result dicts with url, content, and status
     """
     from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, MofNCompleteColumn, TimeElapsedColumn
-    content_methods = {
-        "html": "get_html",
-        "pdf": "get_pdf",
-        "markdown": "get_markdown"
-    }
+    import math
+    from urllib.parse import urlparse
 
-    results = []
+    # Use direct method calls instead of string lookup
+    fetcher = PageFetcher(config)
+
+    # Calculate optimal domain width using 75th percentile for better preservation
+    domains = [urlparse(url).netloc for url in urls]
+    domain_lengths = [len(domain) for domain in domains if domain]
+    if domain_lengths:
+        import statistics
+        percentile_75 = statistics.quantiles(domain_lengths, n=4)[2] if len(domain_lengths) > 1 else domain_lengths[0]
+        optimal_width = min(20, int(percentile_75))
+    else:
+        optimal_width = 15
+
+    def format_domain(url: str) -> str:
+        domain = urlparse(url).netloc
+        if len(domain) <= optimal_width:
+            return domain.ljust(optimal_width)
+        else:
+            return domain[:optimal_width-1] + "…"
 
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
+        BarColumn(complete_style="blue", finished_style="green"),
         MofNCompleteColumn(),
         TimeElapsedColumn(),
     ) as progress:
 
         task = progress.add_task(progress_description, total=len(urls))
         fetcher = PageFetcher(config, show_status=False)
-        method_name = content_methods.get(content_type, "get_raw")
 
         for url in urls:
             try:
-                method = getattr(fetcher, method_name)
-                if method_name == "get_raw":
-                    content = await method(url)
+                if content_type == "html":
+                    content = await fetcher.get_html(url, progress=(progress, task))
+                elif content_type == "pdf":
+                    content = await fetcher.get_pdf(url, progress=(progress, task))
+                elif content_type == "markdown":
+                    content = await fetcher.get_markdown(url, progress=(progress, task))
+                elif content_type == "chunks":
+                    content = await fetcher.get_chunks(url, progress=(progress, task))
                 else:
-                    content = await method(url, progress=(progress, task))
+                    content = await fetcher.get_raw(url)
+
+                # Calculate size appropriately based on content type
+                if content_type == "chunks":
+                    size = sum(len(chunk) for chunk in content)
+                else:
+                    size = len(content)
 
                 results.append({
                     "url": url,
                     "content": content,
-                    "size": len(content),
+                    "size": size,
                     "status": "success"
                 })
 
-                domain = url.split('//')[1].split('/')[0] if '//' in url else url
-                progress.update(task, description=f"[green]✓ {domain} ({len(content):,} chars)")
+                formatted_domain = format_domain(url)
+                progress.update(task, description=f"[green]✓ {formatted_domain} ({len(content):,} chars)")
 
             except Exception as e:
                 results.append({
@@ -1037,46 +1581,72 @@ async def fetch_urls_concurrent_with_progress(
     """
     from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, MofNCompleteColumn, TimeElapsedColumn
     import asyncio
-    content_methods = {
-        "html": "get_html",
-        "pdf": "get_pdf",
-        "markdown": "get_markdown"
-    }
+    import math
+    from urllib.parse import urlparse
+
+    # Use direct method calls instead of string lookup
+
+    # Calculate optimal domain width using 75th percentile for better preservation
+    domains = [urlparse(url).netloc for url in urls]
+    domain_lengths = [len(domain) for domain in domains if domain]
+    if domain_lengths:
+        import statistics
+        percentile_75 = statistics.quantiles(domain_lengths, n=4)[2] if len(domain_lengths) > 1 else domain_lengths[0]
+        optimal_width = min(20, int(percentile_75))
+    else:
+        optimal_width = 15
+
+    def format_domain(url: str) -> str:
+        domain = urlparse(url).netloc
+        if len(domain) <= optimal_width:
+            return domain.ljust(optimal_width)
+        else:
+            return domain[:optimal_width-1] + "…"
 
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
+        BarColumn(complete_style="blue", finished_style="green"),
         MofNCompleteColumn(),
         TimeElapsedColumn(),
     ) as progress:
 
-        task = progress.add_task("[blue]Concurrent fetch...", total=len(urls))
+        task = progress.add_task("Fetching...", total=len(urls))
         completed = {"count": 0}
-        method_name = content_methods.get(content_type, "get_raw")
 
         async def fetch_one(url: str):
             fetcher = PageFetcher(config, show_status=False)
-            domain = url.split('//')[1].split('/')[0] if '//' in url else url
+            formatted_domain = format_domain(url)
 
             try:
-                method = getattr(fetcher, method_name)
-                if method_name == "get_raw":
-                    content = await method(url)
+                if content_type == "html":
+                    content = await fetcher.get_html(url, progress=False)
+                elif content_type == "pdf":
+                    content = await fetcher.get_pdf(url, progress=False)
+                elif content_type == "markdown":
+                    content = await fetcher.get_markdown(url, progress=False)
+                elif content_type == "chunks":
+                    content = await fetcher.get_chunks(url, progress=False)
                 else:
-                    content = await method(url, progress=False)
+                    content = await fetcher.get_raw(url)
 
                 completed["count"] += 1
                 progress.update(
                     task,
                     advance=1,
-                    description=f"[blue]Fetching... ({completed['count']}/{len(urls)}) - {domain}"
+                    description=f"[blue]Fetching... ({completed['count']}/{len(urls)}) {formatted_domain}"
                 )
+
+                # Calculate size appropriately based on content type
+                if content_type == "chunks":
+                    size = sum(len(chunk) for chunk in content)
+                else:
+                    size = len(content)
 
                 return {
                     "url": url,
                     "content": content,
-                    "size": len(content),
+                    "size": size,
                     "status": "success"
                 }
 
@@ -1085,14 +1655,10 @@ async def fetch_urls_concurrent_with_progress(
                 progress.update(
                     task,
                     advance=1,
-                    description=f"[blue]Fetching... ({completed['count']}/{len(urls)}) - Failed: {domain}"
+                    description=f"[blue]Fetching... ({completed['count']}/{len(urls)}) - Failed: {formatted_domain}"
                 )
 
-                return {
-                    "url": url,
-                    "error": str(e),
-                    "status": "error"
-                }
+                return e
 
         semaphore = asyncio.Semaphore(max_concurrent)
 
@@ -1115,4 +1681,4 @@ async def fetch_urls_concurrent_with_progress(
             # Try to fetch and extract DOI
             await self._fetch_and_cache(url)
 
-        return await self.cache.get_doi(url)
+        return await self.cache.get_content(url, "doi")
