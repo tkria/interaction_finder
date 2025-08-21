@@ -16,7 +16,7 @@ dependencies = [
 ]
 
 [project.scripts]
-interaction-finder = "interaction_finder:main"
+interaction-finder = "interaction_finder.cli:main"
 
 [build-system]
 requires = ["hatchling"]
