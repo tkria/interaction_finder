@@ -19,6 +19,7 @@ from typing import Optional, TYPE_CHECKING, Union, List, Any
 import aiofiles
 import aiofiles.os
 from rich.console import Console
+from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, MofNCompleteColumn, TimeElapsedColumn
 
 if TYPE_CHECKING:
     from .settings import IfetcherConfig
@@ -114,6 +115,112 @@ DOI_EXTRACTION_SCHEMA = {
         }
     ]
 }
+
+# =============================================================================
+# Full Text Expansion (Crawl4AI JS Instrumentation)
+# =============================================================================
+# Clicks on common "Full Text" controls and waits for the page to settle so that
+# dynamically loaded content becomes part of the DOM before extraction.
+CLICK_AND_MONITOR_JS = r"""
+(() => {
+  if (!window.__c4ai_mon) {
+    const mon = window.__c4ai_mon = {
+      inflight: 0,
+      last: Date.now(),
+      started: false,
+      mutations: 0,
+      baseline: (document.body.innerText || '').length,
+    };
+    const bump = () => { mon.last = Date.now(); };
+
+    const origFetch = window.fetch;
+    if (origFetch) {
+      window.fetch = (...args) => {
+        mon.inflight++; bump();
+        return origFetch(...args)
+          .finally(() => { mon.inflight--; bump(); });
+      };
+    }
+
+    const XS = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.send = function(...args) {
+      mon.inflight++; bump();
+      this.addEventListener('loadend', () => { mon.inflight--; bump(); }, { once: true });
+      return XS.apply(this, args);
+    };
+
+    const mo = new MutationObserver(muts => {
+      mon.mutations += muts.length; bump();
+      for (const m of muts) {
+        m.addedNodes && m.addedNodes.forEach(n => {
+          const t = n.tagName && n.tagName.toLowerCase();
+          if (t === 'img' || t === 'iframe' || t === 'video' || t === 'audio') {
+            n.addEventListener('load', bump, true);
+            n.addEventListener('error', bump, true);
+          }
+        });
+      }
+    });
+    mo.observe(document, { subtree: true, childList: true, characterData: true, attributes: true });
+
+    window.addEventListener('load', bump, true);
+    window.addEventListener('error', bump, true);
+  }
+
+  const mon = window.__c4ai_mon;
+  const LABEL = /full\s*text/i;
+
+  const candidates = [
+    ...document.querySelectorAll('h1,h2,h3,h4,h5,h6')
+  ].
+    filter(h => LABEL.test((h.innerText || '').trim())).
+    flatMap(h => [h, ...h.querySelectorAll('button,[role="button"],a')]).
+    concat(
+      [...document.querySelectorAll('button,[role="button"],a,[aria-label]')]
+        .filter(el => LABEL.test((el.innerText || el.getAttribute('aria-label') || '').trim()))
+    );
+
+  const seen = new Set(); const uniq = [];
+  for (const el of candidates) { if (el && !seen.has(el)) { seen.add(el); uniq.push(el); } }
+
+  const isClosed = (el) => el.getAttribute && el.hasAttribute('aria-expanded')
+    ? el.getAttribute('aria-expanded') !== 'true'
+    : true;
+
+  const click = (el) => {
+    el.scrollIntoView({ block: 'center' });
+    el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+    el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    el.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }));
+    el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+    el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true }));
+    el.dispatchEvent(new KeyboardEvent('keyup',   { key: 'Enter', code: 'Enter', bubbles: true }));
+  };
+
+  let didAny = false;
+  for (const el of uniq) {
+    const target = (/^h[1-6]$/i.test(el.tagName) ? (el.querySelector('button,[role="button"],a') || el) : el);
+    if (target && isClosed(target) && getComputedStyle(target).display !== 'none') {
+      click(target); didAny = true;
+    }
+  }
+  if (didAny) mon.started = true;
+})();
+"""
+
+WAIT_UNTIL_IDLE_JS = (
+  "js:() => {" \
+  "  const m = window.__c4ai_mon; if (!m) return true;" \
+  "  const idle = m.inflight === 0 && (Date.now() - m.last) > 1000;" \
+  "  if (!m.started) return idle;" \
+  "  const grew = (document.body.innerText || '').length > m.baseline + 50;" \
+  "  return idle && (m.mutations > 0 || grew);" \
+  "}"
+)
+
+# Threshold for deciding when to retry with stealth/full-text expansion
+STEALTH_RETRY_THRESHOLD = 3000  # characters of raw markdown
 
 # =============================================================================
 # Content Processing Helper Functions
@@ -416,6 +523,55 @@ def _get_crawl4ai_pdf_imports():
             raise RuntimeError("crawl4ai package is required for fetching. Install with: pip install crawl4ai")
     return _crawl4ai_pdf_imports
 
+def _get_browser_config(*, enable_stealth: bool = False, headless: bool = True):
+    """Create and return a BrowserConfig instance with desired options."""
+    try:
+        from crawl4ai import BrowserConfig
+    except ImportError:
+        raise RuntimeError("crawl4ai package is required for fetching. Install with: pip install crawl4ai")
+    return BrowserConfig(enable_stealth=enable_stealth, headless=headless)
+
+def _has_recognized_sections(markdown: str) -> bool:
+    """Detect if markdown contains recognized academic sections based on headings."""
+    try:
+        heads = extract_headings(markdown)
+        for h in heads:
+            cls = classify_heading_relevance(h['text'])
+            if cls.get('is_relevant'):
+                return True
+    except Exception:
+        pass
+    return False
+
+def _should_retry_with_stealth(raw_markdown: str, raw_html: str) -> tuple[bool, str]:
+    """Decide whether to retry fetching with stealth/full-text instrumentation.
+
+    Returns:
+        (should_retry, reason)
+    """
+    reasons: list[str] = []
+    text = ((raw_markdown or "") + "\n" + (raw_html or "")).lower()
+
+    if not raw_markdown:
+        reasons.append("no_markdown")
+    else:
+        if len(raw_markdown) < STEALTH_RETRY_THRESHOLD:
+            reasons.append("short_markdown")
+
+    recognized = _has_recognized_sections(raw_markdown or "")
+    if not recognized:
+        reasons.append("no_recognized_sections")
+
+    if "verifying you are human" in text:
+        reasons.append("bot_challenge")
+
+    # Retry if we have a bot challenge OR content is short/lacking sections
+    should_retry = ("bot_challenge" in reasons) or (
+        ("short_markdown" in reasons or "no_markdown" in reasons) and ("no_recognized_sections" in reasons)
+    )
+
+    return should_retry, ",".join(reasons) if reasons else "sufficient_content"
+
 def _get_granular_logger(status_display=None):
     """
     Create a logger that provides granular stage information to Rich status displays.
@@ -486,6 +642,9 @@ class StatusDisplay:
     def __init__(self, show_status: bool = True):
         self.show_status = show_status
         self.console = Console() if show_status else None
+        # Avoid noisy "heartbeat" updates when not attached to an interactive TTY
+        if self.console and not self.console.is_terminal:
+            self.show_status = False
 
     def create_status(self, message: str, progress_info=None):
         """
@@ -821,10 +980,12 @@ class URLCache:
 class PageFetcher:
     """High-level interface for fetching and caching web pages."""
 
-    def __init__(self, config: 'IfetcherConfig', show_status: bool = True):
+    def __init__(self, config: 'IfetcherConfig', show_status: bool = True, verbose: bool = False):
         self.cache = URLCache(config)
         self.config = config
         self.status_display = StatusDisplay(show_status=show_status)
+        self.verbose = verbose
+        self._debug_console = Console(stderr=True) if verbose else None
 
     async def _fetch_html_url(self, url: str, progress_info=None) -> dict[str, str]:
         """
@@ -840,42 +1001,100 @@ class PageFetcher:
         AsyncWebCrawler, CrawlerRunConfig, JsonXPathExtractionStrategy, _ = _get_crawl4ai_imports()
         domain = url.split('//')[1].split('/')[0] if '//' in url else url
 
-        # Create crawler configuration with DOI extraction and proper timeouts
-        cfg = CrawlerRunConfig(
-            extraction_strategy=JsonXPathExtractionStrategy(DOI_EXTRACTION_SCHEMA, verbose=False),
-            page_timeout=self.config.tools.crawl4ai.timeout * 1000,
-            word_count_threshold = 10,
-            excluded_tags = ["nav", "footer", "aside", "form", "dialog"],
-            excluded_selector = "[role=dialog]",
-            verbose=False
-        )
+        # First pass uses a lightweight config; heavy config is created only if retrying
 
         if progress_info is not None:
             progress_instance, task_id = progress_info
             progress_instance.update(task_id, description=f"[green]Fetching HTML from[/green] [bold]{domain}[/bold]")
             granular_logger = _get_quiet_logger()
-            async with AsyncWebCrawler(logger=granular_logger) as crawler:
-                result = await crawler.arun(url=url, config=cfg)
+            # First try: simple browser without JS/wait, headless fast path
+            simple_cfg = CrawlerRunConfig(
+                extraction_strategy=JsonXPathExtractionStrategy(DOI_EXTRACTION_SCHEMA, verbose=False),
+                page_timeout=self.config.tools.crawl4ai.timeout * 1000,
+                word_count_threshold=10,
+                excluded_tags=["nav", "footer", "aside", "form", "dialog"],
+                excluded_selector="[role=dialog]",
+                verbose=False,
+            )
+            browser_simple = _get_browser_config(enable_stealth=False, headless=True)
+            async with AsyncWebCrawler(config=browser_simple, logger=granular_logger) as crawler:
+                result = await crawler.arun(url=url, config=simple_cfg)
                 if not result.success:
                     raise RuntimeError(f"{result.status_code} error fetching {url}: {result.error_message}")
         else:
             with self.status_display.create_status(f"[dim]Initializing...[/dim]") as status:
                 granular_logger = _get_granular_logger(status_display=status)
-                async with AsyncWebCrawler(logger=granular_logger) as crawler:
-                    result = await crawler.arun(url=url, config=cfg)
+                # First try: simple browser without JS/wait, headless fast path
+                simple_cfg = CrawlerRunConfig(
+                    extraction_strategy=JsonXPathExtractionStrategy(DOI_EXTRACTION_SCHEMA, verbose=False),
+                    page_timeout=self.config.tools.crawl4ai.timeout * 1000,
+                    word_count_threshold=10,
+                    excluded_tags=["nav", "footer", "aside", "form", "dialog"],
+                    excluded_selector="[role=dialog]",
+                    verbose=False,
+                )
+                browser_simple = _get_browser_config(enable_stealth=False, headless=True)
+                async with AsyncWebCrawler(config=browser_simple, logger=granular_logger) as crawler:
+                    result = await crawler.arun(url=url, config=simple_cfg)
                     if not result.success:
                         raise RuntimeError(f"{result.status_code} error fetching {url}: {result.error_message}")
 
         final_url = self._extract_final_url(result, url)
         raw_content = result.html or ''
         raw_markdown_content = result.markdown.raw_markdown
-        markdown_content = self._refine_article_content(raw_markdown_content)
         doi = self._extract_doi(result)
+
+        # Decide whether to retry with stealth/full text expansion
+        retry, reason = _should_retry_with_stealth(raw_markdown_content, raw_content)
+        if self.verbose and self._debug_console:
+            self._debug_console.print(
+                f"[dim]fetcher[/dim] {domain}: strategy=light len={len(raw_markdown_content or '')} reason={reason}"
+            )
+
+        if retry:
+            # Build slow/stealth config with JS instrumentation
+            slow_cfg = CrawlerRunConfig(
+                extraction_strategy=JsonXPathExtractionStrategy(DOI_EXTRACTION_SCHEMA, verbose=False),
+                page_timeout=self.config.tools.crawl4ai.timeout * 1000,
+                word_count_threshold=10,
+                excluded_tags=["nav", "footer", "aside", "form", "dialog"],
+                excluded_selector="[role=dialog]",
+                js_code=[CLICK_AND_MONITOR_JS],
+                wait_for=WAIT_UNTIL_IDLE_JS,
+                delay_before_return_html=1.0,
+                verbose=False,
+            )
+            browser_stealth = _get_browser_config(enable_stealth=True, headless=False)
+            # Update status if available
+            if progress_info is not None:
+                progress_instance, task_id = progress_info
+                progress_instance.update(task_id, description=f"[yellow]Retrying with full text[/yellow] [bold]{domain}[/bold]")
+                granular_logger = _get_quiet_logger()
+            else:
+                granular_logger = _get_granular_logger(status_display=self.status_display)
+            async with AsyncWebCrawler(config=browser_stealth, logger=granular_logger) as crawler:
+                result2 = await crawler.arun(url=url, config=slow_cfg)
+                if result2.success:
+                    final_url = self._extract_final_url(result2, url)
+                    raw_content = result2.html or raw_content
+                    raw_markdown_content = result2.markdown.raw_markdown or raw_markdown_content
+                    doi2 = self._extract_doi(result2)
+                    if doi2:
+                        doi = doi2
+                    if self.verbose and self._debug_console:
+                        self._debug_console.print(
+                            f"[dim]fetcher[/dim] {domain}: strategy=heavy len={len(raw_markdown_content or '')} reason={reason}"
+                        )
+                else:
+                    if self.verbose and self._debug_console:
+                        self._debug_console.print(
+                            f"[dim]fetcher[/dim] {domain}: heavy_retry_failed status={getattr(result2, 'status_code', '?')}"
+                        )
 
         return {
             'raw_content': raw_content,
             'raw_markdown_content': raw_markdown_content,
-            'markdown_content': markdown_content,
+            'markdown_content': self._refine_article_content(raw_markdown_content),
             'final_url': final_url,
             'doi': doi
         }
@@ -907,20 +1126,22 @@ class PageFetcher:
             progress_instance, task_id = progress_info
             progress_instance.update(task_id, description=f"[red]Fetching PDF from[/red] [bold]{domain}[/bold]")
             granular_logger = _get_quiet_logger()
-            async with AsyncWebCrawler(crawler_strategy=pdf_crawler_cfg, logger=granular_logger) as crawler:
+            browser_config = _get_browser_config(enable_stealth=True, headless=False)
+            async with AsyncWebCrawler(config=browser_config, crawler_strategy=pdf_crawler_cfg, logger=granular_logger) as crawler:
                 result = await crawler.arun(url=url, config=cfg)
                 if not result.success:
                     raise RuntimeError(f"{result.status_code} error fetching PDF {url}: {result.error_message}")
         else:
             with self.status_display.create_status(f"[dim]Initializing...[/dim]") as status:
                 granular_logger = _get_granular_logger(status_display=status)
-                async with AsyncWebCrawler(crawler_strategy=pdf_crawler_cfg, logger=granular_logger) as crawler:
+                browser_config = _get_browser_config(enable_stealth=True, headless=False)
+                async with AsyncWebCrawler(config=browser_config, crawler_strategy=pdf_crawler_cfg, logger=granular_logger) as crawler:
                     result = await crawler.arun(url=url, config=cfg)
                     if not result.success:
                         raise RuntimeError(f"{result.status_code} error fetching PDF {url}: {result.error_message}")
 
         final_url = result.url
-        raw_markdown_content = result.markdown.raw_content
+        raw_markdown_content = result.markdown.raw_markdown
         markdown_content = self._refine_article_content(raw_markdown_content)
         raw_content = result.pdf or ''
 
@@ -1046,24 +1267,23 @@ class PageFetcher:
 
         final_url = content_info.get('final_url', url)
 
-        with self.status_display.create_status(f"[yellow]Caching content[/yellow]", progress_info):
-            if is_pdf:
-                await self.cache.set_content(url, "pdf", content_info['raw_content'], final_url)
-            else:
-                await self.cache.set_content(url, "html", content_info['raw_content'], final_url)
+        if is_pdf:
+            await self.cache.set_content(url, "pdf", content_info['raw_content'], final_url)
+        else:
+            await self.cache.set_content(url, "html", content_info['raw_content'], final_url)
 
-            await self.cache.set_content(url, "markdown", content_info['markdown_content'], final_url)
+        await self.cache.set_content(url, "markdown", content_info['markdown_content'], final_url)
 
-            # Store raw markdown if available (for both HTML and PDF sources)
-            if content_info.get('raw_markdown_content'):
-                await self.cache.set_content(url, "raw_markdown", content_info['raw_markdown_content'], final_url)
+        # Store raw markdown if available (for both HTML and PDF sources)
+        if content_info.get('raw_markdown_content'):
+            await self.cache.set_content(url, "raw_markdown", content_info['raw_markdown_content'], final_url)
 
-            if content_info.get('doi'):
-                await self.cache.set_content(url, "doi", content_info['doi'], final_url)
+        if content_info.get('doi'):
+            await self.cache.set_content(url, "doi", content_info['doi'], final_url)
 
         return content_info
 
-    async def get_html(self, url: Union[str, List[str]], progress=True) -> Union[str, List[str]]:
+    async def get_html(self, url: Union[str, List[str]], progress=True, fail_fast: bool = False) -> Union[str, List[str]]:
         """
         Get HTML content for single URL or multiple URLs with concurrent fetching.
 
@@ -1083,7 +1303,7 @@ class PageFetcher:
             if len(url) == 0:
                 return []
 
-            results = await self._fetch_multiple(url, "html", progress=progress)
+            results = await self._fetch_multiple(url, "html", progress=progress, fail_fast=fail_fast)
             if isinstance(progress, tuple):
                 # Custom progress returns content directly
                 return results
@@ -1093,7 +1313,7 @@ class PageFetcher:
         else:
             raise TypeError(f"url must be str or list[str], got {type(url)}")
 
-    async def get_pdf(self, url: Union[str, List[str]], progress=True) -> Union[str, List[str]]:
+    async def get_pdf(self, url: Union[str, List[str]], progress=True, fail_fast: bool = False) -> Union[str, List[str]]:
         """
         Get PDF content for single URL or multiple URLs with concurrent fetching.
 
@@ -1113,7 +1333,7 @@ class PageFetcher:
             if len(url) == 0:
                 return []
 
-            results = await self._fetch_multiple(url, "pdf", progress=progress)
+            results = await self._fetch_multiple(url, "pdf", progress=progress, fail_fast=fail_fast)
             if isinstance(progress, tuple):
                 # Custom progress returns content directly
                 return results
@@ -1123,7 +1343,7 @@ class PageFetcher:
         else:
             raise TypeError(f"url must be str or list[str], got {type(url)}")
 
-    async def get_markdown(self, url: Union[str, List[str]], progress=True) -> Union[str, List[str]]:
+    async def get_markdown(self, url: Union[str, List[str]], progress=True, fail_fast: bool = False) -> Union[str, List[str]]:
         """
         Get Markdown content for single URL or multiple URLs with concurrent fetching.
         Automatically detects and handles both HTML and PDF URLs.
@@ -1197,22 +1417,12 @@ class PageFetcher:
 
             # Fetch any URLs that aren't cached
             if urls_to_fetch:
-                fetch_results = await self._fetch_multiple(urls_to_fetch, "markdown", progress=progress)
+                fetch_results = await self._fetch_multiple(urls_to_fetch, "markdown", progress=progress, fail_fast=fail_fast)
 
-                # Handle different return formats
-                if isinstance(progress, tuple):
-                    # Custom progress returns content directly
-                    for i, u in enumerate(urls_to_fetch):
-                        if i < len(fetch_results):
-                            results[u] = fetch_results[i]
-                else:
-                    # Default/silent progress returns result dictionaries
-                    for i, u in enumerate(urls_to_fetch):
-                        if i < len(fetch_results) and not isinstance(fetch_results[i], Exception):
-                            if isinstance(fetch_results[i], dict) and "content" in fetch_results[i]:
-                                results[u] = fetch_results[i]["content"]
-                            else:
-                                results[u] = fetch_results[i]
+                # Map back to original URLs, skipping exceptions
+                for i, u in enumerate(urls_to_fetch):
+                    if i < len(fetch_results) and not isinstance(fetch_results[i], Exception):
+                        results[u] = fetch_results[i]
 
             # Return results in original order
             return [results[u] for u in url if u in results]
@@ -1233,31 +1443,16 @@ class PageFetcher:
 
     def _process_multiple_results(self, results: List, progress) -> List:
         """
-        Process mixed results from _fetch_multiple, filtering out Exception objects.
+        Filter out exceptions from a mixed results list, returning only content items.
 
         Args:
-            results: List containing mix of Exception objects and success data
-            progress: Progress mode (tuple means custom progress with direct content)
+            results: List containing a mix of Exception objects and raw content
+            progress: Progress mode (unused; kept for signature compatibility)
 
         Returns:
-            List of successful content only
+            List of successful content items (exceptions removed)
         """
-        if isinstance(progress, tuple):
-            # Custom progress returns content directly, just filter exceptions
-            return [result for result in results if not isinstance(result, Exception)]
-
-        # Default/silent progress returns dicts or exceptions
-        successful_content = []
-        for result in results:
-            if not isinstance(result, Exception):
-                if isinstance(result, dict) and "content" in result:
-                    successful_content.append(result["content"])
-                else:
-                    # Handle other success formats
-                    successful_content.append(result)
-        return successful_content
-
-
+        return [result for result in results if not isinstance(result, Exception)]
 
     async def get_raw_markdown(self, url: str) -> str:
         """Get raw (pre-cleaned) markdown content for URL, fetching if necessary."""
@@ -1281,7 +1476,7 @@ class PageFetcher:
         """Clear cached content for URL."""
         await self.cache.clear_url(url)
 
-    async def get_chunks(self, url: Union[str, List[str]], progress=True) -> Union[List[str], List[List[str]]]:
+    async def get_chunks(self, url: Union[str, List[str]], progress=True, fail_fast: bool = False) -> Union[List[str], List[List[str]]]:
         """
         Get chunked content for single URL or multiple URLs as lists of strings.
         Automatically fetches markdown first if not cached, then chunks it.
@@ -1304,10 +1499,9 @@ class PageFetcher:
             # Get final URL from redirect info if it exists
             final_url = await self.cache.get_redirect_info(url)
 
-            # Chunk it and cache
-            with self.status_display.create_status(f"[blue]Chunking content[/blue]") as status:
-                chunks = self._create_chunks(markdown_content)
-                await self.cache.set_content(url, "chunks", chunks, final_url)
+            # Chunk it and cache (silently)
+            chunks = self._create_chunks(markdown_content)
+            await self.cache.set_content(url, "chunks", chunks, final_url)
 
             return chunks
 
@@ -1315,7 +1509,7 @@ class PageFetcher:
             if len(url) == 0:
                 return []
 
-            results = await self._fetch_multiple(url, "chunks", progress=progress)
+            results = await self._fetch_multiple(url, "chunks", progress=progress, fail_fast=fail_fast)
             return self._process_multiple_results(results, progress)
 
         else:
@@ -1401,7 +1595,7 @@ class PageFetcher:
             return sum(len(chunk) for chunk in content)
         return len(content)
 
-    async def _fetch_multiple(self, urls: List[str], content_type: str, progress=None, max_concurrent: int = 5) -> Union[List[dict], List[str]]:
+    async def _fetch_multiple(self, urls: List[str], content_type: str, progress=None, max_concurrent: int = 5, fail_fast: bool = False) -> List:
         """
         Unified method to fetch multiple URLs with different progress modes.
 
@@ -1412,16 +1606,32 @@ class PageFetcher:
             max_concurrent: Maximum concurrent fetches
 
         Returns:
-            List of result dictionaries for default progress, list of content for custom progress
+            List of raw content items or Exception objects (uniform across modes)
         """
+        if fail_fast:
+            # Sequential processing with early abort on first failure
+            results: list = []
+            for url in urls:
+                try:
+                    content = await self._get_content_by_type(url, content_type, progress_info=False)
+                    # Always append raw content in fail-fast mode
+                    results.append(content)
+                except Exception as e:
+                    # Return immediately with the exception to signal fail-fast
+                    results.append(e)
+                    return results
+            return results
         if progress is True:
             # Default progress with concurrent processing
-            return await fetch_urls_concurrent_with_progress(
+            results = await fetch_urls_concurrent_with_progress(
                 urls,
                 self.config,
                 content_type=content_type,
-                max_concurrent=max_concurrent
+                max_concurrent=max_concurrent,
+                verbose=self.verbose
             )
+            # Already raw content or exceptions
+            return results
         elif progress is False:
             # Silent concurrent processing
             import asyncio
@@ -1431,18 +1641,13 @@ class PageFetcher:
                 async with semaphore:
                     try:
                         content = await self._get_content_by_type(url, content_type, progress_info=False)
-                        size = self._calculate_content_size(content, content_type)
-                        return {
-                            "url": url,
-                            "content": content,
-                            "size": size,
-                            "status": "success"
-                        }
+                        return content
                     except Exception as e:
                         return e
 
             tasks = [fetch_one(url) for url in urls]
-            return await asyncio.gather(*tasks)
+            results = await asyncio.gather(*tasks)
+            return results
         else:
             # Custom progress (sequential processing)
             progress_instance, task_id = progress
@@ -1453,12 +1658,8 @@ class PageFetcher:
                     domain = url.split('//')[1].split('/')[0] if '//' in url else url
                     progress_instance.update(task_id, description=f"[blue]Fetching {content_type} from[/blue] [bold]{domain}[/bold] ({i+1}/{len(urls)})")
 
-                    # Handle chunking progress separately
-                    if content_type == "chunks" and not await self.cache.has_path(url, "chunks"):
-                        content = await self._get_content_by_type(url, content_type, progress)
-                        progress_instance.update(task_id, description=f"[blue]Chunking content from[/blue] [bold]{domain}[/bold] ({i+1}/{len(urls)})")
-                    else:
-                        content = await self._get_content_by_type(url, content_type, progress)
+                    # Handle content fetch without special chunking messages
+                    content = await self._get_content_by_type(url, content_type, progress)
 
                     results.append(content)
                 except Exception as e:
@@ -1470,8 +1671,9 @@ async def fetch_urls_with_progress(
     urls: list[str],
     config: 'IfetcherConfig',
     content_type: str = "html",
-    progress_description: str = "Fetching URLs..."
-) -> list[dict]:
+    progress_description: str = "Fetching URLs...",
+    verbose: bool = False,
+) -> list:
     """
     Fetch multiple URLs with clean progress display.
 
@@ -1482,7 +1684,7 @@ async def fetch_urls_with_progress(
         progress_description: Description for progress bar
 
     Returns:
-        List of result dicts with url, content, and status
+        List of raw content items or Exception objects (used for UI-only progress)
     """
     from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, MofNCompleteColumn, TimeElapsedColumn
     import math
@@ -1508,19 +1710,29 @@ async def fetch_urls_with_progress(
         else:
             return domain[:optimal_width-1] + "…"
 
+    results: list = []
+
+    _prog_console = Console(stderr=True)
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
         BarColumn(complete_style="blue", finished_style="green"),
         MofNCompleteColumn(),
         TimeElapsedColumn(),
+        transient=False,
+        refresh_per_second=8,
+        console=_prog_console,
     ) as progress:
 
-        task = progress.add_task(progress_description, total=len(urls))
-        fetcher = PageFetcher(config, show_status=False)
+        # Start with a neutral initializing state, then switch to fetching
+        task = progress.add_task("[dim]Initializing...[/dim]", total=len(urls))
+        fetcher = PageFetcher(config, show_status=False, verbose=verbose)
 
         for url in urls:
             try:
+                # Switch to fetching status per-URL
+                formatted_domain = format_domain(url)
+                progress.update(task, description=f"[blue]Fetching...[/blue] {formatted_domain}")
                 if content_type == "html":
                     content = await fetcher.get_html(url, progress=(progress, task))
                 elif content_type == "pdf":
@@ -1538,22 +1750,13 @@ async def fetch_urls_with_progress(
                 else:
                     size = len(content)
 
-                results.append({
-                    "url": url,
-                    "content": content,
-                    "size": size,
-                    "status": "success"
-                })
+                results.append(content)
 
                 formatted_domain = format_domain(url)
                 progress.update(task, description=f"[green]✓ {formatted_domain} ({len(content):,} chars)")
 
             except Exception as e:
-                results.append({
-                    "url": url,
-                    "error": str(e),
-                    "status": "error"
-                })
+                results.append(e)
                 domain = url.split('//')[1].split('/')[0] if '//' in url else url
                 progress.update(task, description=f"[red]✗ {domain} (failed)")
 
@@ -1565,8 +1768,9 @@ async def fetch_urls_concurrent_with_progress(
     urls: list[str],
     config: 'IfetcherConfig',
     content_type: str = "html",
-    max_concurrent: int = 5
-) -> list[dict]:
+    max_concurrent: int = 5,
+    verbose: bool = False,
+) -> list:
     """
     Fetch multiple URLs concurrently with progress display.
 
@@ -1577,7 +1781,7 @@ async def fetch_urls_concurrent_with_progress(
         max_concurrent: Maximum concurrent fetches
 
     Returns:
-        List of result dicts
+        List of raw content items or Exception objects (used for UI-only progress)
     """
     from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, MofNCompleteColumn, TimeElapsedColumn
     import asyncio
@@ -1603,19 +1807,25 @@ async def fetch_urls_concurrent_with_progress(
         else:
             return domain[:optimal_width-1] + "…"
 
+    _prog_console = Console(stderr=True)
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
         BarColumn(complete_style="blue", finished_style="green"),
         MofNCompleteColumn(),
         TimeElapsedColumn(),
+        transient=False,
+        refresh_per_second=8,
+        console=_prog_console,
     ) as progress:
 
-        task = progress.add_task("Fetching...", total=len(urls))
+        # Start with a neutral initializing state, then switch to fetching
+        task = progress.add_task("[dim]Initializing...[/dim]", total=len(urls))
         completed = {"count": 0}
 
         async def fetch_one(url: str):
-            fetcher = PageFetcher(config, show_status=False)
+            # Use progress bar; avoid per-URL spinners to reduce noise
+            fetcher = PageFetcher(config, show_status=False, verbose=verbose)
             formatted_domain = format_domain(url)
 
             try:
@@ -1637,18 +1847,8 @@ async def fetch_urls_concurrent_with_progress(
                     description=f"[blue]Fetching... ({completed['count']}/{len(urls)}) {formatted_domain}"
                 )
 
-                # Calculate size appropriately based on content type
-                if content_type == "chunks":
-                    size = sum(len(chunk) for chunk in content)
-                else:
-                    size = len(content)
-
-                return {
-                    "url": url,
-                    "content": content,
-                    "size": size,
-                    "status": "success"
-                }
+                # Size calculated only for progress description above; return raw content
+                return content
 
             except Exception as e:
                 completed["count"] += 1
@@ -1666,6 +1866,8 @@ async def fetch_urls_concurrent_with_progress(
             async with semaphore:
                 return await fetch_one(url)
 
+        # Switch to fetching state as tasks are scheduled
+        progress.update(task, description=f"[blue]Fetching...[/blue] (0/{len(urls)})")
         tasks = [fetch_with_limit(url) for url in urls]
         results = await asyncio.gather(*tasks)
 

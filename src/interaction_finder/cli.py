@@ -14,6 +14,7 @@ from typing import Optional, List, Dict, Any
 
 import typer
 from rich.console import Console
+from rich.traceback import Traceback
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
@@ -71,6 +72,13 @@ def display_error_summary(failed_pairs: List[tuple[str, Exception]], verbose: bo
     console.print(f"\n[red]Failed URLs: {len(failed_pairs)}[/red]")
 
     if verbose:
+        # Show pretty traceback for each failure
+        for url, exc in failed_pairs:
+            console.print(f"\n[red]Error for:[/red] {url}")
+            tb = Traceback.from_exception(type(exc), exc, exc.__traceback__, show_locals=False)
+            console.print(tb)
+        return
+    else:
         error_groups = group_errors(failed_pairs)
 
         for error_msg, urls in error_groups.items():
@@ -88,8 +96,7 @@ def display_error_summary(failed_pairs: List[tuple[str, Exception]], verbose: bo
                         console.print(f"  • {url}")
                     console.print(f"    [dim]... and {len(urls)-3} more with same error[/dim]")
             console.print()
-    else:
-        console.print("  (use --verbose to see error details)")
+        console.print("  (use --verbose to see full tracebacks)")
 
 
 def separate_results_and_errors(results: List, urls: List[str]) -> tuple[List, List[tuple[str, Exception]]]:
@@ -244,7 +251,8 @@ def train(
     dry_run: bool = typer.Option(False, "--dry-run", help="Show URLs that would be fetched without fetching them"),
     fetch_only: bool = typer.Option(False, "--fetch-only", help="Only fetch and cache URLs from training data, skip further processing"),
     max_concurrent: Optional[int] = typer.Option(None, "--max-concurrent", help="Maximum concurrent requests"),
-    verbose: bool = typer.Option(False, "-v", "--verbose", help="Show verbose output"),
+    verbose: bool = typer.Option(False, "-v", "--verbose", help="Show verbose output and pretty tracebacks on errors"),
+    failfast: bool = typer.Option(False, "--failfast", help="Stop on first error while fetching"),
 ):
     """
     Train sub-command: fetch URLs from training data for prompt optimization.
@@ -399,7 +407,7 @@ def train(
         return
 
     # Fetch URLs
-    asyncio.run(fetch_urls_async(urls, cfg, verbose, fetch_only))
+    asyncio.run(fetch_urls_async(urls, cfg, verbose, fetch_only, failfast))
 
 
 async def check_urls_cache_status(urls: List[str], config: IfetcherConfig) -> Dict[str, Dict[str, bool]]:
@@ -463,9 +471,10 @@ async def check_urls_cache_status(urls: List[str], config: IfetcherConfig) -> Di
     return cache_status
 
 
-async def fetch_urls_async(urls: List[str], config: IfetcherConfig, verbose: bool = False, fetch_only: bool = False):
+async def fetch_urls_async(urls: List[str], config: IfetcherConfig, verbose: bool = False, fetch_only: bool = False, failfast: bool = False):
     """Fetch URLs asynchronously using PageFetcher."""
-    fetcher = PageFetcher(config, show_status=verbose)
+    # In CLI runs, always show status spinners for single-URL operations
+    fetcher = PageFetcher(config, show_status=True, verbose=verbose)
 
     # Check which URLs are already cached
     already_cached = 0
@@ -489,7 +498,7 @@ async def fetch_urls_async(urls: List[str], config: IfetcherConfig, verbose: boo
     try:
         if fetch_only:
             # Use the concurrent fetching method that returns error info
-            results = await fetcher._fetch_multiple(urls, "chunks", progress=True)
+            results = await fetcher._fetch_multiple(urls, "chunks", progress=True, fail_fast=failfast)
 
             # Separate successful and failed results
             successful = []
@@ -510,11 +519,13 @@ async def fetch_urls_async(urls: List[str], config: IfetcherConfig, verbose: boo
             if failed:
                 console.print(f"[red]✗ Failed to cache: {len(failed)}[/red]")
                 display_error_summary(failed, verbose)
+                if failfast:
+                    raise typer.Exit(1)
 
             console.print("[dim]URLs have been fetched and cached for later use[/dim]")
         else:
             # Use the concurrent fetching method that returns error info
-            results = await fetcher._fetch_multiple(urls, "chunks", progress=True)
+            results = await fetcher._fetch_multiple(urls, "chunks", progress=True, fail_fast=failfast)
 
             # Separate successful and failed results
             successful = []
@@ -535,6 +546,8 @@ async def fetch_urls_async(urls: List[str], config: IfetcherConfig, verbose: boo
             if failed:
                 console.print(f"[red]✗ Failed to fetch: {len(failed)}[/red]")
                 display_error_summary(failed, verbose)
+                if failfast:
+                    raise typer.Exit(1)
 
             if verbose and successful:
                 content_lengths = [len(str(result)) for result in successful]

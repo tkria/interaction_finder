@@ -97,7 +97,7 @@ urls = ["https://paper1.url", "https://paper2.url"]
 markdowns = await fetcher.get_markdown(urls)  # Returns list of content
 all_chunks = await fetcher.get_chunks(urls)    # Returns list of lists [["chunk1", "chunk2"], ["chunk3"]]
 
-# Standalone batch functions with progress bars
+# Standalone batch functions with progress bars (return content or exceptions)
 results = await fetch_urls_with_progress(urls, config, "markdown")
 results = await fetch_urls_concurrent_with_progress(urls, config, "chunks", max_concurrent=10)
 ```
