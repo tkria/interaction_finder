@@ -26,6 +26,12 @@ if TYPE_CHECKING:
 
 import re
 
+class PreviousFailure(Exception):
+    """Raised when a previous fetch failure sentinel is present for a URL."""
+    def __init__(self, url: str, message: str | None = None):
+        super().__init__(message or f"Previous failure recorded for URL: {url}")
+        self.url = url
+
 # Content type configurations for serialization/deserialization
 CONTENT_TYPE_CONFIG = {
     "html": {"extension": "html", "serialize": str, "deserialize": str},
@@ -51,31 +57,42 @@ RELEVANT_HEADINGS = {
 
 IRRELEVANT_HEADINGS = {
     'references', 'keywords', 'bibliography', 'citations', 'authors', 'author',
-    'acknowledgements', 'acknowledgments', 'share', 'sharing',
+    'acknowledgements', 'acknowledgments', 'share', 'sharing', 'content link',
     'funding', 'conflicts', 'conflict of interest', 'competing interests',
     'data availability', 'supplementary', 'supporting information',
     'copyright', 'license', 'permissions', 'ethics', 'rights',
-    'affiliations', 'corresponding', 'cite this', 'reprints',
-    'related articles',
+    'affiliations', 'corresponding', 'license', 'licence', 'cite',
+    'how to cite', 'cite this', 'cited by', 'reprints',
+    'related articles', 'similar articles', 'publication history',
+    'publication types', 'notes', 'comments'
 }
 
 # Pattern lists for content classification
 IRRELEVANT_PATTERNS = [
-    r'.*login.*', r'.*sign\s*in.*', r'.*sign\s*up.*', r'.*register.*',
+    # Site chrome and navigation (exclude paywall/login which live in PAYWALL_PATTERNS)
     r'.*cookies?.*', r'.*privacy.*', r'.*terms.*', r'.*subscribe.*',
     r'.*newsletter.*', r'.*follow.*', r'.*social.*', r'.*menu.*',
     r'.*navigation.*', r'.*search.*', r'.*contact.*', r'.*about.*',
-    r'.*create.*account.*', r'.*free.*account.*', r'.*read.*content.*',
-    r'similar content.*', r'.*viewed by others', r'recommended.*',
-    r'supplementary\s+.*', r'supplemental\s+.*', r'.*metrics.*',
-    r'declaration\s+.*', r'.*availability.*', r'.*privacy.*'
+    r'.*read.*content.*', r'similar content.*', r'.*viewed by others', r'recommended.*',
+    r'supplementary\s+.*', r'supplemental\s+.*', r'.*metrics.*', r'.*altmetric.*',
+    r'declaration\s+.*', r'.*availability.*', r'.*privacy.*',
+    r'.*password.*', r'.*username.*', r'comment\s?.*'
 ]
 
 PAYWALL_PATTERNS = [
-    r'.*login.*', r'.*sign\s*in.*', r'.*sign\s*up.*', r'.*register.*',
+    r'.*log ?in.*', r'.*sign\s*in.*', r'.*sign\s*up.*', r'.*register.*',
     r'.*create.*account.*', r'.*free.*account.*', r'.*subscription.*',
-    r'.*paywall.*', r'.*access.*denied.*', r'.*premium.*content.*',
-    r'.*unlock.*content.*', r'.*full.*access.*'
+    r'.*paywall.*', r'.*access.*denied.*', r'.*get\s+.*access.*',
+    r'.*premium.*content.*', r'.*unlock.*content.*', r'.*full.*access.*',
+    r'.*purchase.*'
+]
+
+# Inline chrome filtering configuration
+INLINE_SHORT_LINE_MAXLEN = 140
+CHROME_INLINE_KEYWORDS = [
+    'sign in', 'sign up', 'log in', 'log-in', 'register', 'subscribe',
+    'forgot password', 'username', 'password', 'privacy', 'terms', 'cookies',
+    'share on', 'facebook', 'twitter', 'linkedin', 'email'
 ]
 
 # DOI extraction schema for XPath-based extraction from academic publishers
@@ -228,22 +245,86 @@ STEALTH_RETRY_THRESHOLD = 3000  # characters of raw markdown
 
 def refine_article_content(markdown: str) -> str:
     """
-    Refine article content by removing irrelevant sections using intelligent heading analysis.
+    Trim a page's Markdown to the core scholarly article while removing site chrome.
 
-    Identifies relevant academic sections (Abstract, Methods, Results, Discussion, Conclusion)
-    and irrelevant sections (References, Authors, Acknowledgements, navigation elements).
-    Removes irrelevant content before first relevant section and after last relevant section.
+    The function assumes ATX-style headings ("#", "##", …) and proceeds in phases:
+    1) Parse and classify headings; 2) Optionally pre-trim a duplicated title/abstract
+       preamble; 3) Identify a core article region; 4) Remove irrelevant sections before,
+       within, and after the core while preserving the true title and body.
+
+    Logic and behaviour
+    - Heading detection: Headings are extracted with their level and character offsets and
+      classified into:
+        • Relevant: academic sections like abstract, summary, introduction, methods,
+          results, discussion, conclusion, background, etc.
+        • Irrelevant: site chrome (navigation, sharing, cookies, privacy), metadata blocks
+          (affiliations, authors lists), and boilerplate (acknowledgements, funding, etc.).
+        • Paywall: login/register/paywall cues.
+
+    - Duplicate intro pre-trim (safe optional step):
+        • Section-repeat heuristic:
+            1) Take the first identified relevant section (e.g., "Abstract").
+            2) If the same-named relevant section appears again as the second relevant match,
+               find the second match's preceding larger heading (nearest heading with a lower
+               H level, e.g., H1 before H2 Abstract).
+            3) If the first relevant section starts before that preceding larger heading,
+               trim everything up to that larger heading (drops duplicate summary blocks),
+               then re-run the routine on the trimmed content.
+        • Fallbacks:
+            - If a duplicate H1 title appears and an Abstract occurs before the second title,
+              trim to the second title and re-run.
+            - Else, if two Abstract headings exist, trim to the second Abstract and re-run.
+
+    - No headings: Return the original `markdown` unchanged.
+
+    - No relevant sections found:
+        • If paywall-like headings are present, return an empty string.
+        • Otherwise, aggressively remove each irrelevant section (from its heading to the
+          next same-or-higher-level heading or end-of-document), keeping the remainder.
+
+    - Core region (when relevant sections exist):
+        • core_start: Prefer the first Abstract/Summary/Introduction. If found, preserve a
+          title heading immediately preceding it that has a larger visual rank (lower level
+          number, e.g., H1 before H2 Abstract). Remove everything before that title, and
+          also remove the content between the title and Abstract (preserving the newline
+          after the title). If no such title exists, remove everything before the Abstract.
+          If no Abstract/Summary/Introduction is present, set core_start to the first
+          non-irrelevant, non-paywall heading (fallback: first relevant) and remove the
+          prefix.
+        • core_end: The first irrelevant heading after the last relevant section, or the end
+          of the document if none exists.
+
+    - Section removals:
+        • Before core_start: Remove the entire prefix (except the preserved title case).
+        • Within the core: Remove any irrelevant sections that begin between core_start and
+          core_end, cutting each from its heading to the next same-or-higher-level heading,
+          but never beyond core_end.
+        • Reference-like anywhere: If academic structure is detected, remove reference-like
+          sections (e.g., references/bibliography/citations) anywhere in the document,
+          trimming to the next same-or-higher-level heading.
+        • After core_end: Do not cut the entire tail. Remove only irrelevant sections
+          individually (bounded to the next same-or-higher-level heading), preserving any
+          later relevant sections (e.g., Appendix).
+
+    Safeguards
+    - Over-trim guard: If the page does not clearly look like an academic article and the
+      reduction would be extreme (final length < 30% of input), fall back to the original
+      `markdown` to avoid accidental information loss on portal-like pages.
+    - Robustness: The pre-trim phase is wrapped in try/except and falls back to the standard
+      flow on anomalies.
 
     Args:
-        markdown: Raw markdown content from academic article webpage
+        markdown: Raw Markdown content from a candidate scholarly article page.
 
     Returns:
-        Cleaned markdown content with only relevant academic sections
+        Refined Markdown focused on the article title and core academic sections, with
+        navigation, boilerplate, and other irrelevant blocks removed.
 
-    Example:
-        >>> content = "# Title\\n## Abstract\\nContent...\\n## Authors\\nMore content..."
-        >>> refined = refine_article_content(content)
-        >>> # Returns: "# Title\\n## Abstract\\nContent..."
+    Examples
+        • Duplicate title + abstract: A top summary (Title + Abstract) followed by the main
+          article is trimmed to the second Title and then processed as a normal article.
+        • References mid-document: A mid-document "## References" is removed while keeping
+          subsequent core content (e.g., "## Appendix").
     """
 
     # Use module-level constants
@@ -251,6 +332,7 @@ def refine_article_content(markdown: str) -> str:
     irrelevant_headings = IRRELEVANT_HEADINGS
     irrelevant_patterns = IRRELEVANT_PATTERNS
     paywall_patterns = PAYWALL_PATTERNS
+    all_irrel_patterns = irrelevant_patterns + paywall_patterns
 
     # Find all headings with their positions and levels
     heading_pattern = r'^(#{1,6})\s+(.+?)(?:\s*\{[^}]*\})?\s*$'
@@ -268,7 +350,7 @@ def refine_article_content(markdown: str) -> str:
         # Check for irrelevant patterns first (higher priority)
         is_irrelevant = (
             any(irrel in text_lower for irrel in irrelevant_headings) or
-            any(re.match(pattern, text_lower, re.IGNORECASE) for pattern in irrelevant_patterns)
+            any(re.match(pattern, text_lower, re.IGNORECASE) for pattern in all_irrel_patterns)
         )
 
         # Check for paywall patterns
@@ -291,8 +373,78 @@ def refine_article_content(markdown: str) -> str:
     if not headings:
         return markdown
 
-    # Find first and last relevant headings
+    # Pre-pass: Detect duplicated intro (same relevant section repeated) and trim the first occurrence
+    def _norm_title(s: str) -> str:
+        s = re.sub(r"[\W_]+", " ", s or "").strip().lower()
+        return re.sub(r"\s+", " ", s)
+
+    try:
+        # Heuristic: If the first relevant section appears twice and the second occurrence
+        # has a preceding larger (lower H number) heading, and that larger heading appears
+        # after the first relevant section, then trim up to that larger heading.
+        rels = [h for h in headings if h['is_relevant']]
+        if len(rels) >= 2:
+            def _norm_section_name(txt: str) -> str:
+                return _norm_title(txt)
+
+            first_rel = rels[0]
+            first_rel_name = _norm_section_name(first_rel['text'])
+
+            second_rel_same = None
+            for r in rels[1:]:
+                if _norm_section_name(r['text']) == first_rel_name:
+                    second_rel_same = r
+                    break
+
+            def _preceding_larger_heading(target) -> dict | None:
+                for h in reversed(headings):
+                    if h['start_pos'] < target['start_pos'] and h['level'] < target['level']:
+                        return h
+                return None
+
+            if second_rel_same is not None:
+                parent2 = _preceding_larger_heading(second_rel_same)
+                if parent2 is not None and first_rel['start_pos'] < parent2['start_pos']:
+                    cut_pos = parent2['start_pos']
+                    # Never trim past first recognized heading
+                    if first_relevant_pos is None or cut_pos <= first_relevant_pos:
+                        new_markdown = markdown[cut_pos:]
+                        if len(new_markdown) < len(markdown):
+                            return refine_article_content(new_markdown)
+
+        h1s = [h for h in headings if h['level'] == 1]
+        abstracts = [h for h in headings if 'abstract' in h['text'].lower()]
+        trimmed_prefix = False
+
+        if len(h1s) >= 2:
+            first_title = _norm_title(h1s[0]['text'])
+            for h in h1s[1:]:
+                if _norm_title(h['text']) == first_title:
+                    cut_pos = h['start_pos']
+                    # Only trim if an Abstract appears before the duplicate title (indicating a summary header)
+                    if abstracts and abstracts[0]['start_pos'] < cut_pos:
+                        # Never trim past first recognized heading
+                        if first_relevant_pos is None or cut_pos <= first_relevant_pos:
+                            new_markdown = markdown[cut_pos:]
+                            if len(new_markdown) < len(markdown):
+                                return refine_article_content(new_markdown)
+                    break
+
+        # If no duplicate title found but multiple Abstracts exist, trim to second Abstract
+        if not trimmed_prefix and len(abstracts) >= 2:
+            cut_pos = abstracts[1]['start_pos']
+            # Never trim past first recognized heading
+            if first_relevant_pos is None or cut_pos <= first_relevant_pos:
+                new_markdown = markdown[cut_pos:]
+                if len(new_markdown) < len(markdown):
+                    return refine_article_content(new_markdown)
+    except Exception:
+        # If any issue occurs in pre-pass, continue with normal processing
+        pass
+
+    # Find first and last relevant headings (be robust: also match by keyword even if flags are off)
     relevant_headings_list = [h for h in headings if h['is_relevant']]
+    keyword_relevant_list = [h for h in headings if any(rel in h['text'].lower() for rel in RELEVANT_HEADINGS)]
     irrelevant_headings_list = [h for h in headings if h['is_irrelevant']]
     paywall_headings_list = [h for h in headings if h['is_paywall']]
 
@@ -300,24 +452,53 @@ def refine_article_content(markdown: str) -> str:
     sections_to_remove = []
 
     if not relevant_headings_list:
-        # No relevant headings found - check if this is paywall content
-        if paywall_headings_list:
-            # Paywall content detected with no scientific content - remove everything
-            return ""
-        else:
-            # No relevant headings found - be more aggressive with irrelevant section removal
-            for heading in irrelevant_headings_list:
-                # Find end of this irrelevant section (next heading of same/higher level or end of doc)
-                section_end = len(markdown)
-                for next_heading in headings:
-                    if (next_heading['start_pos'] > heading['start_pos'] and
-                        next_heading['level'] <= heading['level']):
-                        section_end = next_heading['start_pos']
-                        break
-                sections_to_remove.append((heading['start_pos'], section_end))
+        # No relevant headings found — preserve the primary content band:
+        # - Start at the first non-irrelevant, non-paywall heading (prefer lower H levels)
+        # - Remove everything before that heading (site chrome)
+        # - Then remove from the first irrelevant heading AFTER that content heading to the end
+
+        if headings:
+            # Compute section spans for each heading
+            spans = []
+            for i, h in enumerate(headings):
+                sec_start = h['end_pos']
+                sec_end = headings[i+1]['start_pos'] if i+1 < len(headings) else len(markdown)
+                sec_len = len(markdown[sec_start:sec_end].strip())
+                spans.append((h, sec_start, sec_end, sec_len))
+
+            # Prefer a content heading (not irrelevant/paywall, level<=3) with substantial section length
+            def pick_content_head(min_len: int = 200):
+                cands = [h for (h, a, b, L) in spans if not h['is_irrelevant'] and not h['is_paywall'] and h['level'] <= 3 and L >= min_len]
+                if cands:
+                    return sorted(cands, key=lambda h: (h['level'], h['start_pos']))[0]
+                cands = [h for (h, a, b, L) in spans if not h['is_irrelevant'] and not h['is_paywall'] and L >= min_len]
+                if cands:
+                    return sorted(cands, key=lambda h: (h['level'], h['start_pos']))[0]
+                # Fallback: first non-irrelevant/paywall heading, then first heading
+                cands = [h for (h, a, b, L) in spans if not h['is_irrelevant'] and not h['is_paywall']]
+                if cands:
+                    return sorted(cands, key=lambda h: (h['level'], h['start_pos']))[0]
+                return min(headings, key=lambda h: h['start_pos'])
+
+            content_head = pick_content_head()
+
+            # Remove chrome before primary content heading
+            if content_head['start_pos'] > 0:
+                sections_to_remove.append((0, content_head['start_pos']))
+
+            # Remove every irrelevant section after the content heading, bounded to next
+            for h in headings:
+                if h['is_irrelevant'] and h['start_pos'] > content_head['start_pos']:
+                    section_end = len(markdown)
+                    for nh in headings:
+                        if nh['start_pos'] > h['start_pos'] and nh['level'] <= h['level']:
+                            section_end = nh['start_pos']
+                            break
+                    sections_to_remove.append((h['start_pos'], section_end))
     else:
+        # Use keyword-based fallback to determine the last relevant heading reliably
         first_relevant = relevant_headings_list[0]
-        last_relevant = relevant_headings_list[-1]
+        last_relevant = (keyword_relevant_list[-1] if keyword_relevant_list else relevant_headings_list[-1])
 
         # Look for Abstract, Summary, or Introduction section first
         abstract_heading = None
@@ -327,37 +508,20 @@ def refine_article_content(markdown: str) -> str:
                 abstract_heading = heading
                 break
 
-        # If Abstract exists, try to preserve title before it
+        # Determine a core_start and preserve title if present
+        core_start = first_relevant['start_pos']
         title_to_preserve = None
         if abstract_heading is not None:
-            # Look for a larger heading immediately before Abstract
-            for heading in reversed(headings):  # Start from closest to Abstract
-                if (heading['start_pos'] < abstract_heading['start_pos'] and
-                    heading['level'] < abstract_heading['level']):  # Any heading larger than Abstract
-                    # Check if there are any RELEVANT headings between this title and the Abstract
-                    # Ignore irrelevant headings like "Permissions", "Copyright", etc.
-                    has_headings_between = False
-                    for between_heading in headings:
-                        if (heading['end_pos'] < between_heading['start_pos'] < abstract_heading['start_pos']):
-                            # Only consider this heading as blocking if it's not clearly irrelevant
-                            # and is of equal or higher importance than the Abstract (level <= Abstract level)
-                            between_text_lower = between_heading['text'].lower()
-                            is_between_irrelevant = (
-                                any(irrel in between_text_lower for irrel in irrelevant_headings) or
-                                any(re.match(pattern, between_text_lower, re.IGNORECASE) for pattern in irrelevant_patterns) or
-                                between_heading.get('is_paywall', False)
-                            )
-                            is_blocking_level = between_heading['level'] <= abstract_heading['level']
-                            if not is_between_irrelevant and is_blocking_level:
-                                has_headings_between = True
-                                break
+            core_start = abstract_heading['start_pos']
+            # Look for a larger heading immediately before Abstract and preserve it as title
+            for heading in reversed(headings):
+                if (heading['start_pos'] < abstract_heading['start_pos'] and heading['level'] < abstract_heading['level']):
+                    # Always preserve the title-level heading immediately before Abstract,
+                    # regardless of intervening same/higher-level headings. This prevents
+                    # accidental removal of the true article title.
+                    title_to_preserve = heading
+                    break
 
-                    if not has_headings_between:
-                        # Found title with no headings in between - preserve it
-                        title_to_preserve = heading
-                        break
-
-            # Apply title preservation logic for Abstract papers
             if title_to_preserve is not None:
                 # Remove content before title
                 sections_to_remove.append((0, title_to_preserve['start_pos']))
@@ -366,35 +530,79 @@ def refine_article_content(markdown: str) -> str:
                 while title_line_end < len(markdown) and markdown[title_line_end] != '\n':
                     title_line_end += 1
                 if title_line_end < len(markdown):
-                    title_line_end += 1  # Include the newline
+                    title_line_end += 1
                 sections_to_remove.append((title_line_end, abstract_heading['start_pos']))
             else:
                 # No title found, remove everything before Abstract
                 sections_to_remove.append((0, abstract_heading['start_pos']))
-
         else:
-            # No Abstract/Summary/Introduction section - start at the first
-            # non-irrelevant, non-paywall heading regardless of level.
+            # No Abstract/Summary/Introduction section - start at the first non-irrelevant heading
             first_academic_heading = None
             for heading in headings:
                 if (not heading['is_irrelevant'] and not heading['is_paywall']):
                     first_academic_heading = heading
                     break
+            core_start = (first_academic_heading or first_relevant)['start_pos']
+            sections_to_remove.append((0, core_start))
 
-            if first_academic_heading is not None:
-                sections_to_remove.append((0, first_academic_heading['start_pos']))
-            else:
-                # Fallback: remove before first relevant heading if no academic heading found
-                sections_to_remove.append((0, first_relevant['start_pos']))
-
-        # Remove irrelevant sections after last relevant heading
+        # Determine core_end as first irrelevant heading after the last relevant section,
+        # otherwise end of document. Then, ensure we don't cut off any later relevant section
+        # by mistake (robustness against misclassification).
+        core_end = len(markdown)
         for heading in headings:
-            if heading['start_pos'] <= last_relevant['start_pos']:
-                continue
-            if heading['is_irrelevant']:
-                # Remove from this heading to end of document
-                sections_to_remove.append((heading['start_pos'], len(markdown)))
-                break  # Once we find the first irrelevant heading after last relevant, remove everything
+            if heading['start_pos'] > last_relevant['start_pos'] and heading['is_irrelevant']:
+                core_end = heading['start_pos']
+                break
+        # If any relevant-looking heading appears at or after core_end, extend core_end to end
+        if core_end < len(markdown):
+            for h in headings:
+                if h['start_pos'] >= core_end and (h.get('is_relevant') or any(rel in h['text'].lower() for rel in RELEVANT_HEADINGS)):
+                    core_end = len(markdown)
+                    break
+
+        # Remove any irrelevant sections within the core region (clipped)
+        for heading in headings:
+            if heading['is_irrelevant'] and core_start <= heading['start_pos'] < core_end:
+                # End at next heading of same/higher level, but don't cross core_end
+                section_end = core_end
+                for next_heading in headings:
+                    if next_heading['start_pos'] > heading['start_pos'] and next_heading['level'] <= heading['level']:
+                        section_end = min(section_end, next_heading['start_pos'])
+                        break
+                sections_to_remove.append((heading['start_pos'], section_end))
+
+        # Also remove irrelevant sections that start after core_end individually,
+        # rather than cutting the entire tail. This avoids removing late relevant content
+        # (e.g., Appendix) if present.
+        if core_end < len(markdown):
+            for heading in headings:
+                if heading['is_irrelevant'] and heading['start_pos'] >= core_end:
+                    section_end = len(markdown)
+                    for next_heading in headings:
+                        if next_heading['start_pos'] > heading['start_pos'] and next_heading['level'] <= heading['level']:
+                            section_end = next_heading['start_pos']
+                            break
+                    sections_to_remove.append((heading['start_pos'], section_end))
+
+        # Additionally, remove reference-like sections anywhere in the document,
+        # but only if we detected academic structure. This avoids over-removal
+        # on navigation-heavy portal pages.
+        if relevant_headings_list:
+            for heading in headings:
+                text_lower = heading['text'].lower()
+                is_reference_like = (
+                    'references' in text_lower or 'bibliography' in text_lower or 'citations' in text_lower
+                )
+                # Only add extra removals for reference-like headings that weren't already
+                # flagged as irrelevant to avoid duplicate intervals.
+                if is_reference_like and not heading['is_irrelevant']:
+                    # Find end of this section: next heading of same or higher level, or end of doc
+                    section_end = len(markdown)
+                    for next_heading in headings:
+                        if next_heading['start_pos'] > heading['start_pos'] and next_heading['level'] <= heading['level']:
+                            section_end = next_heading['start_pos']
+                            break
+                    sections_to_remove.append((heading['start_pos'], section_end))
 
     # Apply removals in reverse order to maintain position accuracy
     sections_to_remove.sort(key=lambda x: x[0], reverse=True)
@@ -419,13 +627,62 @@ def refine_article_content(markdown: str) -> str:
             for section in ['methods', 'results', 'discussion', 'conclusion'])
     )
 
+    # Inline chrome remover: drop short nav/policy lines and irrelevant sections missed by structure pass
+    def _cleanup_inline(text: str) -> str:
+        lines = text.splitlines()
+        cleaned = []
+        skip_until_next_heading = False
+        heading_re = re.compile(r'^(#{1,6})\s+(.+?)\s*$')
+        for line in lines:
+            m = heading_re.match(line)
+            if m:
+                skip_until_next_heading = False
+                htxt = m.group(2).strip().lower()
+                # If heading itself is irrelevant, skip this heading and the section content lines
+                if (any(h in htxt for h in IRRELEVANT_HEADINGS)
+                    or any(re.match(p, htxt, re.IGNORECASE) for p in IRRELEVANT_PATTERNS)
+                    or any(re.match(p, htxt, re.IGNORECASE) for p in PAYWALL_PATTERNS)):
+                    skip_until_next_heading = True
+                    continue
+                cleaned.append(line)
+                continue
+            if skip_until_next_heading:
+                continue
+            s = line.strip()
+            # Drop obvious short chrome lines
+            if s and len(s) <= INLINE_SHORT_LINE_MAXLEN:
+                low = s.lower()
+                if any(k in low for k in CHROME_INLINE_KEYWORDS):
+                    continue
+            cleaned.append(line)
+        return "\n".join(cleaned).strip()
+
     # Skip safety check for clear academic content (e.g., abstract pages with lots of website chrome)
     if not has_clear_academic_structure and not has_alternative_academic_structure:
-        reduction_ratio = len(result.strip()) / len(markdown.strip()) if len(markdown.strip()) > 0 else 1
-        if markdown.strip() and result.strip() and reduction_ratio < 0.3:
-            return markdown.strip()
+        orig = markdown.strip()
+        refined = result.strip()
+        # If refinement removed everything on a non-academic page, keep original
+        if orig and not refined:
+            return _cleanup_inline(orig)
+        # If refinement is extremely aggressive, keep original
+        if orig and refined:
+            reduction_ratio = len(refined) / len(orig)
+            if reduction_ratio < 0.3:
+                return _cleanup_inline(orig)
 
-    return result.strip()
+    refined = result.strip()
+    if not refined and headings:
+        # Final fallback for non-academic pages: keep band from first heading
+        first_heading = min(headings, key=lambda h: h['start_pos'])
+        end = len(markdown)
+        for h in headings:
+            if h['start_pos'] > first_heading['start_pos'] and h['is_irrelevant']:
+                end = h['start_pos']
+                break
+        band = markdown[first_heading['start_pos']:end].strip()
+        if band:
+            return _cleanup_inline(band)
+    return _cleanup_inline(refined)
 
 def extract_headings(markdown: str) -> List[dict]:
     """
@@ -476,7 +733,7 @@ def classify_heading_relevance(heading_text: str) -> dict:
 
     is_irrelevant = (
         any(irrel in text_lower for irrel in irrelevant_headings) or
-        any(re.match(pattern, text_lower, re.IGNORECASE) for pattern in irrelevant_patterns)
+        any(re.match(pattern, text_lower, re.IGNORECASE) for pattern in all_irrel_patterns)
     )
 
     is_paywall = any(re.match(pattern, text_lower, re.IGNORECASE) for pattern in paywall_patterns)
@@ -504,8 +761,9 @@ def _get_crawl4ai_imports():
         try:
             from crawl4ai import AsyncWebCrawler, CrawlerRunConfig
             from crawl4ai.extraction_strategy import JsonXPathExtractionStrategy
+            from crawl4ai.markdown_generation_strategy import DefaultMarkdownGenerator
             from crawl4ai.async_logger import AsyncLoggerBase
-            _crawl4ai_html_imports = (AsyncWebCrawler, CrawlerRunConfig, JsonXPathExtractionStrategy, AsyncLoggerBase)
+            _crawl4ai_html_imports = (AsyncWebCrawler, CrawlerRunConfig, JsonXPathExtractionStrategy, AsyncLoggerBase, DefaultMarkdownGenerator)
         except ImportError:
             raise RuntimeError("crawl4ai package is required for fetching. Install with: pip install crawl4ai")
     return _crawl4ai_html_imports
@@ -530,6 +788,37 @@ def _get_browser_config(*, enable_stealth: bool = False, headless: bool = True):
     except ImportError:
         raise RuntimeError("crawl4ai package is required for fetching. Install with: pip install crawl4ai")
     return BrowserConfig(enable_stealth=enable_stealth, headless=headless)
+
+def _build_html_crawler_config(timeout_ms: int, *, with_js: bool) -> "CrawlerRunConfig":
+    """Factory for CrawlerRunConfig for HTML pages, sharing common options."""
+    # Full tuple unpack to detect signature changes
+    AsyncWebCrawler, CrawlerRunConfig, JsonXPathExtractionStrategy, AsyncLoggerBase, DefaultMarkdownGenerator = _get_crawl4ai_imports()
+    md_gen = DefaultMarkdownGenerator(
+        content_source="cleaned_html",
+        options={
+            "ignore_links": True,
+            "ignore_images": True,
+            "escape_html": True,
+            "skip_internal_links": True,
+        },
+    )
+    extra_kwargs = {}
+    if with_js:
+        extra_kwargs = {
+            "js_code": [CLICK_AND_MONITOR_JS],
+            "wait_for": WAIT_UNTIL_IDLE_JS,
+            "delay_before_return_html": 2.0,
+        }
+    return CrawlerRunConfig(
+        extraction_strategy=JsonXPathExtractionStrategy(DOI_EXTRACTION_SCHEMA, verbose=False),
+        page_timeout=timeout_ms,
+        word_count_threshold=10,
+        excluded_tags=["nav", "footer", "aside", "form", "dialog"],
+        excluded_selector="[role=dialog], .footer",
+        verbose=False,
+        markdown_generator=md_gen,
+        **extra_kwargs,
+    )
 
 def _has_recognized_sections(markdown: str) -> bool:
     """Detect if markdown contains recognized academic sections based on headings."""
@@ -582,7 +871,8 @@ def _get_granular_logger(status_display=None):
     Returns:
         GranularLogger instance that updates the status display with crawl4ai stages
     """
-    _, _, _, AsyncLoggerBase = _get_crawl4ai_imports()
+    # Full tuple unpack so signature changes raise immediately
+    AsyncWebCrawler, CrawlerRunConfig, JsonXPathExtractionStrategy, AsyncLoggerBase, DefaultMarkdownGenerator = _get_crawl4ai_imports()
 
     class GranularLogger(AsyncLoggerBase):
         """Logger that translates crawl4ai stages into Rich status updates."""
@@ -926,7 +1216,7 @@ class URLCache:
     async def clear_url(self, url: str) -> None:
         """Remove all cached content for a URL."""
         extensions = [config["extension"] for config in CONTENT_TYPE_CONFIG.values()]
-        extensions.extend(["url", "redir"])  # Add metadata file extensions
+        extensions.extend(["url", "redir", "failed"])  # Add metadata file extensions
         paths = await self._get_paths(url, *extensions)
         for path in paths:
             if path.exists():
@@ -963,6 +1253,52 @@ class URLCache:
                 pass
         return None
 
+    async def get_failed_reason(self, url: str) -> Optional[str]:
+        """Read and return the stored failure reason for this exact URL if present."""
+        failed_path, = await self._get_paths(url, "failed")
+        if failed_path.exists():
+            try:
+                async with aiofiles.open(failed_path, 'r', encoding='utf-8') as f:
+                    return (await f.read()).strip()
+            except (OSError, UnicodeDecodeError):
+                return None
+        return None
+
+    async def is_failed(self, url: str) -> bool:
+        """Check if a previous failure sentinel exists for this exact URL.
+
+        Separation of concerns: redirect resolution should be handled by the
+        caller (e.g., PageFetcher), which can then call `is_failed` on the
+        resolved URL if desired.
+        """
+        failed_path, = await self._get_paths(url, "failed")
+        return failed_path.exists()
+
+    async def mark_failed(self, url: str, final_url: Optional[str] = None, reason: Optional[str] = None) -> None:
+        """Create/overwrite a .failed sentinel for this URL.
+
+        Writes the plain-text error message to `<hash>.failed` for the provided URL.
+        We do not duplicate writes for redirect targets; inheritance is handled at
+        read-time by `is_failed()` following the `.redir` chain.
+        """
+        content = (reason or "").strip()
+        path, = await self._get_paths(url, "failed")
+        tmp = path.with_suffix('.failed.tmp')
+        try:
+            async with aiofiles.open(tmp, 'w', encoding='utf-8') as f:
+                await f.write(content)
+            await aiofiles.os.rename(tmp, path)
+        except Exception:
+            if tmp.exists():
+                tmp.unlink()
+            raise
+
+    async def clear_failed(self, url: str) -> None:
+        """Remove any existing .failed sentinel for this exact URL only."""
+        failed_path, = await self._get_paths(url, "failed")
+        if failed_path.exists():
+            failed_path.unlink()
+
     async def list_cached_urls(self) -> list[str]:
         """Get a list of all cached URLs."""
         urls = []
@@ -998,7 +1334,8 @@ class PageFetcher:
         Returns:
             Dict containing raw_content, markdown_content, final_url, and doi
         """
-        AsyncWebCrawler, CrawlerRunConfig, JsonXPathExtractionStrategy, _ = _get_crawl4ai_imports()
+        # Full tuple unpack to fail fast on signature changes
+        AsyncWebCrawler, CrawlerRunConfig, JsonXPathExtractionStrategy, AsyncLoggerBase, DefaultMarkdownGenerator = _get_crawl4ai_imports()
         domain = url.split('//')[1].split('/')[0] if '//' in url else url
 
         # First pass uses a lightweight config; heavy config is created only if retrying
@@ -1008,15 +1345,11 @@ class PageFetcher:
             progress_instance.update(task_id, description=f"[green]Fetching HTML from[/green] [bold]{domain}[/bold]")
             granular_logger = _get_quiet_logger()
             # First try: simple browser without JS/wait, headless fast path
-            simple_cfg = CrawlerRunConfig(
-                extraction_strategy=JsonXPathExtractionStrategy(DOI_EXTRACTION_SCHEMA, verbose=False),
-                page_timeout=self.config.tools.crawl4ai.timeout * 1000,
-                word_count_threshold=10,
-                excluded_tags=["nav", "footer", "aside", "form", "dialog"],
-                excluded_selector="[role=dialog]",
-                verbose=False,
+            simple_cfg = _build_html_crawler_config(
+                timeout_ms=self.config.tools.crawl4ai.timeout * 1000,
+                with_js=False,
             )
-            browser_simple = _get_browser_config(enable_stealth=False, headless=True)
+            browser_simple = _get_browser_config()
             async with AsyncWebCrawler(config=browser_simple, logger=granular_logger) as crawler:
                 result = await crawler.arun(url=url, config=simple_cfg)
                 if not result.success:
@@ -1025,15 +1358,11 @@ class PageFetcher:
             with self.status_display.create_status(f"[dim]Initializing...[/dim]") as status:
                 granular_logger = _get_granular_logger(status_display=status)
                 # First try: simple browser without JS/wait, headless fast path
-                simple_cfg = CrawlerRunConfig(
-                    extraction_strategy=JsonXPathExtractionStrategy(DOI_EXTRACTION_SCHEMA, verbose=False),
-                    page_timeout=self.config.tools.crawl4ai.timeout * 1000,
-                    word_count_threshold=10,
-                    excluded_tags=["nav", "footer", "aside", "form", "dialog"],
-                    excluded_selector="[role=dialog]",
-                    verbose=False,
+                simple_cfg = _build_html_crawler_config(
+                    timeout_ms=self.config.tools.crawl4ai.timeout * 1000,
+                    with_js=False,
                 )
-                browser_simple = _get_browser_config(enable_stealth=False, headless=True)
+                browser_simple = _get_browser_config()
                 async with AsyncWebCrawler(config=browser_simple, logger=granular_logger) as crawler:
                     result = await crawler.arun(url=url, config=simple_cfg)
                     if not result.success:
@@ -1041,7 +1370,7 @@ class PageFetcher:
 
         final_url = self._extract_final_url(result, url)
         raw_content = result.html or ''
-        raw_markdown_content = result.markdown.raw_markdown
+        raw_markdown_content, cleaned_markdown_content = result.markdown.raw_markdown, result.markdown
         doi = self._extract_doi(result)
 
         # Decide whether to retry with stealth/full text expansion
@@ -1053,18 +1382,11 @@ class PageFetcher:
 
         if retry:
             # Build slow/stealth config with JS instrumentation
-            slow_cfg = CrawlerRunConfig(
-                extraction_strategy=JsonXPathExtractionStrategy(DOI_EXTRACTION_SCHEMA, verbose=False),
-                page_timeout=self.config.tools.crawl4ai.timeout * 1000,
-                word_count_threshold=10,
-                excluded_tags=["nav", "footer", "aside", "form", "dialog"],
-                excluded_selector="[role=dialog]",
-                js_code=[CLICK_AND_MONITOR_JS],
-                wait_for=WAIT_UNTIL_IDLE_JS,
-                delay_before_return_html=1.0,
-                verbose=False,
+            slow_cfg = _build_html_crawler_config(
+                timeout_ms=self.config.tools.crawl4ai.timeout * 1000,
+                with_js=True,
             )
-            browser_stealth = _get_browser_config(enable_stealth=True, headless=False)
+            browser_stealth = _get_browser_config(enable_stealth=True, headless=True)#, headless=False)
             # Update status if available
             if progress_info is not None:
                 progress_instance, task_id = progress_info
@@ -1077,7 +1399,11 @@ class PageFetcher:
                 if result2.success:
                     final_url = self._extract_final_url(result2, url)
                     raw_content = result2.html or raw_content
-                    raw_markdown_content = result2.markdown.raw_markdown or raw_markdown_content
+                    tmp_raw, tmp_cleaned = result2.markdown.raw_markdown, result2.markdown
+                    if tmp_raw:
+                        raw_markdown_content = tmp_raw
+                    if tmp_cleaned:
+                        cleaned_markdown_content = tmp_cleaned
                     doi2 = self._extract_doi(result2)
                     if doi2:
                         doi = doi2
@@ -1094,7 +1420,7 @@ class PageFetcher:
         return {
             'raw_content': raw_content,
             'raw_markdown_content': raw_markdown_content,
-            'markdown_content': self._refine_article_content(raw_markdown_content),
+            'markdown_content': self._refine_article_content(cleaned_markdown_content),
             'final_url': final_url,
             'doi': doi
         }
@@ -1126,7 +1452,7 @@ class PageFetcher:
             progress_instance, task_id = progress_info
             progress_instance.update(task_id, description=f"[red]Fetching PDF from[/red] [bold]{domain}[/bold]")
             granular_logger = _get_quiet_logger()
-            browser_config = _get_browser_config(enable_stealth=True, headless=False)
+            browser_config = _get_browser_config(enable_stealth=True, headless=True)
             async with AsyncWebCrawler(config=browser_config, crawler_strategy=pdf_crawler_cfg, logger=granular_logger) as crawler:
                 result = await crawler.arun(url=url, config=cfg)
                 if not result.success:
@@ -1134,15 +1460,15 @@ class PageFetcher:
         else:
             with self.status_display.create_status(f"[dim]Initializing...[/dim]") as status:
                 granular_logger = _get_granular_logger(status_display=status)
-                browser_config = _get_browser_config(enable_stealth=True, headless=False)
+                browser_config = _get_browser_config(enable_stealth=True, headless=True)
                 async with AsyncWebCrawler(config=browser_config, crawler_strategy=pdf_crawler_cfg, logger=granular_logger) as crawler:
                     result = await crawler.arun(url=url, config=cfg)
                     if not result.success:
                         raise RuntimeError(f"{result.status_code} error fetching PDF {url}: {result.error_message}")
 
         final_url = result.url
-        raw_markdown_content = result.markdown.raw_markdown
-        markdown_content = self._refine_article_content(raw_markdown_content)
+        raw_markdown_content, cleaned_markdown_content = result.markdown.raw_markdown, result.markdown
+        markdown_content = self._refine_article_content(cleaned_markdown_content)
         raw_content = result.pdf or ''
 
         return {
@@ -1224,7 +1550,7 @@ class PageFetcher:
         # Return just the text content of each chunk
         return [chunk.text for chunk in chunks]
 
-    async def _fetch_and_cache(self, url: str, progress=True, progress_info=None) -> dict[str, str]:
+    async def _fetch_and_cache(self, url: str, progress=True, progress_info=None, *, retry: bool = False) -> dict[str, str]:
         """
         Fetch content from URL and cache it based on content type.
 
@@ -1236,54 +1562,98 @@ class PageFetcher:
         Returns:
             Dict containing content information
         """
+        # Respect previous failure marker unless retrying.
+        # Follow any known redirects (from prior successful fetches) before checking.
+        if not retry:
+            # Check original URL
+            if await self.cache.is_failed(url):
+                reason = await self.cache.get_failed_reason(url)
+                raise PreviousFailure(url, reason or f"Previous failure recorded for URL: {url}")
+            # If a redirect mapping exists, check the final URL too
+            try:
+                visited = set()
+                current = url
+                for _ in range(3):  # safety cap
+                    redir = await self.cache.get_redirect_info(current)
+                    if not redir or redir in visited:
+                        break
+                    visited.add(redir)
+                    if await self.cache.is_failed(redir):
+                        reason = await self.cache.get_failed_reason(redir)
+                        raise PreviousFailure(redir, reason or f"Previous failure recorded for URL: {redir}")
+                    current = redir
+            except Exception:
+                # On any error probing redirect info, fall back to proceeding
+                pass
+
         is_pdf = self._is_pdf_url(url)
 
-        if progress is True:
-            if is_pdf:
-                content_info = await self._fetch_pdf_url(url)
-                content_info['source_type'] = 'pdf'
-            else:
-                content_info = await self._fetch_html_url(url)
-                content_info['source_type'] = 'html'
-        elif progress is False:
-            old_show_status = self.status_display.show_status
-            self.status_display.show_status = False
-            try:
+        try:
+            if progress is True:
                 if is_pdf:
                     content_info = await self._fetch_pdf_url(url)
                     content_info['source_type'] = 'pdf'
                 else:
                     content_info = await self._fetch_html_url(url)
                     content_info['source_type'] = 'html'
-            finally:
-                self.status_display.show_status = old_show_status
-        else:
-            if is_pdf:
-                content_info = await self._fetch_pdf_url(url, progress_info=progress)
-                content_info['source_type'] = 'pdf'
+            elif progress is False:
+                old_show_status = self.status_display.show_status
+                self.status_display.show_status = False
+                try:
+                    if is_pdf:
+                        content_info = await self._fetch_pdf_url(url)
+                        content_info['source_type'] = 'pdf'
+                    else:
+                        content_info = await self._fetch_html_url(url)
+                        content_info['source_type'] = 'html'
+                finally:
+                    self.status_display.show_status = old_show_status
             else:
-                content_info = await self._fetch_html_url(url, progress_info=progress)
-                content_info['source_type'] = 'html'
+                if is_pdf:
+                    content_info = await self._fetch_pdf_url(url, progress_info=progress)
+                    content_info['source_type'] = 'pdf'
+                else:
+                    content_info = await self._fetch_html_url(url, progress_info=progress)
+                    content_info['source_type'] = 'html'
+        except Exception as e:
+            # Mark failed and re-raise
+            try:
+                await self.cache.mark_failed(url, reason=str(e))
+            finally:
+                pass
+            raise
 
         final_url = content_info.get('final_url', url)
 
-        if is_pdf:
-            await self.cache.set_content(url, "pdf", content_info['raw_content'], final_url)
-        else:
-            await self.cache.set_content(url, "html", content_info['raw_content'], final_url)
+        try:
+            if is_pdf:
+                await self.cache.set_content(url, "pdf", content_info['raw_content'], final_url)
+            else:
+                await self.cache.set_content(url, "html", content_info['raw_content'], final_url)
 
-        await self.cache.set_content(url, "markdown", content_info['markdown_content'], final_url)
+            await self.cache.set_content(url, "markdown", content_info['markdown_content'], final_url)
 
-        # Store raw markdown if available (for both HTML and PDF sources)
-        if content_info.get('raw_markdown_content'):
-            await self.cache.set_content(url, "raw_markdown", content_info['raw_markdown_content'], final_url)
+            # Store raw markdown if available (for both HTML and PDF sources)
+            if content_info.get('raw_markdown_content'):
+                await self.cache.set_content(url, "raw_markdown", content_info['raw_markdown_content'], final_url)
 
-        if content_info.get('doi'):
-            await self.cache.set_content(url, "doi", content_info['doi'], final_url)
+            if content_info.get('doi'):
+                await self.cache.set_content(url, "doi", content_info['doi'], final_url)
 
-        return content_info
+            # Clear any previous failure marker(s) on success
+            await self.cache.clear_failed(url)
+            if final_url and final_url != url:
+                await self.cache.clear_failed(final_url)
+            return content_info
+        except Exception as e:
+            # Mark as failed and re-raise
+            try:
+                await self.cache.mark_failed(url, final_url=final_url, reason=str(e))
+            finally:
+                pass
+            raise
 
-    async def get_html(self, url: Union[str, List[str]], progress=True, fail_fast: bool = False) -> Union[str, List[str]]:
+    async def get_html(self, url: Union[str, List[str]], progress=True, fail_fast: bool = False, *, retry: bool = False) -> Union[str, List[str]]:
         """
         Get HTML content for single URL or multiple URLs with concurrent fetching.
 
@@ -1296,14 +1666,14 @@ class PageFetcher:
         """
         if isinstance(url, str):
             if not await self.cache.has_path(url, "html"):
-                await self._fetch_and_cache(url, progress=progress)
+                await self._fetch_and_cache(url, progress=progress, retry=retry)
             return await self.cache.get_content(url, "html")
 
         elif isinstance(url, list):
             if len(url) == 0:
                 return []
 
-            results = await self._fetch_multiple(url, "html", progress=progress, fail_fast=fail_fast)
+            results = await self._fetch_multiple(url, "html", progress=progress, fail_fast=fail_fast, retry=retry)
             if isinstance(progress, tuple):
                 # Custom progress returns content directly
                 return results
@@ -1313,7 +1683,7 @@ class PageFetcher:
         else:
             raise TypeError(f"url must be str or list[str], got {type(url)}")
 
-    async def get_pdf(self, url: Union[str, List[str]], progress=True, fail_fast: bool = False) -> Union[str, List[str]]:
+    async def get_pdf(self, url: Union[str, List[str]], progress=True, fail_fast: bool = False, *, retry: bool = False) -> Union[str, List[str]]:
         """
         Get PDF content for single URL or multiple URLs with concurrent fetching.
 
@@ -1326,14 +1696,14 @@ class PageFetcher:
         """
         if isinstance(url, str):
             if not await self.cache.has_path(url, "pdf"):
-                await self._fetch_and_cache(url, progress=progress)
+                await self._fetch_and_cache(url, progress=progress, retry=retry)
             return await self.cache.get_content(url, "pdf")
 
         elif isinstance(url, list):
             if len(url) == 0:
                 return []
 
-            results = await self._fetch_multiple(url, "pdf", progress=progress, fail_fast=fail_fast)
+            results = await self._fetch_multiple(url, "pdf", progress=progress, fail_fast=fail_fast, retry=retry)
             if isinstance(progress, tuple):
                 # Custom progress returns content directly
                 return results
@@ -1343,7 +1713,7 @@ class PageFetcher:
         else:
             raise TypeError(f"url must be str or list[str], got {type(url)}")
 
-    async def get_markdown(self, url: Union[str, List[str]], progress=True, fail_fast: bool = False) -> Union[str, List[str]]:
+    async def get_markdown(self, url: Union[str, List[str]], progress=True, fail_fast: bool = False, *, retry: bool = False) -> Union[str, List[str]]:
         """
         Get Markdown content for single URL or multiple URLs with concurrent fetching.
         Automatically detects and handles both HTML and PDF URLs.
@@ -1394,7 +1764,7 @@ class PageFetcher:
                         pass
             else:
                 # No HTML cached, fetch from scratch
-                await self._fetch_and_cache(url, progress=progress)
+                await self._fetch_and_cache(url, progress=progress, retry=retry)
                 return await self.cache.get_path(url, "markdown")
 
         elif isinstance(url, list):
@@ -1417,7 +1787,7 @@ class PageFetcher:
 
             # Fetch any URLs that aren't cached
             if urls_to_fetch:
-                fetch_results = await self._fetch_multiple(urls_to_fetch, "markdown", progress=progress, fail_fast=fail_fast)
+                fetch_results = await self._fetch_multiple(urls_to_fetch, "markdown", progress=progress, fail_fast=fail_fast, retry=retry)
 
                 # Map back to original URLs, skipping exceptions
                 for i, u in enumerate(urls_to_fetch):
@@ -1430,7 +1800,7 @@ class PageFetcher:
         else:
             raise TypeError(f"url must be str or list[str], got {type(url)}")
 
-    async def get_raw(self, url: str) -> str:
+    async def get_raw(self, url: str, *, retry: bool = False) -> str:
         """Get raw content (HTML or PDF) for URL, fetching if necessary."""
         # Check cache first
         source_content = await self.cache.get_source_content(url)
@@ -1438,7 +1808,7 @@ class PageFetcher:
             return source_content
 
         # Not cached, fetch it
-        content_info = await self._fetch_and_cache(url)
+        content_info = await self._fetch_and_cache(url, retry=retry)
         return content_info['raw_content']
 
     def _process_multiple_results(self, results: List, progress) -> List:
@@ -1454,14 +1824,14 @@ class PageFetcher:
         """
         return [result for result in results if not isinstance(result, Exception)]
 
-    async def get_raw_markdown(self, url: str) -> str:
+    async def get_raw_markdown(self, url: str, *, retry: bool = False) -> str:
         """Get raw (pre-cleaned) markdown content for URL, fetching if necessary."""
         # Check cache first
         if await self.cache.has_path(url, "raw_markdown"):
             return await self.cache.get_path(url, "raw_markdown")
 
         # Not cached, fetch it
-        content_info = await self._fetch_and_cache(url)
+        content_info = await self._fetch_and_cache(url, retry=retry)
         return content_info.get('raw_markdown_content', '')
 
     async def is_cached(self, url: str) -> bool:
@@ -1476,7 +1846,7 @@ class PageFetcher:
         """Clear cached content for URL."""
         await self.cache.clear_url(url)
 
-    async def get_chunks(self, url: Union[str, List[str]], progress=True, fail_fast: bool = False) -> Union[List[str], List[List[str]]]:
+    async def get_chunks(self, url: Union[str, List[str]], progress=True, fail_fast: bool = False, *, retry: bool = False) -> Union[List[str], List[List[str]]]:
         """
         Get chunked content for single URL or multiple URLs as lists of strings.
         Automatically fetches markdown first if not cached, then chunks it.
@@ -1494,7 +1864,7 @@ class PageFetcher:
                 return await self.cache.get_content(url, "chunks")
 
             # Get markdown content first
-            markdown_content = await self.get_markdown(url, progress=progress)
+            markdown_content = await self.get_markdown(url, progress=progress, retry=retry)
 
             # Get final URL from redirect info if it exists
             final_url = await self.cache.get_redirect_info(url)
@@ -1509,7 +1879,7 @@ class PageFetcher:
             if len(url) == 0:
                 return []
 
-            results = await self._fetch_multiple(url, "chunks", progress=progress, fail_fast=fail_fast)
+            results = await self._fetch_multiple(url, "chunks", progress=progress, fail_fast=fail_fast, retry=retry)
             return self._process_multiple_results(results, progress)
 
         else:
@@ -1529,7 +1899,7 @@ class PageFetcher:
             except Exception as e:
                 print(f"Failed to prefetch {url}: {e}")
 
-    async def get_doi(self, url: str) -> Optional[str]:
+    async def get_doi(self, url: str, *, retry: bool = False) -> Optional[str]:
         """
         Get DOI for URL if available.
 
@@ -1540,18 +1910,18 @@ class PageFetcher:
             DOI string if found, None otherwise
         """
         if not await self.cache.has_path(url, "doi") and not await self.cache.has_url(url):
-            await self._fetch_and_cache(url)
+            await self._fetch_and_cache(url, retry=retry)
         return await self.cache.get_content(url, "doi")
 
-    async def _get_content_by_type(self, url: str, content_type: str, progress_info=None) -> Any:
+    async def _get_content_by_type(self, url: str, content_type: str, progress_info=None, *, retry: bool = False) -> Any:
         """Get content of specified type, fetching if necessary."""
         if content_type == "html":
             if not await self.cache.has_path(url, "html"):
-                await self._fetch_and_cache(url, progress=progress_info)
+                await self._fetch_and_cache(url, progress=progress_info, retry=retry)
             return await self.cache.get_path(url, "html")
         elif content_type == "pdf":
             if not await self.cache.has_path(url, "pdf"):
-                await self._fetch_and_cache(url, progress=progress_info)
+                await self._fetch_and_cache(url, progress=progress_info, retry=retry)
             return await self.cache.get_path(url, "pdf")
         elif content_type == "markdown":
             if await self.cache.has_path(url, "markdown"):
@@ -1560,10 +1930,10 @@ class PageFetcher:
                 # Fetch appropriate content type to generate markdown
                 if self._is_pdf_url(url):
                     if not await self.cache.has_path(url, "pdf"):
-                        await self._fetch_and_cache(url, progress=progress_info)
+                        await self._fetch_and_cache(url, progress=progress_info, retry=retry)
                 else:
                     if not await self.cache.has_path(url, "html"):
-                        await self._fetch_and_cache(url, progress=progress_info)
+                        await self._fetch_and_cache(url, progress=progress_info, retry=retry)
                 return await self.cache.get_path(url, "markdown")
         elif content_type == "chunks":
             if await self.cache.has_path(url, "chunks"):
@@ -1576,10 +1946,10 @@ class PageFetcher:
                     # Fetch appropriate content type to generate markdown
                     if self._is_pdf_url(url):
                         if not await self.cache.has_path(url, "pdf"):
-                            await self._fetch_and_cache(url, progress=progress_info)
+                            await self._fetch_and_cache(url, progress=progress_info, retry=retry)
                     else:
                         if not await self.cache.has_path(url, "html"):
-                            await self._fetch_and_cache(url, progress=progress_info)
+                            await self._fetch_and_cache(url, progress=progress_info, retry=retry)
                     markdown_content = await self.cache.get_path(url, "markdown")
 
                 # Chunk the markdown content
@@ -1587,7 +1957,7 @@ class PageFetcher:
                 await self.cache.set_content(url, "chunks", chunks)
                 return chunks
         else:
-            return await self.get_raw(url)
+            return await self.get_raw(url, retry=retry)
 
     def _calculate_content_size(self, content: Any, content_type: str) -> int:
         """Calculate appropriate size for different content types."""
@@ -1595,7 +1965,7 @@ class PageFetcher:
             return sum(len(chunk) for chunk in content)
         return len(content)
 
-    async def _fetch_multiple(self, urls: List[str], content_type: str, progress=None, max_concurrent: int = 5, fail_fast: bool = False) -> List:
+    async def _fetch_multiple(self, urls: List[str], content_type: str, progress=None, max_concurrent: int = 5, fail_fast: bool = False, *, retry: bool = False) -> List:
         """
         Unified method to fetch multiple URLs with different progress modes.
 
@@ -1613,7 +1983,7 @@ class PageFetcher:
             results: list = []
             for url in urls:
                 try:
-                    content = await self._get_content_by_type(url, content_type, progress_info=False)
+                    content = await self._get_content_by_type(url, content_type, progress_info=False, retry=retry)
                     # Always append raw content in fail-fast mode
                     results.append(content)
                 except Exception as e:
@@ -1628,6 +1998,7 @@ class PageFetcher:
                 self.config,
                 content_type=content_type,
                 max_concurrent=max_concurrent,
+                retry=retry,
                 verbose=self.verbose
             )
             # Already raw content or exceptions
@@ -1640,7 +2011,7 @@ class PageFetcher:
             async def fetch_one(url: str):
                 async with semaphore:
                     try:
-                        content = await self._get_content_by_type(url, content_type, progress_info=False)
+                        content = await self._get_content_by_type(url, content_type, progress_info=False, retry=retry)
                         return content
                     except Exception as e:
                         return e
@@ -1659,7 +2030,7 @@ class PageFetcher:
                     progress_instance.update(task_id, description=f"[blue]Fetching {content_type} from[/blue] [bold]{domain}[/bold] ({i+1}/{len(urls)})")
 
                     # Handle content fetch without special chunking messages
-                    content = await self._get_content_by_type(url, content_type, progress)
+                    content = await self._get_content_by_type(url, content_type, progress, retry=retry)
 
                     results.append(content)
                 except Exception as e:
@@ -1673,6 +2044,7 @@ async def fetch_urls_with_progress(
     content_type: str = "html",
     progress_description: str = "Fetching URLs...",
     verbose: bool = False,
+    retry: bool = False,
 ) -> list:
     """
     Fetch multiple URLs with clean progress display.
@@ -1734,15 +2106,15 @@ async def fetch_urls_with_progress(
                 formatted_domain = format_domain(url)
                 progress.update(task, description=f"[blue]Fetching...[/blue] {formatted_domain}")
                 if content_type == "html":
-                    content = await fetcher.get_html(url, progress=(progress, task))
+                    content = await fetcher.get_html(url, progress=(progress, task), retry=retry)
                 elif content_type == "pdf":
-                    content = await fetcher.get_pdf(url, progress=(progress, task))
+                    content = await fetcher.get_pdf(url, progress=(progress, task), retry=retry)
                 elif content_type == "markdown":
-                    content = await fetcher.get_markdown(url, progress=(progress, task))
+                    content = await fetcher.get_markdown(url, progress=(progress, task), retry=retry)
                 elif content_type == "chunks":
-                    content = await fetcher.get_chunks(url, progress=(progress, task))
+                    content = await fetcher.get_chunks(url, progress=(progress, task), retry=retry)
                 else:
-                    content = await fetcher.get_raw(url)
+                    content = await fetcher.get_raw(url, retry=retry)
 
                 # Calculate size appropriately based on content type
                 if content_type == "chunks":
@@ -1770,6 +2142,7 @@ async def fetch_urls_concurrent_with_progress(
     content_type: str = "html",
     max_concurrent: int = 5,
     verbose: bool = False,
+    retry: bool = False,
 ) -> list:
     """
     Fetch multiple URLs concurrently with progress display.
@@ -1830,15 +2203,15 @@ async def fetch_urls_concurrent_with_progress(
 
             try:
                 if content_type == "html":
-                    content = await fetcher.get_html(url, progress=False)
+                    content = await fetcher.get_html(url, progress=False, retry=retry)
                 elif content_type == "pdf":
-                    content = await fetcher.get_pdf(url, progress=False)
+                    content = await fetcher.get_pdf(url, progress=False, retry=retry)
                 elif content_type == "markdown":
-                    content = await fetcher.get_markdown(url, progress=False)
+                    content = await fetcher.get_markdown(url, progress=False, retry=retry)
                 elif content_type == "chunks":
-                    content = await fetcher.get_chunks(url, progress=False)
+                    content = await fetcher.get_chunks(url, progress=False, retry=retry)
                 else:
-                    content = await fetcher.get_raw(url)
+                    content = await fetcher.get_raw(url, retry=retry)
 
                 completed["count"] += 1
                 progress.update(

@@ -94,8 +94,8 @@ class TestBasicCaching:
         url = "https://example.com/page"
         content = "<html><body><h1>My Page</h1><p>Content here</p></body></html>"
 
-        await cache.set_html(url, content)
-        retrieved = await cache.get_html(url)
+        await cache.set_path(url, "html", content)
+        retrieved = await cache.get_content(url, "html")
 
         assert retrieved == content
         assert await cache.has_path(url, "html")
@@ -106,8 +106,8 @@ class TestBasicCaching:
         url = "https://example.com/article"
         content = "# My Article\n\nThis is **bold** content with [links](http://example.com)."
 
-        await cache.set_markdown(url, content)
-        retrieved = await cache.get_markdown(url)
+        await cache.set_path(url, "markdown", content)
+        retrieved = await cache.get_content(url, "markdown")
 
         assert retrieved == content
         assert await cache.has_path(url, "markdown")
@@ -118,8 +118,8 @@ class TestBasicCaching:
         url = "https://example.com/paper.pdf"
         content = "PDF content simulated as text"
 
-        await cache.set_pdf(url, content)
-        retrieved = await cache.get_pdf(url)
+        await cache.set_path(url, "pdf", content)
+        retrieved = await cache.get_content(url, "pdf")
 
         assert retrieved == content
         assert await cache.has_path(url, "pdf")
@@ -131,11 +131,11 @@ class TestBasicCaching:
         html_content = "<html><body>HTML</body></html>"
         markdown_content = "# Markdown\nContent"
 
-        await cache.set_html(url, html_content)
-        await cache.set_markdown(url, markdown_content)
+        await cache.set_path(url, "html", html_content)
+        await cache.set_path(url, "markdown", markdown_content)
 
-        assert await cache.get_html(url) == html_content
-        assert await cache.get_markdown(url) == markdown_content
+        assert await cache.get_content(url, "html") == html_content
+        assert await cache.get_content(url, "markdown") == markdown_content
         assert await cache.has_path(url, "html")
         assert await cache.has_path(url, "markdown")
 
@@ -145,11 +145,11 @@ class TestBasicCaching:
         url = "https://nonexistent.com/page"
 
         with pytest.raises(KeyError):
-            await cache.get_html(url)
+            await cache.get_content(url, "html")
         with pytest.raises(KeyError):
-            await cache.get_markdown(url)
+            await cache.get_content(url, "markdown")
         with pytest.raises(KeyError):
-            await cache.get_pdf(url)
+            await cache.get_content(url, "pdf")
 
         assert not await cache.has_path(url, "html")
         assert not await cache.has_path(url, "markdown")
@@ -161,8 +161,8 @@ class TestBasicCaching:
         url = "https://example.com/unicode"
         content = "Content with émojis 🚀 and ünicode characters 中文"
 
-        await cache.set_html(url, content)
-        retrieved = await cache.get_html(url)
+        await cache.set_path(url, "html", content)
+        retrieved = await cache.get_content(url, "html")
 
         assert retrieved == content
 
@@ -174,12 +174,12 @@ class TestBasicCaching:
 
         # Store content with first cache instance
         cache1 = URLCache(temp_config)
-        await cache1.set_html(url, content)
+        await cache1.set_path(url, "html", content)
 
         # Create new cache instance and verify content exists
         cache2 = URLCache(temp_config)
         assert await cache2.has_path(url, "html")
-        assert await cache2.get_html(url) == content
+        assert await cache2.get_content(url, "html") == content
 
 
 class TestUserWorkflows:
@@ -217,8 +217,8 @@ class TestUserWorkflows:
         assert not await fetcher.is_cached(url)
 
         # Store content
-        await fetcher.cache.set_html(url, html_content)
-        await fetcher.cache.set_markdown(url, markdown_content)
+        await fetcher.cache.set_path(url, "html", html_content)
+        await fetcher.cache.set_path(url, "markdown", markdown_content)
 
         # Check cached status
         assert await fetcher.is_cached(url)
@@ -271,8 +271,8 @@ class TestUserWorkflows:
         markdown = "# Redirected content"
 
         # Simulate storing content that was redirected
-        await fetcher.cache.set_html(original_url, content, final_url)
-        await fetcher.cache.set_markdown(original_url, markdown, final_url)
+        await fetcher.cache.set_path(original_url, "html", content, final_url)
+        await fetcher.cache.set_path(original_url, "markdown", markdown, final_url)
 
         # User can access by original URL (silently)
         assert await fetcher.is_cached(original_url)
@@ -323,8 +323,8 @@ class TestUserWorkflows:
         real_url = f"{http_server}/test.html"
 
         # Cache some content first
-        await fetcher.cache.set_html(cached_url, "<html>Cached content</html>")
-        await fetcher.cache.set_markdown(cached_url, "# Cached Content")
+        await fetcher.cache.set_path(cached_url, "html", "<html>Cached content</html>")
+        await fetcher.cache.set_path(cached_url, "markdown", "# Cached Content")
 
         # Check status of both
         assert await fetcher.is_cached(cached_url)
@@ -369,7 +369,7 @@ class TestCacheManagement:
 
         # Store all content
         for url, content in urls_and_content:
-            await cache.set_html(url, content)
+            await cache.set_path(url, "html", content)
 
         # Can check individual URLs
         for url, content in urls_and_content:
@@ -388,10 +388,10 @@ class TestCacheManagement:
         url1 = "https://example.com/keep"
         url2 = "https://example.com/remove"
 
-        await cache.set_html(url1, "<html>Keep this</html>")
-        await cache.set_html(url2, "<html>Remove this</html>")
-        await cache.set_markdown(url1, "# Keep this")
-        await cache.set_markdown(url2, "# Remove this")
+        await cache.set_path(url1, "html", "<html>Keep this</html>")
+        await cache.set_path(url2, "html", "<html>Remove this</html>")
+        await cache.set_path(url1, "markdown", "# Keep this")
+        await cache.set_path(url2, "markdown", "# Remove this")
 
         # Both should be cached
         assert await cache.has_path(url1, "html")
@@ -405,7 +405,7 @@ class TestCacheManagement:
         # Only url1 should remain
         assert await cache.has_path(url1, "html")
         assert not await cache.has_path(url2, "html")
-        assert await cache.get_html(url1) == "<html>Keep this</html>"
+        assert await cache.get_content(url1, "html") == "<html>Keep this</html>"
 
     @pytest.mark.asyncio
     async def test_content_type_detection(self, cache):
@@ -415,10 +415,10 @@ class TestCacheManagement:
         both_url = "https://example.com/both"
 
         # Store different content types
-        await cache.set_html(html_url, "<html>HTML page</html>")
-        await cache.set_pdf(pdf_url, "PDF content")
-        await cache.set_html(both_url, "<html>HTML version</html>")
-        await cache.set_markdown(both_url, "# Markdown version")
+        await cache.set_path(html_url, "html", "<html>HTML page</html>")
+        await cache.set_path(pdf_url, "pdf", "PDF content")
+        await cache.set_path(both_url, "html", "<html>HTML version</html>")
+        await cache.set_path(both_url, "markdown", "# Markdown version")
 
         # Can detect what's available
         assert await cache.get_source_type(html_url) == "html"
@@ -455,11 +455,11 @@ class TestEdgeCases:
         """User can store and retrieve empty content."""
         url = "https://example.com/empty"
 
-        await cache.set_html(url, "")
-        await cache.set_markdown(url, "")
+        await cache.set_path(url, "html", "")
+        await cache.set_path(url, "markdown", "")
 
-        assert await cache.get_html(url) == ""
-        assert await cache.get_markdown(url) == ""
+        assert await cache.get_content(url, "html") == ""
+        assert await cache.get_content(url, "markdown") == ""
         assert await cache.has_path(url, "html")
         assert await cache.has_path(url, "markdown")
 
@@ -470,8 +470,8 @@ class TestEdgeCases:
         large_content = "x" * 100000  # 100KB of content
 
         # Store and retrieve large content
-        await cache.set_html(url, large_content)
-        retrieved = await cache.get_html(url)
+        await cache.set_path(url, "html", large_content)
+        retrieved = await cache.get_content(url, "html")
 
         assert retrieved == large_content
         assert len(retrieved) == 100000
@@ -488,8 +488,8 @@ class TestEdgeCases:
         </body>
         </html>"""
 
-        await cache.set_html(url, content)
-        retrieved = await cache.get_html(url)
+        await cache.set_path(url, "html", content)
+        retrieved = await cache.get_content(url, "html")
 
         assert retrieved == content
 
@@ -501,12 +501,12 @@ class TestEdgeCases:
         url2 = "https://site2.com/page"
 
         # Store same content under different URLs
-        await cache.set_html(url1, content)
-        await cache.set_html(url2, content)
+        await cache.set_path(url1, "html", content)
+        await cache.set_path(url2, "html", content)
 
         # Both should work independently
-        assert await cache.get_html(url1) == content
-        assert await cache.get_html(url2) == content
+        assert await cache.get_content(url1, "html") == content
+        assert await cache.get_content(url2, "html") == content
         assert await cache.has_path(url1, "html")
         assert await cache.has_path(url2, "html")
 
@@ -518,12 +518,12 @@ class TestEdgeCases:
         updated_content = "<html>Updated</html>"
 
         # Store initial content
-        await cache.set_html(url, original_content)
-        assert await cache.get_html(url) == original_content
+        await cache.set_path(url, "html", original_content)
+        assert await cache.get_content(url, "html") == original_content
 
         # Update with new content
-        await cache.set_html(url, updated_content)
-        assert await cache.get_html(url) == updated_content
+        await cache.set_path(url, "html", updated_content)
+        assert await cache.get_content(url, "html") == updated_content
 
 
 class TestEnhancedFunctionality:
@@ -578,7 +578,7 @@ Some methodology content here.
 This should remain.
 """
 
-        cleaned_markdown = fetcher._remove_references_section(markdown_with_refs)
+        cleaned_markdown = fetcher._refine_article_content(markdown_with_refs)
 
         # Should remove references but keep appendix
         assert "References" not in cleaned_markdown
@@ -617,7 +617,7 @@ This should remain.
         assert await cache.has_path(url, "doi") == True
 
         # Retrieve DOI
-        retrieved_doi = await cache.get_doi(url)
+        retrieved_doi = await cache.get_content(url, "doi")
         assert retrieved_doi == doi
 
         # Check that the .doi file was created
@@ -651,9 +651,9 @@ This should remain.
         assert (await cache.get_path(url, "doi")).strip() == "10.1234/test"
 
         # Test that specific methods still work
-        assert await cache.get_html(url) == "<html>content</html>"
-        assert await cache.get_pdf(url) == "PDF content"
-        assert await cache.get_doi(url) == "10.1234/test"
+        assert await cache.get_content(url, "html") == "<html>content</html>"
+        assert await cache.get_content(url, "pdf") == "PDF content"
+        assert await cache.get_content(url, "doi") == "10.1234/test"
 
     @pytest.mark.asyncio
     async def test_cache_file_cleanup_with_doi(self, cache):

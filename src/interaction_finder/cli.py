@@ -253,6 +253,7 @@ def train(
     max_concurrent: Optional[int] = typer.Option(None, "--max-concurrent", help="Maximum concurrent requests"),
     verbose: bool = typer.Option(False, "-v", "--verbose", help="Show verbose output and pretty tracebacks on errors"),
     failfast: bool = typer.Option(False, "--failfast", help="Stop on first error while fetching"),
+    retry: bool = typer.Option(False, "--retry", help="Force retry of URLs previously marked as failed"),
 ):
     """
     Train sub-command: fetch URLs from training data for prompt optimization.
@@ -407,7 +408,7 @@ def train(
         return
 
     # Fetch URLs
-    asyncio.run(fetch_urls_async(urls, cfg, verbose, fetch_only, failfast))
+    asyncio.run(fetch_urls_async(urls, cfg, verbose, fetch_only, failfast, retry))
 
 
 async def check_urls_cache_status(urls: List[str], config: IfetcherConfig) -> Dict[str, Dict[str, bool]]:
@@ -471,7 +472,7 @@ async def check_urls_cache_status(urls: List[str], config: IfetcherConfig) -> Di
     return cache_status
 
 
-async def fetch_urls_async(urls: List[str], config: IfetcherConfig, verbose: bool = False, fetch_only: bool = False, failfast: bool = False):
+async def fetch_urls_async(urls: List[str], config: IfetcherConfig, verbose: bool = False, fetch_only: bool = False, failfast: bool = False, retry: bool = False):
     """Fetch URLs asynchronously using PageFetcher."""
     # In CLI runs, always show status spinners for single-URL operations
     fetcher = PageFetcher(config, show_status=True, verbose=verbose)
@@ -498,7 +499,7 @@ async def fetch_urls_async(urls: List[str], config: IfetcherConfig, verbose: boo
     try:
         if fetch_only:
             # Use the concurrent fetching method that returns error info
-            results = await fetcher._fetch_multiple(urls, "chunks", progress=True, fail_fast=failfast)
+            results = await fetcher._fetch_multiple(urls, "chunks", progress=True, fail_fast=failfast, retry=retry)
 
             # Separate successful and failed results
             successful = []
@@ -525,7 +526,7 @@ async def fetch_urls_async(urls: List[str], config: IfetcherConfig, verbose: boo
             console.print("[dim]URLs have been fetched and cached for later use[/dim]")
         else:
             # Use the concurrent fetching method that returns error info
-            results = await fetcher._fetch_multiple(urls, "chunks", progress=True, fail_fast=failfast)
+            results = await fetcher._fetch_multiple(urls, "chunks", progress=True, fail_fast=failfast, retry=retry)
 
             # Separate successful and failed results
             successful = []
