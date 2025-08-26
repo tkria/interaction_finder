@@ -1,0 +1,664 @@
+"""Web client for fetching HTML and PDF content."""
+
+import re
+from typing import Dict, Optional, List, TYPE_CHECKING
+from rich.console import Console
+
+if TYPE_CHECKING:
+    from ..settings import IfetcherConfig
+
+# Web client constants
+STEALTH_RETRY_THRESHOLD = 3000  # characters of raw markdown
+CHUNK_SIZE_TOKENS = 4096
+CHUNK_MIN_SENTENCES = 2
+CHUNK_SKIP_WINDOW = 1
+CHUNK_SIMILARITY_THRESHOLD = 0.5
+
+# DOI extraction schema for XPath-based extraction from academic publishers
+DOI_EXTRACTION_SCHEMA = {
+    "name": "DOI extractor (XPath)",
+    "baseSelector": "/html",
+    "fields": [
+        {
+            "name": "doi_meta_cite",
+            "selector": "//meta[@name='citation_doi']",
+            "type": "attribute",
+            "attribute": "content",
+        },
+        {
+            "name": "doi_meta_pub",
+            "selector": "//meta[@name='publication_doi']",
+            "type": "attribute",
+            "attribute": "content",
+        },
+        {
+            "name": "doi_dc",
+            "selector": "//meta[translate(@name,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz')='dc.identifier' and contains(@content, 'doi.org/')]",
+            "type": "attribute",
+            "attribute": "content",
+        },
+        {
+            "name": "doi_dc_doi",
+            "selector": "//meta[translate(@name,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz')='dc.identifier.doi']",
+            "type": "attribute",
+            "attribute": "content",
+        },
+        {
+            "name": "doi_canonical",
+            "selector": "//link[@rel='canonical' and contains(@href, 'doi.org/')]",
+            "type": "attribute",
+            "attribute": "href",
+        },
+    ],
+}
+
+# Full text expansion JavaScript for dynamic content loading
+CLICK_AND_MONITOR_JS = r"""
+(() => {
+  if (!window.__c4ai_mon) {
+    const mon = window.__c4ai_mon = {
+      inflight: 0,
+      last: Date.now(),
+      started: false,
+      mutations: 0,
+      baseline: (document.body.innerText || '').length,
+    };
+    const bump = () => { mon.last = Date.now(); };
+
+    const origFetch = window.fetch;
+    if (origFetch) {
+      window.fetch = (...args) => {
+        mon.inflight++; bump();
+        return origFetch(...args)
+          .finally(() => { mon.inflight--; bump(); });
+      };
+    }
+
+    const XS = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.send = function(...args) {
+      mon.inflight++; bump();
+      this.addEventListener('loadend', () => { mon.inflight--; bump(); }, { once: true });
+      return XS.apply(this, args);
+    };
+
+    const mo = new MutationObserver(muts => {
+      mon.mutations += muts.length; bump();
+      for (const m of muts) {
+        m.addedNodes && m.addedNodes.forEach(n => {
+          const t = n.tagName && n.tagName.toLowerCase();
+          if (t === 'img' || t === 'iframe' || t === 'video' || t === 'audio') {
+            n.addEventListener('load', bump, true);
+            n.addEventListener('error', bump, true);
+          }
+        });
+      }
+    });
+    mo.observe(document, { subtree: true, childList: true, characterData: true, attributes: true });
+
+    window.addEventListener('load', bump, true);
+    window.addEventListener('error', bump, true);
+  }
+
+  const mon = window.__c4ai_mon;
+  const LABEL = /full\s*text/i;
+
+  const candidates = [
+    ...document.querySelectorAll('h1,h2,h3,h4,h5,h6')
+  ].
+    filter(h => LABEL.test((h.innerText || '').trim())).
+    flatMap(h => [h, ...h.querySelectorAll('button,[role="button"],a')]).
+    concat(
+      [...document.querySelectorAll('button,[role="button"],a,[aria-label]')]
+        .filter(el => LABEL.test((el.innerText || el.getAttribute('aria-label') || '').trim()))
+    );
+
+  const seen = new Set(); const uniq = [];
+  for (const el of candidates) { if (el && !seen.has(el)) { seen.add(el); uniq.push(el); } }
+
+  const isClosed = (el) => el.getAttribute && el.hasAttribute('aria-expanded')
+    ? el.getAttribute('aria-expanded') !== 'true'
+    : true;
+
+  const click = (el) => {
+    el.scrollIntoView({ block: 'center' });
+    el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+    el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    el.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }));
+    el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+    el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true }));
+    el.dispatchEvent(new KeyboardEvent('keyup',   { key: 'Enter', code: 'Enter', bubbles: true }));
+  };
+
+  let didAny = false;
+  for (const el of uniq) {
+    const target = (/^h[1-6]$/i.test(el.tagName) ? (el.querySelector('button,[role="button"],a') || el) : el);
+    if (target && isClosed(target) && getComputedStyle(target).display !== 'none') {
+      click(target); didAny = true;
+    }
+  }
+  if (didAny) mon.started = true;
+})();
+"""
+
+WAIT_FOR_READY_JS = (
+    "js:() => {"
+    "  const m = window.__c4ai_mon; if (!m) return true;"
+    "  const idle = m.inflight === 0 && (Date.now() - m.last) > 1000;"
+    "  if (!m.started) return idle;"
+    "  const grew = (document.body.innerText || '').length > m.baseline + 50;"
+    "  return idle && (m.mutations > 0 || grew);"
+    "}"
+)
+
+# Lazy import cache variables
+_crawl4ai_html_imports = None
+_crawl4ai_pdf_imports = None
+_quiet_logger = None
+_chunker = None
+
+
+def _get_crawl4ai_imports():
+    """Lazy import crawl4ai modules with simple caching."""
+    global _crawl4ai_html_imports
+    if _crawl4ai_html_imports is None:
+        try:
+            from crawl4ai import AsyncWebCrawler, CrawlerRunConfig
+            from crawl4ai.extraction_strategy import JsonXPathExtractionStrategy
+            from crawl4ai.markdown_generation_strategy import DefaultMarkdownGenerator
+            from crawl4ai.async_logger import AsyncLoggerBase
+
+            _crawl4ai_html_imports = (
+                AsyncWebCrawler,
+                CrawlerRunConfig,
+                JsonXPathExtractionStrategy,
+                AsyncLoggerBase,
+                DefaultMarkdownGenerator,
+            )
+        except ImportError:
+            raise RuntimeError(
+                "crawl4ai package is required for fetching. Install with: pip install crawl4ai"
+            )
+    return _crawl4ai_html_imports
+
+
+def _get_crawl4ai_pdf_imports():
+    """Lazy import crawl4ai PDF modules with simple caching."""
+    global _crawl4ai_pdf_imports
+    if _crawl4ai_pdf_imports is None:
+        try:
+            from crawl4ai import AsyncWebCrawler, CrawlerRunConfig
+            from crawl4ai.processors.pdf import (
+                PDFCrawlerStrategy,
+                PDFContentScrapingStrategy,
+            )
+            from crawl4ai.async_logger import AsyncLoggerBase
+
+            _crawl4ai_pdf_imports = (
+                AsyncWebCrawler,
+                CrawlerRunConfig,
+                PDFCrawlerStrategy,
+                PDFContentScrapingStrategy,
+                AsyncLoggerBase,
+            )
+        except ImportError:
+            raise RuntimeError(
+                "crawl4ai package is required for fetching. Install with: pip install crawl4ai"
+            )
+    return _crawl4ai_pdf_imports
+
+
+def _get_browser_config(*, enable_stealth: bool = False, headless: bool = True):
+    """Create and return a BrowserConfig instance with desired options."""
+    try:
+        from crawl4ai import BrowserConfig
+    except ImportError:
+        raise RuntimeError(
+            "crawl4ai package is required for fetching. Install with: pip install crawl4ai"
+        )
+    return BrowserConfig(enable_stealth=enable_stealth, headless=headless)
+
+
+def _get_chunker():
+    """Lazy import and initialize chonkie chunker with simple caching."""
+    global _chunker
+    if _chunker is None:
+        from chonkie import SDPMChunker
+
+        _chunker = SDPMChunker(
+            embedding_model="minishlab/potion-base-8M",  # Default model
+            threshold=CHUNK_SIMILARITY_THRESHOLD,  # Similarity threshold (0-1)
+            chunk_size=CHUNK_SIZE_TOKENS,  # Maximum tokens per chunk
+            min_sentences=CHUNK_MIN_SENTENCES,  # Initial sentences per chunk
+            skip_window=CHUNK_SKIP_WINDOW,  # Number of chunks to skip when looking for similarities
+        )
+    return _chunker
+
+
+def _get_quiet_logger():
+    """Get a quiet logger for crawl4ai operations."""
+    global _quiet_logger
+    if _quiet_logger is None:
+        try:
+            from crawl4ai.async_logger import AsyncLoggerBase
+
+            class QuietLogger(AsyncLoggerBase):
+                async def alog(self, level, message, tag="", **kwargs):
+                    pass  # Suppress all logging
+
+                # Implement all required abstract methods
+                def debug(self, message, tag="", **kwargs):
+                    pass
+
+                def info(self, message, tag="", **kwargs):
+                    pass
+
+                def success(self, message, tag="", **kwargs):
+                    pass
+
+                def warning(self, message, tag="", **kwargs):
+                    pass
+
+                def error(self, message, tag="", **kwargs):
+                    pass
+
+                def error_status(self, url, error, tag="ERROR", url_length=100):
+                    pass
+
+                def url_status(
+                    self, url, success=True, timing=0, tag="FETCH", url_length=100
+                ):
+                    pass
+
+            _quiet_logger = QuietLogger()
+        except ImportError:
+            _quiet_logger = None
+    return _quiet_logger
+
+
+def _get_granular_logger(status_display=None):
+    """Get a granular logger that updates status display."""
+    try:
+        from crawl4ai.async_logger import AsyncLoggerBase
+
+        class GranularLogger(AsyncLoggerBase):
+            def __init__(self, status_display=None):
+                self.status_display = status_display
+
+            async def alog(self, level, message, tag="", **kwargs):
+                if self.status_display and level in ("INFO", "SUCCESS", "WARNING"):
+                    if "Crawling" in message:
+                        self.status_display.update(f"[yellow]{message}[/yellow]")
+                    elif "Processing" in message:
+                        self.status_display.update(f"[blue]{message}[/blue]")
+                    elif "Complete" in message or "Success" in message:
+                        self.status_display.update(f"[green]{message}[/green]")
+
+            def error_status(
+                self, url: str, error: str, tag: str = "ERROR", url_length: int = 100
+            ):
+                pass
+
+            async def astatus_update(
+                self, url: str, tag: str = "FETCH", url_length: int = 100
+            ) -> None:
+                if self.status_display:
+                    domain = (
+                        url.split("//")[1].split("/")[0] if "//" in url else url[:20]
+                    )
+                    self.status_display.update(
+                        f"[cyan]Fetching[/cyan] [bold]{domain}[/bold]"
+                    )
+
+            # Implement all required abstract methods
+            def debug(self, message, tag="", **kwargs):
+                pass
+
+            def info(self, message, tag="", **kwargs):
+                pass
+
+            def success(self, message, tag="", **kwargs):
+                pass
+
+            def warning(self, message, tag="", **kwargs):
+                pass
+
+            def error(self, message, tag="", **kwargs):
+                pass
+
+            def url_status(
+                self, url, success=True, timing=0, tag="FETCH", url_length=100
+            ):
+                pass
+
+        return GranularLogger(status_display)
+    except ImportError:
+        return None
+
+
+class WebClient:
+    """Low-level web client for fetching HTML and PDF content."""
+
+    def __init__(self, config: "IfetcherConfig", verbose: bool = False):
+        self.config = config
+        self.verbose = verbose
+        self._debug_console = Console(stderr=True) if verbose else None
+        self._crawler_configs = self._build_crawler_configs()
+
+    def _build_crawler_configs(self) -> Dict[str, any]:
+        """Pre-build crawler configurations to avoid repeated construction."""
+        # Handle both real config and mock config safely
+        try:
+            timeout_ms = self.config.tools.crawl4ai.timeout * 1000
+        except (AttributeError, TypeError):
+            # Fallback for mocked configs in tests
+            timeout_ms = 30000
+
+        return {
+            "simple_html": self._build_html_crawler_config(timeout_ms, with_js=False),
+            "stealth_html": self._build_html_crawler_config(timeout_ms, with_js=True),
+            "simple_browser": _get_browser_config(),
+            "stealth_browser": _get_browser_config(enable_stealth=True),
+            "pdf_config": self._build_pdf_crawler_config(timeout_ms),
+        }
+
+    def _build_html_crawler_config(self, timeout_ms: int, *, with_js: bool) -> any:
+        """Factory for CrawlerRunConfig for HTML pages, sharing common options."""
+        (
+            AsyncWebCrawler,
+            CrawlerRunConfig,
+            JsonXPathExtractionStrategy,
+            AsyncLoggerBase,
+            DefaultMarkdownGenerator,
+        ) = _get_crawl4ai_imports()
+
+        md_gen = DefaultMarkdownGenerator(
+            content_source="cleaned_html",
+            options={
+                "ignore_links": True,
+                "ignore_images": True,
+                "escape_html": True,
+                "skip_internal_links": True,
+            },
+        )
+
+        extra_kwargs = {}
+        if with_js:
+            extra_kwargs.update(
+                {
+                    "js_code": [CLICK_AND_MONITOR_JS],
+                    "wait_for": WAIT_FOR_READY_JS,
+                    "delay_before_return_html": 3.0,
+                }
+            )
+
+        extraction_strategy = JsonXPathExtractionStrategy(
+            DOI_EXTRACTION_SCHEMA, verbose=False
+        )
+
+        return CrawlerRunConfig(
+            extraction_strategy=extraction_strategy,
+            markdown_generator=md_gen,
+            page_timeout=timeout_ms,
+            delay_before_return_html=extra_kwargs.get("delay_before_return_html", 0.5),
+            word_count_threshold=10,
+            **{
+                k: v for k, v in extra_kwargs.items() if k != "delay_before_return_html"
+            },
+        )
+
+    def _build_pdf_crawler_config(self, timeout_ms: int) -> any:
+        """Build crawler configuration for PDF files."""
+        (
+            AsyncWebCrawler,
+            CrawlerRunConfig,
+            PDFCrawlerStrategy,
+            PDFContentScrapingStrategy,
+            AsyncLoggerBase,
+        ) = _get_crawl4ai_pdf_imports()
+
+        pdf_crawler_cfg = PDFCrawlerStrategy()
+        pdf_scraping_cfg = PDFContentScrapingStrategy()
+
+        return CrawlerRunConfig(
+            scraping_strategy=pdf_scraping_cfg,
+            page_timeout=timeout_ms,
+            word_count_threshold=10,
+        )
+
+    async def fetch_html(self, url: str, retry: bool = False) -> Dict[str, str]:
+        """Fetch HTML with automatic retry escalation."""
+        return await self._fetch_with_retry_escalation(
+            url, self._fetch_html_simple, self._fetch_html_stealth, retry
+        )
+
+    async def fetch_pdf(self, url: str, retry: bool = False) -> Dict[str, str]:
+        """Fetch PDF content with format detection."""
+        if not self._is_pdf_url(url):
+            raise ValueError(f"URL does not appear to be a PDF: {url}")
+        return await self._fetch_pdf_content(url)
+
+    async def fetch_markdown(self, url: str, retry: bool = False) -> str:
+        """Fetch content and return processed markdown."""
+        if self._is_pdf_url(url):
+            result = await self.fetch_pdf(url, retry=retry)
+        else:
+            result = await self.fetch_html(url, retry=retry)
+
+        from .content_processor import ContentProcessor
+
+        processor = ContentProcessor()
+        return processor.refine_article(result["markdown_content"])
+
+    def create_chunks(self, markdown_content: str) -> List[str]:
+        """Chunk markdown content and return as list of strings."""
+        chunker = _get_chunker()
+        chunks = chunker(markdown_content)
+        return [chunk.text for chunk in chunks]
+
+    async def _fetch_with_retry_escalation(
+        self, url: str, simple_fetcher, stealth_fetcher, force_retry: bool = False
+    ):
+        """Higher-order function for retry escalation pattern."""
+        try:
+            result = await simple_fetcher(url)
+            if force_retry or self._should_retry_with_stealth(result):
+                if self.verbose:
+                    self._debug_console.print(
+                        f"[yellow]Retrying {url} with stealth mode[/yellow]"
+                    )
+                return await stealth_fetcher(url)
+            return result
+        except Exception as e:
+            if force_retry:
+                if self.verbose:
+                    self._debug_console.print(
+                        f"[red]Simple fetch failed for {url}, trying stealth: {e}[/red]"
+                    )
+                return await stealth_fetcher(url)
+            raise
+
+    async def _fetch_html_simple(self, url: str) -> Dict[str, str]:
+        """Fetch HTML using simple configuration."""
+        return await self._fetch_html_with_config(url, "simple_html", "simple_browser")
+
+    async def _fetch_html_stealth(self, url: str) -> Dict[str, str]:
+        """Fetch HTML using stealth configuration with JS execution."""
+        return await self._fetch_html_with_config(
+            url, "stealth_html", "stealth_browser"
+        )
+
+    async def _fetch_html_with_config(
+        self, url: str, config_key: str, browser_key: str
+    ) -> Dict[str, str]:
+        """Fetch HTML using specified configuration."""
+        (
+            AsyncWebCrawler,
+            CrawlerRunConfig,
+            JsonXPathExtractionStrategy,
+            AsyncLoggerBase,
+            DefaultMarkdownGenerator,
+        ) = _get_crawl4ai_imports()
+
+        crawler_config = self._crawler_configs[config_key]
+        browser_config = self._crawler_configs[browser_key]
+        logger = _get_quiet_logger() if not self.verbose else _get_granular_logger()
+
+        async with AsyncWebCrawler(config=browser_config, logger=logger) as crawler:
+            result = await crawler.arun(url=url, config=crawler_config)
+            if not result.success:
+                raise RuntimeError(
+                    f"{result.status_code} error fetching {url}: {result.error_message}"
+                )
+
+            return {
+                "raw_content": result.html,
+                "markdown_content": result.markdown,
+                "final_url": self._extract_final_url(result, url),
+                "doi": self._extract_doi(result),
+            }
+
+    async def _fetch_pdf_content(self, url: str) -> Dict[str, str]:
+        """Fetch PDF content using crawl4ai."""
+        (
+            AsyncWebCrawler,
+            CrawlerRunConfig,
+            PDFCrawlerStrategy,
+            PDFContentScrapingStrategy,
+            AsyncLoggerBase,
+        ) = _get_crawl4ai_pdf_imports()
+
+        pdf_config = self._crawler_configs["pdf_config"]
+        browser_config = self._crawler_configs["simple_browser"]
+        logger = _get_quiet_logger() if not self.verbose else _get_granular_logger()
+
+        async with AsyncWebCrawler(config=browser_config, logger=logger) as crawler:
+            result = await crawler.arun(url=url, config=pdf_config)
+            if not result.success:
+                raise RuntimeError(
+                    f"{result.status_code} error fetching PDF {url}: {result.error_message}"
+                )
+
+            return {
+                "raw_content": result.extracted_content or result.html,
+                "markdown_content": result.markdown,
+                "final_url": self._extract_final_url(result, url),
+                "doi": "",  # PDFs don't have DOI extraction
+            }
+
+    def _extract_final_url(self, result, original_url: str) -> str:
+        """Extract the final URL after any redirects."""
+        final_url = original_url
+
+        # Check crawl4ai result structure for redirects
+        if hasattr(result, "_results") and result._results:
+            first_result = result._results[0]
+            if hasattr(first_result, "redirected_url") and first_result.redirected_url:
+                final_url = first_result.redirected_url
+            elif hasattr(first_result, "url"):
+                final_url = first_result.url
+
+        if final_url == original_url and hasattr(result, "url"):
+            final_url = result.url
+
+        return final_url
+
+    def _extract_doi(self, result) -> str:
+        """Extract DOI from crawl4ai extracted content."""
+        import json
+
+        doi = ""
+        try:
+            if hasattr(result, "extracted_content") and result.extracted_content:
+                # Try to parse as JSON string (crawl4ai format)
+                if isinstance(result.extracted_content, str):
+                    extracted_data = json.loads(result.extracted_content)
+                else:
+                    # If it's already parsed, use directly
+                    extracted_data = result.extracted_content
+
+                # Handle both list and dict formats
+                if isinstance(extracted_data, list):
+                    items_to_check = extracted_data
+                elif isinstance(extracted_data, dict):
+                    items_to_check = [extracted_data]
+                else:
+                    return ""
+
+                for doi_data in items_to_check:
+                    for field_name in [
+                        "doi_meta_pub",
+                        "doi_meta_cite",
+                        "doi_dc_doi",
+                        "doi_dc",
+                    ]:
+                        if field_name in doi_data and doi_data[field_name]:
+                            doi = doi_data[field_name]
+                            if isinstance(doi, list) and doi:
+                                doi = doi[0]
+                            break
+
+                    if (
+                        not doi
+                        and "doi_canonical" in doi_data
+                        and doi_data["doi_canonical"]
+                    ):
+                        canonical_url = doi_data["doi_canonical"]
+                        if isinstance(canonical_url, list) and canonical_url:
+                            canonical_url = canonical_url[0]
+                        if "doi.org/" in canonical_url:
+                            doi = canonical_url.split("doi.org/")[1]
+
+                    if doi:
+                        break
+        except (json.JSONDecodeError, AttributeError, KeyError, IndexError, TypeError):
+            pass
+        return doi
+
+    def _is_pdf_url(self, url: str) -> bool:
+        """Check if URL points to a PDF file based on extension."""
+        from urllib.parse import urlparse
+
+        return urlparse(url).path.lower().endswith(".pdf")
+
+    def _should_retry_with_stealth(self, fetch_result: Dict[str, str]) -> bool:
+        """Decide whether to retry fetching with stealth/full-text instrumentation."""
+        raw_markdown = fetch_result.get("markdown_content", "")
+        raw_html = fetch_result.get("raw_content", "")
+
+        reasons = []
+        text = ((raw_markdown or "") + "\n" + (raw_html or "")).lower()
+
+        if not raw_markdown:
+            reasons.append("no_markdown")
+        else:
+            if len(raw_markdown) < STEALTH_RETRY_THRESHOLD:
+                reasons.append("short_markdown")
+
+        if not self._has_recognized_sections(raw_markdown or ""):
+            reasons.append("no_recognized_sections")
+
+        if "verifying you are human" in text:
+            reasons.append("bot_challenge")
+
+        # Retry if we have a bot challenge OR content is short/lacking sections
+        should_retry = ("bot_challenge" in reasons) or (
+            ("short_markdown" in reasons or "no_markdown" in reasons)
+            and ("no_recognized_sections" in reasons)
+        )
+
+        return should_retry
+
+    def _has_recognized_sections(self, markdown: str) -> bool:
+        """Detect if markdown contains recognized academic sections based on headings."""
+        try:
+            from .content_processor import extract_headings, classify_heading_relevance
+
+            heads = extract_headings(markdown)
+            for h in heads:
+                cls = classify_heading_relevance(h["text"])
+                if cls.get("is_relevant"):
+                    return True
+        except Exception:
+            pass
+        return False

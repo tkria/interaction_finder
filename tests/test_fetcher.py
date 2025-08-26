@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import Mock, MagicMock, AsyncMock
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import sys
+
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from interaction_finder.fetcher import URLCache, PageFetcher
@@ -24,23 +25,25 @@ class MockHTTPHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/test.html":
             self.send_response(200)
-            self.send_header('Content-type', 'text/html')
+            self.send_header("Content-type", "text/html")
             self.end_headers()
-            html_content = "<html><body><h1>Test Page</h1><meta name='citation_doi' content='10.1234/test'/></body></html>"
+            html_content = "<html><head><meta name='citation_doi' content='10.1234/test'/></head><body><h1>Test Page</h1></body></html>"
             self.wfile.write(html_content.encode())
         elif self.path == "/test.pdf":
             self.send_response(200)
-            self.send_header('Content-type', 'application/pdf')
+            self.send_header("Content-type", "application/pdf")
             self.end_headers()
             pdf_content = "Fake PDF content for testing"
             self.wfile.write(pdf_content.encode())
         elif self.path == "/redirect":
             self.send_response(302)
-            self.send_header('Location', f'http://localhost:{self.server.server_port}/test.html')
+            self.send_header(
+                "Location", f"http://localhost:{self.server.server_port}/test.html"
+            )
             self.end_headers()
         elif self.path == "/404":
             self.send_response(404)
-            self.send_header('Content-type', 'text/plain')
+            self.send_header("Content-type", "text/plain")
             self.end_headers()
             self.wfile.write(b"Not Found")
         else:
@@ -53,11 +56,11 @@ def http_server():
     """Start a local HTTP server for testing."""
     # Find an available port
     sock = socket.socket()
-    sock.bind(('', 0))
+    sock.bind(("", 0))
     port = sock.getsockname()[1]
     sock.close()
 
-    server = HTTPServer(('localhost', port), MockHTTPHandler)
+    server = HTTPServer(("localhost", port), MockHTTPHandler)
 
     # Run server in background thread
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -104,7 +107,9 @@ class TestBasicCaching:
     async def test_store_and_retrieve_markdown(self, cache):
         """User can store Markdown content and retrieve it exactly as stored."""
         url = "https://example.com/article"
-        content = "# My Article\n\nThis is **bold** content with [links](http://example.com)."
+        content = (
+            "# My Article\n\nThis is **bold** content with [links](http://example.com)."
+        )
 
         await cache.set_path(url, "markdown", content)
         retrieved = await cache.get_content(url, "markdown")
@@ -226,7 +231,9 @@ class TestUserWorkflows:
         # Retrieve content (silently)
         assert await fetcher.get_html(url, progress=False) == html_content
         assert await fetcher.get_markdown(url, progress=False) == markdown_content
-        assert await fetcher.get_raw(url) == html_content  # Raw returns HTML when available
+        assert (
+            await fetcher.get_raw(url) == html_content
+        )  # Raw returns HTML when available
 
     @pytest.mark.asyncio
     async def test_transparent_fetching_workflow(self, fetcher, monkeypatch):
@@ -235,16 +242,16 @@ class TestUserWorkflows:
         expected_html = "<html>Fetched content</html>"
         expected_markdown = "# Fetched content"
 
-        # Mock the fetching process
-        async def mock_fetch_url(self, url):
+        # Mock the fetching process at the WebClient level
+        async def mock_fetch_html(url, retry=False):
             return {
-                'raw_content': expected_html,
-                'markdown_content': expected_markdown,
-                'content_type': 'text/html',
-                'final_url': url
+                "raw_content": expected_html,
+                "markdown_content": expected_markdown,
+                "final_url": url,
+                "doi": "",
             }
 
-        monkeypatch.setattr(PageFetcher, '_fetch_html_url', mock_fetch_url)
+        monkeypatch.setattr(fetcher.web_client, "fetch_html", mock_fetch_html)
 
         # Initially not cached
         assert not await fetcher.is_cached(url)
@@ -285,9 +292,7 @@ class TestUserWorkflows:
     @pytest.mark.asyncio
     async def test_bulk_prefetching_workflow(self, fetcher, http_server):
         """User can prefetch multiple URLs efficiently."""
-        urls = [
-            f"{http_server}/test.html"
-        ]
+        urls = [f"{http_server}/test.html"]
 
         # Initially none cached
         for url in urls:
@@ -364,7 +369,7 @@ class TestCacheManagement:
         urls_and_content = [
             ("https://example.com/page1", "<html>Page 1</html>"),
             ("https://example.com/page2", "<html>Page 2</html>"),
-            ("https://example.com/page3", "<html>Page 3</html>")
+            ("https://example.com/page3", "<html>Page 3</html>"),
         ]
 
         # Store all content
@@ -552,10 +557,10 @@ class TestEnhancedFunctionality:
 
     def test_pdf_url_detection(self, fetcher):
         """Test that PDF URLs are correctly identified."""
-        assert fetcher._is_pdf_url("https://example.com/paper.pdf") == True
-        assert fetcher._is_pdf_url("https://example.com/paper.PDF") == True
-        assert fetcher._is_pdf_url("https://example.com/page.html") == False
-        assert fetcher._is_pdf_url("https://example.com/") == False
+        assert fetcher.web_client._is_pdf_url("https://example.com/paper.pdf") == True
+        assert fetcher.web_client._is_pdf_url("https://example.com/paper.PDF") == True
+        assert fetcher.web_client._is_pdf_url("https://example.com/page.html") == False
+        assert fetcher.web_client._is_pdf_url("https://example.com/") == False
 
     def test_references_removal(self, fetcher):
         """Test that references sections are properly removed from markdown."""
@@ -578,7 +583,7 @@ Some methodology content here.
 This should remain.
 """
 
-        cleaned_markdown = fetcher._refine_article_content(markdown_with_refs)
+        cleaned_markdown = fetcher.content_processor.refine_article(markdown_with_refs)
 
         # Should remove references but keep appendix
         assert "References" not in cleaned_markdown
@@ -592,11 +597,13 @@ This should remain.
         url = "https://example.com/test"
 
         # Test single extension
-        html_path, = await cache._get_paths(url, "html")
+        (html_path,) = await cache._get_paths(url, "html")
         assert html_path.suffix == ".html"
 
         # Test multiple extensions
-        html_path, pdf_path, doi_path = await cache._get_paths(url, "html", "pdf", "doi")
+        html_path, pdf_path, doi_path = await cache._get_paths(
+            url, "html", "pdf", "doi"
+        )
         assert html_path.suffix == ".html"
         assert pdf_path.suffix == ".pdf"
         assert doi_path.suffix == ".doi"
@@ -621,7 +628,7 @@ This should remain.
         assert retrieved_doi == doi
 
         # Check that the .doi file was created
-        doi_path, = await cache._get_paths(url, "doi")
+        (doi_path,) = await cache._get_paths(url, "doi")
         assert doi_path.exists()
         assert doi_path.read_text().strip() == doi
 
@@ -753,7 +760,9 @@ class TestIntegrationWithHTTPServer:
             assert await fetcher.is_cached(url)
         except RuntimeError as e:
             # Expected failure due to invalid PDF content
-            assert "EOF marker not found" in str(e) or "Failed to extract content" in str(e)
+            assert "EOF marker not found" in str(
+                e
+            ) or "Failed to extract content" in str(e)
             # The URL should not be cached when fetching fails
 
     @pytest.mark.asyncio
@@ -787,10 +796,7 @@ class TestIntegrationWithHTTPServer:
     @pytest.mark.asyncio
     async def test_concurrent_fetching(self, fetcher, http_server):
         """Test concurrent fetching of multiple URLs."""
-        html_urls = [
-            f"{http_server}/test.html",
-            f"{http_server}/redirect"
-        ]
+        html_urls = [f"{http_server}/test.html", f"{http_server}/redirect"]
 
         # Fetch HTML URLs concurrently (avoid PDF which has parsing issues with fake content, silently)
         tasks = [fetcher.get_html(url, progress=False) for url in html_urls]
@@ -841,16 +847,23 @@ class TestMultipleURLFetching:
     def temp_config(self, tmp_path):
         """Fixture to create a temporary config."""
         from interaction_finder.settings import IfetcherConfig
-        return IfetcherConfig(
-            cache_dir=tmp_path / "test_cache",
-            status_dir=tmp_path / "test_status",
-            doi_db_path=tmp_path / "test_doi.db"
-        )
+
+        config = Mock(spec=IfetcherConfig)
+        config.output = Mock()
+        config.output.cache = "cache"
+        config.abspath = Mock(return_value=tmp_path / "test_cache")
+        config.tools = Mock()
+        config.tools.crawl4ai = Mock()
+        config.tools.crawl4ai.timeout = 30
+        config.tools.crawl4ai.user_agent = "TestAgent/1.0"
+        config.tools.crawl4ai.delay_between_requests = 1.0
+        return config
 
     @pytest.fixture
     def fetcher(self, temp_config):
         """Fixture to create a PageFetcher instance."""
         from interaction_finder.fetcher import PageFetcher
+
         return PageFetcher(temp_config, show_status=False)
 
     @pytest.mark.asyncio

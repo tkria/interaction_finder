@@ -3,6 +3,7 @@ import re
 from typing import List
 from .models import Term
 
+
 def parse_term_line(line: str) -> Term | None:
     """
     Parse a single line into a Term object.
@@ -31,12 +32,12 @@ def parse_term_line(line: str) -> Term | None:
         return None
 
     # Skip pure comment lines (starting with #)
-    if line.startswith('#'):
+    if line.startswith("#"):
         return None
 
     # Split on first # to separate term name from comment/attributes
-    if '#' in line:
-        term_part, comment_part = line.split('#', 1)
+    if "#" in line:
+        term_part, comment_part = line.split("#", 1)
         term_name = term_part.strip()
         comment_part = comment_part.strip()
     else:
@@ -57,7 +58,7 @@ def parse_term_line(line: str) -> Term | None:
         attributes_dict = _parse_attributes(comment_part)
 
         for attr_name, attr_value in attributes_dict.items():
-            if attr_name == 'kind':
+            if attr_name == "kind":
                 kind = attr_value
             else:
                 attributes[attr_name] = attr_value
@@ -88,14 +89,14 @@ def _parse_attributes(text: str) -> dict[str, str]:
     attr_starts = []
     i = 0
     while i < len(text):
-        if text[i] == '&':
+        if text[i] == "&":
             # Look ahead to see if this looks like an attribute
             j = i + 1
             # Skip the attribute name (word characters)
-            while j < len(text) and (text[j].isalnum() or text[j] == '_'):
+            while j < len(text) and (text[j].isalnum() or text[j] == "_"):
                 j += 1
             # Check if we have an = sign
-            if j < len(text) and text[j] == '=':
+            if j < len(text) and text[j] == "=":
                 attr_starts.append(i)
         i += 1
 
@@ -111,14 +112,14 @@ def _parse_attributes(text: str) -> dict[str, str]:
         attr_text = text[start_pos:end_pos]
 
         # Parse this individual attribute
-        if '=' in attr_text:
+        if "=" in attr_text:
             # Find the first = sign
-            eq_pos = attr_text.find('=')
+            eq_pos = attr_text.find("=")
             attr_name = attr_text[1:eq_pos].strip()  # Skip the & and get name
-            attr_value = attr_text[eq_pos + 1:].strip()  # Get value after =
+            attr_value = attr_text[eq_pos + 1 :].strip()  # Get value after =
 
             # Remove trailing comma if present
-            if attr_value.endswith(','):
+            if attr_value.endswith(","):
                 attr_value = attr_value[:-1].strip()
 
             if attr_name:
@@ -127,6 +128,7 @@ def _parse_attributes(text: str) -> dict[str, str]:
                 # Skip attributes with empty values
 
     return attributes
+
 
 def parse_terms_from_lines(lines: List[str]) -> List[Term]:
     """

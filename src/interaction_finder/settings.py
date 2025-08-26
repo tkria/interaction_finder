@@ -7,8 +7,9 @@ import shlex
 from copy import deepcopy
 from pydantic import BaseModel, Field, field_validator
 
+
 class IfetcherConfig(BaseModel):
-    _dir: Path | None = None # Directory of the config file
+    _dir: Path | None = None  # Directory of the config file
 
     class AgentSpec(BaseModel):
         llm: str | None = None
@@ -22,7 +23,7 @@ class IfetcherConfig(BaseModel):
 
     researcher: str = ""
 
-    @field_validator('researcher')
+    @field_validator("researcher")
     @classmethod
     def validate_researcher(cls, v):
         """Validate that researcher is a valid research mode"""
@@ -60,7 +61,7 @@ class IfetcherConfig(BaseModel):
             strip_suffix_re: str = ""
             strip_re: Union[str, List[str]] = Field(default_factory=list)
 
-            @field_validator('cmd', mode='before')
+            @field_validator("cmd", mode="before")
             @classmethod
             def normalize_cmd(cls, v):
                 """Convert string command to list using shell parsing"""
@@ -73,7 +74,7 @@ class IfetcherConfig(BaseModel):
                         raise ValueError(f"Invalid command string: {e}")
                 return v if v is not None else []
 
-            @field_validator('strip_re', mode='before')
+            @field_validator("strip_re", mode="before")
             @classmethod
             def normalize_strip_re(cls, v):
                 """Convert string values to single-item lists for consistency"""
@@ -84,7 +85,9 @@ class IfetcherConfig(BaseModel):
         crawl4ai: Crawl4AI = Field(default_factory=Crawl4AI)
         searxng: SearXNG = Field(default_factory=SearXNG)
         ontologies: Ontologies = Field(default_factory=Ontologies)
-        external_researcher: ExternalResearcher = Field(default_factory=ExternalResearcher)
+        external_researcher: ExternalResearcher = Field(
+            default_factory=ExternalResearcher
+        )
 
     tools: Tools = Field(default_factory=Tools)
 
@@ -95,7 +98,7 @@ class IfetcherConfig(BaseModel):
             example: List[str] = Field(default_factory=list)
             normalise: Dict[str, str] = Field(default_factory=dict)
 
-            @field_validator('kind', 'example', 'form', mode='before')
+            @field_validator("kind", "example", "form", mode="before")
             @classmethod
             def normalise_to_list(cls, v):
                 """Convert string values to single-item lists for consistency"""
@@ -110,7 +113,7 @@ class IfetcherConfig(BaseModel):
         synonyms: Dict[str, str] = Field(default_factory=dict)
         example: List[str] = Field(default_factory=list)
 
-        @field_validator('kinds', mode='before')
+        @field_validator("kinds", mode="before")
         @classmethod
         def normalise_kinds(cls, v):
             """
@@ -138,9 +141,12 @@ class IfetcherConfig(BaseModel):
             # Handle raw dict that should be a Kind
             if isinstance(v, dict):
                 # Check if it's a raw Kind definition (has keys like 'kind', 'form', 'is')
-                if any(k in ['kind', 'is', 'form', 'example'] for k in v.keys()):
+                if any(k in ["kind", "is", "form", "example"] for k in v.keys()):
                     # Detect if this is a flat structure with kind properties directly
-                    if any(isinstance(v.get(k), (str, list)) for k in ['kind', 'is', 'form', 'example']):
+                    if any(
+                        isinstance(v.get(k), (str, list))
+                        for k in ["kind", "is", "form", "example"]
+                    ):
                         try:
                             kind_obj = cls.Kind.model_validate(v)
                             return {"default": kind_obj}
@@ -148,11 +154,13 @@ class IfetcherConfig(BaseModel):
                             pass
             return v if isinstance(v, dict) else {}
 
-        @field_validator('kinds')
+        @field_validator("kinds")
         @classmethod
         def validate_kinds_not_empty(cls, v):
             if not v:
-                raise ValueError("At least one kind must be defined in [task.kinds] or [task.kinds.*]")
+                raise ValueError(
+                    "At least one kind must be defined in [task.kinds] or [task.kinds.*]"
+                )
             return v
 
         def get_kind_names(self) -> List[str]:
@@ -167,7 +175,9 @@ class IfetcherConfig(BaseModel):
                 kinds = self.get_kind_names()
                 return kinds[1] if kinds[0] == kind_name else kinds[0]
             else:
-                raise ValueError("Cannot get complementary kind: more than two kinds defined.")
+                raise ValueError(
+                    "Cannot get complementary kind: more than two kinds defined."
+                )
 
     task: Task = Field(default_factory=Task)
 
@@ -175,6 +185,7 @@ class IfetcherConfig(BaseModel):
         class Summarisation(BaseModel):
             chunksize: int = 10
             maxchars: int = 80000
+
         envfile: str | None = None
         max_loops: int = 5
         max_tokens: int = 500000
@@ -218,10 +229,10 @@ class IfetcherConfig(BaseModel):
             return (self._dir / path).resolve()
         return Path.cwd() / path
 
-
-
     @staticmethod
-    def apply_overrides(data: Dict[str, Any], overrides: Dict[str, Any]) -> Dict[str, Any]:
+    def apply_overrides(
+        data: Dict[str, Any], overrides: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """
         Apply overrides to a configuration dictionary.
 
@@ -237,18 +248,20 @@ class IfetcherConfig(BaseModel):
 
         # Apply each override
         for key_path, value in overrides.items():
-            keys = key_path.split('.')
+            keys = key_path.split(".")
 
             # Navigate to the nested dict location
             current = result
             for i, key in enumerate(keys[:-1]):
                 # Handle array indexing with [n] syntax
-                if '[' in key and key.endswith(']'):
-                    base_key, index_str = key.split('[', 1)
+                if "[" in key and key.endswith("]"):
+                    base_key, index_str = key.split("[", 1)
                     index = int(index_str[:-1])  # Remove the closing ']'
 
                     # Ensure the key exists and is a list
-                    if base_key not in current or not isinstance(current[base_key], list):
+                    if base_key not in current or not isinstance(
+                        current[base_key], list
+                    ):
                         current[base_key] = []
 
                     # Ensure the list has enough elements
@@ -266,8 +279,8 @@ class IfetcherConfig(BaseModel):
             last_key = keys[-1]
 
             # Handle array indexing in the last key
-            if '[' in last_key and last_key.endswith(']'):
-                base_key, index_str = last_key.split('[', 1)
+            if "[" in last_key and last_key.endswith("]"):
+                base_key, index_str = last_key.split("[", 1)
                 index = int(index_str[:-1])
 
                 # Ensure the key exists and is a list
@@ -281,10 +294,10 @@ class IfetcherConfig(BaseModel):
                 current[base_key][index] = value
             else:
                 # Handle comma-separated list values
-                if isinstance(value, str) and ',' in value:
+                if isinstance(value, str) and "," in value:
                     try:
                         # Check if this looks like it should be a list of strings
-                        current[last_key] = [item.strip() for item in value.split(',')]
+                        current[last_key] = [item.strip() for item in value.split(",")]
                     except:
                         # If conversion fails, use the original string
                         current[last_key] = value
@@ -294,7 +307,12 @@ class IfetcherConfig(BaseModel):
         return result
 
     @classmethod
-    def from_path(cls, path: str | Path, overrides: Optional[Dict[str, Any]] = None, mode: Optional[str] = None) -> IfetcherConfig:
+    def from_path(
+        cls,
+        path: str | Path,
+        overrides: Optional[Dict[str, Any]] = None,
+        mode: Optional[str] = None,
+    ) -> IfetcherConfig:
         """
         Load configuration from a file path with optional overrides and mode.
 
@@ -317,7 +335,10 @@ class IfetcherConfig(BaseModel):
             # Handle both flat dotted key format and nested format
             if isinstance(mode_overrides, dict):
                 # Check if this is nested format by looking for non-dotted keys that are dicts
-                has_nested = any(isinstance(v, dict) and not k.count('.') for k, v in mode_overrides.items())
+                has_nested = any(
+                    isinstance(v, dict) and not k.count(".")
+                    for k, v in mode_overrides.items()
+                )
 
                 if has_nested:
                     # Convert nested format to flat dotted format
@@ -336,7 +357,9 @@ class IfetcherConfig(BaseModel):
         return config
 
     @staticmethod
-    def _flatten_nested_overrides(nested_dict: Dict[str, Any], parent_key: str = '') -> Dict[str, Any]:
+    def _flatten_nested_overrides(
+        nested_dict: Dict[str, Any], parent_key: str = ""
+    ) -> Dict[str, Any]:
         """
         Convert nested dictionary to flat dictionary with dotted keys.
 
@@ -352,8 +375,10 @@ class IfetcherConfig(BaseModel):
             new_key = f"{parent_key}.{k}" if parent_key else k
 
             # If value is a dict and key doesn't contain dots (indicating it's not already flattened)
-            if isinstance(v, dict) and '.' not in k:
-                items.extend(IfetcherConfig._flatten_nested_overrides(v, new_key).items())
+            if isinstance(v, dict) and "." not in k:
+                items.extend(
+                    IfetcherConfig._flatten_nested_overrides(v, new_key).items()
+                )
             else:
                 items.append((new_key, v))
 

@@ -4,6 +4,7 @@ CLI interface for Interaction Finder using Typer.
 This module provides command-line interface functionality for the interaction finder tool,
 including a train sub-command for fetching URLs from training data files.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -24,7 +25,7 @@ from .fetcher import PageFetcher
 app = typer.Typer(
     name="interaction-finder",
     help="A tool for fetching and processing web content for interaction discovery.",
-    rich_markup_mode="rich"
+    rich_markup_mode="rich",
 )
 
 console = Console()
@@ -46,9 +47,9 @@ def group_errors(failed_pairs: List[tuple[str, Exception]]) -> Dict[str, List[st
         # Normalize error message by removing URL-specific parts
         error_msg = str(exception)
         # Remove the specific URL from the error message for grouping
-        normalized_msg = re.sub(r'https?://[^\s]+', '<URL>', error_msg)
+        normalized_msg = re.sub(r"https?://[^\s]+", "<URL>", error_msg)
         # Take just the first line for cleaner grouping
-        normalized_msg = normalized_msg.split('\n')[0]
+        normalized_msg = normalized_msg.split("\n")[0]
         error_key = f"{type(exception).__name__}: {normalized_msg}"
 
         if error_key not in error_groups:
@@ -58,7 +59,9 @@ def group_errors(failed_pairs: List[tuple[str, Exception]]) -> Dict[str, List[st
     return error_groups
 
 
-def display_error_summary(failed_pairs: List[tuple[str, Exception]], verbose: bool = False):
+def display_error_summary(
+    failed_pairs: List[tuple[str, Exception]], verbose: bool = False
+):
     """
     Display errors in a user-friendly grouped format.
 
@@ -75,7 +78,9 @@ def display_error_summary(failed_pairs: List[tuple[str, Exception]], verbose: bo
         # Show pretty traceback for each failure
         for url, exc in failed_pairs:
             console.print(f"\n[red]Error for:[/red] {url}")
-            tb = Traceback.from_exception(type(exc), exc, exc.__traceback__, show_locals=False)
+            tb = Traceback.from_exception(
+                type(exc), exc, exc.__traceback__, show_locals=False
+            )
             console.print(tb)
         return
     else:
@@ -86,7 +91,9 @@ def display_error_summary(failed_pairs: List[tuple[str, Exception]], verbose: bo
                 console.print(f"  • {urls[0]}")
                 console.print(f"    [dim]{error_msg}[/dim]")
             else:
-                console.print(f"  • {urls[0]} [dim](and {len(urls)-1} more similar)[/dim]")
+                console.print(
+                    f"  • {urls[0]} [dim](and {len(urls) - 1} more similar)[/dim]"
+                )
                 console.print(f"    [dim]{error_msg}[/dim]")
                 if len(urls) <= 5:
                     for url in urls[1:]:
@@ -94,12 +101,16 @@ def display_error_summary(failed_pairs: List[tuple[str, Exception]], verbose: bo
                 else:
                     for url in urls[1:3]:
                         console.print(f"  • {url}")
-                    console.print(f"    [dim]... and {len(urls)-3} more with same error[/dim]")
+                    console.print(
+                        f"    [dim]... and {len(urls) - 3} more with same error[/dim]"
+                    )
             console.print()
         console.print("  (use --verbose to see full tracebacks)")
 
 
-def separate_results_and_errors(results: List, urls: List[str]) -> tuple[List, List[tuple[str, Exception]]]:
+def separate_results_and_errors(
+    results: List, urls: List[str]
+) -> tuple[List, List[tuple[str, Exception]]]:
     """
     Separate successful results from exceptions with their corresponding URLs.
 
@@ -135,17 +146,25 @@ def handle_operation_error(operation: str, error: Exception, context: str = "") 
     console.print(f"[red]Error {operation}{context_part}: {error}[/red]")
 
 
-def load_config(config_path: Optional[str] = None, mode: Optional[str] = None) -> IfetcherConfig:
+def load_config(
+    config_path: Optional[str] = None, mode: Optional[str] = None
+) -> IfetcherConfig:
     """Load configuration from file or use defaults."""
     if config_path:
         config_file = Path(config_path)
         if not config_file.exists():
-            handle_operation_error("loading configuration", f"Configuration file {config_path} not found")
+            handle_operation_error(
+                "loading configuration", f"Configuration file {config_path} not found"
+            )
             raise typer.Exit(1)
         return IfetcherConfig.from_path(config_file, mode=mode)
     else:
         # Try to find a config file in common locations
-        for potential_config in ["config.toml", "interaction_finder.toml", ".interaction_finder.toml"]:
+        for potential_config in [
+            "config.toml",
+            "interaction_finder.toml",
+            ".interaction_finder.toml",
+        ]:
             if Path(potential_config).exists():
                 console.print(f"[dim]Using config file: {potential_config}[/dim]")
                 return IfetcherConfig.from_path(potential_config, mode=mode)
@@ -173,11 +192,13 @@ def extract_urls_from_jsonl(file_path: Path) -> tuple[List[str], int]:
     url_pattern = re.compile(r'https?://[^\s<>"]+')
 
     if not file_path.exists():
-        handle_operation_error("reading training data", f"Training data file {file_path} not found")
+        handle_operation_error(
+            "reading training data", f"Training data file {file_path} not found"
+        )
         raise typer.Exit(1)
 
     try:
-        with open(file_path, 'r', encoding='utf-8') as f:
+        with open(file_path, "r", encoding="utf-8") as f:
             for line_num, line in enumerate(f, 1):
                 line = line.strip()
                 if not line:
@@ -186,10 +207,14 @@ def extract_urls_from_jsonl(file_path: Path) -> tuple[List[str], int]:
                 try:
                     data = json.loads(line)
                     if not isinstance(data, dict):
-                        console.print(f"[yellow]Warning: Line {line_num} is not a JSON object, skipping[/yellow]")
+                        console.print(
+                            f"[yellow]Warning: Line {line_num} is not a JSON object, skipping[/yellow]"
+                        )
                         continue
 
-                    line_urls = set()  # Track URLs found in this line to avoid duplicates
+                    line_urls = (
+                        set()
+                    )  # Track URLs found in this line to avoid duplicates
 
                     # Extract URLs from explicit URL fields first (highest priority)
                     for field in ["url", "source", "link"]:
@@ -208,7 +233,14 @@ def extract_urls_from_jsonl(file_path: Path) -> tuple[List[str], int]:
                     if not line_urls:
                         for key, value in data.items():
                             # Skip the fields we already checked
-                            if key in ["url", "urls", "source", "sources", "link", "links"]:
+                            if key in [
+                                "url",
+                                "urls",
+                                "source",
+                                "sources",
+                                "link",
+                                "links",
+                            ]:
                                 continue
 
                             if isinstance(value, str):
@@ -223,7 +255,9 @@ def extract_urls_from_jsonl(file_path: Path) -> tuple[List[str], int]:
                     all_urls.extend(line_urls)
 
                 except json.JSONDecodeError as e:
-                    console.print(f"[yellow]Warning: Invalid JSON on line {line_num}: {e}[/yellow]")
+                    console.print(
+                        f"[yellow]Warning: Invalid JSON on line {line_num}: {e}[/yellow]"
+                    )
                     continue
 
     except Exception as e:
@@ -244,16 +278,38 @@ def extract_urls_from_jsonl(file_path: Path) -> tuple[List[str], int]:
 @app.command()
 def train(
     term: str = typer.Argument(..., help="Term to use for training data file lookup"),
-
-    config: Optional[str] = typer.Option(None, "-c", "--config", help="Path to configuration file"),
-    mode: Optional[str] = typer.Option(None, "-m", "--mode", help="Configuration mode to use"),
-    training_file: Optional[str] = typer.Option(None, "-f", "--file", help="Override training data file path"),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Show URLs that would be fetched without fetching them"),
-    fetch_only: bool = typer.Option(False, "--fetch-only", help="Only fetch and cache URLs from training data, skip further processing"),
-    max_concurrent: Optional[int] = typer.Option(None, "--max-concurrent", help="Maximum concurrent requests"),
-    verbose: bool = typer.Option(False, "-v", "--verbose", help="Show verbose output and pretty tracebacks on errors"),
-    failfast: bool = typer.Option(False, "--failfast", help="Stop on first error while fetching"),
-    retry: bool = typer.Option(False, "--retry", help="Force retry of URLs previously marked as failed"),
+    config: Optional[str] = typer.Option(
+        None, "-c", "--config", help="Path to configuration file"
+    ),
+    mode: Optional[str] = typer.Option(
+        None, "-m", "--mode", help="Configuration mode to use"
+    ),
+    training_file: Optional[str] = typer.Option(
+        None, "-f", "--file", help="Override training data file path"
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Show URLs that would be fetched without fetching them"
+    ),
+    fetch_only: bool = typer.Option(
+        False,
+        "--fetch-only",
+        help="Only fetch and cache URLs from training data, skip further processing",
+    ),
+    max_concurrent: Optional[int] = typer.Option(
+        None, "--max-concurrent", help="Maximum concurrent requests"
+    ),
+    verbose: bool = typer.Option(
+        False,
+        "-v",
+        "--verbose",
+        help="Show verbose output and pretty tracebacks on errors",
+    ),
+    failfast: bool = typer.Option(
+        False, "--failfast", help="Stop on first error while fetching"
+    ),
+    retry: bool = typer.Option(
+        False, "--retry", help="Force retry of URLs previously marked as failed"
+    ),
 ):
     """
     Train sub-command: fetch URLs from training data for prompt optimization.
@@ -307,7 +363,9 @@ def train(
     if total_entries == unique_count:
         console.print(f"[green]Found {unique_count} unique URLs[/green]")
     else:
-        console.print(f"[green]Found {unique_count} unique URLs from {total_entries} entries[/green]")
+        console.print(
+            f"[green]Found {unique_count} unique URLs from {total_entries} entries[/green]"
+        )
 
     if verbose or dry_run:
         table = Table(title="URLs to fetch")
@@ -321,8 +379,12 @@ def train(
             stats = cache_status.get("_stats", {})
 
             # Determine which columns to show based on what content exists
-            show_html = stats.get("html_count", 0) > 0 or stats.get("total_nothing", 0) > 0
-            show_pdf = stats.get("pdf_count", 0) > 0 or (stats.get("total_nothing", 0) > 0 and not show_html)
+            show_html = (
+                stats.get("html_count", 0) > 0 or stats.get("total_nothing", 0) > 0
+            )
+            show_pdf = stats.get("pdf_count", 0) > 0 or (
+                stats.get("total_nothing", 0) > 0 and not show_html
+            )
             show_md = stats.get("md_count", 0) > 0
             show_chunks = stats.get("chunks_count", 0) > 0
         elif verbose and dry_run:
@@ -354,25 +416,37 @@ def train(
                 chunks_cached = status.get("chunks", False)
 
                 # Check if nothing is cached at all
-                nothing_cached = not (html_cached or pdf_cached or md_cached or chunks_cached)
+                nothing_cached = not (
+                    html_cached or pdf_cached or md_cached or chunks_cached
+                )
 
                 # Build row data based on which columns are shown
                 row_data = [str(i), url]
 
                 if show_html:
                     if nothing_cached:
-                        html_count, pdf_count = stats.get("html_count", 0), stats.get("pdf_count", 0)
+                        html_count, pdf_count = (
+                            stats.get("html_count", 0),
+                            stats.get("pdf_count", 0),
+                        )
                         most_common_is_html = html_count >= pdf_count
-                        html_status = "[red bold]✗[/red bold]" if most_common_is_html else ""
+                        html_status = (
+                            "[red bold]✗[/red bold]" if most_common_is_html else ""
+                        )
                     else:
                         html_status = "[green]✓[/green]" if html_cached else ""
                     row_data.append(html_status)
 
                 if show_pdf:
                     if nothing_cached:
-                        html_count, pdf_count = stats.get("html_count", 0), stats.get("pdf_count", 0)
+                        html_count, pdf_count = (
+                            stats.get("html_count", 0),
+                            stats.get("pdf_count", 0),
+                        )
                         most_common_is_html = html_count >= pdf_count
-                        pdf_status = "[red bold]✗[/red bold]" if not most_common_is_html else ""
+                        pdf_status = (
+                            "[red bold]✗[/red bold]" if not most_common_is_html else ""
+                        )
                     else:
                         pdf_status = "[green]✓[/green]" if pdf_cached else ""
                     row_data.append(pdf_status)
@@ -411,7 +485,9 @@ def train(
     asyncio.run(fetch_urls_async(urls, cfg, verbose, fetch_only, failfast, retry))
 
 
-async def check_urls_cache_status(urls: List[str], config: IfetcherConfig) -> Dict[str, Dict[str, bool]]:
+async def check_urls_cache_status(
+    urls: List[str], config: IfetcherConfig
+) -> Dict[str, Dict[str, bool]]:
     """
     Check cache status for multiple URLs.
 
@@ -466,13 +542,20 @@ async def check_urls_cache_status(urls: List[str], config: IfetcherConfig) -> Di
         "pdf_count": pdf_count,
         "md_count": md_count,
         "chunks_count": chunks_count,
-        "total_nothing": total_nothing
+        "total_nothing": total_nothing,
     }
 
     return cache_status
 
 
-async def fetch_urls_async(urls: List[str], config: IfetcherConfig, verbose: bool = False, fetch_only: bool = False, failfast: bool = False, retry: bool = False):
+async def fetch_urls_async(
+    urls: List[str],
+    config: IfetcherConfig,
+    verbose: bool = False,
+    fetch_only: bool = False,
+    failfast: bool = False,
+    retry: bool = False,
+):
     """Fetch URLs asynchronously using PageFetcher."""
     # In CLI runs, always show status spinners for single-URL operations
     fetcher = PageFetcher(config, show_status=True, verbose=verbose)
@@ -487,19 +570,25 @@ async def fetch_urls_async(urls: List[str], config: IfetcherConfig, verbose: boo
 
     if already_cached > 0:
         if fetch_only:
-            console.print(f"[bold green]Fetching and caching {urls_to_fetch} URLs...[/bold green]")
+            console.print(
+                f"[bold green]Fetching and caching {urls_to_fetch} URLs...[/bold green]"
+            )
         else:
             console.print(f"[bold green]Fetching {urls_to_fetch} URLs...[/bold green]")
     else:
         if fetch_only:
-            console.print(f"[bold green]Fetching and caching {len(urls)} URLs...[/bold green]")
+            console.print(
+                f"[bold green]Fetching and caching {len(urls)} URLs...[/bold green]"
+            )
         else:
             console.print(f"[bold green]Fetching {len(urls)} URLs...[/bold green]")
 
     try:
         if fetch_only:
             # Use the concurrent fetching method that returns error info
-            results = await fetcher._fetch_multiple(urls, "chunks", progress=True, fail_fast=failfast, retry=retry)
+            results = await fetcher._fetch_multiple(
+                urls, "chunks", progress=True, fail_fast=failfast, retry=retry
+            )
 
             # Separate successful and failed results
             successful = []
@@ -526,7 +615,9 @@ async def fetch_urls_async(urls: List[str], config: IfetcherConfig, verbose: boo
             console.print("[dim]URLs have been fetched and cached for later use[/dim]")
         else:
             # Use the concurrent fetching method that returns error info
-            results = await fetcher._fetch_multiple(urls, "chunks", progress=True, fail_fast=failfast, retry=retry)
+            results = await fetcher._fetch_multiple(
+                urls, "chunks", progress=True, fail_fast=failfast, retry=retry
+            )
 
             # Separate successful and failed results
             successful = []
@@ -552,7 +643,9 @@ async def fetch_urls_async(urls: List[str], config: IfetcherConfig, verbose: boo
 
             if verbose and successful:
                 content_lengths = [len(str(result)) for result in successful]
-                console.print(f"[dim]Fetched content lengths: {content_lengths} characters[/dim]")
+                console.print(
+                    f"[dim]Fetched content lengths: {content_lengths} characters[/dim]"
+                )
 
     except Exception as e:
         handle_operation_error("during URL fetching", e)
@@ -561,8 +654,12 @@ async def fetch_urls_async(urls: List[str], config: IfetcherConfig, verbose: boo
 
 @app.command()
 def config_info(
-    config: Optional[str] = typer.Option(None, "-c", "--config", help="Path to configuration file"),
-    mode: Optional[str] = typer.Option(None, "-m", "--mode", help="Configuration mode to use"),
+    config: Optional[str] = typer.Option(
+        None, "-c", "--config", help="Path to configuration file"
+    ),
+    mode: Optional[str] = typer.Option(
+        None, "-m", "--mode", help="Configuration mode to use"
+    ),
 ):
     """Show current configuration information."""
     try:
@@ -577,7 +674,9 @@ def config_info(
         table.add_row("Max Concurrent Requests", str(cfg.tools.crawl4ai.max_concurrent))
         table.add_row("Request Timeout", f"{cfg.tools.crawl4ai.timeout}s")
         table.add_row("Max Retries", str(cfg.tools.crawl4ai.max_retries))
-        table.add_row("Delay Between Requests", f"{cfg.tools.crawl4ai.delay_between_requests}s")
+        table.add_row(
+            "Delay Between Requests", f"{cfg.tools.crawl4ai.delay_between_requests}s"
+        )
 
         if cfg.modes:
             table.add_row("Available Modes", ", ".join(cfg.modes.keys()))
