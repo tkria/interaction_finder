@@ -450,11 +450,40 @@ class WebClient:
         processor = ContentProcessor()
         return processor.refine_article(result["markdown_content"])
 
-    def create_chunks(self, markdown_content: str) -> List[str]:
-        """Chunk markdown content and return as list of strings."""
+    def create_chunks(self, markdown_content: str) -> List[dict]:
+        """Chunk markdown content and return as list of chunk objects with embeddings."""
+        import numpy as np
+
         chunker = _get_chunker()
-        chunks = chunker(markdown_content)
-        return [chunk.text for chunk in chunks]
+        chunk_objects = chunker(markdown_content)
+
+        chunks_data = []
+        for chunk_obj in chunk_objects:
+            chunk_dict = {
+                "text": chunk_obj.text,
+                "wordcount": len(chunk_obj.text.split()),
+                "embedding": None,
+            }
+
+            # Extract embedding from chonkie chunk object
+            # Compute chunk embedding as average of sentence embeddings
+            if hasattr(chunk_obj, "sentences") and chunk_obj.sentences:
+                sentence_embeddings = []
+                for sentence in chunk_obj.sentences:
+                    if (
+                        hasattr(sentence, "embedding")
+                        and sentence.embedding is not None
+                    ):
+                        sentence_embeddings.append(np.array(sentence.embedding))
+
+                if sentence_embeddings:
+                    # Average sentence embeddings to get chunk embedding
+                    chunk_embedding = np.mean(sentence_embeddings, axis=0)
+                    chunk_dict["embedding"] = chunk_embedding.tolist()
+
+            chunks_data.append(chunk_dict)
+
+        return chunks_data
 
     async def _fetch_with_retry_escalation(
         self, url: str, simple_fetcher, stealth_fetcher, force_retry: bool = False

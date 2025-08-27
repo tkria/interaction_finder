@@ -63,10 +63,11 @@ class PageFetcher:
         lambda self, url, **kw: self.batch_ops._fetch_markdown_and_cache(url, **kw),
     )
 
-    get_chunks = _create_content_getter(
-        "chunks",
-        lambda self, url, **kw: self.batch_ops._fetch_chunks_and_cache(url, **kw),
-    )
+    # get_chunks method is defined manually below for backward compatibility
+    # get_chunks = _create_content_getter(
+    #     "chunks",
+    #     lambda self, url, **kw: self.batch_ops._fetch_chunks_and_cache(url, **kw),
+    # )
 
     async def get_raw(self, url: str, *, retry: bool = False) -> str:
         """Get raw content (HTML or PDF) for URL, fetching if necessary."""
@@ -218,6 +219,205 @@ class PageFetcher:
             progress=show_progress,
             retry=retry,
         )
+
+    async def get_groups(
+        self,
+        urls: List[str],
+        constraint: str = "count:3-8",
+        similarity_threshold: float = 0.3,
+        linkage_method: str = "average",
+        prefetch: bool = True,
+        progress: bool = True,
+        retry: bool = False,
+    ) -> List[dict]:
+        """
+        Group documents by semantic similarity with size constraints.
+
+        Args:
+            urls: List of URLs to group
+            constraint: Either "count:min-max" or "words:min-max"
+            similarity_threshold: Minimum similarity for grouping (0-1)
+            linkage_method: Clustering linkage method ("average", "complete", "single")
+            prefetch: Whether to fetch missing documents
+            progress: Show progress bar
+            retry: Retry failed fetches
+
+        Returns:
+            List of group dictionaries with:
+            - documents: List of URLs in group
+            - total_words: Combined word count
+            - cohesion_score: Average pairwise similarity
+        """
+        from .document_grouper import DocumentGrouper, compute_group_cohesion
+
+        if not urls:
+            return []
+
+        # Parse constraint
+        try:
+            constraint_type, min_val, max_val = DocumentGrouper.parse_constraint(
+                constraint
+            )
+        except ValueError as e:
+            raise ValueError(f"Invalid constraint format: {e}")
+
+        # Ensure all documents are cached with chunks
+        if prefetch:
+            await self.prefetch(urls, ["chunks"], max_concurrent=5)
+
+        # Get chunk data for all documents
+        doc_chunks = {}
+        doc_word_counts = {}
+
+        for url in urls:
+            try:
+                chunks_data = await self.get_chunks_with_embeddings(url, retry=retry)
+                doc_chunks[url] = chunks_data
+                doc_word_counts[url] = sum(chunk["wordcount"] for chunk in chunks_data)
+            except Exception as e:
+                if retry:
+                    # Second attempt failed, skip this document
+                    if self.verbose:
+                        from rich.console import Console
+
+                        console = Console()
+                        console.print(f"[red]Failed to get chunks for {url}: {e}[/red]")
+                    continue
+                else:
+                    raise
+
+        # Filter out documents without chunks
+        valid_urls = [url for url in urls if url in doc_chunks]
+
+        if not valid_urls:
+            return []
+
+        if len(valid_urls) == 1:
+            # Single document - return as single group
+            url = valid_urls[0]
+            doc_embeddings = self._compute_document_embeddings({url: doc_chunks[url]})
+            return [
+                {
+                    "documents": [url],
+                    "total_words": doc_word_counts[url],
+                    "cohesion_score": 1.0,
+                }
+            ]
+
+        # Group documents using constrained agglomerative clustering
+        grouper = DocumentGrouper(linkage_method=linkage_method)
+        groups = grouper.group_documents(
+            documents=valid_urls,
+            chunk_data=doc_chunks,
+            constraint_type=constraint_type,
+            min_size=min_val,
+            max_size=max_val,
+            similarity_threshold=similarity_threshold,
+        )
+
+        # Compute document embeddings for cohesion calculation
+        doc_embeddings = self._compute_document_embeddings(doc_chunks)
+
+        # Format results
+        result = []
+        for group in groups:
+            total_words = sum(doc_word_counts.get(url, 0) for url in group)
+            cohesion = compute_group_cohesion(group, doc_embeddings)
+
+            result.append(
+                {
+                    "documents": group,
+                    "total_words": total_words,
+                    "cohesion_score": cohesion,
+                }
+            )
+
+        return result
+
+    async def get_chunks_with_embeddings(
+        self, url: str, retry: bool = False
+    ) -> List[dict]:
+        """Get chunks with embeddings."""
+        if await self.cache.has_path(url, "chunks"):
+            content = await self.cache.get_content(url, "chunks")
+            if isinstance(content, dict) and "chunks" in content:
+                return content["chunks"]
+
+        # Fetch and compute
+        markdown = await self.get_markdown(url, retry=retry)
+        chunks_data = self.web_client.create_chunks(markdown)
+
+        # Save in new format
+        from datetime import datetime
+
+        await self.cache.save_content(
+            url,
+            "chunks",
+            {
+                "version": 2,
+                "chunks": chunks_data,
+                "metadata": {
+                    "model": "minishlab/potion-base-8M",
+                    "chunk_method": "SDPMChunker",
+                    "created_at": datetime.now().isoformat(),
+                    "total_wordcount": sum(c["wordcount"] for c in chunks_data),
+                },
+            },
+        )
+
+        return chunks_data
+
+    def _compute_document_embeddings(self, doc_chunks: dict) -> dict:
+        """Compute document-level embeddings as averages of chunk embeddings."""
+        import numpy as np
+
+        doc_embeddings = {}
+        for url, chunks in doc_chunks.items():
+            chunk_embeddings = []
+            for chunk in chunks:
+                if chunk.get("embedding"):
+                    chunk_embeddings.append(np.array(chunk["embedding"]))
+
+            if chunk_embeddings:
+                doc_embeddings[url] = np.mean(chunk_embeddings, axis=0)
+            else:
+                doc_embeddings[url] = np.zeros(256)  # Default dimension
+
+        return doc_embeddings
+
+    def _parse_constraint(self, constraint: str) -> tuple:
+        """Parse constraint string - delegated to DocumentGrouper."""
+        from .document_grouper import DocumentGrouper
+
+        return DocumentGrouper.parse_constraint(constraint)
+
+    async def get_chunks(
+        self,
+        url: Union[str, List[str]],
+        progress=True,
+        fail_fast=False,
+        *,
+        retry: bool = False,
+    ) -> Union[List[str], List[List[str]]]:
+        """Get chunk texts only."""
+        if isinstance(url, str):
+            chunks_data = await self.get_chunks_with_embeddings(url, retry=retry)
+            return [chunk["text"] for chunk in chunks_data]
+        elif isinstance(url, list):
+            results = []
+            for single_url in url:
+                try:
+                    chunks_data = await self.get_chunks_with_embeddings(
+                        single_url, retry=retry
+                    )
+                    results.append([chunk["text"] for chunk in chunks_data])
+                except Exception:
+                    if fail_fast:
+                        raise
+                    results.append([])
+            return results
+        else:
+            raise TypeError(f"Expected str or List[str], got {type(url)}")
 
 
 # Export the class for backward compatibility

@@ -22,6 +22,9 @@ from .utils import url_to_hash, normalize_url, url_to_hash_base36
 # Import the URLCache class for direct use if needed
 from .cache import URLCache
 
+# Import document grouping functionality
+from .document_grouper import DocumentGrouper, compute_group_cohesion
+
 
 # Import the exception class
 class PreviousFailure(Exception):
@@ -36,6 +39,8 @@ class PreviousFailure(Exception):
 __all__ = [
     "PageFetcher",
     "URLCache",
+    "DocumentGrouper",
+    "compute_group_cohesion",
     "PreviousFailure",
     "fetch_urls_with_progress",
     "fetch_urls_concurrent_with_progress",

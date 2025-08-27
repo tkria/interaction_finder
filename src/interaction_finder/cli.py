@@ -310,6 +310,17 @@ def train(
     retry: bool = typer.Option(
         False, "--retry", help="Force retry of URLs previously marked as failed"
     ),
+    group_documents: bool = typer.Option(
+        False, "--group", help="Group documents by similarity before processing"
+    ),
+    group_constraint: str = typer.Option(
+        "count:3-8",
+        "--group-size",
+        help="Grouping constraint: 'count:min-max' or 'words:min-max'",
+    ),
+    group_threshold: float = typer.Option(
+        0.3, "--group-threshold", help="Minimum similarity threshold for grouping (0-1)"
+    ),
 ):
     """
     Train sub-command: fetch URLs from training data for prompt optimization.
@@ -357,6 +368,77 @@ def train(
     if not urls:
         console.print("[yellow]No URLs found in training data file[/yellow]")
         return
+
+    # Group documents if requested
+    if group_documents and not fetch_only:
+        try:
+            console.print(f"[bold blue]Grouping {len(urls)} documents...[/bold blue]")
+            with console.status("[bold blue]Computing document similarities..."):
+                groups = await fetcher.get_groups(
+                    urls,
+                    constraint=group_constraint,
+                    similarity_threshold=group_threshold,
+                    prefetch=True,
+                    progress=False,  # Don't show nested progress bar
+                    retry=retry,
+                )
+
+            if groups:
+                console.print(f"[green]✓ Created {len(groups)} document groups[/green]")
+                total_docs = sum(len(group["documents"]) for group in groups)
+                total_words = sum(group["total_words"] for group in groups)
+                avg_cohesion = sum(group["cohesion_score"] for group in groups) / len(
+                    groups
+                )
+
+                console.print(f"[cyan]- Total documents grouped: {total_docs}[/cyan]")
+                console.print(
+                    f"[cyan]- Total words across groups: {total_words:,}[/cyan]"
+                )
+                console.print(
+                    f"[cyan]- Average group cohesion: {avg_cohesion:.3f}[/cyan]"
+                )
+
+                if verbose:
+                    for i, group in enumerate(groups, 1):
+                        console.print(
+                            f"  Group {i}: {len(group['documents'])} docs, "
+                            f"{group['total_words']:,} words, "
+                            f"cohesion: {group['cohesion_score']:.3f}"
+                        )
+                        if len(group["documents"]) <= 3:
+                            for doc in group["documents"]:
+                                console.print(f"    • {doc}")
+                        else:
+                            for doc in group["documents"][:2]:
+                                console.print(f"    • {doc}")
+                            console.print(
+                                f"    • ... and {len(group['documents']) - 2} more"
+                            )
+
+                # Note: For now, we continue with individual URL processing
+                # Future enhancement could process groups together
+                console.print(
+                    "[dim]Continuing with individual document processing...[/dim]"
+                )
+            else:
+                console.print(
+                    "[yellow]No document groups created (all documents below threshold)[/yellow]"
+                )
+
+        except Exception as e:
+            if verbose:
+                import traceback
+
+                console.print(f"[red]Error during document grouping: {e}[/red]")
+                console.print("[red]" + traceback.format_exc() + "[/red]")
+            else:
+                console.print(f"[red]Error during document grouping: {e}[/red]")
+            console.print(
+                "[yellow]Continuing with individual document processing...[/yellow]"
+            )
+    elif group_documents and fetch_only:
+        console.print("[yellow]Document grouping skipped in fetch-only mode[/yellow]")
 
     # Show URL count information
     unique_count = len(urls)

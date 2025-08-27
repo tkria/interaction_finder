@@ -195,6 +195,16 @@ class IfetcherConfig(BaseModel):
 
     workflow: Workflow = Field(default_factory=Workflow)
 
+    class Grouping(BaseModel):
+        """Configuration for document grouping functionality."""
+
+        enabled: bool = True
+        default_constraint: str = "count:3-8"
+        similarity_threshold: float = 0.3
+        linkage_method: str = "average"  # "average", "complete", "single"
+
+    grouping: Grouping = Field(default_factory=Grouping)
+
     class Output(BaseModel):
         path: str = "runs/{mode}/{model}/{repeat}/{term}"
         cache: str = "cache"
