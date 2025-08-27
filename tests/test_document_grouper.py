@@ -102,7 +102,6 @@ class TestDocumentGrouper:
             constraint_type="count",
             min_size=1,
             max_size=3,  # Allow larger groups
-            similarity_threshold=0.2,  # Lower threshold
         )
 
         # Should create groups based on similarity
@@ -145,7 +144,6 @@ class TestDocumentGrouper:
             constraint_type="words",
             min_size=100,
             max_size=300,  # doc1+doc2 = 250, doc1+doc2+doc3 = 450 (too much)
-            similarity_threshold=0.3,
         )
 
         # Should respect word count constraints

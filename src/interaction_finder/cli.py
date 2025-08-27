@@ -133,6 +133,43 @@ def separate_results_and_errors(
     return successful, failed
 
 
+def parse_group_option(value: Optional[str]) -> tuple[bool, str]:
+    """
+    Parse the --group option value into grouping enabled flag and constraint.
+
+    Handles forms:
+    - None (not provided) -> (False, "count:3-8")
+    - "true" or "" -> (True, "count:3-8")
+    - "docs:3-5" or "count:3-5" -> (True, "count:3-5")
+    - "words:500-800" -> (True, "words:500-800")
+
+    Args:
+        value: The option value from CLI
+
+    Returns:
+        Tuple of (grouping_enabled, constraint_string)
+    """
+    if value is None:
+        return False, "count:3-8"
+
+    if value == "" or value.lower() == "true":
+        return True, "count:3-8"
+
+    # Handle shorthand "docs:" -> "count:"
+    if value.startswith("docs:"):
+        value = value.replace("docs:", "count:", 1)
+
+    # Validate constraint format
+    import re
+
+    if not re.match(r"(count|words):\d+-\d+", value):
+        console.print(f"[red]Invalid group constraint format: {value}[/red]")
+        console.print("[red]Expected format: 'count:min-max' or 'words:min-max'[/red]")
+        raise typer.Exit(1)
+
+    return True, value
+
+
 def handle_operation_error(operation: str, error: Exception, context: str = "") -> None:
     """
     Handle errors from operations with consistent formatting and context.
@@ -310,16 +347,10 @@ def train(
     retry: bool = typer.Option(
         False, "--retry", help="Force retry of URLs previously marked as failed"
     ),
-    group_documents: bool = typer.Option(
-        False, "--group", help="Group documents by similarity before processing"
-    ),
-    group_constraint: str = typer.Option(
-        "count:3-8",
-        "--group-size",
-        help="Grouping constraint: 'count:min-max' or 'words:min-max'",
-    ),
-    group_threshold: float = typer.Option(
-        0.3, "--group-threshold", help="Minimum similarity threshold for grouping (0-1)"
+    group: Optional[str] = typer.Option(
+        None,
+        "--group",
+        help="Group documents by similarity. Use --group for default (count:3-8), --group=count:3-5, --group=words:500-800, or --group=docs:3-5",
     ),
 ):
     """
@@ -336,6 +367,9 @@ def train(
         interaction-finder train BRCA1 --file custom_training.jsonl --dry-run
         interaction-finder train BRCA1 --fetch-only
         interaction-finder train BRCA1 --fetch-only --verbose
+        interaction-finder train BRCA1 --group
+        interaction-finder train BRCA1 --group=count:5-10
+        interaction-finder train BRCA1 --group=words:1000-5000
     """
     console.print(f"[bold blue]Training mode for term: {term}[/bold blue]")
 
@@ -369,19 +403,17 @@ def train(
         console.print("[yellow]No URLs found in training data file[/yellow]")
         return
 
+    # Parse the group option
+    group_documents, group_constraint = parse_group_option(group)
+
     # Group documents if requested
     if group_documents and not fetch_only:
         try:
             console.print(f"[bold blue]Grouping {len(urls)} documents...[/bold blue]")
-            with console.status("[bold blue]Computing document similarities..."):
-                groups = await fetcher.get_groups(
-                    urls,
-                    constraint=group_constraint,
-                    similarity_threshold=group_threshold,
-                    prefetch=True,
-                    progress=False,  # Don't show nested progress bar
-                    retry=retry,
-                )
+            # Run grouping in async context
+            groups = asyncio.run(
+                perform_document_grouping(urls, cfg, group_constraint, retry)
+            )
 
             if groups:
                 console.print(f"[green]✓ Created {len(groups)} document groups[/green]")
@@ -565,6 +597,38 @@ def train(
 
     # Fetch URLs
     asyncio.run(fetch_urls_async(urls, cfg, verbose, fetch_only, failfast, retry))
+
+
+async def perform_document_grouping(
+    urls: List[str],
+    config: IfetcherConfig,
+    constraint: str,
+    retry: bool,
+) -> List[Dict[str, Any]]:
+    """
+    Perform document grouping asynchronously.
+
+    Args:
+        urls: List of URLs to group
+        config: Configuration for PageFetcher
+        constraint: Grouping constraint string
+        retry: Whether to retry failed URLs
+
+    Returns:
+        List of document groups
+    """
+    from .fetcher import PageFetcher
+
+    fetcher = PageFetcher(config, show_status=False)
+    with console.status("[bold blue]Computing document similarities..."):
+        groups = await fetcher.get_groups(
+            urls,
+            constraint=constraint,
+            prefetch=True,
+            progress=False,  # Don't show nested progress bar
+            retry=retry,
+        )
+    return groups
 
 
 async def check_urls_cache_status(

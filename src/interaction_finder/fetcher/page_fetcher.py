@@ -224,7 +224,6 @@ class PageFetcher:
         self,
         urls: List[str],
         constraint: str = "count:3-8",
-        similarity_threshold: float = 0.3,
         linkage_method: str = "average",
         prefetch: bool = True,
         progress: bool = True,
@@ -236,7 +235,6 @@ class PageFetcher:
         Args:
             urls: List of URLs to group
             constraint: Either "count:min-max" or "words:min-max"
-            similarity_threshold: Minimum similarity for grouping (0-1)
             linkage_method: Clustering linkage method ("average", "complete", "single")
             prefetch: Whether to fetch missing documents
             progress: Show progress bar
@@ -312,7 +310,6 @@ class PageFetcher:
             constraint_type=constraint_type,
             min_size=min_val,
             max_size=max_val,
-            similarity_threshold=similarity_threshold,
         )
 
         # Compute document embeddings for cohesion calculation

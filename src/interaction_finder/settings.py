@@ -200,7 +200,6 @@ class IfetcherConfig(BaseModel):
 
         enabled: bool = True
         default_constraint: str = "count:3-8"
-        similarity_threshold: float = 0.3
         linkage_method: str = "average"  # "average", "complete", "single"
 
     grouping: Grouping = Field(default_factory=Grouping)

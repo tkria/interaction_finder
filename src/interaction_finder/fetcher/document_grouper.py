@@ -68,7 +68,6 @@ class DocumentGrouper:
         constraint_type: str = "count",
         min_size: int = 3,
         max_size: int = 8,
-        similarity_threshold: float = 0.3,
     ) -> List[List[str]]:
         """
         Group documents using constrained agglomerative clustering.
@@ -79,7 +78,6 @@ class DocumentGrouper:
             constraint_type: Either "count" (document count) or "words" (word count)
             min_size: Minimum group size (documents or words)
             max_size: Maximum group size (documents or words)
-            similarity_threshold: Minimum similarity for merging clusters
 
         Returns:
             List of document groups, where each group is a list of document IDs
@@ -106,7 +104,6 @@ class DocumentGrouper:
             doc_metrics=doc_metrics,
             min_size=min_size,
             max_size=max_size,
-            similarity_threshold=similarity_threshold,
         )
 
         # Handle orphaned documents
@@ -116,8 +113,6 @@ class DocumentGrouper:
             doc_embeddings=doc_embeddings,
             doc_metrics=doc_metrics,
             max_size=max_size,
-            similarity_threshold=similarity_threshold
-            * 0.7,  # Lower threshold for orphans
         )
 
         return groups
@@ -230,7 +225,6 @@ class DocumentGrouper:
         doc_metrics: Dict[str, int],
         min_size: int,
         max_size: int,
-        similarity_threshold: float,
     ) -> List[List[str]]:
         """Run constrained agglomerative clustering."""
         # Initialize each document as its own cluster
@@ -259,11 +253,6 @@ class DocumentGrouper:
 
                     # Calculate distance
                     dist = self._cluster_distance(c_a, c_b, doc_embeddings)
-
-                    # Check similarity threshold (convert distance to similarity)
-                    similarity = 1.0 - dist
-                    if similarity < similarity_threshold:
-                        continue
 
                     if dist < best_distance:
                         best_distance = dist
@@ -298,7 +287,6 @@ class DocumentGrouper:
         doc_embeddings: Dict[str, np.ndarray],
         doc_metrics: Dict[str, int],
         max_size: int,
-        similarity_threshold: float,
     ) -> List[List[str]]:
         """Handle orphaned documents by trying to add them to existing groups."""
         # Find orphaned documents
@@ -334,10 +322,7 @@ class DocumentGrouper:
 
                     if similarities:
                         avg_similarity = np.mean(similarities)
-                        if (
-                            avg_similarity > best_similarity
-                            and avg_similarity >= similarity_threshold
-                        ):
+                        if avg_similarity > best_similarity:
                             best_similarity = avg_similarity
                             best_group_idx = i
 
