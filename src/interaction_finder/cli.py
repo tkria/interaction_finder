@@ -146,8 +146,95 @@ def handle_operation_error(operation: str, error: Exception, context: str = "") 
     console.print(f"[red]Error {operation}{context_part}: {error}[/red]")
 
 
+def parse_config_override(override: str) -> tuple[str, Any]:
+    """
+    Parse a config override string into path and value.
+
+    Args:
+        override: String in format "path.to.key=value"
+
+    Returns:
+        Tuple of (dotted_path, parsed_value)
+
+    Raises:
+        ValueError: If override format is invalid
+    """
+    if "=" not in override:
+        raise ValueError(
+            f"Invalid override format: {override}. Expected 'path.to.key=value'"
+        )
+
+    path, value_str = override.split("=", 1)
+
+    # Parse value with basic type inference
+    value_str = value_str.strip()
+
+    # Boolean values
+    if value_str.lower() in ("true", "false"):
+        value = value_str.lower() == "true"
+    # Integer values
+    elif value_str.isdigit():
+        value = int(value_str)
+    # Float values
+    elif "." in value_str and value_str.replace(".", "").isdigit():
+        value = float(value_str)
+    # String values (remove quotes if present)
+    else:
+        if (value_str.startswith('"') and value_str.endswith('"')) or (
+            value_str.startswith("'") and value_str.endswith("'")
+        ):
+            value = value_str[1:-1]
+        else:
+            value = value_str
+
+    return path.strip(), value
+
+
+def apply_config_overrides(config_data: dict, overrides: List[str]) -> dict:
+    """
+    Apply configuration overrides to config data.
+
+    Args:
+        config_data: Base configuration dictionary
+        overrides: List of override strings
+
+    Returns:
+        Modified configuration dictionary
+    """
+    if not overrides:
+        return config_data
+
+    for override in overrides:
+        try:
+            path, value = parse_config_override(override)
+
+            # Navigate to the nested dictionary location
+            current = config_data
+            path_parts = path.split(".")
+
+            # Navigate to parent of target key
+            for part in path_parts[:-1]:
+                if part not in current:
+                    current[part] = {}
+                current = current[part]
+
+            # Set the final value
+            final_key = path_parts[-1]
+            current[final_key] = value
+
+            console.print(f"[dim]Override applied: {path} = {value}[/dim]")
+
+        except Exception as e:
+            console.print(f"[red]Error applying override '{override}': {e}[/red]")
+            raise typer.Exit(1)
+
+    return config_data
+
+
 def load_config(
-    config_path: Optional[str] = None, mode: Optional[str] = None
+    config_path: Optional[str] = None,
+    mode: Optional[str] = None,
+    overrides: List[str] = None,
 ) -> IfetcherConfig:
     """Load configuration from file or use defaults."""
     if config_path:
@@ -157,7 +244,24 @@ def load_config(
                 "loading configuration", f"Configuration file {config_path} not found"
             )
             raise typer.Exit(1)
-        return IfetcherConfig.from_path(config_file, mode=mode)
+
+        # Load TOML data and apply overrides before creating config
+        import tomli
+
+        config_data = tomli.loads(config_file.read_text("utf-8"))
+        config_data = apply_config_overrides(config_data, overrides or [])
+
+        # Apply mode overrides if specified
+        if mode and "modes" in config_data and mode in config_data["modes"]:
+            mode_overrides = config_data["modes"][mode]
+            if isinstance(mode_overrides, dict):
+                config_data = IfetcherConfig.apply_overrides(
+                    config_data, mode_overrides
+                )
+
+        config = IfetcherConfig.model_validate(config_data)
+        config._dir = config_file.parent
+        return config
     else:
         # Try to find a config file in common locations
         for potential_config in [
@@ -167,11 +271,31 @@ def load_config(
         ]:
             if Path(potential_config).exists():
                 console.print(f"[dim]Using config file: {potential_config}[/dim]")
-                return IfetcherConfig.from_path(potential_config, mode=mode)
 
-        # Use default configuration
+                # Load TOML data and apply overrides
+                import tomli
+
+                config_file = Path(potential_config)
+                config_data = tomli.loads(config_file.read_text("utf-8"))
+                config_data = apply_config_overrides(config_data, overrides or [])
+
+                # Apply mode overrides if specified
+                if mode and "modes" in config_data and mode in config_data["modes"]:
+                    mode_overrides = config_data["modes"][mode]
+                    if isinstance(mode_overrides, dict):
+                        config_data = IfetcherConfig.apply_overrides(
+                            config_data, mode_overrides
+                        )
+
+                config = IfetcherConfig.model_validate(config_data)
+                config._dir = config_file.parent
+                return config
+
+        # Use default configuration with overrides
         console.print("[dim]Using default configuration[/dim]")
-        return IfetcherConfig()
+        config_data = {}
+        config_data = apply_config_overrides(config_data, overrides or [])
+        return IfetcherConfig.model_validate(config_data)
 
 
 def extract_urls_from_jsonl(file_path: Path) -> tuple[List[str], int]:
@@ -310,6 +434,11 @@ def train(
     retry: bool = typer.Option(
         False, "--retry", help="Force retry of URLs previously marked as failed"
     ),
+    overrides: List[str] = typer.Option(
+        [],
+        "-O",
+        help="Override config values using dotted paths (e.g., -O workflow.grouping.enabled=false)",
+    ),
 ):
     """
     Train sub-command: fetch URLs from training data for prompt optimization.
@@ -330,7 +459,7 @@ def train(
 
     # Load configuration
     try:
-        cfg = load_config(config, mode)
+        cfg = load_config(config, mode, overrides)
     except Exception as e:
         handle_operation_error("loading configuration", e)
         raise typer.Exit(1)
@@ -764,10 +893,15 @@ def config_info(
     mode: Optional[str] = typer.Option(
         None, "-m", "--mode", help="Configuration mode to use"
     ),
+    overrides: List[str] = typer.Option(
+        [],
+        "-O",
+        help="Override config values using dotted paths (e.g., -O workflow.grouping.enabled=false)",
+    ),
 ):
     """Show current configuration information."""
     try:
-        cfg = load_config(config, mode)
+        cfg = load_config(config, mode, overrides)
 
         table = Table(title="Configuration Information")
         table.add_column("Setting", style="cyan")
