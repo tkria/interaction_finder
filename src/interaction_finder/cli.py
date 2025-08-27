@@ -133,43 +133,6 @@ def separate_results_and_errors(
     return successful, failed
 
 
-def parse_group_option(value: Optional[str]) -> tuple[bool, str]:
-    """
-    Parse the --group option value into grouping enabled flag and constraint.
-
-    Handles forms:
-    - None (not provided) -> (False, "count:3-8")
-    - "true" or "" -> (True, "count:3-8")
-    - "docs:3-5" or "count:3-5" -> (True, "count:3-5")
-    - "words:500-800" -> (True, "words:500-800")
-
-    Args:
-        value: The option value from CLI
-
-    Returns:
-        Tuple of (grouping_enabled, constraint_string)
-    """
-    if value is None:
-        return False, "count:3-8"
-
-    if value == "" or value.lower() == "true":
-        return True, "count:3-8"
-
-    # Handle shorthand "docs:" -> "count:"
-    if value.startswith("docs:"):
-        value = value.replace("docs:", "count:", 1)
-
-    # Validate constraint format
-    import re
-
-    if not re.match(r"(count|words):\d+-\d+", value):
-        console.print(f"[red]Invalid group constraint format: {value}[/red]")
-        console.print("[red]Expected format: 'count:min-max' or 'words:min-max'[/red]")
-        raise typer.Exit(1)
-
-    return True, value
-
-
 def handle_operation_error(operation: str, error: Exception, context: str = "") -> None:
     """
     Handle errors from operations with consistent formatting and context.
@@ -347,11 +310,6 @@ def train(
     retry: bool = typer.Option(
         False, "--retry", help="Force retry of URLs previously marked as failed"
     ),
-    group: Optional[str] = typer.Option(
-        None,
-        "--group",
-        help="Group documents by similarity. Use --group for default (count:3-8), --group=count:3-5, --group=words:500-800, or --group=docs:3-5",
-    ),
 ):
     """
     Train sub-command: fetch URLs from training data for prompt optimization.
@@ -367,9 +325,6 @@ def train(
         interaction-finder train BRCA1 --file custom_training.jsonl --dry-run
         interaction-finder train BRCA1 --fetch-only
         interaction-finder train BRCA1 --fetch-only --verbose
-        interaction-finder train BRCA1 --group
-        interaction-finder train BRCA1 --group=count:5-10
-        interaction-finder train BRCA1 --group=words:1000-5000
     """
     console.print(f"[bold blue]Training mode for term: {term}[/bold blue]")
 
@@ -403,16 +358,16 @@ def train(
         console.print("[yellow]No URLs found in training data file[/yellow]")
         return
 
-    # Parse the group option
-    group_documents, group_constraint = parse_group_option(group)
+    # Group documents if enabled in configuration
+    grouping_config = cfg.workflow.grouping
 
-    # Group documents if requested
-    if group_documents and not fetch_only:
+    # Group documents if enabled
+    if grouping_config.enabled and not fetch_only:
         try:
             console.print(f"[bold blue]Grouping {len(urls)} documents...[/bold blue]")
             # Run grouping in async context
             groups = asyncio.run(
-                perform_document_grouping(urls, cfg, group_constraint, retry)
+                perform_document_grouping(urls, cfg, grouping_config, retry)
             )
 
             if groups:
@@ -469,7 +424,7 @@ def train(
             console.print(
                 "[yellow]Continuing with individual document processing...[/yellow]"
             )
-    elif group_documents and fetch_only:
+    elif grouping_config.enabled and fetch_only:
         console.print("[yellow]Document grouping skipped in fetch-only mode[/yellow]")
 
     # Show URL count information
@@ -602,7 +557,7 @@ def train(
 async def perform_document_grouping(
     urls: List[str],
     config: IfetcherConfig,
-    constraint: str,
+    grouping_config: Any,  # Will be Workflow.Grouping instance
     retry: bool,
 ) -> List[Dict[str, Any]]:
     """
@@ -611,7 +566,7 @@ async def perform_document_grouping(
     Args:
         urls: List of URLs to group
         config: Configuration for PageFetcher
-        constraint: Grouping constraint string
+        grouping_config: Grouping configuration object
         retry: Whether to retry failed URLs
 
     Returns:
@@ -623,7 +578,10 @@ async def perform_document_grouping(
     with console.status("[bold blue]Computing document similarities..."):
         groups = await fetcher.get_groups(
             urls,
-            constraint=constraint,
+            constraint_type=grouping_config.constraint_type,
+            min_size=grouping_config.min_size,
+            max_size=grouping_config.max_size,
+            linkage_method=grouping_config.linkage_method,
             prefetch=True,
             progress=False,  # Don't show nested progress bar
             retry=retry,
@@ -823,6 +781,23 @@ def config_info(
         table.add_row(
             "Delay Between Requests", f"{cfg.tools.crawl4ai.delay_between_requests}s"
         )
+
+        # Grouping configuration
+        table.add_row(
+            "Document Grouping",
+            "Enabled" if cfg.workflow.grouping.enabled else "Disabled",
+        )
+        if cfg.workflow.grouping.enabled:
+            table.add_row(
+                "Grouping Constraint Type", cfg.workflow.grouping.constraint_type
+            )
+            table.add_row(
+                "Grouping Size Range",
+                f"{cfg.workflow.grouping.min_size}-{cfg.workflow.grouping.max_size}",
+            )
+            table.add_row(
+                "Grouping Linkage Method", cfg.workflow.grouping.linkage_method
+            )
 
         if cfg.modes:
             table.add_row("Available Modes", ", ".join(cfg.modes.keys()))

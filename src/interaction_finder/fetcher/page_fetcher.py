@@ -223,7 +223,9 @@ class PageFetcher:
     async def get_groups(
         self,
         urls: List[str],
-        constraint: str = "count:3-8",
+        constraint_type: str = "count",
+        min_size: int = 3,
+        max_size: int = 8,
         linkage_method: str = "average",
         prefetch: bool = True,
         progress: bool = True,
@@ -234,7 +236,9 @@ class PageFetcher:
 
         Args:
             urls: List of URLs to group
-            constraint: Either "count:min-max" or "words:min-max"
+            constraint_type: Either "count" or "words"
+            min_size: Minimum group size (documents or words)
+            max_size: Maximum group size (documents or words)
             linkage_method: Clustering linkage method ("average", "complete", "single")
             prefetch: Whether to fetch missing documents
             progress: Show progress bar
@@ -251,13 +255,13 @@ class PageFetcher:
         if not urls:
             return []
 
-        # Parse constraint
-        try:
-            constraint_type, min_val, max_val = DocumentGrouper.parse_constraint(
-                constraint
-            )
-        except ValueError as e:
-            raise ValueError(f"Invalid constraint format: {e}")
+        # Validate constraint parameters
+        if constraint_type not in ("count", "words"):
+            raise ValueError("constraint_type must be 'count' or 'words'")
+        if min_size < 1:
+            raise ValueError("min_size must be >= 1")
+        if min_size > max_size:
+            raise ValueError("min_size must be <= max_size")
 
         # Ensure all documents are cached with chunks
         if prefetch:
@@ -308,8 +312,8 @@ class PageFetcher:
             documents=valid_urls,
             chunk_data=doc_chunks,
             constraint_type=constraint_type,
-            min_size=min_val,
-            max_size=max_val,
+            min_size=min_size,
+            max_size=max_size,
         )
 
         # Compute document embeddings for cohesion calculation

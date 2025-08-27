@@ -5,7 +5,7 @@ from typing import List, Dict, Union, Any, Optional
 import tomli
 import shlex
 from copy import deepcopy
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class IfetcherConfig(BaseModel):
@@ -186,23 +186,48 @@ class IfetcherConfig(BaseModel):
             chunksize: int = 10
             maxchars: int = 80000
 
+        class Grouping(BaseModel):
+            """Configuration for document grouping within workflow."""
+
+            enabled: bool = True
+            constraint_type: str = "count"  # "count" or "words"
+            min_size: int = 3
+            max_size: int = 8
+            linkage_method: str = "average"  # "average", "complete", "single"
+
+            @field_validator("constraint_type")
+            @classmethod
+            def validate_constraint_type(cls, v: str) -> str:
+                if v not in ("count", "words"):
+                    raise ValueError("constraint_type must be 'count' or 'words'")
+                return v
+
+            @field_validator("linkage_method")
+            @classmethod
+            def validate_linkage_method(cls, v: str) -> str:
+                if v not in ("average", "complete", "single"):
+                    raise ValueError(
+                        "linkage_method must be 'average', 'complete', or 'single'"
+                    )
+                return v
+
+            @model_validator(mode="after")
+            def validate_size_range(self) -> "Grouping":
+                if self.min_size > self.max_size:
+                    raise ValueError("min_size must be <= max_size")
+                if self.min_size < 1:
+                    raise ValueError("min_size must be >= 1")
+                return self
+
         envfile: str | None = None
         max_loops: int = 5
         max_tokens: int = 500000
         max_requests: int | None = None
         summary: Summarisation = Field(default_factory=Summarisation)
+        grouping: Grouping = Field(default_factory=Grouping)
         unstructured_comparison: bool = False
 
     workflow: Workflow = Field(default_factory=Workflow)
-
-    class Grouping(BaseModel):
-        """Configuration for document grouping functionality."""
-
-        enabled: bool = True
-        default_constraint: str = "count:3-8"
-        linkage_method: str = "average"  # "average", "complete", "single"
-
-    grouping: Grouping = Field(default_factory=Grouping)
 
     class Output(BaseModel):
         path: str = "runs/{mode}/{model}/{repeat}/{term}"
