@@ -7,6 +7,15 @@ from .cache import URLCache
 from .web_client import WebClient
 from .progress_display import StatusDisplay
 
+
+class PreviousFailure(Exception):
+    """Raised when a previous fetch failure sentinel is present for a URL."""
+
+    def __init__(self, url: str, message: str | None = None):
+        super().__init__(message or f"Previous failure recorded for URL: {url}")
+        self.url = url
+
+
 # Batch operation constants
 DEFAULT_MAX_CONCURRENT = 5
 
@@ -124,84 +133,204 @@ class BatchOperations:
 
         return results
 
+    async def _check_previous_failures(self, url: str) -> None:
+        """Check for previous failures and raise PreviousFailure if found."""
+        # Check original URL
+        if await self.cache.is_failed(url):
+            reason = await self.cache.get_failed_reason(url)
+            raise PreviousFailure(
+                url, reason or f"Previous failure recorded for URL: {url}"
+            )
+
+        # Follow redirect chain and check each URL for failures
+        try:
+            visited = set()
+            current = url
+            for _ in range(3):  # Safety cap to avoid infinite loops
+                redir = await self.cache.get_redirect_info(current)
+                if not redir or redir in visited:
+                    break
+                visited.add(redir)
+                if await self.cache.is_failed(redir):
+                    reason = await self.cache.get_failed_reason(redir)
+                    raise PreviousFailure(
+                        redir,
+                        reason or f"Previous failure recorded for URL: {redir}",
+                    )
+                current = redir
+        except PreviousFailure:
+            # Re-raise PreviousFailure exceptions
+            raise
+        except (FileNotFoundError, KeyError, OSError):
+            # Only catch expected cache miss/access errors, continue processing
+            pass
+
     async def _fetch_html_and_cache(self, url: str, retry: bool = False) -> str:
         """Fetch HTML content and cache it."""
-        if await self.cache.has_path(url, "html"):
+        # When retrying, bypass cache and fetch fresh content
+        if not retry and await self.cache.has_path(url, "html"):
             return await self.cache.get_content(url, "html")
 
-        fetch_result = await self.web_client.fetch_html(url, retry=retry)
-        await self.cache.set_content(
-            url, "html", fetch_result["raw_content"], fetch_result["final_url"]
-        )
+        # Check for previous failures unless retrying
+        if not retry:
+            await self._check_previous_failures(url)
 
-        # Also cache other extracted data
-        if fetch_result["markdown_content"]:
+        # Fetch operation - mark as failed only on fetch errors
+        try:
+            fetch_result = await self.web_client.fetch_html(url, retry=retry)
+        except Exception as e:
+            # Only mark as failed for actual fetch/network errors
+            await self.cache.mark_failed(url, reason=str(e))
+            raise
+
+        # Post-processing - don't mark as failed on processing errors
+        try:
+            # Cache all extracted data
+            final_url = fetch_result["final_url"]
             await self.cache.set_content(
-                url,
-                "raw_markdown",
-                fetch_result["markdown_content"],
-                fetch_result["final_url"],
-            )
-        if fetch_result["doi"]:
-            await self.cache.set_content(
-                url, "doi", fetch_result["doi"], fetch_result["final_url"]
+                url, "html", fetch_result["raw_content"], final_url
             )
 
-        return fetch_result["raw_content"]
+            if fetch_result["markdown_content"]:
+                await self.cache.set_content(
+                    url, "raw_markdown", fetch_result["markdown_content"], final_url
+                )
+            if fetch_result["doi"]:
+                await self.cache.set_content(url, "doi", fetch_result["doi"], final_url)
+
+            # Clear any previous failure markers on success
+            await self.cache.clear_failed(url)
+            if final_url and final_url != url:
+                await self.cache.clear_failed(final_url)
+
+            return fetch_result["raw_content"]
+
+        except Exception:
+            # Processing errors propagate but don't mark as failed
+            # The content was successfully fetched, just post-processing failed
+            raise
 
     async def _fetch_pdf_and_cache(self, url: str, retry: bool = False) -> str:
         """Fetch PDF content and cache it."""
-        if await self.cache.has_path(url, "pdf"):
+        # When retrying, bypass cache and fetch fresh content
+        if not retry and await self.cache.has_path(url, "pdf"):
             return await self.cache.get_content(url, "pdf")
 
-        fetch_result = await self.web_client.fetch_pdf(url, retry=retry)
-        await self.cache.set_content(
-            url, "pdf", fetch_result["raw_content"], fetch_result["final_url"]
-        )
+        # Check for previous failures unless retrying
+        if not retry:
+            await self._check_previous_failures(url)
 
-        # Also cache markdown representation
-        if fetch_result["markdown_content"]:
+        # Fetch operation - mark as failed only on fetch errors
+        try:
+            fetch_result = await self.web_client.fetch_pdf(url, retry=retry)
+        except Exception as e:
+            # Only mark as failed for actual fetch/network errors
+            await self.cache.mark_failed(url, reason=str(e))
+            raise
+
+        # Post-processing - don't mark as failed on processing errors
+        try:
+            # Cache all extracted data
+            final_url = fetch_result["final_url"]
             await self.cache.set_content(
-                url,
-                "raw_markdown",
-                fetch_result["markdown_content"],
-                fetch_result["final_url"],
+                url, "pdf", fetch_result["raw_content"], final_url
             )
 
-        return fetch_result["raw_content"]
+            if fetch_result["markdown_content"]:
+                await self.cache.set_content(
+                    url, "raw_markdown", fetch_result["markdown_content"], final_url
+                )
+
+            # Clear any previous failure markers on success
+            await self.cache.clear_failed(url)
+            if final_url and final_url != url:
+                await self.cache.clear_failed(final_url)
+
+            return fetch_result["raw_content"]
+
+        except Exception:
+            # Processing errors propagate but don't mark as failed
+            # The content was successfully fetched, just post-processing failed
+            raise
 
     async def _fetch_markdown_and_cache(self, url: str, retry: bool = False) -> str:
         """Fetch processed markdown content and cache it."""
-        if await self.cache.has_path(url, "markdown"):
+        # When retrying, bypass cache and fetch fresh content
+        if not retry and await self.cache.has_path(url, "markdown"):
             return await self.cache.get_content(url, "markdown")
 
-        # Get processed markdown directly from web client
-        processed_markdown = await self.web_client.fetch_markdown(url, retry=retry)
-
-        # We need to get the final URL for caching, so do a separate fetch
-        # This is a bit inefficient but maintains the abstraction
-        if self.web_client._is_pdf_url(url):
-            fetch_result = await self.web_client.fetch_pdf(url, retry=retry)
+        # Check if we already have raw markdown cached (from HTML/PDF fetch)
+        # Skip cache check if retrying
+        if not retry and await self.cache.has_path(url, "raw_markdown"):
+            raw_markdown = await self.cache.get_content(url, "raw_markdown")
+            final_url = await self.cache.get_redirect_info(url)
         else:
-            fetch_result = await self.web_client.fetch_html(url, retry=retry)
+            # Check for previous failures unless retrying
+            if not retry:
+                await self._check_previous_failures(url)
 
-        await self.cache.set_content(
-            url, "markdown", processed_markdown, fetch_result["final_url"]
-        )
+            # Fetch operation - mark as failed only on fetch errors
+            try:
+                # Do fresh fetch to get all data
+                if self.web_client._is_pdf_url(url):
+                    fetch_result = await self.web_client.fetch_pdf(url, retry=retry)
+                else:
+                    fetch_result = await self.web_client.fetch_html(url, retry=retry)
+            except Exception as e:
+                # Only mark as failed for actual fetch/network errors
+                await self.cache.mark_failed(url, reason=str(e))
+                raise
+
+            # Post-processing - don't mark as failed on processing errors
+            try:
+                raw_markdown = fetch_result["markdown_content"]
+                final_url = fetch_result["final_url"]
+
+                # Cache the raw markdown
+                await self.cache.set_content(
+                    url, "raw_markdown", raw_markdown, final_url
+                )
+
+                # Clear any previous failure markers on success
+                await self.cache.clear_failed(url)
+                if final_url and final_url != url:
+                    await self.cache.clear_failed(final_url)
+
+            except Exception:
+                # Processing errors propagate but don't mark as failed
+                # The content was successfully fetched, just post-processing failed
+                raise
+
+        # Process the raw markdown content
+        from .content_processor import ContentProcessor
+
+        processor = ContentProcessor()
+        processed_markdown = processor.refine_article(raw_markdown)
+
+        # Cache the processed markdown
+        await self.cache.set_content(url, "markdown", processed_markdown, final_url)
 
         return processed_markdown
 
     async def _fetch_chunks_and_cache(self, url: str, retry: bool = False) -> List[str]:
         """Fetch chunked content and cache it."""
-        if await self.cache.has_path(url, "chunks"):
+        # When retrying, bypass cache and fetch fresh content
+        if not retry and await self.cache.has_path(url, "chunks"):
             return await self.cache.get_content(url, "chunks")
 
-        # Get markdown first, then chunk it
-        markdown_content = await self._fetch_markdown_and_cache(url, retry=retry)
-        chunks = self.web_client.create_chunks(markdown_content)
+        # Ensure we have both raw content (HTML/PDF) and processed markdown
+        if self.web_client._is_pdf_url(url):
+            await self._fetch_pdf_and_cache(url, retry=retry)
+        else:
+            await self._fetch_html_and_cache(url, retry=retry)
 
-        # Cache the chunks - the cache will determine final_url from the markdown cache
-        await self.cache.set_content(url, "chunks", chunks)
+        # Get processed markdown (this will use the cached raw_markdown)
+        processed_markdown = await self._fetch_markdown_and_cache(url, retry=retry)
+        chunks = self.web_client.create_chunks(processed_markdown)
+
+        # Get final URL from redirect info and cache chunks there
+        final_url = await self.cache.get_redirect_info(url)
+        await self.cache.set_content(url, "chunks", chunks, final_url)
 
         return chunks
 
@@ -243,7 +372,7 @@ class BatchOperations:
         limited_tasks = [fetch_with_limit(task) for task in tasks]
 
         with self.progress_display.batch_progress(
-            len(limited_tasks), "Prefetching content"
+            len(limited_tasks), "Fetching and chunking documents"
         ) as progress:
             completed = 0
             for coro in asyncio.as_completed(limited_tasks):

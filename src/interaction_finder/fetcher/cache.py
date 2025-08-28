@@ -270,13 +270,39 @@ class URLCache:
         return None
 
     async def clear_url(self, url: str) -> None:
-        """Remove all cached content for a URL."""
+        """Remove all cached content for a URL and its entire redirect chain."""
+        # Collect all URLs in the redirect chain
+        urls_to_clear = {url}
+        current = url
+        visited = set()
+
+        # Follow redirect chain forward with safety limit
+        while current and current not in visited and len(visited) < 10:
+            visited.add(current)
+            try:
+                redir = await self.get_redirect_info(current)
+                if redir and redir != current:  # Avoid self-redirects
+                    urls_to_clear.add(redir)
+                    current = redir
+                else:
+                    break
+            except (FileNotFoundError, KeyError, OSError):
+                # No redirect info available, stop traversal
+                break
+
+        # Clear all URLs in the chain
         extensions = [config["extension"] for config in CONTENT_TYPE_CONFIG.values()]
         extensions.extend(["url", "redir", "failed"])  # Add metadata file extensions
-        paths = await self._get_paths(url, *extensions)
-        for path in paths:
-            if path.exists():
-                path.unlink()
+
+        for url_to_clear in urls_to_clear:
+            try:
+                paths = await self._get_paths(url_to_clear, *extensions)
+                for path in paths:
+                    if path.exists():
+                        path.unlink()
+            except (FileNotFoundError, KeyError, OSError):
+                # URL may not exist in cache, continue with others
+                continue
 
     async def get_url_hash(self, url: str) -> str:
         """Get the actual hash string used for a URL (including probe suffix if any)."""

@@ -355,6 +355,8 @@ class TestFetcherFunctions:
         batch_ops.cache.has_path = AsyncMock(return_value=False)
         batch_ops.web_client.fetch_html = AsyncMock(return_value=fetch_result)
         batch_ops.cache.set_content = AsyncMock()
+        batch_ops.cache.clear_failed = AsyncMock()
+        batch_ops.cache.mark_failed = AsyncMock()
 
         result = await batch_ops._fetch_html_and_cache(url, retry=True)
 
@@ -375,8 +377,12 @@ class TestFetcherFunctions:
         }
 
         batch_ops.cache.has_path = AsyncMock(return_value=False)
+        batch_ops.cache.is_failed = AsyncMock(return_value=False)
+        batch_ops.cache.get_redirect_info = AsyncMock(return_value=None)
         batch_ops.web_client.fetch_pdf = AsyncMock(return_value=fetch_result)
         batch_ops.cache.set_content = AsyncMock()
+        batch_ops.cache.clear_failed = AsyncMock()
+        batch_ops.cache.mark_failed = AsyncMock()
 
         result = await batch_ops._fetch_pdf_and_cache(url)
 
@@ -390,24 +396,36 @@ class TestFetcherFunctions:
     async def test_fetch_markdown_and_cache(self, batch_ops):
         """Test markdown fetching and caching."""
         url = "http://example.com"
-        processed_markdown = "processed markdown content"
+        raw_markdown = "raw markdown content"
         fetch_result = {
+            "raw_content": "html content",
+            "markdown_content": raw_markdown,
             "final_url": "http://example.com/final",
         }
 
         batch_ops.cache.has_path = AsyncMock(return_value=False)
-        batch_ops.web_client.fetch_markdown = AsyncMock(return_value=processed_markdown)
+        batch_ops.cache.is_failed = AsyncMock(return_value=False)
         batch_ops.web_client._is_pdf_url = Mock(return_value=False)
         batch_ops.web_client.fetch_html = AsyncMock(return_value=fetch_result)
         batch_ops.cache.set_content = AsyncMock()
+        batch_ops.cache.clear_failed = AsyncMock()
+        batch_ops.cache.mark_failed = AsyncMock()
+        batch_ops.cache.get_redirect_info = AsyncMock(return_value=None)
 
-        result = await batch_ops._fetch_markdown_and_cache(url)
+        # Mock the content processor
+        with patch(
+            "interaction_finder.fetcher.content_processor.ContentProcessor"
+        ) as mock_processor_class:
+            mock_processor = mock_processor_class.return_value
+            processed_markdown = "processed markdown content"
+            mock_processor.refine_article.return_value = processed_markdown
 
-        assert result == processed_markdown
-        batch_ops.web_client.fetch_markdown.assert_called_once_with(url, retry=False)
-        batch_ops.cache.set_content.assert_called_once_with(
-            url, "markdown", processed_markdown, "http://example.com/final"
-        )
+            result = await batch_ops._fetch_markdown_and_cache(url)
+
+            assert result == processed_markdown
+            batch_ops.web_client.fetch_html.assert_called_once_with(url, retry=False)
+            # Should cache both raw_markdown and processed markdown
+            assert batch_ops.cache.set_content.call_count == 2
 
     @pytest.mark.anyio
     async def test_fetch_chunks_and_cache(self, batch_ops):
@@ -417,16 +435,21 @@ class TestFetcherFunctions:
         chunks = ["chunk1", "chunk2", "chunk3"]
 
         batch_ops.cache.has_path = AsyncMock(return_value=False)
+        batch_ops.web_client._is_pdf_url = Mock(return_value=False)
+        batch_ops._fetch_html_and_cache = AsyncMock()
         batch_ops._fetch_markdown_and_cache = AsyncMock(return_value=markdown_content)
         batch_ops.web_client.create_chunks = Mock(return_value=chunks)
         batch_ops.cache.set_content = AsyncMock()
+        batch_ops.cache.get_redirect_info = AsyncMock(return_value=None)
 
         result = await batch_ops._fetch_chunks_and_cache(url, retry=True)
 
         assert result == chunks
+        # Should first fetch HTML, then markdown, then create chunks
+        batch_ops._fetch_html_and_cache.assert_called_once_with(url, retry=True)
         batch_ops._fetch_markdown_and_cache.assert_called_once_with(url, retry=True)
         batch_ops.web_client.create_chunks.assert_called_once_with(markdown_content)
-        batch_ops.cache.set_content.assert_called_once_with(url, "chunks", chunks)
+        batch_ops.cache.set_content.assert_called_once_with(url, "chunks", chunks, None)
 
 
 class TestPrefetchOperations:
