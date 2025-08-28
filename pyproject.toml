@@ -24,4 +24,4 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [dependency-groups]
-dev = ["pytest-cov>=6.2.1"]
+dev = ["pytest-cov>=6.2.1", "pytest-asyncio>=0.24.0"]

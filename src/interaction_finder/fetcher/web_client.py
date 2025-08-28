@@ -223,14 +223,14 @@ def _get_chunker():
     """Lazy import and initialize chonkie chunker with simple caching."""
     global _chunker
     if _chunker is None:
-        from chonkie import SDPMChunker
+        from chonkie import SemanticChunker
 
-        _chunker = SDPMChunker(
+        _chunker = SemanticChunker(
             embedding_model="minishlab/potion-base-8M",  # Default model
             threshold=CHUNK_SIMILARITY_THRESHOLD,  # Similarity threshold (0-1)
             chunk_size=CHUNK_SIZE_TOKENS,  # Maximum tokens per chunk
             min_sentences=CHUNK_MIN_SENTENCES,  # Initial sentences per chunk
-            skip_window=CHUNK_SKIP_WINDOW,  # Number of chunks to skip when looking for similarities
+            similarity_window=CHUNK_SKIP_WINDOW,  # Number of sentences to consider for similarity (renamed from skip_window)
         )
     return _chunker
 
@@ -466,19 +466,47 @@ class WebClient:
             }
 
             # Extract embedding from chonkie chunk object
-            # Compute chunk embedding as average of sentence embeddings
+            # Compute chunk embedding as weighted average of sentence embeddings
             if hasattr(chunk_obj, "sentences") and chunk_obj.sentences:
                 sentence_embeddings = []
-                for sentence in chunk_obj.sentences:
+                sentence_weights = []
+
+                # Get text lengths for length-based weighting
+                sentence_lengths = [
+                    len(sentence.text) for sentence in chunk_obj.sentences
+                ]
+                max_length = max(sentence_lengths) if sentence_lengths else 1
+
+                for i, sentence in enumerate(chunk_obj.sentences):
                     if (
                         hasattr(sentence, "embedding")
                         and sentence.embedding is not None
                     ):
                         sentence_embeddings.append(np.array(sentence.embedding))
 
+                        # Position weight: higher for first/last 20% of sentences
+                        num_sentences = len(chunk_obj.sentences)
+                        position_cutoff = max(1, int(0.2 * num_sentences))
+                        if i < position_cutoff or i >= num_sentences - position_cutoff:
+                            position_weight = 1.5  # Important positions
+                        else:
+                            position_weight = 1.0  # Middle sentences
+
+                        # Length weight: normalize by max length
+                        length_weight = sentence_lengths[i] / max_length
+
+                        # Combined weight
+                        total_weight = position_weight * length_weight
+                        sentence_weights.append(total_weight)
+
                 if sentence_embeddings:
-                    # Average sentence embeddings to get chunk embedding
-                    chunk_embedding = np.mean(sentence_embeddings, axis=0)
+                    # Weighted average of sentence embeddings
+                    sentence_weights = np.array(sentence_weights)
+                    weights_normalized = sentence_weights / sentence_weights.sum()
+
+                    chunk_embedding = np.average(
+                        sentence_embeddings, axis=0, weights=weights_normalized
+                    )
                     chunk_dict["embedding"] = chunk_embedding.tolist()
 
             chunks_data.append(chunk_dict)

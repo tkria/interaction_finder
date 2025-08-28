@@ -11,6 +11,7 @@ from .page_fetcher import PageFetcher
 from .batch_operations import (
     fetch_urls_with_progress,
     fetch_urls_concurrent_with_progress,
+    PreviousFailure,
 )
 from .content_processor import (
     refine_article_content,
@@ -24,15 +25,6 @@ from .cache import URLCache
 
 # Import document grouping functionality
 from .document_grouper import DocumentGrouper, compute_group_cohesion
-
-
-# Import the exception class
-class PreviousFailure(Exception):
-    """Raised when a previous fetch failure sentinel is present for a URL."""
-
-    def __init__(self, url: str, message: str | None = None):
-        super().__init__(message or f"Previous failure recorded for URL: {url}")
-        self.url = url
 
 
 # Export the public API - maintains exact compatibility with original fetcher.py

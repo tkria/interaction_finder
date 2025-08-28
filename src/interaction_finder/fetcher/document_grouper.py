@@ -24,8 +24,8 @@ class Cluster:
     def __post_init__(self):
         """Initialize centroid if not provided."""
         if self.centroid is None:
-            # Will be computed from document embeddings
-            self.centroid = np.zeros(256)  # Default chonkie embedding dimension
+            # Will be set dynamically when first computed
+            self.centroid = None
 
     def merge_with(
         self, other: "Cluster", doc_embeddings: Dict[str, np.ndarray]
@@ -42,7 +42,14 @@ class Cluster:
         if all_centroids:
             new_centroid = np.mean(all_centroids, axis=0)
         else:
-            new_centroid = np.zeros_like(self.centroid)
+            # Use existing centroid as template, or create from available centroids
+            if self.centroid is not None:
+                new_centroid = np.zeros_like(self.centroid)
+            elif other.centroid is not None:
+                new_centroid = np.zeros_like(other.centroid)
+            else:
+                # Fallback - this shouldn't happen in normal operation
+                new_centroid = np.zeros(256)
 
         return Cluster(
             id=max(self.id, other.id) + 1, documents=new_docs, centroid=new_centroid
@@ -135,8 +142,8 @@ class DocumentGrouper:
                 # Average all chunk embeddings to get document embedding
                 doc_embeddings[doc] = np.mean(chunk_embeddings, axis=0)
             else:
-                # Fallback to zero vector if no embeddings
-                doc_embeddings[doc] = np.zeros(256)
+                # Skip documents without embeddings - they'll be handled later
+                continue
 
         return doc_embeddings
 
@@ -228,10 +235,20 @@ class DocumentGrouper:
     ) -> List[List[str]]:
         """Run constrained agglomerative clustering."""
         # Initialize each document as its own cluster
-        clusters = {
-            i: Cluster(i, {doc}, doc_embeddings.get(doc, np.zeros(256)))
-            for i, doc in enumerate(documents)
-        }
+        clusters = {}
+        for i, doc in enumerate(documents):
+            if doc in doc_embeddings:
+                clusters[i] = Cluster(i, {doc}, doc_embeddings[doc])
+            else:
+                # Create cluster with proper-dimensioned zero vector
+                if doc_embeddings:
+                    # Get dimension from first available embedding
+                    sample_embedding = next(iter(doc_embeddings.values()))
+                    zero_embedding = np.zeros_like(sample_embedding)
+                else:
+                    # Fallback if no embeddings available
+                    zero_embedding = np.zeros(256)
+                clusters[i] = Cluster(i, {doc}, zero_embedding)
 
         # Main clustering loop
         while len(clusters) > 1:

@@ -351,7 +351,7 @@ class PageFetcher:
         # Save in new format
         from datetime import datetime
 
-        await self.cache.save_content(
+        await self.cache.set_content(
             url,
             "chunks",
             {
@@ -359,7 +359,7 @@ class PageFetcher:
                 "chunks": chunks_data,
                 "metadata": {
                     "model": "minishlab/potion-base-8M",
-                    "chunk_method": "SDPMChunker",
+                    "chunk_method": "SemanticChunker",
                     "created_at": datetime.now().isoformat(),
                     "total_wordcount": sum(c["wordcount"] for c in chunks_data),
                 },
@@ -369,7 +369,12 @@ class PageFetcher:
         return chunks_data
 
     def _compute_document_embeddings(self, doc_chunks: dict) -> dict:
-        """Compute document-level embeddings as averages of chunk embeddings."""
+        """Compute document-level embeddings as averages of chunk embeddings.
+
+        Returns:
+            Dict mapping URLs to numpy arrays of document embeddings.
+            Documents without embeddings are excluded from the result.
+        """
         import numpy as np
 
         doc_embeddings = {}
@@ -380,9 +385,9 @@ class PageFetcher:
                     chunk_embeddings.append(np.array(chunk["embedding"]))
 
             if chunk_embeddings:
+                # Compute mean embedding as numpy array
                 doc_embeddings[url] = np.mean(chunk_embeddings, axis=0)
-            else:
-                doc_embeddings[url] = np.zeros(256)  # Default dimension
+            # Skip documents without embeddings rather than using zeros
 
         return doc_embeddings
 
