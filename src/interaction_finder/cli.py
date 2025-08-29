@@ -884,7 +884,12 @@ async def fetch_urls_async(
         raise typer.Exit(1)
 
 
-@app.command()
+# Create a subcommand group for config operations
+config_app = typer.Typer(help="Configuration management commands")
+app.add_typer(config_app, name="config")
+
+
+@config_app.command("info")
 def config_info(
     config: Optional[str] = typer.Option(
         None, "-c", "--config", help="Path to configuration file"
@@ -940,6 +945,217 @@ def config_info(
     except Exception as e:
         handle_operation_error("loading configuration", e)
         raise typer.Exit(1)
+
+
+@config_app.command("edit")
+def config_edit(
+    config: Optional[str] = typer.Option(
+        None, "-c", "--config", help="Path to configuration file to edit"
+    ),
+):
+    """Open interactive configuration editor."""
+    from .settings_editor import run_config_editor
+
+    run_config_editor(config)
+
+
+@config_app.command("validate")
+def config_validate(
+    config: Optional[str] = typer.Option(
+        None, "-c", "--config", help="Path to configuration file to validate"
+    ),
+    mode: Optional[str] = typer.Option(
+        None, "-m", "--mode", help="Configuration mode to validate"
+    ),
+):
+    """Validate configuration file without loading full settings."""
+    try:
+        cfg = load_config(config, mode)
+        console.print(f"[green]✓ Configuration is valid[/green]")
+
+        # Show some basic info
+        config_path = Path(config) if config else Path("config.toml")
+        if config_path.exists():
+            console.print(f"[dim]Config file: {config_path}[/dim]")
+            console.print(f"[dim]File size: {config_path.stat().st_size} bytes[/dim]")
+        else:
+            console.print(f"[dim]Using default configuration[/dim]")
+
+        if mode:
+            console.print(f"[dim]Mode: {mode}[/dim]")
+
+    except Exception as e:
+        console.print(f"[red]✗ Configuration validation failed:[/red]")
+        console.print(f"[red]  {e}[/red]")
+        raise typer.Exit(1)
+
+
+@app.command()
+def extract_pairs(
+    urls: List[str] = typer.Argument(
+        ..., help="URLs to process for entity pair extraction"
+    ),
+    config: Optional[str] = typer.Option(
+        None, "-c", "--config", help="Path to configuration file"
+    ),
+    mode: Optional[str] = typer.Option(
+        None, "-m", "--mode", help="Configuration mode to use"
+    ),
+    output: Optional[str] = typer.Option(
+        None,
+        "-o",
+        "--output",
+        help="Output file path (defaults to extraction_results.jsonl)",
+    ),
+    model: Optional[str] = typer.Option(
+        None, "--model", help="Override AI model (e.g., openai:gpt-4o)"
+    ),
+    max_concurrent: Optional[int] = typer.Option(
+        5, "--max-concurrent", help="Maximum concurrent requests"
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Show what would be processed without running extraction",
+    ),
+    verbose: bool = typer.Option(
+        False, "-v", "--verbose", help="Show verbose output and tracebacks"
+    ),
+):
+    """
+    Extract entity pairs from URLs using the graph pipeline.
+
+    This command processes the provided URLs by:
+    1. Fetching and chunking document content
+    2. Grouping documents semantically
+    3. Extracting entities of configured types
+    4. Assessing entity relationships
+    5. Generating and validating entity pairs
+
+    The entity types and relationship types are configured in the TOML configuration file
+    via task.kinds and task.relation settings.
+
+    Examples:
+        # Extract gene-disease pairs from PubMed URLs
+        interaction-finder extract-pairs https://pubmed.ncbi.nlm.nih.gov/123 https://pubmed.ncbi.nlm.nih.gov/456
+
+        # Extract with custom config and output
+        interaction-finder extract-pairs --config gene_config.toml --output results.jsonl url1.txt url2.txt
+
+        # Dry run to see what would be processed
+        interaction-finder extract-pairs --dry-run https://example.com/paper.pdf
+    """
+    try:
+        # Load configuration
+        config_obj = load_config(config, mode)
+
+        if dry_run:
+            console.print(
+                "[bold blue]Dry run mode - showing what would be processed[/bold blue]"
+            )
+            console.print(f"URLs to process: {len(urls)}")
+            for i, url in enumerate(urls, 1):
+                console.print(f"  {i}. {url}")
+
+            console.print(f"\nConfiguration:")
+            console.print(f"  Entity kinds: {config_obj.task.get_kind_names()}")
+            console.print(f"  Relation type: {config_obj.task.relation}")
+            console.print(
+                f"  Grouping: {config_obj.workflow.grouping.constraint_type} "
+                f"({config_obj.workflow.grouping.min_size}-{config_obj.workflow.grouping.max_size})"
+            )
+            console.print(f"  Model: {model or 'default from config'}")
+            return
+
+        # Set up output path
+        if output is None:
+            output = "extraction_results.jsonl"
+        output_path = Path(output).resolve()
+
+        console.print(f"[bold green]Starting entity pair extraction[/bold green]")
+        console.print(f"URLs: {len(urls)}")
+        console.print(f"Entity types: {', '.join(config_obj.task.get_kind_names())}")
+        console.print(f"Relation: {config_obj.task.relation}")
+        console.print(f"Output: {output_path}")
+
+        # Run extraction
+        result = asyncio.run(
+            _run_extraction(
+                urls=urls,
+                config_obj=config_obj,
+                model=model,
+                max_concurrent=max_concurrent,
+                verbose=verbose,
+            )
+        )
+
+        # Save results
+        from .extraction_graph import save_results
+
+        save_results(result, output_path)
+
+        # Display summary
+        _display_extraction_summary(result)
+
+    except Exception as e:
+        if verbose:
+            console.print(Traceback(show_locals=True))
+        else:
+            console.print(f"[bold red]Error:[/bold red] {e}", style="red")
+        raise typer.Exit(1)
+
+
+async def _run_extraction(
+    urls: List[str],
+    config_obj: IfetcherConfig,
+    model: Optional[str],
+    max_concurrent: int,
+    verbose: bool,
+) -> Any:
+    """Run the entity extraction pipeline."""
+    from .extraction_graph import extract_from_urls
+    from .fetcher import PageFetcher
+
+    # Create PageFetcher with appropriate settings
+    page_fetcher = PageFetcher(config_obj, show_status=True, verbose=verbose)
+
+    # Run extraction
+    result = await extract_from_urls(
+        urls=urls, config=config_obj, page_fetcher=page_fetcher, model=model
+    )
+
+    return result
+
+
+def _display_extraction_summary(result: Any):
+    """Display extraction results summary."""
+    console.print(f"\n[bold green]Extraction Complete[/bold green]")
+
+    # Create summary table
+    table = Table(title="Extraction Summary")
+    table.add_column("Metric", style="cyan")
+    table.add_column("Value", style="green")
+
+    table.add_row("Document Groups", str(result.total_groups))
+    table.add_row("Successful Groups", str(result.successful_groups))
+    table.add_row("Total Entity Pairs", str(result.total_pairs))
+
+    # Add entity counts by kind
+    for kind, count in result.total_entities.items():
+        table.add_row(f"{kind.title()} Entities", str(count))
+
+    if result.errors:
+        table.add_row("Errors", str(len(result.errors)), style="red")
+
+    console.print(table)
+
+    # Show errors if any
+    if result.errors:
+        console.print(f"\n[bold red]Errors encountered:[/bold red]")
+        for error in result.errors[:3]:  # Show first 3 errors
+            console.print(f"  • {error.get('error', 'Unknown error')}")
+        if len(result.errors) > 3:
+            console.print(f"  ... and {len(result.errors) - 3} more")
 
 
 def main():

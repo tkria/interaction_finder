@@ -13,6 +13,7 @@ dependencies = [
     "pydantic>=2.11.7",
     "rich>=14.1.0",
     "tomli>=2.2.1",
+    "tomli-w>=1.1.0",
     "typer>=0.16.1",
 ]
 
