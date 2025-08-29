@@ -703,18 +703,17 @@ async def perform_document_grouping(
     """
     from .fetcher import PageFetcher
 
-    fetcher = PageFetcher(config, show_status=False)
-    with console.status("[bold blue]Computing document similarities..."):
-        groups = await fetcher.get_groups(
-            urls,
-            constraint_type=grouping_config.constraint_type,
-            min_size=grouping_config.min_size,
-            max_size=grouping_config.max_size,
-            linkage_method=grouping_config.linkage_method,
-            prefetch=True,
-            progress=False,  # Don't show nested progress bar
-            retry=retry,
-        )
+    fetcher = PageFetcher(config, show_status=True)
+    groups = await fetcher.get_groups(
+        urls,
+        constraint_type=grouping_config.constraint_type,
+        min_size=grouping_config.min_size,
+        max_size=grouping_config.max_size,
+        linkage_method=grouping_config.linkage_method,
+        prefetch=True,
+        progress=True,  # Enable progress display
+        retry=retry,
+    )
     return groups
 
 

@@ -271,22 +271,76 @@ class PageFetcher:
         doc_chunks = {}
         doc_word_counts = {}
 
-        for url in urls:
-            try:
-                chunks_data = await self.get_chunks_with_embeddings(url, retry=retry)
-                doc_chunks[url] = chunks_data
-                doc_word_counts[url] = sum(chunk["wordcount"] for chunk in chunks_data)
-            except Exception as e:
-                if retry:
-                    # Second attempt failed, skip this document
-                    if self.verbose:
-                        from rich.console import Console
+        if progress and len(urls) > 1:
+            from rich.progress import (
+                Progress,
+                SpinnerColumn,
+                TextColumn,
+                BarColumn,
+                TimeElapsedColumn,
+            )
 
-                        console = Console()
-                        console.print(f"[red]Failed to get chunks for {url}: {e}[/red]")
-                    continue
-                else:
-                    raise
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+                TimeElapsedColumn(),
+                console=self.batch_ops.progress_display.console,
+                disable=not progress,
+            ) as progress_bar:
+                task = progress_bar.add_task(
+                    "Gathering document chunks...", total=len(urls)
+                )
+
+                for url in urls:
+                    try:
+                        chunks_data = await self.get_chunks_with_embeddings(
+                            url, retry=retry
+                        )
+                        doc_chunks[url] = chunks_data
+                        doc_word_counts[url] = sum(
+                            chunk["wordcount"] for chunk in chunks_data
+                        )
+                    except Exception as e:
+                        if retry:
+                            # Second attempt failed, skip this document
+                            if self.verbose:
+                                from rich.console import Console
+
+                                console = Console()
+                                console.print(
+                                    f"[red]Failed to get chunks for {url}: {e}[/red]"
+                                )
+                            continue
+                        else:
+                            raise
+                    finally:
+                        progress_bar.advance(task, 1)
+        else:
+            # Single document or no progress - process without progress bar
+            for url in urls:
+                try:
+                    chunks_data = await self.get_chunks_with_embeddings(
+                        url, retry=retry
+                    )
+                    doc_chunks[url] = chunks_data
+                    doc_word_counts[url] = sum(
+                        chunk["wordcount"] for chunk in chunks_data
+                    )
+                except Exception as e:
+                    if retry:
+                        # Second attempt failed, skip this document
+                        if self.verbose:
+                            from rich.console import Console
+
+                            console = Console()
+                            console.print(
+                                f"[red]Failed to get chunks for {url}: {e}[/red]"
+                            )
+                        continue
+                    else:
+                        raise
 
         # Filter out documents without chunks
         valid_urls = [url for url in urls if url in doc_chunks]
@@ -307,17 +361,31 @@ class PageFetcher:
             ]
 
         # Group documents using constrained agglomerative clustering
-        grouper = DocumentGrouper(linkage_method=linkage_method)
-        groups = grouper.group_documents(
-            documents=valid_urls,
-            chunk_data=doc_chunks,
-            constraint_type=constraint_type,
-            min_size=min_size,
-            max_size=max_size,
-        )
-
-        # Compute document embeddings for cohesion calculation
-        doc_embeddings = self._compute_document_embeddings(doc_chunks)
+        if progress and len(valid_urls) > 1:
+            with self.batch_ops.progress_display.status(
+                "Computing document similarities and grouping..."
+            ):
+                grouper = DocumentGrouper(linkage_method=linkage_method)
+                groups = grouper.group_documents(
+                    documents=valid_urls,
+                    chunk_data=doc_chunks,
+                    constraint_type=constraint_type,
+                    min_size=min_size,
+                    max_size=max_size,
+                )
+                # Compute document embeddings for cohesion calculation
+                doc_embeddings = self._compute_document_embeddings(doc_chunks)
+        else:
+            grouper = DocumentGrouper(linkage_method=linkage_method)
+            groups = grouper.group_documents(
+                documents=valid_urls,
+                chunk_data=doc_chunks,
+                constraint_type=constraint_type,
+                min_size=min_size,
+                max_size=max_size,
+            )
+            # Compute document embeddings for cohesion calculation
+            doc_embeddings = self._compute_document_embeddings(doc_chunks)
 
         # Format results
         result = []
