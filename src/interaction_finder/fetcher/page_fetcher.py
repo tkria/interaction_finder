@@ -416,9 +416,10 @@ class PageFetcher:
         markdown = await self.get_markdown(url, retry=retry)
         chunks_data = self.web_client.create_chunks(markdown)
 
-        # Save in new format
+        # Save in new format with proper final_url
         from datetime import datetime
 
+        final_url = await self.cache.get_redirect_info(url)
         await self.cache.set_content(
             url,
             "chunks",
@@ -432,6 +433,7 @@ class PageFetcher:
                     "total_wordcount": sum(c["wordcount"] for c in chunks_data),
                 },
             },
+            final_url,
         )
 
         return chunks_data
