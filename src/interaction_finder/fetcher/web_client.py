@@ -459,9 +459,12 @@ class WebClient:
 
         chunks_data = []
         for chunk_obj in chunk_objects:
+            # Trim leading newlines and trailing whitespace
+            cleaned_text = chunk_obj.text.lstrip("\n").rstrip()
+
             chunk_dict = {
-                "text": chunk_obj.text,
-                "wordcount": len(chunk_obj.text.split()),
+                "text": cleaned_text,
+                "wordcount": len(cleaned_text.split()),
                 "embedding": None,
             }
 
