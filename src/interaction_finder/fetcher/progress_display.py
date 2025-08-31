@@ -1,6 +1,6 @@
 """Progress display and status management for fetcher operations."""
 
-from typing import Optional, Tuple, Union, Any
+from typing import Optional, Tuple, Union, Any, Protocol
 from rich.console import Console
 from rich.progress import (
     Progress,
@@ -10,6 +10,14 @@ from rich.progress import (
     MofNCompleteColumn,
     TimeElapsedColumn,
 )
+
+
+class StatusProtocol(Protocol):
+    """Protocol for status objects that can be updated with text."""
+
+    def update(self, text: str) -> None:
+        """Update the status display with new text."""
+        ...
 
 
 class StatusDisplay:

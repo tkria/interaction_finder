@@ -127,9 +127,11 @@ class BatchOperations:
                 completed += 1
                 # Format domain for consistent width display
                 domain = self.format_domain(url)
-                progress.update(
-                    1, f"Fetching {content_type} ({completed}/{len(urls)}) {domain}"
-                )
+                progress.update(1, f"Fetching source {completed} {domain}")
+
+            # Update final status when all complete
+            if completed > 0:
+                progress.update(0, f"Fetched {completed} sites")
 
         return results
 
@@ -379,6 +381,10 @@ class BatchOperations:
                 await coro  # Wait for completion but ignore result
                 completed += 1
                 progress.update(1, f"Prefetching ({completed}/{len(limited_tasks)})")
+
+            # Update final status when all complete
+            if completed > 0:
+                progress.update(0, f"Prefetched {completed} documents")
 
     async def _safe_fetch_single(
         self, url: str, fetcher_func: Callable

@@ -306,9 +306,7 @@ def _get_granular_logger(status_display=None):
                     domain = (
                         url.split("//")[1].split("/")[0] if "//" in url else url[:20]
                     )
-                    self.status_display.update(
-                        f"[cyan]Fetching[/cyan] [bold]{domain}[/bold]"
-                    )
+                    self.status_display.update(f"[cyan]Fetching[/cyan] {domain}")
 
             # Implement all required abstract methods
             def debug(self, message, tag="", **kwargs):
