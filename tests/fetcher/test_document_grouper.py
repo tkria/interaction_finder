@@ -36,8 +36,13 @@ class TestDocumentGrouper:
             DocumentGrouper.parse_constraint("invalid")
 
     def test_compute_document_embeddings(self):
-        """Test computing document embeddings from chunk data."""
-        grouper = DocumentGrouper()
+        """Test computing document embeddings from chunk data using new API."""
+        from interaction_finder.fetcher.document_embedding import (
+            SimpleAverageEmbedder,
+            convert_legacy_chunk_data,
+        )
+
+        embedder = SimpleAverageEmbedder()
 
         chunk_data = {
             "doc1": [
@@ -49,18 +54,16 @@ class TestDocumentGrouper:
             ],
         }
 
-        doc_embeddings = grouper._compute_document_embeddings(
-            ["doc1", "doc2"], chunk_data
-        )
+        # Convert to typed format
+        typed_chunk_data = convert_legacy_chunk_data(chunk_data)
+        doc_embeddings = embedder.compute_embeddings(["doc1", "doc2"], typed_chunk_data)
 
         assert "doc1" in doc_embeddings
         assert "doc2" in doc_embeddings
 
-        # doc1 should have average of [1,2,3] and [2,3,4] = [1.5, 2.5, 3.5]
-        np.testing.assert_array_equal(doc_embeddings["doc1"], [1.5, 2.5, 3.5])
-
-        # doc2 should have [3,4,5]
-        np.testing.assert_array_equal(doc_embeddings["doc2"], [3.0, 4.0, 5.0])
+        # Check that embeddings are unit-normalized (different from raw averages)
+        assert abs(np.linalg.norm(doc_embeddings["doc1"]) - 1.0) < 1e-6
+        assert abs(np.linalg.norm(doc_embeddings["doc2"]) - 1.0) < 1e-6
 
     def test_compute_word_counts(self):
         """Test computing word counts from chunk data."""

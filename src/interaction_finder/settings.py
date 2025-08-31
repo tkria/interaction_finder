@@ -9,19 +9,43 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class IfetcherConfig(BaseModel):
+    """Configuration for interaction finder with validation and path resolution."""
+
     _dir: Path | None = None  # Directory of the config file
 
     class AgentSpec(BaseModel):
-        llm: str | None = None
-        expertise: str | None = None
-        instruction: str | None = None
-        retries: int | None = None
-        instrument: bool = True
-        prompt: str | None = None
+        """Configuration for AI agent behavior and settings."""
 
-    agents: Dict[str, AgentSpec] = Field(default_factory=dict)
+        llm: str | None = Field(
+            None, description="Language model to use for this agent"
+        )
+        expertise: str | None = Field(
+            None, description="Domain expertise specification for the agent"
+        )
+        instruction: str | None = Field(
+            None, description="Custom instructions for the agent"
+        )
+        retries: int | None = Field(
+            None,
+            description="Number of retry attempts for failed requests",
+            ge=0,
+            le=10,
+        )
+        instrument: bool = Field(
+            True, description="Enable instrumentation and logging for this agent"
+        )
+        prompt: str | None = Field(
+            None, description="Custom prompt template for the agent"
+        )
 
-    researcher: str = ""
+    agents: Dict[str, AgentSpec] = Field(
+        default_factory=dict,
+        description="Configuration for different AI agents by name",
+    )
+
+    researcher: str = Field(
+        "", description="Research mode selection (currently only default supported)"
+    )
 
     @field_validator("researcher")
     @classmethod
@@ -36,30 +60,78 @@ class IfetcherConfig(BaseModel):
         return v
 
     class Tools(BaseModel):
-        enabled: List[str] = Field(default_factory=list)
+        """Configuration for external tools and services."""
+
+        enabled: List[str] = Field(
+            default_factory=list,
+            description="List of enabled tools (e.g., crawl4ai, searxng)",
+        )
 
         class SearXNG(BaseModel):
-            categories: str = "general"
-            blocked_sites: List[str] = Field(default_factory=list)
+            """Configuration for SearXNG search engine integration."""
+
+            categories: str = Field(
+                "general", description="Search categories for SearXNG"
+            )
+            blocked_sites: List[str] = Field(
+                default_factory=list,
+                description="List of sites to block in search results",
+            )
 
         class Crawl4AI(BaseModel):
-            timeout: int = 30
-            max_retries: int = 3
-            user_agent: str = "InteractionFinder/1.0"
-            delay_between_requests: float = 1.0
-            max_concurrent: int = 5
+            """Configuration for Crawl4AI web scraping tool."""
+
+            timeout: int = Field(
+                30, description="Request timeout in seconds", ge=1, le=600
+            )
+            max_retries: int = Field(
+                3, description="Maximum number of retry attempts", ge=0, le=10
+            )
+            user_agent: str = Field(
+                "InteractionFinder/1.0",
+                description="HTTP User-Agent string for requests",
+            )
+            delay_between_requests: float = Field(
+                1.0, description="Delay between requests in seconds", ge=0.0, le=10.0
+            )
+            max_concurrent: int = Field(
+                5, description="Maximum concurrent requests", ge=1, le=50
+            )
 
         class Ontologies(BaseModel):
-            hpo_path: str | None = None
-            cl_path: str | None = None
+            """Configuration for biological ontology file paths."""
+
+            hpo_path: str | None = Field(
+                None, description="Path to HPO (Human Phenotype Ontology) file"
+            )
+            cl_path: str | None = Field(
+                None, description="Path to CL (Cell Ontology) file"
+            )
 
         class ExternalResearcher(BaseModel):
-            cmd: Union[str, List[str]] = Field(default_factory=list)
-            dir: str | None = None
-            env: Dict[str, str] = Field(default_factory=dict)
-            strip_prefix_re: str = ""
-            strip_suffix_re: str = ""
-            strip_re: Union[str, List[str]] = Field(default_factory=list)
+            """Configuration for external research tools and commands."""
+
+            cmd: Union[str, List[str]] = Field(
+                default_factory=list,
+                description="External researcher command and arguments",
+            )
+            dir: str | None = Field(
+                None, description="Working directory for external researcher"
+            )
+            env: Dict[str, str] = Field(
+                default_factory=dict,
+                description="Environment variables for external researcher",
+            )
+            strip_prefix_re: str = Field(
+                "", description="Regex pattern to strip from output prefix"
+            )
+            strip_suffix_re: str = Field(
+                "", description="Regex pattern to strip from output suffix"
+            )
+            strip_re: Union[str, List[str]] = Field(
+                default_factory=list,
+                description="List of regex patterns to strip from external researcher output",
+            )
 
             @field_validator("cmd", mode="before")
             @classmethod
@@ -89,14 +161,32 @@ class IfetcherConfig(BaseModel):
             default_factory=ExternalResearcher
         )
 
-    tools: Tools = Field(default_factory=Tools)
+    tools: Tools = Field(
+        default_factory=Tools,
+        description="Configuration for external tools and services",
+    )
 
     class Task(BaseModel):
+        """Configuration for extraction task definition and parameters."""
+
         class Kind(BaseModel):
-            kind: List[str] = Field(default_factory=list, serialization_alias="is")
-            form: List[str] = Field(default_factory=lambda: ["name"])
-            example: List[str] = Field(default_factory=list)
-            normalise: Dict[str, str] = Field(default_factory=dict)
+            """Configuration for entity kind definitions in extraction tasks."""
+
+            kind: List[str] = Field(
+                default_factory=list,
+                serialization_alias="is",
+                description="Entity types for this kind",
+            )
+            form: List[str] = Field(
+                default_factory=lambda: ["name"],
+                description="Form variants for entity recognition",
+            )
+            example: List[str] = Field(
+                default_factory=list, description="Example entities of this kind"
+            )
+            normalise: Dict[str, str] = Field(
+                default_factory=dict, description="Entity name normalization mappings"
+            )
 
             @field_validator("kind", "example", "form", mode="before")
             @classmethod
@@ -106,12 +196,21 @@ class IfetcherConfig(BaseModel):
                     return [v]
                 return v
 
-        relation: str = "Interaction"
-        pairs: str = "pairs"
-        context: str = ""
-        kinds: Dict[str, Kind] = Field(default_factory=dict)
-        synonyms: Dict[str, str] = Field(default_factory=dict)
-        example: List[str] = Field(default_factory=list)
+        relation: str = Field(
+            "Interaction",
+            description="Type of relation to extract (e.g., 'Interaction')",
+        )
+        pairs: str = Field("pairs", description="Pair extraction mode")
+        context: str = Field("", description="Context information for task")
+        kinds: Dict[str, Kind] = Field(
+            default_factory=dict, description="Entity kind definitions for extraction"
+        )
+        synonyms: Dict[str, str] = Field(
+            default_factory=dict, description="Entity synonym mappings"
+        )
+        example: List[str] = Field(
+            default_factory=list, description="Example interactions for the task"
+        )
 
         @field_validator("kinds", mode="before")
         @classmethod
@@ -179,21 +278,56 @@ class IfetcherConfig(BaseModel):
                     "Cannot get complementary kind: more than two kinds defined."
                 )
 
-    task: Task = Field(default_factory=Task)
+    task: Task = Field(
+        default_factory=Task, description="Configuration for extraction task definition"
+    )
 
     class Workflow(BaseModel):
+        """Configuration for processing workflow and document handling."""
+
         class Summarisation(BaseModel):
-            chunksize: int = 10
-            maxchars: int = 80000
+            """Configuration for document summarization parameters."""
+
+            chunksize: int = Field(
+                10, description="Chunk size for summarization", ge=1, le=100
+            )
+            maxchars: int = Field(
+                80000,
+                description="Maximum characters for summarization",
+                ge=1000,
+                le=200000,
+            )
 
         class Grouping(BaseModel):
             """Configuration for document grouping within workflow."""
 
-            enabled: bool = True
-            constraint_type: str = "count"  # "count" or "words"
-            min_size: int = 3
-            max_size: int = 8
-            linkage_method: str = "average"  # "average", "complete", "single"
+            enabled: bool = Field(
+                True, description="Enable document grouping by semantic similarity"
+            )
+            constraint_type: str = Field(
+                "count", description="Group by document count or total word count"
+            )  # "count" or "words"
+            min_size: int = Field(3, description="Minimum group size", ge=1, le=100)
+            max_size: int = Field(8, description="Maximum group size", ge=1, le=100)
+            linkage_method: str = Field(
+                "average", description="Clustering linkage method for grouping"
+            )  # "average", "complete", "single"
+            clustering_method: str = Field(
+                "agglomerative", description="Clustering algorithm to use"
+            )  # "agglomerative", "spectral", "hybrid", "random", "size_annealed_agglomerative"
+            embedding_weights: str = Field(
+                "idf", description="Document embedding weights"
+            )  # "uniform", "idf"
+            dual_evaluation: bool = Field(
+                False,
+                description="Evaluate groups using both embedding weight strategies",
+            )
+            seeding_method: str = Field(
+                "kmeans", description="Spectral seeding method for hybrid clustering"
+            )  # "kmeans", "fiedler"
+            refinement_method: str = Field(
+                "hierarchical", description="Refinement method for hybrid clustering"
+            )  # "hierarchical", "agglomerative"
 
             @field_validator("constraint_type")
             @classmethod
@@ -211,6 +345,44 @@ class IfetcherConfig(BaseModel):
                     )
                 return v
 
+            @field_validator("clustering_method")
+            @classmethod
+            def validate_clustering_method(cls, v: str) -> str:
+                if v not in (
+                    "agglomerative",
+                    "spectral",
+                    "hybrid",
+                    "random",
+                    "size_annealed_agglomerative",
+                ):
+                    raise ValueError(
+                        "clustering_method must be 'agglomerative', 'spectral', 'hybrid', 'random', or 'size_annealed_agglomerative'"
+                    )
+                return v
+
+            @field_validator("embedding_weights")
+            @classmethod
+            def validate_embedding_weights(cls, v: str) -> str:
+                if v not in ("uniform", "idf"):
+                    raise ValueError("embedding_weights must be 'uniform' or 'idf'")
+                return v
+
+            @field_validator("seeding_method")
+            @classmethod
+            def validate_seeding_method(cls, v: str) -> str:
+                if v not in ("kmeans", "fiedler"):
+                    raise ValueError("seeding_method must be 'kmeans' or 'fiedler'")
+                return v
+
+            @field_validator("refinement_method")
+            @classmethod
+            def validate_refinement_method(cls, v: str) -> str:
+                if v not in ("hierarchical", "agglomerative"):
+                    raise ValueError(
+                        "refinement_method must be 'hierarchical' or 'agglomerative'"
+                    )
+                return v
+
             @model_validator(mode="after")
             def validate_size_range(self) -> "Grouping":
                 if self.min_size > self.max_size:
@@ -219,19 +391,41 @@ class IfetcherConfig(BaseModel):
                     raise ValueError("min_size must be >= 1")
                 return self
 
-        envfile: str | None = None
-        max_loops: int = 5
-        max_tokens: int = 500000
-        max_requests: int | None = None
-        summary: Summarisation = Field(default_factory=Summarisation)
-        grouping: Grouping = Field(default_factory=Grouping)
-        unstructured_comparison: bool = False
+        envfile: str | None = Field(
+            None, description="Environment file for workflow configuration"
+        )
+        max_loops: int = Field(5, description="Maximum processing loops", ge=1, le=50)
+        max_tokens: int = Field(
+            500000, description="Maximum tokens for processing", ge=1000, le=2000000
+        )
+        max_requests: int | None = Field(
+            None,
+            description="Maximum number of requests (null for unlimited)",
+            ge=1,
+            le=10000,
+        )
+        summary: Summarisation = Field(
+            default_factory=Summarisation, description="Document summarization settings"
+        )
+        grouping: Grouping = Field(
+            default_factory=Grouping, description="Document grouping configuration"
+        )
+        unstructured_comparison: bool = Field(
+            False, description="Enable unstructured comparison mode"
+        )
 
-    workflow: Workflow = Field(default_factory=Workflow)
+    workflow: Workflow = Field(
+        default_factory=Workflow, description="Configuration for processing workflow"
+    )
 
     class Output(BaseModel):
-        path: str = "runs/{mode}/{model}/{repeat}/{term}"
-        cache: str = "cache"
+        """Configuration for output file paths and caching."""
+
+        path: str = Field(
+            "runs/{mode}/{model}/{repeat}/{term}",
+            description="Output path template (supports {mode}, {model}, {repeat}, {term})",
+        )
+        cache: str = Field("cache", description="Cache directory path")
 
         @field_validator("path", "cache")
         @classmethod
@@ -240,11 +434,18 @@ class IfetcherConfig(BaseModel):
                 raise ValueError("output paths must be relative")
             return v
 
-    output: Output = Field(default_factory=Output)
+    output: Output = Field(
+        default_factory=Output, description="Configuration for output paths and caching"
+    )
 
-    training_data: str = "training_data/{term}.jsonl"
+    training_data: str = Field(
+        "training_data/{term}.jsonl",
+        description="Training data path template (supports {term})",
+    )
 
-    modes: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
+    modes: Dict[str, Dict[str, Any]] = Field(
+        default_factory=dict, description="Mode-specific configuration overrides"
+    )
 
     def abspath(self, path: str | Path, **kwargs) -> Path:
         """

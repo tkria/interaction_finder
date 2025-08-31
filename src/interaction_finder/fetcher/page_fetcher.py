@@ -1,6 +1,6 @@
 """High-level PageFetcher interface with eliminated duplication using higher-order functions."""
 
-from typing import Union, List, Optional, Callable, Any, TYPE_CHECKING
+from typing import Union, List, Optional, Callable, Any, TYPE_CHECKING, Dict
 from .cache import URLCache
 from .web_client import WebClient
 from .batch_operations import BatchOperations
@@ -63,11 +63,32 @@ class PageFetcher:
         lambda self, url, **kw: self.batch_ops._fetch_markdown_and_cache(url, **kw),
     )
 
-    # get_chunks method is defined manually below for backward compatibility
-    # get_chunks = _create_content_getter(
-    #     "chunks",
-    #     lambda self, url, **kw: self.batch_ops._fetch_chunks_and_cache(url, **kw),
-    # )
+    async def get_chunks_with_embeddings(
+        self,
+        url: Union[str, List[str]],
+        *,
+        progress: bool = True,
+        fail_fast: bool = True,
+        retry: bool = False,
+    ):
+        """Get chunks with embeddings for URL(s)."""
+        if isinstance(url, str):
+            # Single URL - check cache first
+            if not retry and await self.cache.has_path(url, "chunks"):
+                cached_data = await self.cache.get_content(url, "chunks")
+                # Handle both formats: direct chunks list or {"chunks": [...]}
+                if isinstance(cached_data, dict) and "chunks" in cached_data:
+                    return cached_data["chunks"]
+                else:
+                    return cached_data
+            # Cache miss - fetch using batch operations
+            return await self.batch_ops._fetch_chunks_and_cache(url, retry=retry)
+        else:
+            # Multiple URLs - use batch operations
+            results = await self.batch_ops.fetch_multiple(
+                url, "chunks", progress=progress, fail_fast=fail_fast, retry=retry
+            )
+            return results
 
     async def get_raw(self, url: str, *, retry: bool = False) -> str:
         """Get raw content (HTML or PDF) for URL, fetching if necessary."""
@@ -132,6 +153,134 @@ class PageFetcher:
     async def list_cached_urls(self) -> List[str]:
         """Get a list of all cached URLs."""
         return await self.cache.list_cached_urls()
+
+    def get_clustering_log(self) -> Optional[List[Dict]]:
+        """Get the operation log from the last clustering operation."""
+        return getattr(self, "_last_clustering_log", None)
+
+    def _print_clustering_log(self, log: List[Dict]) -> None:
+        """Print detailed clustering operation log for debugging."""
+        print("\n=== CLUSTERING OPERATION LOG ===")
+
+        for entry in log:
+            entry_type = entry["type"]
+
+            if entry_type == "initialization":
+                print(
+                    f"Initialization: {entry['total_docs']} docs, avg similarity: {entry['avg_similarity']:.3f}"
+                )
+                print(
+                    f"Constraints: {entry['constraints']['min_size']}-{entry['constraints']['max_size']}"
+                )
+
+                # Display similarity distribution and adaptive thresholds
+                if entry.get("similarity_stats"):
+                    stats = entry["similarity_stats"]
+                    print(f"Similarity distribution:")
+                    print(
+                        f"  Min: {stats['min']:.3f}, Q1: {stats['q25']:.3f}, Median: {stats['median']:.3f}"
+                    )
+                    print(
+                        f"  Q3: {stats['q75']:.3f}, Max: {stats['max']:.3f}, Std: {stats['std']:.3f}"
+                    )
+                    if entry.get("adaptive_thresholds"):
+                        thresholds = entry["adaptive_thresholds"]
+                        print(
+                            f"Adaptive thresholds: Q3={thresholds[0]:.3f}, Median={thresholds[1]:.3f}, Q1={thresholds[2]:.3f}"
+                        )
+
+            elif entry_type == "phase1_merge":
+                threshold_info = (
+                    f" @{entry.get('threshold_level', 'unknown')}"
+                    if entry.get("threshold_level")
+                    else ""
+                )
+                helps_info = (
+                    " (helps undersized)" if entry.get("helps_undersized") else ""
+                )
+                print(
+                    f"  Merge {entry['clusters'][0]}+{entry['clusters'][1]}: [{entry['sizes'][0]}]+[{entry['sizes'][1]}] → [{sum(entry['sizes'])}], sim={entry['similarity_score']:.3f}{threshold_info}{helps_info}"
+                )
+
+            elif entry_type == "threshold_lowered":
+                print(
+                    f"  → Lowering threshold from {entry['from_level']} ({entry['from_threshold']:.3f}) - {entry['remaining_undersized']} clusters still undersized"
+                )
+
+            elif entry_type == "phase1_emergency_fallback":
+                print(
+                    f"  → Emergency fallback: {len(entry['remaining_undersized'])} clusters still below min_size"
+                )
+
+            elif entry_type == "phase1_emergency_merge":
+                print(
+                    f"  Emergency merge {entry['clusters'][0]}+{entry['clusters'][1]}: [{entry['sizes'][0]}]+[{entry['sizes'][1]}] → [{sum(entry['sizes'])}], sim={entry['similarity_score']:.3f}"
+                )
+
+            elif entry_type == "phase1_complete":
+                print(f"\nPhase 1 Complete: {entry['merges_performed']} merges")
+                print(
+                    f"Clusters: {entry['total_clusters']} total, {entry['clusters_at_min_size']} at min_size"
+                )
+                print(f"Cluster sizes: {entry['cluster_sizes']}")
+
+            elif entry_type == "phase2_iteration":
+                print(f"\nPhase 2 Iteration {entry['iteration']}:")
+                print(
+                    f"  Clusters: {entry['total_clusters']}, Sizes: {entry['cluster_sizes']}"
+                )
+                print(
+                    f"  Candidates: {entry['candidates_evaluated']} total, {entry['candidates_valid']} valid"
+                )
+                print(
+                    f"  Rejected: {entry['candidates_rejected_size']} size, {entry['candidates_rejected_modularity']} modularity"
+                )
+                print(
+                    f"  Best ΔQ: {entry['best_delta_q']:.4f}, pair sizes: {entry['best_pair_sizes']}"
+                )
+                if entry.get("modularity_distribution"):
+                    mod_dist = entry["modularity_distribution"]
+                    print(
+                        f"  Modularity range: [{min(mod_dist):.4f}, {max(mod_dist):.4f}]"
+                    )
+
+                # Show top modularity candidates for detailed insight
+                if entry.get("modularity_values"):
+                    mod_values = entry["modularity_values"]
+                    # Sort by delta_q descending and show top 3
+                    sorted_mods = sorted(
+                        mod_values, key=lambda x: x["delta_q"], reverse=True
+                    )[:3]
+                    print("  Top modularity candidates:")
+                    for mv in sorted_mods:
+                        status = (
+                            "✓" if not mv.get("rejected") else f"✗ ({mv['rejected']})"
+                        )
+                        print(
+                            f"    [{mv['sizes'][0]}]+[{mv['sizes'][1]}]: ΔQ={mv['delta_q']:.4f} {status}"
+                        )
+
+            elif entry_type == "phase2_stopping":
+                print(f"\nPhase 2 Stopped: {entry['reason']}")
+                print(
+                    f"Final: {entry['final_clusters']} clusters, ΔQ: {entry['final_delta_q']:.4f}"
+                )
+                print(f"Final sizes: {entry['final_cluster_sizes']}")
+
+            elif entry_type == "clustering_complete":
+                print(f"\n=== CLUSTERING SUMMARY ===")
+                print(f"Phase 1 merges: {entry['total_phase1_merges']}")
+                print(f"Phase 2 merges: {entry['total_phase2_merges']}")
+                print(f"Final groups: {entry['final_groups']}")
+                print(
+                    f"Groups at max size ({entry.get('max_size', 'N/A')}): {entry['groups_at_max_size']}"
+                )
+                print(
+                    f"Groups at min size ({entry.get('min_size', 'N/A')}): {entry['groups_at_min_size']}"
+                )
+                print(f"Group sizes: {entry['final_group_sizes']}")
+
+        print("=== END CLUSTERING LOG ===\n")
 
     def _process_multiple_results(
         self, results: List[Any], progress_display
@@ -227,10 +376,18 @@ class PageFetcher:
         min_size: int = 3,
         max_size: int = 8,
         linkage_method: str = "average",
+        clustering_method: str = "agglomerative",
+        embedding_weights: str = "uniform",
+        seeding_method: str = "kmeans",
+        refinement_method: str = "hierarchical",
         prefetch: bool = True,
         progress: bool = True,
         retry: bool = False,
-    ) -> List[dict]:
+        fail_fast: bool = True,
+        include_chunks: bool = False,
+        return_metadata: bool = False,
+        **kwargs,
+    ):
         """
         Group documents by semantic similarity with size constraints.
 
@@ -240,15 +397,23 @@ class PageFetcher:
             min_size: Minimum group size (documents or words)
             max_size: Maximum group size (documents or words)
             linkage_method: Clustering linkage method ("average", "complete", "single")
+            clustering_method: Clustering algorithm ("agglomerative", "spectral", "hybrid", "random")
+            embedding_weights: Document embedding weights ("uniform", "idf")
+            seeding_method: Spectral seeding method for hybrid clustering ("kmeans", "fiedler")
+            refinement_method: Refinement method for hybrid clustering ("hierarchical", "agglomerative")
             prefetch: Whether to fetch missing documents
             progress: Show progress bar
             retry: Retry failed fetches
+            return_metadata: If True, returns (groups, metadata) tuple instead of just groups
 
         Returns:
-            List of group dictionaries with:
+            If return_metadata=False: List of group dictionaries with:
             - documents: List of URLs in group
             - total_words: Combined word count
             - cohesion_score: Average pairwise similarity
+
+            If return_metadata=True: Tuple of (groups, clustering_metadata) where
+            clustering_metadata contains comprehensive metrics
         """
         from .document_grouper import DocumentGrouper, compute_group_cohesion
 
@@ -263,180 +428,175 @@ class PageFetcher:
         if min_size > max_size:
             raise ValueError("min_size must be <= max_size")
 
-        # Ensure all documents are cached with chunks
-        if prefetch:
-            await self.prefetch(urls, ["chunks"], max_concurrent=5)
+        # Get chunk data for all documents using batch operations
+        # Always use fail_fast=False for chunk fetching to allow partial processing
+        # No separate prefetch needed - get_chunks_with_embeddings handles caching internally
+        chunks_results = await self.get_chunks_with_embeddings(
+            urls, progress=progress, fail_fast=False, retry=retry
+        )
 
-        # Get chunk data for all documents
+        # Build doc_chunks dict from results
         doc_chunks = {}
         doc_word_counts = {}
-
-        if progress and len(urls) > 1:
-            from rich.progress import (
-                Progress,
-                SpinnerColumn,
-                TextColumn,
-                BarColumn,
-                TimeElapsedColumn,
-            )
-
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                BarColumn(),
-                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-                TimeElapsedColumn(),
-                console=self.batch_ops.progress_display.console,
-                disable=not progress,
-            ) as progress_bar:
-                task = progress_bar.add_task(
-                    "Gathering document chunks...", total=len(urls)
-                )
-
-                for url in urls:
-                    try:
-                        chunks_data = await self.get_chunks_with_embeddings(
-                            url, retry=retry
-                        )
-                        doc_chunks[url] = chunks_data
-                        doc_word_counts[url] = sum(
-                            chunk["wordcount"] for chunk in chunks_data
-                        )
-                    except Exception as e:
-                        if retry:
-                            # Second attempt failed, skip this document
-                            if self.verbose:
-                                from rich.console import Console
-
-                                console = Console()
-                                console.print(
-                                    f"[red]Failed to get chunks for {url}: {e}[/red]"
-                                )
-                            continue
-                        else:
-                            raise
-                    finally:
-                        progress_bar.advance(task, 1)
-        else:
-            # Single document or no progress - process without progress bar
-            for url in urls:
-                try:
-                    chunks_data = await self.get_chunks_with_embeddings(
-                        url, retry=retry
-                    )
+        for url, chunks_data in zip(urls, chunks_results):
+            # Skip failed results (exceptions) and None results
+            if chunks_data is not None and not isinstance(chunks_data, Exception):
+                if isinstance(chunks_data, list):
+                    # Direct list of chunks
                     doc_chunks[url] = chunks_data
                     doc_word_counts[url] = sum(
                         chunk["wordcount"] for chunk in chunks_data
                     )
-                except Exception as e:
-                    if retry:
-                        # Second attempt failed, skip this document
-                        if self.verbose:
-                            from rich.console import Console
-
-                            console = Console()
-                            console.print(
-                                f"[red]Failed to get chunks for {url}: {e}[/red]"
-                            )
-                        continue
-                    else:
-                        raise
+                elif isinstance(chunks_data, dict) and "chunks" in chunks_data:
+                    # Wrapped in dict with "chunks" key
+                    chunks_list = chunks_data["chunks"]
+                    doc_chunks[url] = chunks_list
+                    doc_word_counts[url] = sum(
+                        chunk["wordcount"] for chunk in chunks_list
+                    )
 
         # Filter out documents without chunks
         valid_urls = [url for url in urls if url in doc_chunks]
 
         if not valid_urls:
+            if return_metadata:
+                return [], {}
             return []
 
         if len(valid_urls) == 1:
             # Single document - return as single group
             url = valid_urls[0]
             doc_embeddings = self._compute_document_embeddings({url: doc_chunks[url]})
-            return [
+            formatted_groups = [
                 {
                     "documents": [url],
                     "total_words": doc_word_counts[url],
                     "cohesion_score": 1.0,
                 }
             ]
+            if return_metadata:
+                return formatted_groups, {}
+            return formatted_groups
 
-        # Group documents using constrained agglomerative clustering
-        if progress and len(valid_urls) > 1:
-            with self.batch_ops.progress_display.status(
-                "Computing document similarities and grouping..."
-            ):
-                grouper = DocumentGrouper(linkage_method=linkage_method)
-                groups = grouper.group_documents(
+        # Group documents using specified clustering method
+        grouper = DocumentGrouper(
+            linkage_method=linkage_method,
+            clustering_method=clustering_method,
+            embedding_weights=embedding_weights,
+            seeding_method=seeding_method,
+            refinement_method=refinement_method,
+            **kwargs,
+        )
+
+        if len(valid_urls) > 1:
+            # Create single status object for entire process
+            if progress:
+                with self.batch_ops.progress_display.create_status(
+                    "Computing document similarities and grouping..."
+                ) as status:
+                    result = grouper.group_documents_with_details(
+                        documents=valid_urls,
+                        chunk_data=doc_chunks,
+                        constraint_type=constraint_type,
+                        min_size=min_size,
+                        max_size=max_size,
+                        clustering_method=clustering_method,
+                        embedding_weights=embedding_weights,
+                        seeding_method=seeding_method,
+                        refinement_method=refinement_method,
+                        status=status,
+                        **kwargs,
+                    )
+                groups = result.groups
+                clustering_result = result
+
+                # Compute embeddings for cohesion (reuse existing computation)
+                from .document_embedding import convert_legacy_chunk_data
+
+                typed_chunks = convert_legacy_chunk_data(doc_chunks)
+                doc_embeddings = grouper.embedder.compute_embeddings(
+                    valid_urls, typed_chunks
+                )
+            else:
+                result = grouper.group_documents_with_details(
                     documents=valid_urls,
                     chunk_data=doc_chunks,
                     constraint_type=constraint_type,
                     min_size=min_size,
                     max_size=max_size,
+                    clustering_method=clustering_method,
+                    embedding_weights=embedding_weights,
+                    seeding_method=seeding_method,
+                    refinement_method=refinement_method,
+                    **kwargs,
                 )
-                # Compute document embeddings for cohesion calculation
-                doc_embeddings = self._compute_document_embeddings(doc_chunks)
+                groups = result.groups
+                clustering_result = result
+
+                # Compute embeddings for cohesion
+                from .document_embedding import convert_legacy_chunk_data
+
+                typed_chunks = convert_legacy_chunk_data(doc_chunks)
+                doc_embeddings = grouper.embedder.compute_embeddings(
+                    valid_urls, typed_chunks
+                )
         else:
-            grouper = DocumentGrouper(linkage_method=linkage_method)
-            groups = grouper.group_documents(
+            result = grouper.group_documents_with_details(
                 documents=valid_urls,
                 chunk_data=doc_chunks,
                 constraint_type=constraint_type,
                 min_size=min_size,
                 max_size=max_size,
+                clustering_method=clustering_method,
+                embedding_weights=embedding_weights,
+                seeding_method=seeding_method,
+                refinement_method=refinement_method,
+                **kwargs,
             )
-            # Compute document embeddings for cohesion calculation
-            doc_embeddings = self._compute_document_embeddings(doc_chunks)
+            groups = result.groups
+            clustering_result = result
+            from .document_embedding import convert_legacy_chunk_data
+
+            typed_chunks = convert_legacy_chunk_data(doc_chunks)
+            doc_embeddings = grouper.embedder.compute_embeddings(
+                valid_urls, typed_chunks
+            )
 
         # Format results
-        result = []
+        formatted_groups = []
         for group in groups:
             total_words = sum(doc_word_counts.get(url, 0) for url in group)
             cohesion = compute_group_cohesion(group, doc_embeddings)
 
-            result.append(
-                {
-                    "documents": group,
-                    "total_words": total_words,
-                    "cohesion_score": cohesion,
+            group_data = {
+                "documents": group,
+                "total_words": total_words,
+                "cohesion_score": cohesion,
+            }
+
+            # Include chunks if requested
+            if include_chunks:
+                group_data["chunks"] = {
+                    url: doc_chunks[url] for url in group if url in doc_chunks
                 }
-            )
 
-        return result
+            formatted_groups.append(group_data)
 
-    async def get_chunks_with_embeddings(
-        self, url: str, retry: bool = False
-    ) -> List[dict]:
-        """Get chunks with embeddings."""
-        if await self.cache.has_path(url, "chunks"):
-            content = await self.cache.get_content(url, "chunks")
-            if isinstance(content, dict) and "chunks" in content:
-                return content["chunks"]
+        # Add operation log to result for debugging clustering behavior
+        if "clustering_result" in locals() and hasattr(
+            clustering_result, "operation_log"
+        ):
+            # Store the operation log in a way that can be accessed later
+            self._last_clustering_log = clustering_result.operation_log
+            # Print the log for debugging (only in verbose mode)
+            if self.verbose:
+                self._print_clustering_log(clustering_result.operation_log)
 
-        # Fetch and compute
-        markdown = await self.get_markdown(url, retry=retry)
-        chunks_data = self.web_client.create_chunks(markdown)
-
-        # Save in new format with proper final_url
-        from datetime import datetime
-
-        final_url = await self.cache.get_redirect_info(url)
-        await self.cache.set_content(
-            url,
-            "chunks",
-            {
-                "version": 2,
-                "chunks": chunks_data,
-                "metadata": {
-                    "model": "minishlab/potion-base-8M",
-                    "chunk_method": "SemanticChunker",
-                    "created_at": datetime.now().isoformat(),
-                    "total_wordcount": sum(c["wordcount"] for c in chunks_data),
-                },
-            },
-            final_url,
-        )
-
-        return chunks_data
+        # Return groups with optional metadata
+        if return_metadata and "clustering_result" in locals():
+            return formatted_groups, clustering_result.metadata
+        else:
+            return formatted_groups
 
     def _compute_document_embeddings(self, doc_chunks: dict) -> dict:
         """Compute document-level embeddings as averages of chunk embeddings.

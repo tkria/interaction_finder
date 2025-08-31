@@ -1,72 +1,141 @@
 """
-Document grouping using constrained agglomerative clustering based on chunk embeddings.
+Document grouping using multiple embedding and clustering strategies.
 
-This module implements semantic document grouping with size constraints, using
-chunk-level embeddings to compute document similarities and constrained
-agglomerative clustering to form groups.
+This module provides a unified interface for document clustering with support for
+multiple embedding methods (mean averaging, IDF-like) and clustering algorithms
+(agglomerative, spectral, hybrid).
+
+This is the new implementation that replaces the monolithic document_grouper.py
 """
 
+from typing import List, Dict, Optional, Callable, Literal, Tuple, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .progress_display import StatusProtocol
+import warnings
+from dataclasses import dataclass, field
 import numpy as np
-from typing import List, Dict, Set, Tuple, Optional
-from dataclasses import dataclass
-from scipy.spatial.distance import cosine
-import re
+
+# Import the new modular components
+from .document_embedding import (
+    ChunkData,
+    DocumentEmbedder,
+    SimpleAverageEmbedder,
+    IDFEmbedder,
+    convert_legacy_chunk_data,
+)
+from .document_clustering import (
+    ClusteringConstraints,
+    ClusteringResult,
+    DocumentClusterer,
+    AgglomerativeClusterer,
+    SpectralClusterer,
+    HybridClusterer,
+    RandomClusterer,
+    SizeAnnealedAgglomerativeClusterer,
+)
 
 
 @dataclass
-class Cluster:
-    """Represents a cluster of documents during agglomerative clustering."""
+class GroupingResult:
+    """Result of document grouping with metadata (backward compatibility)."""
 
-    id: int
-    documents: Set[str]
-    centroid: Optional[np.ndarray] = None
-
-    def __post_init__(self):
-        """Initialize centroid if not provided."""
-        if self.centroid is None:
-            # Will be set dynamically when first computed
-            self.centroid = None
-
-    def merge_with(
-        self, other: "Cluster", doc_embeddings: Dict[str, np.ndarray]
-    ) -> "Cluster":
-        """Merge two clusters into a new one."""
-        new_docs = self.documents.union(other.documents)
-
-        # Recompute centroid as average of all document centroids
-        all_centroids = []
-        for doc in new_docs:
-            if doc in doc_embeddings:
-                all_centroids.append(doc_embeddings[doc])
-
-        if all_centroids:
-            new_centroid = np.mean(all_centroids, axis=0)
-        else:
-            # Use existing centroid as template, or create from available centroids
-            if self.centroid is not None:
-                new_centroid = np.zeros_like(self.centroid)
-            elif other.centroid is not None:
-                new_centroid = np.zeros_like(other.centroid)
-            else:
-                # Fallback - this shouldn't happen in normal operation
-                new_centroid = np.zeros(256)
-
-        return Cluster(
-            id=max(self.id, other.id) + 1, documents=new_docs, centroid=new_centroid
-        )
+    groups: List[List[str]]
+    metadata: Dict[str, any] = field(default_factory=dict)
+    operation_log: List[Dict] = field(default_factory=list)
 
 
 class DocumentGrouper:
-    """Groups documents using constrained agglomerative clustering."""
+    """
+    Unified document grouper with support for multiple embedding and clustering methods.
 
-    def __init__(self, linkage_method: str = "average"):
+    This class provides backward compatibility with the original API while using
+    the new modular implementation underneath.
+    """
+
+    def __init__(
+        self,
+        linkage_method: str = "average",
+        clustering_method: str = "agglomerative",
+        embedding_weights: str = "uniform",
+        embedding_method: str = None,  # Legacy parameter
+        use_specificity_weighting: bool = False,  # Legacy parameter
+        seeding_method: str = "kmeans",
+        refinement_method: str = "hierarchical",
+        **kwargs,
+    ):
         """
-        Initialize the document grouper.
+        Initialize document grouper.
 
         Args:
-            linkage_method: Linkage method for clustering ("average", "complete", "single")
+            linkage_method: Linkage method for agglomerative clustering
+            clustering_method: Clustering algorithm ("agglomerative", "spectral", "hybrid")
+            embedding_weights: Weighting strategy for chunk averaging ("uniform", "idf")
+            embedding_method: Legacy parameter, maps to embedding_weights
+            use_specificity_weighting: Legacy parameter, maps to "idf"
+            **kwargs: Additional parameters passed to underlying algorithms
         """
-        self.linkage_method = linkage_method
+        # Handle legacy parameter mapping
+        if use_specificity_weighting:
+            embedding_weights = "idf"
+            warnings.warn(
+                "use_specificity_weighting is deprecated, use embedding_weights='idf'",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        elif embedding_method is not None:
+            # Map legacy embedding_method to new embedding_weights
+            if embedding_method == "idf_weighted":
+                embedding_weights = "idf"
+            elif embedding_method == "mean":
+                embedding_weights = "uniform"
+            warnings.warn(
+                f"embedding_method is deprecated, use embedding_weights='{embedding_weights}'",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+
+        # Initialize embedder
+        if embedding_weights == "idf":
+            self.embedder = IDFEmbedder(
+                similarity_threshold=kwargs.get("similarity_threshold", 0.3),
+                sharpening_power=kwargs.get("sharpening_power", 2.0),
+                blend_ratio=kwargs.get("blend_ratio", 0.05),
+            )
+        else:
+            self.embedder = SimpleAverageEmbedder()
+
+        # Initialize clustering algorithm
+        if clustering_method == "agglomerative":
+            self.clusterer = AgglomerativeClusterer(linkage=linkage_method)
+        elif clustering_method == "spectral":
+            self.clusterer = SpectralClusterer(
+                random_state=kwargs.get("random_state", 42)
+            )
+        elif clustering_method == "hybrid":
+            self.clusterer = HybridClusterer(
+                n_components=kwargs.get("n_components", 10),
+                seed_multiplier=kwargs.get("seed_multiplier", 1.5),
+                seeding_method=seeding_method,
+                refinement_method=refinement_method,
+                random_state=kwargs.get("random_state", 42),
+                max_iterations=kwargs.get("max_iterations", 100),
+                enable_swaps=kwargs.get("enable_swaps", False),
+            )
+        elif clustering_method == "random":
+            self.clusterer = RandomClusterer(
+                random_state=kwargs.get("random_state", 42)
+            )
+        elif clustering_method == "size_annealed_agglomerative":
+            self.clusterer = SizeAnnealedAgglomerativeClusterer(
+                enable_border_moves=kwargs.get("enable_border_moves", False),
+                enable_swaps=kwargs.get("enable_swaps", False),
+            )
+        else:
+            raise ValueError(f"Unknown clustering method: {clustering_method}")
+
+        self.embedding_weights = embedding_weights
+        self.clustering_method = clustering_method
 
     def group_documents(
         self,
@@ -77,277 +146,206 @@ class DocumentGrouper:
         max_size: int = 8,
     ) -> List[List[str]]:
         """
-        Group documents using constrained agglomerative clustering.
+        Group documents using configured embedding and clustering methods.
 
         Args:
             documents: List of document URLs/identifiers
-            chunk_data: Dict mapping document ID to list of chunk objects
+            chunk_data: Dict mapping document ID to list of chunk objects (legacy format)
             constraint_type: Either "count" (document count) or "words" (word count)
-            min_size: Minimum group size (documents or words)
-            max_size: Maximum group size (documents or words)
+            min_size: Minimum group size
+            max_size: Maximum group size
 
         Returns:
-            List of document groups, where each group is a list of document IDs
+            List of document groups
         """
-        if not documents:
-            return []
+        # Convert legacy chunk format
+        typed_chunk_data = convert_legacy_chunk_data(chunk_data)
 
-        if len(documents) == 1:
-            return [documents]
+        # Compute embeddings
+        embeddings = self.embedder.compute_embeddings(documents, typed_chunk_data)
 
-        # Compute document embeddings (average of chunk embeddings)
-        doc_embeddings = self._compute_document_embeddings(documents, chunk_data)
+        # Set up constraints
+        constraints = ClusteringConstraints(
+            min_size=min_size, max_size=max_size, constraint_type=constraint_type
+        )
 
         # Compute document metrics for constraints
         if constraint_type == "words":
             doc_metrics = self._compute_word_counts(documents, chunk_data)
         else:
-            doc_metrics = {doc: 1 for doc in documents}  # Each doc counts as 1
+            doc_metrics = {doc: 1 for doc in documents}
 
-        # Run constrained agglomerative clustering
-        groups = self._constrained_agglomerative_clustering(
-            documents=documents,
-            doc_embeddings=doc_embeddings,
-            doc_metrics=doc_metrics,
-            min_size=min_size,
-            max_size=max_size,
+        # Perform clustering
+        result = self.clusterer.cluster(
+            embeddings=embeddings, constraints=constraints, doc_metrics=doc_metrics
         )
 
-        # Handle orphaned documents
-        groups = self._handle_orphans(
-            groups=groups,
-            all_documents=set(documents),
-            doc_embeddings=doc_embeddings,
-            doc_metrics=doc_metrics,
-            max_size=max_size,
+        return result.groups
+
+    def group_documents_with_details(
+        self,
+        documents: List[str],
+        chunk_data: Dict[str, List[Dict]],
+        constraint_type: str = "count",
+        min_size: int = 3,
+        max_size: int = 8,
+        status: Optional["StatusProtocol"] = None,
+        original_document_count: Optional[int] = None,
+        clustering_method: str = "agglomerative",
+        embedding_weights: str = "uniform",
+        embedding_type: str = None,  # Legacy parameter
+        dual_evaluation: bool = False,
+        seeding_method: str = "kmeans",
+        refinement_method: str = "hierarchical",
+        **kwargs,
+    ) -> GroupingResult:
+        """
+        Group documents with detailed metadata and progress reporting.
+
+        Args:
+            documents: List of document URLs/identifiers
+            chunk_data: Dict mapping document ID to list of chunk objects
+            constraint_type: Either "count" (document count) or "words" (word count)
+            min_size: Minimum group size
+            max_size: Maximum group size
+            status: Optional status object for progress updates
+            original_document_count: Original document count before filtering
+            clustering_method: Clustering algorithm to use
+            embedding_weights: Weighting strategy for chunk averaging ("uniform", "idf")
+            embedding_type: Legacy parameter, maps to embedding_weights
+            dual_evaluation: If True, compute metrics using both embedding methods
+
+        Returns:
+            GroupingResult with groups and comprehensive metadata
+        """
+        # Convert legacy parameters to new format
+        if clustering_method == "spectral_advanced":
+            clustering_method = "hybrid"
+
+        # Handle legacy embedding_type parameter
+        if embedding_type is not None:
+            if embedding_type == "idf_weighted":
+                embedding_weights = "idf"
+            elif embedding_type == "mean":
+                embedding_weights = "uniform"
+
+        # Create temporary grouper with specified methods
+        temp_grouper = DocumentGrouper(
+            clustering_method=clustering_method,
+            embedding_weights=embedding_weights,
+            seeding_method=seeding_method,
+            refinement_method=refinement_method,
+            **kwargs,
         )
 
-        return groups
+        # Convert legacy chunk format
+        typed_chunk_data = convert_legacy_chunk_data(chunk_data)
 
-    def _compute_document_embeddings(
-        self, documents: List[str], chunk_data: Dict[str, List[Dict]]
-    ) -> Dict[str, np.ndarray]:
-        """Compute document-level embeddings as averages of chunk embeddings."""
-        doc_embeddings = {}
+        # Compute primary embeddings
+        embeddings = temp_grouper.embedder.compute_embeddings(
+            documents, typed_chunk_data, status
+        )
 
-        for doc in documents:
-            chunks = chunk_data.get(doc, [])
-            chunk_embeddings = []
+        # Set up constraints and metrics
+        constraints = ClusteringConstraints(
+            min_size=min_size, max_size=max_size, constraint_type=constraint_type
+        )
 
-            for chunk in chunks:
-                if chunk.get("embedding"):
-                    chunk_embeddings.append(np.array(chunk["embedding"]))
+        if constraint_type == "words":
+            doc_metrics = self._compute_word_counts(documents, chunk_data)
+        else:
+            doc_metrics = {doc: 1 for doc in documents}
 
-            if chunk_embeddings:
-                # Average all chunk embeddings to get document embedding
-                doc_embeddings[doc] = np.mean(chunk_embeddings, axis=0)
-            else:
-                # Skip documents without embeddings - they'll be handled later
-                continue
+        # Perform clustering
+        result = temp_grouper.clusterer.cluster(
+            embeddings=embeddings,
+            constraints=constraints,
+            doc_metrics=doc_metrics,
+            status=status,
+        )
 
-        return doc_embeddings
+        # Dual evaluation if requested
+        if dual_evaluation:
+            # Compute alternative embeddings
+            alt_embedding_weights = "uniform" if embedding_weights == "idf" else "idf"
+            alt_embedder = (
+                IDFEmbedder()
+                if alt_embedding_weights == "idf"
+                else SimpleAverageEmbedder()
+            )
+            alt_embeddings = alt_embedder.compute_embeddings(
+                documents, typed_chunk_data
+            )
+
+            # Compute alternative metrics
+            alt_clusterer = temp_grouper.clusterer  # Use same clustering algorithm
+            alt_S, alt_docs = alt_clusterer._build_similarity_matrix(alt_embeddings)
+            alt_metrics = alt_clusterer._compute_standard_metrics(
+                result.groups, alt_S, alt_docs
+            )
+
+            # Add dual metrics to result
+            result.metrics.update(
+                {
+                    "alternative_embedding_weights": alt_embedding_weights,
+                    "alternative_cohesions": alt_metrics.get("cohesions", []),
+                    "alternative_avg_cohesion": alt_metrics.get("avg_cohesion", 0.0),
+                    "alternative_cohesion_std": alt_metrics.get("cohesion_std", 0.0),
+                }
+            )
+
+        # Enhance metadata for backward compatibility
+        enhanced_metadata = {
+            "algorithm": f"{clustering_method}_clustering",
+            "constraint_type": constraint_type,
+            "constraints": {"min_size": min_size, "max_size": max_size},
+            "documents_clustered": len([d for d in documents if d in embeddings]),
+            "total_documents": original_document_count or len(documents),
+            "documents_with_embeddings": len(embeddings),
+            "embedding_weights": embedding_weights,
+            "dual_evaluation": dual_evaluation,
+            # Copy over computed metrics
+            **result.metrics,
+        }
+
+        # Legacy format compatibility
+        if "cohesions" in result.metrics:
+            enhanced_metadata["group_cohesions"] = result.metrics["cohesions"]
+
+        if "group_size_histogram" not in enhanced_metadata:
+            # Compute group size histogram for legacy compatibility
+            size_histogram = {}
+            for group in result.groups:
+                size = len(group)
+                size_histogram[size] = size_histogram.get(size, 0) + 1
+            enhanced_metadata["group_size_histogram"] = size_histogram
+
+        # Word counts per group for legacy compatibility
+        total_word_counts = []
+        for group in result.groups:
+            group_words = 0
+            for doc in group:
+                chunks = chunk_data.get(doc, [])
+                group_words += sum(chunk.get("wordcount", 0) for chunk in chunks)
+            total_word_counts.append(group_words)
+        enhanced_metadata["total_word_counts"] = total_word_counts
+
+        return GroupingResult(
+            groups=result.groups,
+            metadata=enhanced_metadata,
+            operation_log=result.operation_log,
+        )
 
     def _compute_word_counts(
         self, documents: List[str], chunk_data: Dict[str, List[Dict]]
     ) -> Dict[str, int]:
         """Compute total word count for each document."""
         word_counts = {}
-
         for doc in documents:
             chunks = chunk_data.get(doc, [])
             total_words = sum(chunk.get("wordcount", 0) for chunk in chunks)
             word_counts[doc] = total_words
-
         return word_counts
-
-    def _cluster_distance(
-        self,
-        cluster_a: Cluster,
-        cluster_b: Cluster,
-        doc_embeddings: Dict[str, np.ndarray],
-    ) -> float:
-        """Compute distance between two clusters based on linkage method."""
-        if self.linkage_method == "average":
-            return self._average_linkage_distance(cluster_a, cluster_b, doc_embeddings)
-        elif self.linkage_method == "complete":
-            return self._complete_linkage_distance(cluster_a, cluster_b, doc_embeddings)
-        elif self.linkage_method == "single":
-            return self._single_linkage_distance(cluster_a, cluster_b, doc_embeddings)
-        else:
-            # Default to average linkage
-            return self._average_linkage_distance(cluster_a, cluster_b, doc_embeddings)
-
-    def _average_linkage_distance(
-        self,
-        cluster_a: Cluster,
-        cluster_b: Cluster,
-        doc_embeddings: Dict[str, np.ndarray],
-    ) -> float:
-        """Average linkage: mean of all pairwise distances."""
-        distances = []
-        for doc_a in cluster_a.documents:
-            for doc_b in cluster_b.documents:
-                if doc_a in doc_embeddings and doc_b in doc_embeddings:
-                    dist = cosine(doc_embeddings[doc_a], doc_embeddings[doc_b])
-                    distances.append(dist)
-
-        return np.mean(distances) if distances else 1.0
-
-    def _complete_linkage_distance(
-        self,
-        cluster_a: Cluster,
-        cluster_b: Cluster,
-        doc_embeddings: Dict[str, np.ndarray],
-    ) -> float:
-        """Complete linkage: maximum of all pairwise distances."""
-        distances = []
-        for doc_a in cluster_a.documents:
-            for doc_b in cluster_b.documents:
-                if doc_a in doc_embeddings and doc_b in doc_embeddings:
-                    dist = cosine(doc_embeddings[doc_a], doc_embeddings[doc_b])
-                    distances.append(dist)
-
-        return max(distances) if distances else 1.0
-
-    def _single_linkage_distance(
-        self,
-        cluster_a: Cluster,
-        cluster_b: Cluster,
-        doc_embeddings: Dict[str, np.ndarray],
-    ) -> float:
-        """Single linkage: minimum of all pairwise distances."""
-        distances = []
-        for doc_a in cluster_a.documents:
-            for doc_b in cluster_b.documents:
-                if doc_a in doc_embeddings and doc_b in doc_embeddings:
-                    dist = cosine(doc_embeddings[doc_a], doc_embeddings[doc_b])
-                    distances.append(dist)
-
-        return min(distances) if distances else 1.0
-
-    def _constrained_agglomerative_clustering(
-        self,
-        documents: List[str],
-        doc_embeddings: Dict[str, np.ndarray],
-        doc_metrics: Dict[str, int],
-        min_size: int,
-        max_size: int,
-    ) -> List[List[str]]:
-        """Run constrained agglomerative clustering."""
-        # Initialize each document as its own cluster
-        clusters = {}
-        for i, doc in enumerate(documents):
-            if doc in doc_embeddings:
-                clusters[i] = Cluster(i, {doc}, doc_embeddings[doc])
-            else:
-                # Create cluster with proper-dimensioned zero vector
-                if doc_embeddings:
-                    # Get dimension from first available embedding
-                    sample_embedding = next(iter(doc_embeddings.values()))
-                    zero_embedding = np.zeros_like(sample_embedding)
-                else:
-                    # Fallback if no embeddings available
-                    zero_embedding = np.zeros(256)
-                clusters[i] = Cluster(i, {doc}, zero_embedding)
-
-        # Main clustering loop
-        while len(clusters) > 1:
-            # Find best valid merge
-            best_merge = None
-            best_distance = float("inf")
-
-            cluster_ids = list(clusters.keys())
-            for i, id_a in enumerate(cluster_ids):
-                for id_b in cluster_ids[i + 1 :]:
-                    c_a, c_b = clusters[id_a], clusters[id_b]
-
-                    # Check size constraint
-                    merged_metric = sum(
-                        doc_metrics[doc] for doc in c_a.documents.union(c_b.documents)
-                    )
-                    if merged_metric > max_size:
-                        continue
-
-                    # Calculate distance
-                    dist = self._cluster_distance(c_a, c_b, doc_embeddings)
-
-                    if dist < best_distance:
-                        best_distance = dist
-                        best_merge = (id_a, id_b)
-
-            # If no valid merges, stop
-            if best_merge is None:
-                break
-
-            # Perform merge
-            id_a, id_b = best_merge
-            new_cluster = clusters[id_a].merge_with(clusters[id_b], doc_embeddings)
-
-            # Update clusters dict
-            del clusters[id_a]
-            del clusters[id_b]
-            clusters[new_cluster.id] = new_cluster
-
-        # Convert to final format, filtering by min_size
-        result = []
-        for cluster in clusters.values():
-            cluster_metric = sum(doc_metrics[doc] for doc in cluster.documents)
-            if cluster_metric >= min_size:
-                result.append(list(cluster.documents))
-
-        return result
-
-    def _handle_orphans(
-        self,
-        groups: List[List[str]],
-        all_documents: Set[str],
-        doc_embeddings: Dict[str, np.ndarray],
-        doc_metrics: Dict[str, int],
-        max_size: int,
-    ) -> List[List[str]]:
-        """Handle orphaned documents by trying to add them to existing groups."""
-        # Find orphaned documents
-        grouped_docs = set()
-        for group in groups:
-            grouped_docs.update(group)
-
-        orphans = list(all_documents - grouped_docs)
-
-        if not orphans:
-            return groups
-
-        # Try to add each orphan to the best-fitting group
-        for orphan in orphans:
-            best_group_idx = None
-            best_similarity = -1
-
-            for i, group in enumerate(groups):
-                # Check if adding orphan would exceed max_size
-                group_metric = sum(doc_metrics[doc] for doc in group)
-                if group_metric + doc_metrics[orphan] > max_size:
-                    continue
-
-                # Compute similarity to group
-                if orphan in doc_embeddings:
-                    similarities = []
-                    for doc in group:
-                        if doc in doc_embeddings:
-                            sim = 1.0 - cosine(
-                                doc_embeddings[orphan], doc_embeddings[doc]
-                            )
-                            similarities.append(sim)
-
-                    if similarities:
-                        avg_similarity = np.mean(similarities)
-                        if avg_similarity > best_similarity:
-                            best_similarity = avg_similarity
-                            best_group_idx = i
-
-            # Add to best group if found
-            if best_group_idx is not None:
-                groups[best_group_idx].append(orphan)
-
-        return groups
 
     @staticmethod
     def parse_constraint(constraint: str) -> Tuple[str, int, int]:
@@ -357,6 +355,8 @@ class DocumentGrouper:
         Returns:
             Tuple of (constraint_type, min_val, max_val)
         """
+        import re
+
         match = re.match(r"(\w+):(\d+)-(\d+)", constraint)
         if not match:
             raise ValueError(
@@ -367,6 +367,52 @@ class DocumentGrouper:
         return constraint_type, int(min_val), int(max_val)
 
 
+# Factory functions for easy algorithm selection
+def create_embedder(weights: str, **kwargs) -> DocumentEmbedder:
+    """
+    Create document embedder by weighting strategy.
+
+    Args:
+        weights: "uniform" or "idf"
+        **kwargs: Parameters passed to embedder constructor
+
+    Returns:
+        DocumentEmbedder instance
+    """
+    if weights == "uniform":
+        return SimpleAverageEmbedder()
+    elif weights == "idf":
+        return IDFEmbedder(**kwargs)
+    else:
+        raise ValueError(f"Unknown embedding weights: {weights}")
+
+
+def create_clusterer(method: str, **kwargs) -> DocumentClusterer:
+    """
+    Create document clusterer by method name.
+
+    Args:
+        method: "agglomerative", "spectral", "hybrid", "random", or "size_annealed_agglomerative"
+        **kwargs: Parameters passed to clusterer constructor
+
+    Returns:
+        DocumentClusterer instance
+    """
+    if method == "agglomerative":
+        return AgglomerativeClusterer(**kwargs)
+    elif method == "spectral":
+        return SpectralClusterer(**kwargs)
+    elif method == "hybrid":
+        return HybridClusterer(**kwargs)
+    elif method == "random":
+        return RandomClusterer(**kwargs)
+    elif method == "size_annealed_agglomerative":
+        return SizeAnnealedAgglomerativeClusterer(**kwargs)
+    else:
+        raise ValueError(f"Unknown clustering method: {method}")
+
+
+# Legacy function for backward compatibility
 def compute_group_cohesion(
     group: List[str], doc_embeddings: Dict[str, np.ndarray]
 ) -> float:
@@ -380,8 +426,16 @@ def compute_group_cohesion(
     Returns:
         Average pairwise similarity within the group (0-1)
     """
+    warnings.warn(
+        "compute_group_cohesion is deprecated, use ClusteringResult.metrics instead",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+
     if len(group) < 2:
         return 1.0
+
+    from scipy.spatial.distance import cosine
 
     similarities = []
     for i, doc_a in enumerate(group):
@@ -390,4 +444,4 @@ def compute_group_cohesion(
                 sim = 1.0 - cosine(doc_embeddings[doc_a], doc_embeddings[doc_b])
                 similarities.append(sim)
 
-    return np.mean(similarities) if similarities else 0.0
+    return float(np.mean(similarities)) if similarities else 0.0

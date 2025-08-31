@@ -24,7 +24,32 @@ from .utils import url_to_hash, normalize_url, url_to_hash_base36
 from .cache import URLCache
 
 # Import document grouping functionality
-from .document_grouper import DocumentGrouper, compute_group_cohesion
+from .document_grouper import (
+    DocumentGrouper,
+    compute_group_cohesion,
+    create_embedder,
+    create_clusterer,
+)
+
+# Import new modular components
+from .document_embedding import (
+    DocumentEmbedder,
+    SimpleAverageEmbedder,
+    IDFEmbedder,
+    ChunkData,
+    convert_legacy_chunk_data,
+)
+from .document_clustering import (
+    DocumentClusterer,
+    AgglomerativeClusterer,
+    SpectralClusterer,
+    HybridClusterer,
+    RandomClusterer,
+    SizeAnnealedAgglomerativeClusterer,
+    ClusterCache,
+    ClusteringConstraints,
+    ClusteringResult,
+)
 
 
 # Export the public API - maintains exact compatibility with original fetcher.py
@@ -33,6 +58,24 @@ __all__ = [
     "URLCache",
     "DocumentGrouper",
     "compute_group_cohesion",
+    "create_embedder",
+    "create_clusterer",
+    # New modular components
+    "DocumentEmbedder",
+    "SimpleAverageEmbedder",
+    "IDFEmbedder",
+    "ChunkData",
+    "convert_legacy_chunk_data",
+    "DocumentClusterer",
+    "AgglomerativeClusterer",
+    "SpectralClusterer",
+    "HybridClusterer",
+    "RandomClusterer",
+    "SizeAnnealedAgglomerativeClusterer",
+    "ClusterCache",
+    "ClusteringConstraints",
+    "ClusteringResult",
+    # Utilities
     "PreviousFailure",
     "fetch_urls_with_progress",
     "fetch_urls_concurrent_with_progress",
