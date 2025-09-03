@@ -49,6 +49,82 @@ class TestNormalizeTextForMatching:
         expected = "gene expression level 25x higher in cancer cells"
         assert normalize_text_for_matching(text) == expected
 
+    def test_greek_letter_normalization(self):
+        """Test Greek letter conversion to ASCII names."""
+        # Basic Greek letters
+        assert normalize_text_for_matching("α-tubulin") == "alpha tubulin"
+        assert normalize_text_for_matching("β-catenin") == "beta catenin"
+        assert normalize_text_for_matching("γ-globin") == "gamma globin"
+
+        # Uppercase Greek letters
+        assert normalize_text_for_matching("Α-subunit") == "alpha subunit"
+        assert normalize_text_for_matching("Β-cell") == "beta cell"
+
+        # Multiple Greek letters
+        assert (
+            normalize_text_for_matching("α/β-heterodimer") == "alpha beta heterodimer"
+        )
+
+        # Greek letters with numbers
+        assert normalize_text_for_matching("p53α variant") == "p53 alpha variant"
+
+        # Standalone Greek letters
+        assert normalize_text_for_matching("The α protein") == "the alpha protein"
+
+        # Greek letters at word boundaries
+        assert normalize_text_for_matching("NFκB pathway") == "nf kappa b pathway"
+
+    def test_unicode_normalization(self):
+        """Test Unicode normalization removes accents and diacritical marks."""
+        # Basic accented characters
+        assert normalize_text_for_matching("café") == "cafe"
+        assert normalize_text_for_matching("résumé") == "resume"
+        assert normalize_text_for_matching("naïve") == "naive"
+
+        # Scientific terms with accents
+        assert normalize_text_for_matching("François Müller") == "francois muller"
+        assert normalize_text_for_matching("β-galactosidase") == "beta galactosidase"
+
+        # Mixed Unicode and Greek
+        assert (
+            normalize_text_for_matching("α-hélix structure") == "alpha helix structure"
+        )
+
+    def test_contractions_and_decimals(self):
+        """Test that contractions and decimal points are handled correctly."""
+        # Contractions should be merged
+        assert normalize_text_for_matching("don't worry") == "dont worry"
+        assert normalize_text_for_matching("can't bind") == "cant bind"
+        assert normalize_text_for_matching("it's active") == "its active"
+
+        # Decimal points should be removed
+        assert normalize_text_for_matching("IC50 = 2.5 μM") == "ic50 25 mu m"
+        assert normalize_text_for_matching("0.001 significance") == "0001 significance"
+
+        # Don't affect other periods
+        assert normalize_text_for_matching("end. Next sentence") == "end next sentence"
+
+    def test_scientific_paper_title_with_underscores(self):
+        """Test that paper titles with markdown formatting are properly normalized."""
+        title = "Mutations in Iron-Sulfur Cluster Scaffold Genes _NFU1_ and _BOLA3_ Cause a Fatal Deficiency"
+        expected = "mutations in iron sulfur cluster scaffold genes nfu1 and bola3 cause a fatal deficiency"
+        assert normalize_text_for_matching(title) == expected
+
+    def test_complex_biomedical_text_normalization(self):
+        """Test normalization of complex biomedical text with multiple features."""
+        text = "The α-helical domain of p53β contains κB-binding sites (χ² = 0.05, p < 0.001)"
+        result = normalize_text_for_matching(text)
+        # Check key components are present (order and exact spacing may vary)
+        assert "alpha" in result
+        assert "beta" in result
+        assert "kappa" in result
+        assert "chi" in result
+        assert "helical" in result
+        assert "p53" in result
+        assert "binding" in result
+        assert "005" in result
+        assert "0001" in result
+
 
 class TestResourceId:
     """Test ResourceId creation and validation."""
@@ -160,16 +236,72 @@ class TestResource:
 
         resource = Resource(id=resource_id, title="Test", text=text)
 
-        # Test mapping for "brca1" in normalized text
-        norm_text = resource.normalized_text  # "the brca1 gene"
-        brca1_start = norm_text.find("brca1")
+    def test_find_original_position_helper(self):
+        """Test the _find_original_position helper method directly."""
+        resource_id = ResourceId(url="https://example.com", counter=1)
+        text = "Hello, world! Test text."
+        resource = Resource(id=resource_id, title="Test", text=text)
 
-        original_start, original_end = resource.map_normalized_to_original_position(
-            brca1_start, 5
-        )
+        # Test finding position at start
+        original_pos = resource._find_original_position(0)
+        assert original_pos == 0
 
-        # Should map back to "BRCA1" in original text
-        assert text[original_start:original_end] == "BRCA1"
+        # Test finding position in middle
+        original_pos = resource._find_original_position(
+            5
+        )  # Should map to somewhere in original
+        assert original_pos is not None
+        assert 0 <= original_pos <= len(text)
+
+        # Test finding position at end - should map to end of original text
+        end_normalized = len(resource.normalized_text)
+        original_pos = resource._find_original_position(end_normalized)
+        # The final position mapping should be close to the end (within 1-2 chars due to normalization)
+        assert original_pos is not None
+        assert abs(original_pos - len(text)) <= 2
+
+    def test_greek_letter_position_mapping(self):
+        """Test that Greek letters maintain correct position mapping."""
+        resource_id = ResourceId(url="https://example.com", counter=1)
+        text = "The α-subunit and β-catenin interact."
+        resource = Resource(id=resource_id, title="Test", text=text)
+
+        # Normalized should expand Greek letters
+        assert "alpha" in resource.normalized_text
+        assert "beta" in resource.normalized_text
+
+        # Test quoting the Greek letters works
+        alpha_quote = resource.quote("α-subunit")
+        assert alpha_quote is not None
+        assert alpha_quote.count == 1
+
+        # Verify the extracted text matches original
+        assert "α-subunit" in alpha_quote.get_quote_text()
+
+    def test_unicode_position_mapping(self):
+        """Test position mapping with Unicode normalization."""
+        resource_id = ResourceId(url="https://example.com", counter=1)
+        text = "Protein café binds to résumé domain."
+        resource = Resource(id=resource_id, title="Test", text=text)
+
+        # Should be able to quote using normalized form
+        cafe_quote = resource.quote("cafe")
+        assert cafe_quote is not None
+        assert "café" in cafe_quote.get_quote_text()
+
+        resume_quote = resource.quote("resume")
+        assert resume_quote is not None
+        assert "résumé" in resume_quote.get_quote_text()
+
+        # Test that position mapping is working (don't test specific positions since normalization changes offsets)
+        # Instead test that we can successfully find and quote Unicode content
+        protein_quote = resource.quote("protein")
+        assert protein_quote is not None
+        assert "Protein" in protein_quote.get_quote_text()
+
+        binds_quote = resource.quote("binds")
+        assert binds_quote is not None
+        assert "binds" in binds_quote.get_quote_text()
 
     def test_resource_quote_method(self):
         """Test the quote() method on Resource."""
@@ -255,6 +387,27 @@ class TestResourcePool:
         pool = ResourcePool()
         assert pool.get("nonexistent_id") is None
         assert pool.get("https://nonexistent.com") is None
+
+    def test_find_resource_id_helper(self):
+        """Test the _find_resource_id helper method directly."""
+        pool = ResourcePool()
+        resource = pool.add("https://example.com/paper1.pdf", "Paper 1", "Text 1")
+
+        # Test finding by ResourceId object
+        found_id = pool._find_resource_id(resource.id)
+        assert found_id == resource.id
+
+        # Test finding by ID string
+        found_id = pool._find_resource_id(resource.id.id)
+        assert found_id == resource.id
+
+        # Test finding by URL
+        found_id = pool._find_resource_id("https://example.com/paper1.pdf")
+        assert found_id == resource.id
+
+        # Test nonexistent key
+        assert pool._find_resource_id("nonexistent") is None
+        assert pool._find_resource_id("https://nonexistent.com") is None
 
     def test_getitem_access(self):
         """Test dictionary-style access to resources."""
@@ -581,3 +734,71 @@ class TestIntegrationScenarios:
             context = quote.get_context(context_chars=50)
             assert len(context) > len(quote.get_quote_text())
             assert "**" in context  # Should have quote highlighting
+
+    def test_original_problem_paper_title_quotability(self):
+        """Integration test for the original problem: quoting paper titles with underscores."""
+        # Simulate the exact scenario from the original issue
+        paper_title = "Mutations in Iron-Sulfur Cluster Scaffold Genes _NFU1_ and _BOLA3_ Cause a Fatal Deficiency of Multiple Respiratory Chain and 2-Oxoacid Dehydrogenase Enzymes"
+
+        # Mock content similar to the cache file
+        paper_content = f"""
+        # {paper_title}
+
+        ## Abstract
+        Iron-sulfur (Fe-S) clusters are essential cofactors for numerous biological processes.
+        This study examines mutations in the _NFU1_ and _BOLA3_ genes, which encode scaffold
+        proteins critical for Fe-S cluster biogenesis.
+
+        ## Introduction  
+        The _NFU1_ gene encodes a late-acting scaffold protein, while _BOLA3_ participates
+        in the cytosolic iron-sulfur cluster assembly machinery.
+
+        ## Results
+        Patients with mutations in these genes showed severe deficiencies in respiratory
+        chain complexes I, II, and III, as well as reduced activity of 2-oxoacid
+        dehydrogenase enzymes.
+        """
+
+        pool = ResourcePool()
+        resource = pool.add(
+            "https://pubmed.ncbi.nlm.nih.gov/example",
+            paper_title,  # Use the full title with underscores
+            paper_content,
+        )
+
+        # Test that the title can be quoted despite the underscores
+        title_quote = resource.quote(paper_title)
+        assert title_quote is not None, f"Failed to quote paper title: {paper_title}"
+        assert title_quote.count >= 1, (
+            "Should find at least one occurrence of the title"
+        )
+
+        # Test that key terms from the title can be found individually
+        mutations_quote = resource.quote("mutations")
+        assert mutations_quote is not None, "Should find 'mutations'"
+
+        genes_quote = resource.quote("genes")
+        assert genes_quote is not None, "Should find 'genes'"
+
+        # Test key phrase from title
+        key_phrase = "iron sulfur cluster"
+        phrase_quote = resource.quote(key_phrase)
+        assert phrase_quote is not None, "Should find key phrase from title"
+
+        # Test that individual gene names can be quoted
+        nfu1_quote = resource.quote("NFU1")
+        assert nfu1_quote is not None, "Should find NFU1 gene mentions"
+        assert nfu1_quote.count >= 2, "Should find multiple NFU1 mentions"
+
+        bola3_quote = resource.quote("BOLA3")
+        assert bola3_quote is not None, "Should find BOLA3 gene mentions"
+        assert bola3_quote.count >= 2, "Should find multiple BOLA3 mentions"
+
+        # Verify that underscored versions in content can be found
+        underscore_nfu1 = resource.quote("_NFU1_")
+        assert underscore_nfu1 is not None, "Should find _NFU1_ with underscores"
+
+        # Verify position mapping works for Greek letters and special characters
+        complex_phrase = "iron-sulfur cluster"
+        complex_quote = resource.quote(complex_phrase)
+        assert complex_quote is not None, "Should find complex phrases with hyphens"

@@ -9,16 +9,48 @@ supporting quotes.
 import hashlib
 import re
 import bisect
+import unicodedata
 from typing import List, Optional, Tuple, Dict, Any
 from pydantic import BaseModel, Field, field_validator, ValidationInfo
+
+
+# Greek letter mappings for scientific text normalization (lowercase only)
+GREEK_LETTER_MAP = {
+    "α": "alpha",
+    "β": "beta",
+    "γ": "gamma",
+    "δ": "delta",
+    "ε": "epsilon",
+    "ζ": "zeta",
+    "η": "eta",
+    "θ": "theta",
+    "ι": "iota",
+    "κ": "kappa",
+    "λ": "lambda",
+    "μ": "mu",
+    "ν": "nu",
+    "ξ": "xi",
+    "ο": "omicron",
+    "π": "pi",
+    "ρ": "rho",
+    "σ": "sigma",
+    "ς": "sigma",
+    "τ": "tau",
+    "υ": "upsilon",
+    "φ": "phi",
+    "χ": "chi",
+    "ψ": "psi",
+    "ω": "omega",
+}
 
 
 def normalize_text_for_matching(text: str) -> str:
     """
     Normalize text for fuzzy quote matching.
 
-    Converts to lowercase, removes punctuation, and normalizes whitespace
-    to make quote matching more robust against formatting differences.
+    Converts to lowercase, handles Unicode normalization, converts Greek letters
+    to ASCII equivalents, removes punctuation, and normalizes whitespace to make
+    quote matching more robust against formatting differences.
 
     Args:
         text: Raw text to normalize
@@ -26,17 +58,61 @@ def normalize_text_for_matching(text: str) -> str:
     Returns:
         Normalized text suitable for comparison
     """
-    # Convert to lowercase
-    normalized = text.lower()
-    # Handle contractions: remove apostrophes that are between word characters
-    normalized = re.sub(r"(\w)'(\w)", r"\1\2", normalized)
-    # Handle decimal points: remove periods between digits
-    normalized = re.sub(r"(\d)\.(\d)", r"\1\2", normalized)
-    # Replace remaining punctuation with spaces to preserve word boundaries
-    normalized = re.sub(r"[^\w\s]", " ", normalized)
-    # Normalize whitespace (collapse multiple spaces, strip)
-    normalized = " ".join(normalized.split())
-    return normalized
+    # Apply Unicode normalization first
+    unicode_text = unicodedata.normalize("NFD", text)
+    unicode_text = "".join(c for c in unicode_text if unicodedata.category(c) != "Mn")
+
+    normalized = []
+    text_len = len(unicode_text)
+    last_was_space = True
+
+    for i, char in enumerate(unicode_text):
+        char_lower = char.lower()
+
+        # ASCII alphanumeric - fast path
+        if char_lower.isascii() and char_lower.isalnum():
+            normalized.append(char_lower)
+            last_was_space = False
+
+        # Greek letters
+        elif 0x0370 <= ord(char) <= 0x03FF and char_lower in GREEK_LETTER_MAP:
+            # Add space before if needed
+            if normalized and normalized[-1].isalnum():
+                normalized.append(" ")
+            # Add Greek name
+            normalized.extend(GREEK_LETTER_MAP[char_lower])
+            # Add space after if needed
+            if i + 1 < text_len and unicode_text[i + 1].isalnum():
+                normalized.append(" ")
+            last_was_space = False
+
+        # Skip contractions and decimals
+        elif (
+            char == "'"
+            and i > 0
+            and i < text_len - 1
+            and unicode_text[i - 1].isalnum()
+            and unicode_text[i + 1].isalnum()
+        ) or (
+            char == "."
+            and i > 0
+            and i < text_len - 1
+            and unicode_text[i - 1].isdigit()
+            and unicode_text[i + 1].isdigit()
+        ):
+            continue
+
+        # Other alphanumeric
+        elif char_lower.isalnum():
+            normalized.append(char_lower)
+            last_was_space = False
+
+        # Everything else becomes space
+        elif not last_was_space:
+            normalized.append(" ")
+            last_was_space = True
+
+    return "".join(normalized).strip()
 
 
 class ResourceId(BaseModel):
@@ -108,14 +184,17 @@ class Resource(BaseModel):
             title: Human-readable document title
             text: Full document text content
         """
-        # Compute normalized text and position mapping
+        # Build normalized text with Greek letter support
         normalized_text, position_offsets = self._build_normalized_text_and_offsets(
             text
         )
 
-        # Initialize with computed values
         super().__init__(
-            id=id, title=title, text=text, normalized_text=normalized_text, **data
+            id=id,
+            title=title,
+            text=text,
+            normalized_text=normalized_text,
+            **data,
         )
         self.position_offsets = position_offsets
 
@@ -133,45 +212,87 @@ class Resource(BaseModel):
             Tuple of (normalized_text, position_offsets) where position_offsets
             is a list of (normalized_pos, original_pos) tuples for binary search
         """
-        # Get normalized text using the same logic as normalize_text_for_matching
-        normalized_text = normalize_text_for_matching(original_text)
+        # Apply Unicode normalization first
+        unicode_text = unicodedata.normalize("NFD", original_text)
+        unicode_text = "".join(
+            c for c in unicode_text if unicodedata.category(c) != "Mn"
+        )
 
-        # Now build position mapping by walking through both texts
+        normalized = []
         position_offsets = []
-        orig_pos = 0
-        norm_pos = 0
+        text_len = len(unicode_text)
+        last_was_space = True  # Start as True to avoid leading spaces
 
-        while orig_pos < len(original_text) and norm_pos < len(normalized_text):
-            orig_char = original_text[orig_pos]
-            norm_char = normalized_text[norm_pos]
+        def _should_skip_char(char: str, pos: int) -> bool:
+            """Check if character should be skipped (contractions, decimals)."""
+            if pos == 0 or pos >= text_len - 1:
+                return False
+            prev_char, next_char = unicode_text[pos - 1], unicode_text[pos + 1]
+            return (char == "'" and prev_char.isalnum() and next_char.isalnum()) or (
+                char == "." and prev_char.isdigit() and next_char.isdigit()
+            )
 
-            if orig_char.lower() == norm_char:
-                # Characters match - record mapping and advance both
-                position_offsets.append((norm_pos, orig_pos))
-                norm_pos += 1
-                orig_pos += 1
-            elif orig_char.lower().isalnum():
-                # Original has alnum but normalized doesn't - this is a contraction case
-                # Find the matching character in normalized text
-                if norm_char == orig_char.lower():
-                    position_offsets.append((norm_pos, orig_pos))
-                    norm_pos += 1
-                orig_pos += 1
-            elif norm_char == " ":
-                # Normalized has space (from punctuation) - record position and advance norm
-                position_offsets.append((norm_pos, orig_pos))
-                norm_pos += 1
-                # Skip any punctuation or whitespace in original
-                while (
-                    orig_pos < len(original_text)
-                    and not original_text[orig_pos].lower().isalnum()
-                ):
-                    orig_pos += 1
-            else:
-                # Skip character in original (punctuation/whitespace)
-                orig_pos += 1
+        i = 0
+        while i < text_len:
+            char = unicode_text[i]
 
-        # Add final position for end-of-text mapping
+            # Fast path for ASCII alphanumeric (most common case)
+            if "a" <= char <= "z" or "0" <= char <= "9":
+                position_offsets.append((len(normalized), i))
+                normalized.append(char)
+                last_was_space = False
+
+            elif "A" <= char <= "Z":
+                position_offsets.append((len(normalized), i))
+                normalized.append(char.lower())
+                last_was_space = False
+
+            # Greek letters (Unicode range check first for performance)
+            elif 0x0370 <= ord(char) <= 0x03FF:
+                char_lower = char.lower()
+                if char_lower in GREEK_LETTER_MAP:
+                    # Add space before if needed
+                    if normalized and normalized[-1].isalnum():
+                        position_offsets.append((len(normalized), i))
+                        normalized.append(" ")
+                    # Add Greek name
+                    position_offsets.append((len(normalized), i))
+                    normalized.extend(GREEK_LETTER_MAP[char_lower])
+                    # Add space after if needed
+                    if i + 1 < text_len and unicode_text[i + 1].isalnum():
+                        normalized.append(" ")
+                    last_was_space = False
+                else:
+                    # Non-Greek unicode letter
+                    if char.isalnum():
+                        position_offsets.append((len(normalized), i))
+                        normalized.append(char_lower)
+                        last_was_space = False
+                    elif not last_was_space:
+                        position_offsets.append((len(normalized), i))
+                        normalized.append(" ")
+                        last_was_space = True
+
+            # Skip contractions and decimal points
+            elif _should_skip_char(char, i):
+                pass
+
+            # Other alphanumeric characters
+            elif char.isalnum():
+                position_offsets.append((len(normalized), i))
+                normalized.append(char.lower())
+                last_was_space = False
+
+            # Convert everything else to single space
+            elif not last_was_space:
+                position_offsets.append((len(normalized), i))
+                normalized.append(" ")
+                last_was_space = True
+
+            i += 1
+
+        # Final result and position mapping
+        normalized_text = "".join(normalized).strip()
         position_offsets.append((len(normalized_text), len(original_text)))
 
         return normalized_text, position_offsets
@@ -199,9 +320,27 @@ class Resource(BaseModel):
             f"text='{text_preview}', {len(self.text)} chars)"
         )
 
-    def __str__(self) -> str:
-        """String representation for print() and REPL display."""
-        return self.__repr__()
+    def _find_original_position(self, normalized_pos: int) -> Optional[int]:
+        """
+        Find original text position for a normalized text position using binary search.
+
+        Args:
+            normalized_pos: Position in normalized text
+
+        Returns:
+            Original text position or None if mapping fails
+        """
+        idx = bisect.bisect_left(self.position_offsets, (normalized_pos, 0))
+        if idx < len(self.position_offsets):
+            # Check if we have exact match or need closest
+            if (
+                idx > 0
+                and self.position_offsets[idx][0] != normalized_pos
+                and self.position_offsets[idx - 1][0] <= normalized_pos
+            ):
+                idx -= 1
+            return self.position_offsets[idx][1]
+        return None
 
     def map_normalized_to_original_position(
         self, norm_start: int, norm_length: int
@@ -218,36 +357,8 @@ class Resource(BaseModel):
         Returns:
             Tuple of (original_start, original_end) or (None, None) if mapping fails
         """
-        norm_end = norm_start + norm_length
-
-        # Binary search for start position
-        start_idx = bisect.bisect_left(self.position_offsets, (norm_start, 0))
-        if start_idx < len(self.position_offsets):
-            # Check if we have exact match or need closest
-            if (
-                start_idx > 0
-                and self.position_offsets[start_idx][0] != norm_start
-                and self.position_offsets[start_idx - 1][0] <= norm_start
-            ):
-                start_idx -= 1
-            original_start = self.position_offsets[start_idx][1]
-        else:
-            original_start = None
-
-        # Binary search for end position
-        end_idx = bisect.bisect_left(self.position_offsets, (norm_end, 0))
-        if end_idx < len(self.position_offsets):
-            # Check if we have exact match or need closest
-            if (
-                end_idx > 0
-                and self.position_offsets[end_idx][0] != norm_end
-                and self.position_offsets[end_idx - 1][0] <= norm_end
-            ):
-                end_idx -= 1
-            original_end = self.position_offsets[end_idx][1]
-        else:
-            original_end = None
-
+        original_start = self._find_original_position(norm_start)
+        original_end = self._find_original_position(norm_start + norm_length)
         return original_start, original_end
 
 
@@ -336,6 +447,24 @@ class ResourcePool(BaseModel):
         resource_id = self.register(url)
         return self.add_content(resource_id, title, document_text)
 
+    def _find_resource_id(self, key) -> Optional[ResourceId]:
+        """
+        Find ResourceId by key (ResourceId, ID string, or URL).
+
+        Args:
+            key: ResourceId object, ID string, or URL string
+
+        Returns:
+            ResourceId if found, None otherwise
+        """
+        if isinstance(key, ResourceId):
+            return key if key in self.resource_map else None
+        elif isinstance(key, str):
+            for resource_id in self.resource_map.keys():
+                if resource_id.id == key or resource_id.url == key:
+                    return resource_id
+        return None
+
     def get(self, key) -> Optional[Resource]:
         """
         Retrieve resource by ResourceId, ID string, or URL.
@@ -346,14 +475,8 @@ class ResourcePool(BaseModel):
         Returns:
             Resource if found, None otherwise
         """
-        if isinstance(key, ResourceId):
-            return self.resource_map.get(key)
-        elif isinstance(key, str):
-            # Search by ID string or URL
-            for resource_id in self.resource_map.keys():
-                if resource_id.id == key or resource_id.url == key:
-                    return self.resource_map.get(resource_id)
-        return None
+        resource_id = self._find_resource_id(key)
+        return self.resource_map.get(resource_id) if resource_id else None
 
     def __getitem__(self, key) -> Resource:
         """
@@ -387,16 +510,7 @@ class ResourcePool(BaseModel):
             "1_a1b2c3d4" in pool
             resource_id in pool
         """
-        if isinstance(item, ResourceId):
-            return item in self.resource_map
-        elif isinstance(item, str):
-            # Search by ID string or URL
-            for resource_id in self.resource_map.keys():
-                if resource_id.id == item or resource_id.url == item:
-                    return True
-            return False
-        else:
-            return False
+        return self._find_resource_id(item) is not None
 
     @property
     def resources(self) -> List[Resource]:
@@ -410,10 +524,6 @@ class ResourcePool(BaseModel):
         total_resources = len(self.resource_map)
         loaded_resources = len(self.resources)
         return f"ResourcePool({loaded_resources}/{total_resources} resources loaded)"
-
-    def __str__(self) -> str:
-        """String representation for print() and REPL display."""
-        return self.__repr__()
 
 
 class ResourceQuote(BaseModel):
@@ -491,14 +601,16 @@ class ResourceQuote(BaseModel):
             resource = info.data["resource"]
             text_length = len(resource.text)
 
+            # Check all spans are within bounds and properly ordered
             for i, (start, end) in enumerate(v):
-                if start < 0 or end > text_length:
-                    raise ValueError(
-                        f"Span {i + 1} ({start}-{end}) must be within text bounds (0-{text_length})"
+                if not (0 <= start < end <= text_length):
+                    bound_msg = (
+                        f"within text bounds (0-{text_length})"
+                        if start < 0 or end > text_length
+                        else "start < end"
                     )
-                if start >= end:
                     raise ValueError(
-                        f"Span {i + 1}: start ({start}) must be less than end ({end})"
+                        f"Span {i + 1} ({start}-{end}) must be {bound_msg}"
                     )
         return v
 
@@ -611,7 +723,3 @@ class ResourceQuote(BaseModel):
             lines.append(f"  [{i + 1}] '{quote_text}' at {start}-{end}")
 
         return "\n".join(lines)
-
-    def __str__(self) -> str:
-        """String representation for print() and REPL display."""
-        return self.__repr__()
