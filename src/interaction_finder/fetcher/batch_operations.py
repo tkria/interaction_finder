@@ -127,7 +127,7 @@ class BatchOperations:
                 completed += 1
                 # Format domain for consistent width display
                 domain = self.format_domain(url)
-                progress.update(1, f"Fetching source {completed} {domain}")
+                progress.update(1, f"Fetching {domain}")
 
             # Update final status when all complete
             if completed > 0:
@@ -266,6 +266,30 @@ class BatchOperations:
         if not retry and await self.cache.has_path(url, "raw_markdown"):
             raw_markdown = await self.cache.get_content(url, "raw_markdown")
             final_url = await self.cache.get_redirect_info(url)
+        # Check if we can regenerate raw_markdown from cached HTML/PDF content
+        elif not retry and (
+            await self.cache.has_path(url, "html")
+            or await self.cache.has_path(url, "pdf")
+        ):
+            # Regenerate raw_markdown from cached content using file:// URI
+            if await self.cache.has_path(url, "html"):
+                html_path = await self.cache.get_file_path(url, "html")
+                if html_path is None:
+                    raise RuntimeError(f"HTML file path not found for URL: {url}")
+                file_uri = html_path.absolute().as_uri()
+                fetch_result = await self.web_client.fetch_html(file_uri, retry=False)
+            else:  # PDF case
+                pdf_path = await self.cache.get_file_path(url, "pdf")
+                if pdf_path is None:
+                    raise RuntimeError(f"PDF file path not found for URL: {url}")
+                file_uri = pdf_path.absolute().as_uri()
+                fetch_result = await self.web_client.fetch_pdf(file_uri, retry=False)
+
+            raw_markdown = fetch_result["markdown_content"]
+            final_url = await self.cache.get_redirect_info(url)
+
+            # Cache the regenerated raw markdown
+            await self.cache.set_content(url, "raw_markdown", raw_markdown, final_url)
         else:
             # Check for previous failures unless retrying
             if not retry:

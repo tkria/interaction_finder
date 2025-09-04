@@ -390,16 +390,16 @@ class WebClient:
                 }
             )
 
-        extraction_strategy = JsonXPathExtractionStrategy(
-            DOI_EXTRACTION_SCHEMA, verbose=False
-        )
-
         return CrawlerRunConfig(
-            extraction_strategy=extraction_strategy,
+            extraction_strategy=JsonXPathExtractionStrategy(
+                DOI_EXTRACTION_SCHEMA, verbose=False
+            ),
             markdown_generator=md_gen,
             page_timeout=timeout_ms,
             delay_before_return_html=extra_kwargs.get("delay_before_return_html", 0.5),
             word_count_threshold=10,
+            excluded_tags=["nav", "footer", "aside", "form", "dialog"],
+            excluded_selector="[role=dialog], .footer, .reference-citations",
             **{
                 k: v for k, v in extra_kwargs.items() if k != "delay_before_return_html"
             },
@@ -519,19 +519,40 @@ class WebClient:
     ):
         """Higher-order function for retry escalation pattern."""
         try:
+            if self.verbose:
+                self._debug_console.print(
+                    f"\r[blue]Fetching {url} (simple mode)[/blue]"
+                )
             result = await simple_fetcher(url)
+
             if force_retry or self._should_retry_with_stealth(result):
                 if self.verbose:
                     self._debug_console.print(
-                        f"[yellow]Retrying {url} with stealth mode[/yellow]"
+                        f"\r[yellow]Retrying {url} with stealth mode[/yellow]"
                     )
-                return await stealth_fetcher(url)
+                stealth_result = await stealth_fetcher(url)
+                if self.verbose:
+                    still_needs_retry = self._should_retry_with_stealth(stealth_result)
+                    status = (
+                        "still triggers retry"
+                        if still_needs_retry
+                        else "retry conditions resolved"
+                    )
+                    self._debug_console.print(
+                        f"\r[cyan]Stealth result for {url}: {status}[/cyan]"
+                    )
+                return stealth_result
+            else:
+                if self.verbose:
+                    self._debug_console.print(
+                        f"\r[green]Simple fetch successful for {url}[/green]"
+                    )
             return result
         except Exception as e:
             if force_retry:
                 if self.verbose:
                     self._debug_console.print(
-                        f"[red]Simple fetch failed for {url}, trying stealth: {e}[/red]"
+                        f"\r[red]Simple fetch failed for {url}, trying stealth: {e}[/red]"
                     )
                 return await stealth_fetcher(url)
             raise
@@ -571,7 +592,7 @@ class WebClient:
 
             return {
                 "raw_content": result.html,
-                "markdown_content": result.markdown,
+                "markdown_content": str(result.markdown),
                 "final_url": self._extract_final_url(result, url),
                 "doi": self._extract_doi(result),
             }
@@ -599,7 +620,7 @@ class WebClient:
 
             return {
                 "raw_content": result.extracted_content or result.html,
-                "markdown_content": result.markdown,
+                "markdown_content": str(result.markdown),
                 "final_url": self._extract_final_url(result, url),
                 "doi": "",  # PDFs don't have DOI extraction
             }
@@ -683,26 +704,22 @@ class WebClient:
         """Decide whether to retry fetching with stealth/full-text instrumentation."""
         raw_markdown = fetch_result.get("markdown_content", "")
         raw_html = fetch_result.get("raw_content", "")
-
-        reasons = []
         text = ((raw_markdown or "") + "\n" + (raw_html or "")).lower()
 
-        if not raw_markdown:
-            reasons.append("no_markdown")
-        else:
-            if len(raw_markdown) < STEALTH_RETRY_THRESHOLD:
-                reasons.append("short_markdown")
+        # Initialize flags
+        no_markdown = not raw_markdown
+        short_markdown = bool(
+            raw_markdown and len(raw_markdown) < STEALTH_RETRY_THRESHOLD
+        )
+        no_recognized_sections = not self._has_recognized_sections(raw_markdown or "")
+        bot_challenge = "verifying you are human" in text or "are you a robot" in text
+        free_full_text_available = "free full text" in text
 
-        if not self._has_recognized_sections(raw_markdown or ""):
-            reasons.append("no_recognized_sections")
-
-        if "verifying you are human" in text:
-            reasons.append("bot_challenge")
-
-        # Retry if we have a bot challenge OR content is short/lacking sections
-        should_retry = ("bot_challenge" in reasons) or (
-            ("short_markdown" in reasons or "no_markdown" in reasons)
-            and ("no_recognized_sections" in reasons)
+        # Retry if we have a bot challenge OR content is short AND free full text available OR content is short/lacking sections
+        should_retry = (
+            bot_challenge
+            or (short_markdown and free_full_text_available)
+            or ((short_markdown or no_markdown) and no_recognized_sections)
         )
 
         return should_retry

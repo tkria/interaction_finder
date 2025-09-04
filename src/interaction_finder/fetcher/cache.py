@@ -335,6 +335,34 @@ class URLCache:
                 pass
         return None
 
+    async def get_file_path(self, url: str, content_type: str) -> Optional[Path]:
+        """Get the actual file path for cached content (following redirects if needed)."""
+        if content_type not in CONTENT_TYPE_CONFIG:
+            available = ", ".join(CONTENT_TYPE_CONFIG.keys())
+            raise ValueError(
+                f"Unknown content type '{content_type}'. Available: {available}"
+            )
+        extension = CONTENT_TYPE_CONFIG[content_type]["extension"]
+        content_path, redir_path = await self._get_paths(url, extension, "redir")
+
+        # Check if content exists at the original URL location
+        if content_path.exists():
+            if await self._verify_url_mapping(url):
+                return content_path
+
+        # Check for redirected content
+        if redir_path.exists():
+            try:
+                async with aiofiles.open(redir_path, "r", encoding="utf-8") as f:
+                    final_url = (await f.read()).strip()
+                (final_content_path,) = await self._get_paths(final_url, extension)
+                if final_content_path.exists():
+                    return final_content_path
+            except (OSError, UnicodeDecodeError):
+                pass
+
+        return None
+
     async def get_failed_reason(self, url: str) -> Optional[str]:
         """Read and return the stored failure reason for this exact URL if present."""
         (failed_path,) = await self._get_paths(url, "failed")
