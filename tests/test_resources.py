@@ -551,7 +551,7 @@ class TestResourceQuote:
 
         assert fragment is not None
         assert fragment.get_quote_text() == "BRCA1"
-        assert fragment.validate_quote(quote)
+        # Quote is valid if constructor succeeded
 
     def test_from_quote_normalized_match(self):
         """Test creating ResourceQuote from quote with different formatting."""
@@ -560,7 +560,7 @@ class TestResourceQuote:
         fragment = ResourceQuote(self.resource, quote)
 
         assert fragment is not None
-        assert fragment.validate_quote(quote)
+        # Quote is valid if constructor succeeded
         # Should normalize to match
         actual = fragment.get_quote_text()
         assert "BRCA1" in actual and "gene" in actual
@@ -581,13 +581,22 @@ class TestResourceQuote:
         assert "The" in context  # Should include surrounding text
 
     def test_validate_quote_exact(self):
-        """Test quote validation with exact match."""
+        """Test quote construction with different text formats."""
         fragment = ResourceQuote(self.resource, "DNA repair")
 
-        assert fragment.validate_quote("DNA repair")
-        assert fragment.validate_quote("dna repair")  # Case insensitive
-        assert fragment.validate_quote("DNA  repair")  # Whitespace tolerance
-        assert not fragment.validate_quote("RNA repair")  # Different text
+        # Exact match should work
+        assert fragment.get_quote_text() == "DNA repair"
+
+        # Different formatting should also work due to normalized matching
+        fragment2 = ResourceQuote(self.resource, "dna repair")  # Case insensitive
+        assert fragment2.get_quote_text() == "DNA repair"
+
+        fragment3 = ResourceQuote(self.resource, "DNA  repair")  # Whitespace tolerance
+        assert fragment3.get_quote_text() == "DNA repair"
+
+        # Invalid text should raise ValueError
+        with pytest.raises(ValueError, match="Quote text not found"):
+            ResourceQuote(self.resource, "RNA repair")
 
     def test_complex_text_quote_matching(self):
         """Test quote matching with complex text containing punctuation."""
@@ -598,7 +607,7 @@ class TestResourceQuote:
         # Should find quote despite punctuation differences
         fragment = ResourceQuote(resource, "protein BRCA1 is important")
         assert fragment is not None
-        assert fragment.validate_quote("protein BRCA1 is important")
+        # Quote is valid if constructor succeeded
 
     def test_multiple_quote_occurrences(self):
         """Test quote matching when text appears multiple times."""
@@ -652,7 +661,7 @@ class TestResourceQuote:
         # Should match despite different whitespace
         fragment = ResourceQuote(resource, "Gene BRCA1 is important")
         assert fragment is not None
-        assert fragment.validate_quote("Gene BRCA1 is important")
+        # Quote is valid if constructor succeeded
 
 
 class TestIntegrationScenarios:
@@ -682,9 +691,7 @@ class TestIntegrationScenarios:
         assert quote1 is not None
         assert quote2 is not None
 
-        # Validate quotes
-        assert quote1.validate_quote("tumor suppressor")
-        assert quote2.validate_quote("increase cancer risk")
+        # Quotes are valid if constructors succeeded
 
         # Test resource retrieval
         assert pool.get(resource1.id.id) == resource1
@@ -726,7 +733,7 @@ class TestIntegrationScenarios:
         for quote_text in test_quotes:
             quote = resource.quote(quote_text)  # Use new quote() method
             assert quote is not None, f"Could not find quote: {quote_text}"
-            assert quote.validate_quote(quote_text)
+            # Quote is valid if constructor succeeded
             quotes.append(quote)
 
         # Test context extraction
@@ -802,3 +809,144 @@ class TestIntegrationScenarios:
         complex_phrase = "iron-sulfur cluster"
         complex_quote = resource.quote(complex_phrase)
         assert complex_quote is not None, "Should find complex phrases with hyphens"
+
+
+class TestDisjointQuotes:
+    """Test disjoint quote matching with ellipses."""
+
+    def test_simple_disjoint_quote(self):
+        """Test basic disjoint quote with two segments."""
+        document_text = "In 2020, two articles published in Nature reported additional cases with missense variants in exon 38 or 39 in KMT2D gene."
+
+        pool = ResourcePool()
+        resource = pool.add("https://example.com", "Test Document", document_text)
+
+        # Test disjoint quote
+        quote = resource.quote(
+            "In 2020, two articles ... reported additional cases ... missense variants"
+        )
+        assert quote is not None
+        assert quote.count == 1
+        assert quote.is_disjoint == True
+        # Should have 3 segments: 'In 2020, two articles', 'reported additional cases', 'missense variants'
+
+        # Verify quote text includes ellipses
+        quote_text = quote.get_quote_text()
+        assert "..." in quote_text
+        assert "In 2020, two articles" in quote_text
+        assert "reported additional cases" in quote_text
+        assert "missense variants" in quote_text
+
+    def test_multiple_disjoint_occurrences(self):
+        """Test disjoint quote that matches multiple times."""
+        document_text = """
+        Null mutations have been identified in the genes coding for two proteins, 
+        cartilage-associated protein (CRTAP) and prolyl 3-hydroxylase 1 (P3H1).
+        Further analysis showed null mutations in other genes coding for different proteins,
+        including additional cartilage-associated protein variants.
+        """
+
+        pool = ResourcePool()
+        resource = pool.add("https://example.com", "Test Document", document_text)
+
+        quote = resource.quote("Null mutations ... genes coding for ... proteins")
+        assert quote is not None
+        assert quote.count >= 1
+
+        # Should be disjoint
+        assert quote.is_disjoint == True
+
+    def test_continuous_quote_still_works(self):
+        """Test that continuous quotes still work as before."""
+        document_text = (
+            "BRCA1 mutations significantly increase breast cancer risk in patients."
+        )
+
+        pool = ResourcePool()
+        resource = pool.add("https://example.com", "Test Document", document_text)
+
+        quote = resource.quote("BRCA1 mutations")
+        assert quote is not None
+        assert quote.count == 1
+        assert quote.is_disjoint == False
+        # Should be a single continuous quote
+
+        quote_text = quote.get_quote_text()
+        assert quote_text == "BRCA1 mutations"
+        assert "..." not in quote_text
+
+    def test_disjoint_quote_context(self):
+        """Test context display for disjoint quotes."""
+        document_text = "In 2020, two articles published in Nature reported additional cases with missense variants in exon 38 or 39 in KMT2D gene."
+
+        pool = ResourcePool()
+        resource = pool.add("https://example.com", "Test Document", document_text)
+
+        quote = resource.quote("In 2020 ... reported ... variants")
+        assert quote is not None
+
+        context = quote.get_context(context_chars=10)
+        # Should show context around each segment
+        assert "**In 2020**" in context or "**In 2020, two articles**" in context
+        assert "**reported**" in context
+        assert "**variants**" in context
+        assert "\n...\n" in context  # Separator between segments
+
+    def test_invalid_disjoint_quote(self):
+        """Test that invalid disjoint quotes raise appropriate errors."""
+        document_text = "This is a test document without the expected content."
+
+        pool = ResourcePool()
+        resource = pool.add("https://example.com", "Test Document", document_text)
+
+        # Should fail when segments don't appear in order
+        with pytest.raises(ValueError, match="Quote text not found"):
+            ResourceQuote(resource, "nonexistent ... segments ... here")
+
+    def test_ellipsis_variations(self):
+        """Test different ellipsis formats are recognized."""
+        document_text = "The quick brown fox jumps over the lazy dog near the river."
+
+        pool = ResourcePool()
+        resource = pool.add("https://example.com", "Test Document", document_text)
+
+        # Test various ellipsis formats including Unicode ellipsis
+        formats = [
+            "The quick ... jumps over ... lazy dog",
+            "The quick….jumps over….lazy dog",  # Unicode ellipsis
+            "The quick … jumps over … lazy dog",  # Unicode ellipsis with spaces
+            "The quick....jumps over....lazy dog",
+        ]
+
+        for format_text in formats:
+            quote = resource.quote(format_text)
+            assert quote is not None, f"Failed to match format: {format_text}"
+            assert quote.is_disjoint == True, f"Should be disjoint for: {format_text}"
+            # Should have 3 segments: 'The quick', 'jumps over', 'lazy dog'
+
+    def test_unicode_ellipsis_support(self):
+        """Test explicit Unicode ellipsis (U+2026) support."""
+        document_text = "Mutations in BRCA1 have been identified in many studies published recently."
+
+        pool = ResourcePool()
+        resource = pool.add("https://example.com", "Test Document", document_text)
+
+        # Test Unicode ellipsis character
+        quote = resource.quote("Mutations in BRCA1 … published recently")
+        assert quote is not None
+        assert quote.is_disjoint == True
+        assert quote.count == 1
+
+        # Verify the segments are found correctly
+        quote_text = quote.get_quote_text()
+        assert "Mutations in BRCA1" in quote_text
+        assert "published recently" in quote_text
+        assert "..." in quote_text  # Output should normalize to ...
+
+        # Test mixed ellipsis types should work the same
+        quote_mixed = resource.quote("Mutations in BRCA1 ... published recently")
+        assert quote_mixed is not None
+        assert quote_mixed.count == 1
+
+        # Both should find the same content (though represented differently)
+        assert quote.get_quote_text() == quote_mixed.get_quote_text()

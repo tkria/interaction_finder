@@ -10,7 +10,7 @@ import hashlib
 import re
 import bisect
 import unicodedata
-from typing import List, Optional, Tuple, Dict, Any
+from typing import List, Optional, Tuple
 from pydantic import BaseModel, Field, field_validator, ValidationInfo
 
 
@@ -537,7 +537,10 @@ class ResourceQuote(BaseModel):
     resource: Resource = Field(description="Source document resource with full content")
     query_text: str = Field(description="Original query text that was searched for")
     spans: List[Tuple[int, int]] = Field(
-        description="List of (start, end) character spans for all occurrences"
+        description="List of (start, end) character spans for all segments"
+    )
+    is_disjoint: bool = Field(
+        description="True if this quote contains ellipsis markers"
     )
 
     def __init__(self, resource: Resource, text: str, **data):
@@ -556,42 +559,111 @@ class ResourceQuote(BaseModel):
         """
         # Allow direct construction if spans and query_text are provided
         if "spans" in data and "query_text" in data:
+            # Set is_disjoint if not provided
+            if "is_disjoint" not in data:
+                data["is_disjoint"] = (
+                    "..." in data["query_text"] or "…" in data["query_text"]
+                )
             super().__init__(resource=resource, **data)
             return
 
-        # Search for all occurrences of the quote text
-        normalized_quote = normalize_text_for_matching(text)
-        normalized_text = resource.normalized_text
+        # Check if this is a disjoint quote (both ... and …)
+        segments = re.split(r"\s*(?:\.{3,}|…)\s*", text)
+        segments = [s.strip() for s in segments if s.strip()]
+        is_disjoint = len(segments) > 1
 
-        # Find all occurrences in normalized text
-        normalized_positions = []
-        start_pos = 0
-        while True:
-            pos = normalized_text.find(normalized_quote, start_pos)
-            if pos == -1:
-                break
-            normalized_positions.append(pos)
-            start_pos = pos + 1
+        if is_disjoint:
+            # Find all occurrences where segments appear in order
+            normalized_text = resource.normalized_text
+            normalized_segments = [normalize_text_for_matching(seg) for seg in segments]
 
-        if not normalized_positions:
-            raise ValueError(f"Quote text not found in resource: {text!r}")
+            all_spans = []
+            pos = 0
+            while True:
+                # Find first segment starting from pos
+                first_match = self._find_next_match(
+                    normalized_text, normalized_segments[0], pos
+                )
+                if not first_match:
+                    break
 
-        # Map all occurrences back to original text positions
-        spans = []
-        for normalized_pos in normalized_positions:
-            original_start, original_end = resource.map_normalized_to_original_position(
-                normalized_pos,
-                len(normalized_quote),
+                # Try to find remaining segments in order
+                spans = [first_match]
+                current_pos = first_match[1]
+
+                for seg in normalized_segments[1:]:
+                    next_match = self._find_next_match(
+                        normalized_text, seg, current_pos
+                    )
+                    if not next_match:
+                        break
+                    spans.append(next_match)
+                    current_pos = next_match[1]
+
+                if len(spans) == len(normalized_segments):
+                    # All segments found - add to results
+                    all_spans.extend(spans)
+
+                pos = first_match[0] + 1  # Continue searching
+
+            if not all_spans:
+                raise ValueError(f"Quote text not found in resource: {text!r}")
+
+            spans = self._original_positions(resource, all_spans)
+
+            super().__init__(
+                resource=resource,
+                query_text=text,
+                spans=spans,
+                is_disjoint=True,
             )
-            if original_start is not None and original_end is not None:
-                spans.append((original_start, original_end))
+        else:
+            # Continuous quote - find all matches by looping
+            normalized_text = resource.normalized_text
+            normalized_pattern = normalize_text_for_matching(text)
 
-        if not spans:
-            raise ValueError(
-                f"Could not map any occurrences back to original text: {text!r}"
+            norm_spans = []
+            pos = 0
+            while True:
+                match = self._find_next_match(normalized_text, normalized_pattern, pos)
+                if not match:
+                    break
+                norm_spans.append(match)
+                pos = match[0] + 1  # Continue from next character
+
+            if not norm_spans:
+                raise ValueError(f"Quote text not found in resource: {text!r}")
+
+            spans = self._original_positions(resource, norm_spans)
+
+            super().__init__(
+                resource=resource,
+                query_text=text,
+                spans=spans,
+                is_disjoint=False,
             )
 
-        super().__init__(resource=resource, query_text=text, spans=spans)
+    def _find_next_match(
+        self, normalized_text: str, pattern: str, start: int = 0
+    ) -> Optional[Tuple[int, int]]:
+        """Find next occurrence of pattern in normalized text, return normalized span."""
+        pos = normalized_text.find(pattern, start)
+        if pos == -1:
+            return None
+        return (pos, pos + len(pattern))
+
+    def _original_positions(
+        self, resource: Resource, norm_spans: List[Tuple[int, int]]
+    ) -> List[Tuple[int, int]]:
+        """Map normalized spans to original positions."""
+        original_spans = []
+        for norm_start, norm_end in norm_spans:
+            orig_start, orig_end = resource.map_normalized_to_original_position(
+                norm_start, norm_end - norm_start
+            )
+            if orig_start is not None and orig_end is not None:
+                original_spans.append((orig_start, orig_end))
+        return original_spans
 
     @field_validator("spans")
     @classmethod
@@ -601,7 +673,7 @@ class ResourceQuote(BaseModel):
             resource = info.data["resource"]
             text_length = len(resource.text)
 
-            # Check all spans are within bounds and properly ordered
+            # Validate each span
             for i, (start, end) in enumerate(v):
                 if not (0 <= start < end <= text_length):
                     bound_msg = (
@@ -617,7 +689,19 @@ class ResourceQuote(BaseModel):
     @property
     def count(self) -> int:
         """Number of occurrences found."""
-        return len(self.spans)
+        if self.is_disjoint:
+            # For disjoint quotes, count how many segment groups we have
+            segments_in_query = len(
+                [
+                    s.strip()
+                    for s in re.split(r"\s*(?:\.{3,}|…)\s*", self.query_text)
+                    if s.strip()
+                ]
+            )
+            return len(self.spans) // segments_in_query if segments_in_query > 0 else 0
+        else:
+            # For continuous quotes, each span is one occurrence
+            return len(self.spans)
 
     def get_quote_text(self, occurrence: int = 1) -> str:
         """
@@ -627,18 +711,38 @@ class ResourceQuote(BaseModel):
             occurrence: Which occurrence to get (1-based)
 
         Returns:
-            Quote text from the specified occurrence
+            Quote text from the specified occurrence, joining segments for disjoint quotes
 
         Raises:
             IndexError: If occurrence doesn't exist
         """
-        if occurrence < 1 or occurrence > len(self.spans):
+        if occurrence < 1 or occurrence > self.count:
             raise IndexError(
-                f"Occurrence {occurrence} not found (have {len(self.spans)} occurrences)"
+                f"Occurrence {occurrence} not found (have {self.count} occurrences)"
             )
 
-        start, end = self.spans[occurrence - 1]
-        return self.resource.text[start:end]
+        if self.is_disjoint:
+            # For disjoint quotes, get segments for this occurrence
+            segments_in_query = len(
+                [
+                    s.strip()
+                    for s in re.split(r"\s*(?:\.{3,}|…)\s*", self.query_text)
+                    if s.strip()
+                ]
+            )
+            start_idx = (occurrence - 1) * segments_in_query
+            end_idx = start_idx + segments_in_query
+            occurrence_spans = self.spans[start_idx:end_idx]
+
+            # Extract and join with ellipses
+            segments = []
+            for start, end in occurrence_spans:
+                segments.append(self.resource.text[start:end])
+            return " ... ".join(segments)
+        else:
+            # For continuous quotes, just get the single span
+            start, end = self.spans[occurrence - 1]
+            return self.resource.text[start:end]
 
     def get_all_quote_texts(self) -> List[str]:
         """
@@ -647,7 +751,7 @@ class ResourceQuote(BaseModel):
         Returns:
             List of quote texts for all occurrences
         """
-        return [self.resource.text[start:end] for start, end in self.spans]
+        return [self.get_quote_text(i + 1) for i in range(self.count)]
 
     def get_context(self, occurrence: int = 1, context_chars: int = 200) -> str:
         """
@@ -658,58 +762,54 @@ class ResourceQuote(BaseModel):
             context_chars: Number of characters to include before/after quote
 
         Returns:
-            Context text with quote highlighted
+            Context text with quote highlighted, showing each segment for disjoint quotes
 
         Raises:
             IndexError: If occurrence doesn't exist
         """
-        if occurrence < 1 or occurrence > len(self.spans):
+        if occurrence < 1 or occurrence > self.count:
             raise IndexError(
-                f"Occurrence {occurrence} not found (have {len(self.spans)} occurrences)"
+                f"Occurrence {occurrence} not found (have {self.count} occurrences)"
             )
 
-        start, end = self.spans[occurrence - 1]
+        if self.is_disjoint:
+            # For disjoint quotes, get segments for this occurrence
+            segments_in_query = len(
+                [
+                    s.strip()
+                    for s in re.split(r"\s*(?:\.{3,}|…)\s*", self.query_text)
+                    if s.strip()
+                ]
+            )
+            start_idx = (occurrence - 1) * segments_in_query
+            end_idx = start_idx + segments_in_query
+            occurrence_spans = self.spans[start_idx:end_idx]
+        else:
+            # For continuous quotes, just get the single span for this occurrence
+            occurrence_spans = [self.spans[occurrence - 1]]
+
         text = self.resource.text
 
-        # Calculate context bounds
-        context_start = max(0, start - context_chars)
-        context_end = min(len(text), end + context_chars)
-
-        # Extract context with quote markers
-        before = text[context_start:start]
-        quote = text[start:end]
-        after = text[end:context_end]
-
-        return f"{before}**{quote}**{after}"
-
-    def get_all_contexts(self, context_chars: int = 200) -> List[str]:
-        """
-        Get surrounding context for all occurrences.
-
-        Args:
-            context_chars: Number of characters to include before/after each quote
-
-        Returns:
-            List of context strings for all occurrences
-        """
-        return [self.get_context(i + 1, context_chars) for i in range(len(self.spans))]
-
-    def validate_quote(self, expected_quote: str) -> bool:
-        """
-        Validate that the query matches the expected quote text.
-
-        Uses normalized comparison to handle formatting differences.
-
-        Args:
-            expected_quote: Quote text to validate against
-
-        Returns:
-            True if query matches expected quote, False otherwise
-        """
-        normalized_actual = normalize_text_for_matching(self.query_text)
-        normalized_expected = normalize_text_for_matching(expected_quote)
-
-        return normalized_actual == normalized_expected
+        if len(occurrence_spans) == 1:
+            # Single continuous segment
+            start, end = occurrence_spans[0]
+            context_start = max(0, start - context_chars)
+            context_end = min(len(text), end + context_chars)
+            before = text[context_start:start]
+            quote = text[start:end]
+            after = text[end:context_end]
+            return f"{before}**{quote}**{after}"
+        else:
+            # Multiple segments - show context around each
+            contexts = []
+            for start, end in occurrence_spans:
+                ctx_start = max(0, start - context_chars)
+                ctx_end = min(len(text), end + context_chars)
+                before = text[ctx_start:start]
+                segment = text[start:end]
+                after = text[end:ctx_end]
+                contexts.append(f"{before}**{segment}**{after}")
+            return "\n...\n".join(contexts)
 
     def __repr__(self) -> str:
         """Rich representation for REPL display."""
@@ -718,8 +818,24 @@ class ResourceQuote(BaseModel):
 
         # Following lines: Each quote with position
         for i in range(self.count):
-            start, end = self.spans[i]
             quote_text = self.get_quote_text(i + 1)
-            lines.append(f"  [{i + 1}] '{quote_text}' at {start}-{end}")
+            if self.is_disjoint:
+                # For disjoint quotes, show overall span range
+                segments_per = len(
+                    [
+                        s.strip()
+                        for s in re.split(r"\s*(?:\.{3,}|…)\s*", self.query_text)
+                        if s.strip()
+                    ]
+                )
+                start_idx = i * segments_per
+                end_idx = start_idx + segments_per
+                spans_for_occurrence = self.spans[start_idx:end_idx]
+                first_start = spans_for_occurrence[0][0]
+                last_end = spans_for_occurrence[-1][1]
+                lines.append(f"  [{i + 1}] '{quote_text}' at {first_start}-{last_end}")
+            else:
+                start, end = self.spans[i]
+                lines.append(f"  [{i + 1}] '{quote_text}' at {start}-{end}")
 
         return "\n".join(lines)
