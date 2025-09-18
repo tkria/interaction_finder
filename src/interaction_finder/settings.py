@@ -1,11 +1,49 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List, Dict, Union, Any, Optional
+from typing import List, Dict, Union, Any, Optional, TYPE_CHECKING
 import tomli
 import shlex
+import os
 from copy import deepcopy
 from pydantic import BaseModel, Field, field_validator, model_validator
+
+if TYPE_CHECKING:
+    from .search.config import SearchConfig
+
+
+def configure_logfire() -> None:
+    """Configure logfire if LOGFIRE_WRITE_TOKEN is available."""
+    token = os.environ.get("LOGFIRE_WRITE_TOKEN")
+    if token:
+        try:
+            import logfire
+
+            logfire.configure(token=token, scrubbing=False)
+            logfire.instrument_pydantic_ai()
+        except ImportError:
+            # Logfire not available, skip configuration
+            pass
+
+
+def _create_search_config():
+    """Create SearchConfig instance - helper to avoid circular imports."""
+    from .search.config import SearchConfig
+
+    return SearchConfig()
+
+
+# Rebuild the model after all imports are available
+def _rebuild_config_model():
+    """Rebuild the config model after all dependencies are loaded."""
+    try:
+        from .search.config import SearchConfig
+
+        # Need to rebuild nested models that reference SearchConfig too
+        IfetcherConfig.Tools.model_rebuild()
+        IfetcherConfig.model_rebuild()
+    except ImportError:
+        pass
 
 
 class IfetcherConfig(BaseModel):
@@ -64,7 +102,7 @@ class IfetcherConfig(BaseModel):
 
         enabled: List[str] = Field(
             default_factory=list,
-            description="List of enabled tools (e.g., crawl4ai, searxng)",
+            description="List of enabled tools (e.g., crawl4ai, searxng, search)",
         )
 
         class SearXNG(BaseModel):
@@ -159,6 +197,11 @@ class IfetcherConfig(BaseModel):
         ontologies: Ontologies = Field(default_factory=Ontologies)
         external_researcher: ExternalResearcher = Field(
             default_factory=ExternalResearcher
+        )
+
+        search: "SearchConfig" = Field(
+            default_factory=lambda: _create_search_config(),
+            description="Configuration for document search functionality",
         )
 
     tools: Tools = Field(

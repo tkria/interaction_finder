@@ -18,11 +18,33 @@ import typer
 from rich.console import Console
 from rich.traceback import Traceback
 from rich.progress import Progress, SpinnerColumn, TextColumn
+
+try:
+    import logfire
+except ImportError:
+    # Create a no-op logfire if not available
+    class _NoOpLogfire:
+        def info(self, *args, **kwargs):
+            pass
+
+        def warning(self, *args, **kwargs):
+            pass
+
+        def error(self, *args, **kwargs):
+            pass
+
+        def debug(self, *args, **kwargs):
+            pass
+
+    logfire = _NoOpLogfire()
 from rich.table import Table
 from rich.panel import Panel
 
-from .settings import IfetcherConfig
+from .settings import IfetcherConfig, configure_logfire, _rebuild_config_model
 from .fetcher import PageFetcher
+from .search import SearchQuery
+from .search.backends import PubMedBackend, PerplexicaBackend
+from .search.expansion import create_llm_expander
 
 app = typer.Typer(
     name="interaction-finder",
@@ -31,6 +53,9 @@ app = typer.Typer(
 )
 
 console = Console()
+
+# Initialize configuration models after all imports
+_rebuild_config_model()
 
 
 def group_errors(failed_pairs: List[tuple[str, Exception]]) -> Dict[str, List[str]]:
@@ -606,6 +631,479 @@ def terms(
         raise typer.Exit(1)
 
 
+@app.command()
+def search(
+    query: str = typer.Argument(help="Search query for finding relevant papers"),
+    backend: Optional[str] = typer.Option(
+        None, "-b", "--backend", help="Search backend to use (e.g., pubmed, europepmc)"
+    ),
+    max_results: Optional[int] = typer.Option(
+        None, "-n", "--max-results", help="Maximum number of results to return"
+    ),
+    expand: bool = typer.Option(
+        False, "--expand", help="Enable query expansion with synonyms and aliases"
+    ),
+    output_format: str = typer.Option(
+        "table", "-f", "--format", help="Output format: table, json, jsonl, urls, csv"
+    ),
+    save_results: Optional[str] = typer.Option(
+        None, "-o", "--output", help="Save results to file"
+    ),
+    config: Optional[str] = typer.Option(
+        None, "-c", "--config", help="Path to configuration file"
+    ),
+    mode: Optional[str] = typer.Option(
+        None, "-m", "--mode", help="Configuration mode to use"
+    ),
+    verbose: bool = typer.Option(
+        False, "-v", "--verbose", help="Show verbose output including search details"
+    ),
+):
+    """
+    Search for academic papers and documents.
+
+    This command searches academic databases for papers related to your query.
+    Results can be displayed in different formats or saved for later use.
+
+    Examples:
+        interaction-finder search "BRCA1 mutations"
+        interaction-finder search "p53 interactions" --backend pubmed --max-results 50
+        interaction-finder search "diabetes" --expand --format json
+        interaction-finder search "TNF alpha" --output results.json
+    """
+    asyncio.run(
+        _run_search_command(
+            query=query,
+            backend=backend,
+            max_results=max_results,
+            expand=expand,
+            output_format=output_format,
+            save_results=save_results,
+            config=config,
+            mode=mode,
+            verbose=verbose,
+        )
+    )
+
+
+async def _run_search_for_extract(
+    query: str,
+    backend: Optional[str],
+    max_results: Optional[int],
+    cfg: IfetcherConfig,
+    term: Optional[str],
+    verbose: bool,
+):
+    """Run search specifically for integration with extract command."""
+    # Use default backend if none specified
+    if backend is None:
+        backend = cfg.tools.search.default_backend
+
+    if backend not in cfg.tools.search.enabled_backends:
+        console.print(
+            f"[red]Search backend '{backend}' is not enabled in configuration[/red]"
+        )
+        console.print(
+            f"[blue]Available backends:[/blue] {', '.join(cfg.tools.search.enabled_backends)}"
+        )
+        raise typer.Exit(1)
+
+    # Create search query with query expansion enabled by default for extract
+    search_query = SearchQuery(
+        query=query,
+        max_results=max_results or 50,  # Default to 50 for extract
+    )
+
+    # Apply query expansion automatically
+    if cfg.tools.search.expansion.enabled:
+        if verbose:
+            console.print(f"[dim]Expanding query: '{query}'[/dim]")
+
+        llm_config = cfg.tools.search.expansion.llm.model_dump()
+        expander = create_llm_expander(
+            model_name=llm_config.get("model_name", "openai:gpt-4o-mini"),
+            max_terms=llm_config.get("max_terms", 15),
+        )
+
+        expansion_context = {
+            "max_expansion_terms": cfg.tools.search.expansion.max_expansion_terms,
+            "min_confidence": cfg.tools.search.expansion.min_confidence,
+        }
+        # Add LLM-specific context
+        expansion_context.update(llm_config)
+        expansion_result = await expander.expand_query(query, expansion_context)
+        search_query.expanded_terms = [
+            term.term for term in expansion_result.expanded_terms
+        ]
+
+        if verbose and expansion_result.expanded_terms:
+            console.print(
+                f"[dim]Expanded terms: {', '.join(term.term for term in expansion_result.expanded_terms)}[/dim]"
+            )
+
+    # Create and run search backend
+    backend_config = cfg.tools.search.get_backend_config(backend)
+
+    if backend == "pubmed":
+        search_backend = PubMedBackend(backend_config)
+    elif backend == "perplexica":
+        search_backend = PerplexicaBackend(backend_config)
+    else:
+        console.print(f"[red]Backend '{backend}' is not implemented[/red]")
+        raise typer.Exit(1)
+
+    try:
+        async with search_backend:
+            results = await search_backend.search(search_query)
+            if verbose:
+                console.print(
+                    f"[dim]Search completed: {results.result_count} results in {results.search_time:.2f}s[/dim]"
+                )
+            return results
+    except Exception as e:
+        console.print(f"[red]Search failed: {e}[/red]")
+        if verbose:
+            import traceback
+
+            console.print(f"[dim]{traceback.format_exc()}[/dim]")
+        raise typer.Exit(1)
+
+
+async def _run_search_command(
+    query: str,
+    backend: Optional[str] = None,
+    max_results: Optional[int] = None,
+    expand: bool = False,
+    output_format: str = "table",
+    save_results: Optional[str] = None,
+    config: Optional[str] = None,
+    mode: Optional[str] = None,
+    verbose: bool = False,
+) -> None:
+    """Run the search command asynchronously."""
+    try:
+        # Load configuration
+        cfg = load_config(config, mode)
+
+        # Determine backend to use
+        if backend is None:
+            backend = cfg.tools.search.default_backend
+
+        if backend not in cfg.tools.search.enabled_backends:
+            console.print(
+                f"[red]Backend '{backend}' is not enabled in configuration[/red]"
+            )
+            console.print(
+                f"[blue]Available backends:[/blue] {', '.join(cfg.tools.search.enabled_backends)}"
+            )
+            raise typer.Exit(1)
+
+        # Create search query
+        search_query = SearchQuery(
+            query=query, max_results=max_results or cfg.tools.search.max_results
+        )
+
+        # Apply query expansion if requested
+        if expand:
+            if verbose:
+                console.print(f"[dim]Expanding query: '{query}'[/dim]")
+
+            # Use LLM expansion (only option available)
+            llm_config = cfg.tools.search.expansion.llm.model_dump()
+            expander = create_llm_expander(
+                model_name=llm_config.get("model_name", "openai:gpt-4o-mini"),
+                max_terms=llm_config.get("max_terms", 15),
+            )
+
+            expansion_context = {
+                "max_expansion_terms": cfg.tools.search.expansion.max_expansion_terms,
+                "min_confidence": cfg.tools.search.expansion.min_confidence,
+            }
+            # Add LLM-specific context
+            expansion_context.update(llm_config)
+            expansion_result = await expander.expand_query(query, expansion_context)
+            search_query.expanded_terms = [
+                term.term for term in expansion_result.expanded_terms
+            ]
+
+            if verbose and expansion_result.expanded_terms:
+                console.print(
+                    f"[dim]Expanded terms: {', '.join(term.term for term in expansion_result.expanded_terms)}[/dim]"
+                )
+            elif verbose:
+                console.print("[dim]No expansion terms found[/dim]")
+
+        # Create search backend
+        backend_config = cfg.tools.search.get_backend_config(backend)
+
+        if backend == "pubmed":
+            search_backend = PubMedBackend(backend_config)
+        elif backend == "perplexica":
+            search_backend = PerplexicaBackend(backend_config)
+        else:
+            console.print(f"[red]Backend '{backend}' is not implemented yet[/red]")
+            console.print(f"[blue]Available backends:[/blue] pubmed, perplexica")
+            raise typer.Exit(1)
+
+        # Perform search
+        if verbose:
+            console.print(f"[dim]Searching with {backend} backend...[/dim]")
+
+        try:
+            async with search_backend:
+                results = await search_backend.search(search_query)
+
+                # Display results
+                _display_search_results(results, output_format, verbose, save_results)
+
+        except Exception as e:
+            console.print(f"[red]Search failed: {e}[/red]")
+            if verbose:
+                import traceback
+
+                console.print(f"[dim]{traceback.format_exc()}[/dim]")
+            raise typer.Exit(1)
+
+    except Exception as e:
+        handle_operation_error("during search", e)
+        raise typer.Exit(1)
+
+
+def _display_search_results(
+    results, output_format: str, verbose: bool, save_results: Optional[str] = None
+) -> None:
+    """Display search results in the specified format."""
+    if output_format == "table":
+        _display_results_table(results, verbose)
+    elif output_format == "json":
+        _display_results_json(results)
+    elif output_format == "urls":
+        _display_results_urls(results)
+    elif output_format == "csv":
+        _display_results_csv(results)
+    elif output_format == "jsonl":
+        _display_results_jsonl(results)
+    else:
+        console.print(f"[red]Unknown output format: {output_format}[/red]")
+        return
+
+    # Save results if requested
+    if save_results:
+        _save_search_results(results, save_results, output_format)
+
+
+def _display_results_table(results, verbose: bool = False) -> None:
+    """Display search results as a Rich table."""
+    # Create summary panel
+    summary_table = Table(show_header=False, box=None, padding=(0, 1))
+    summary_table.add_row(styled_key("Backend:"), styled_config(results.backend))
+    summary_table.add_row(styled_key("Query:"), styled_path(results.query.query))
+
+    if results.query.expanded_terms:
+        summary_table.add_row(
+            styled_key("Expanded:"),
+            styled_config(f"+{len(results.query.expanded_terms)} terms"),
+        )
+
+    summary_table.add_row(styled_key("Results:"), styled_count(results.result_count))
+
+    if results.total_found and results.total_found > results.result_count:
+        summary_table.add_row(
+            styled_key("Total Available:"), styled_count(results.total_found)
+        )
+
+    if results.search_time:
+        summary_table.add_row(
+            styled_key("Search Time:"), styled_config(f"{results.search_time:.2f}s")
+        )
+
+    console.print(
+        Panel(
+            summary_table,
+            title="[bold blue]Search Results[/bold blue]",
+            border_style="blue",
+        )
+    )
+
+    if not results.results:
+        console.print("[yellow]No results found[/yellow]")
+        return
+
+    # Create results table
+    results_table = Table(show_header=True, header_style="bold blue")
+    results_table.add_column("Title", style="white", max_width=60)
+    results_table.add_column("Authors", style="dim white", max_width=30)
+    results_table.add_column("Journal", style="cyan", max_width=25)
+    results_table.add_column("Year", style="green", justify="center", max_width=6)
+
+    if verbose:
+        results_table.add_column("PMID", style="yellow", justify="center", max_width=8)
+
+    for result in results.results:
+        authors_str = ", ".join(result.authors[:3])  # First 3 authors
+        if len(result.authors) > 3:
+            authors_str += " et al."
+
+        year_str = ""
+        if result.publication_date:
+            year_str = str(result.publication_date.year)
+
+        row = [
+            result.short_title,
+            authors_str or "[dim]No authors[/dim]",
+            result.journal or "[dim]Unknown[/dim]",
+            year_str or "[dim]N/A[/dim]",
+        ]
+
+        if verbose and result.pmid:
+            row.append(result.pmid)
+
+        results_table.add_row(*row)
+
+    console.print(results_table)
+
+    # Show URLs if verbose
+    if verbose:
+        console.print(f"\n[dim]URLs:[/dim]")
+        for i, result in enumerate(results.results, 1):
+            console.print(f"  {i:2d}. {result.url}")
+
+
+def _display_results_json(results) -> None:
+    """Display search results as JSON."""
+    import json
+
+    results_dict = results.model_dump()
+    console.print(json.dumps(results_dict, indent=2, default=str))
+
+
+def _display_results_urls(results) -> None:
+    """Display only the URLs from search results."""
+    for result in results.results:
+        console.print(result.url)
+
+
+def _display_results_csv(results) -> None:
+    """Display search results as CSV."""
+    import csv
+    import io
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+
+    # Write header
+    writer.writerow(["Title", "Authors", "Journal", "Year", "URL", "DOI", "PMID"])
+
+    # Write data
+    for result in results.results:
+        authors_str = "; ".join(result.authors)
+        year_str = str(result.publication_date.year) if result.publication_date else ""
+
+        writer.writerow(
+            [
+                result.title,
+                authors_str,
+                result.journal or "",
+                year_str,
+                result.url,
+                result.doi or "",
+                result.pmid or "",
+            ]
+        )
+
+    console.print(output.getvalue().rstrip())
+
+
+def _display_results_jsonl(results) -> None:
+    """Display search results as JSONL format compatible with extract command."""
+    import json
+
+    for result in results.results:
+        # Format compatible with extract command's expected JSONL structure
+        record = {
+            "url": result.url,
+            "title": result.title,
+            "authors": result.authors,
+            "journal": result.journal,
+            "publication_date": result.publication_date.isoformat()
+            if result.publication_date
+            else None,
+            "doi": result.doi,
+            "pmid": result.pmid,
+            "backend": result.backend,
+            "relevance_score": result.relevance_score,
+        }
+        console.print(json.dumps(record, default=str))
+
+
+def _save_search_results(results, filename: str, format_type: str) -> None:
+    """Save search results to file."""
+    try:
+        with open(filename, "w", encoding="utf-8") as f:
+            if format_type == "json":
+                import json
+
+                json.dump(results.model_dump(), f, indent=2, default=str)
+            elif format_type == "csv":
+                import csv
+
+                writer = csv.writer(f)
+                writer.writerow(
+                    ["Title", "Authors", "Journal", "Year", "URL", "DOI", "PMID"]
+                )
+
+                for result in results.results:
+                    authors_str = "; ".join(result.authors)
+                    year_str = (
+                        str(result.publication_date.year)
+                        if result.publication_date
+                        else ""
+                    )
+
+                    writer.writerow(
+                        [
+                            result.title,
+                            authors_str,
+                            result.journal or "",
+                            year_str,
+                            result.url,
+                            result.doi or "",
+                            result.pmid or "",
+                        ]
+                    )
+            elif format_type == "jsonl":
+                import json
+
+                for result in results.results:
+                    record = {
+                        "url": result.url,
+                        "title": result.title,
+                        "authors": result.authors,
+                        "journal": result.journal,
+                        "publication_date": result.publication_date.isoformat()
+                        if result.publication_date
+                        else None,
+                        "doi": result.doi,
+                        "pmid": result.pmid,
+                        "backend": result.backend,
+                        "relevance_score": result.relevance_score,
+                    }
+                    f.write(json.dumps(record, default=str) + "\n")
+            elif format_type == "urls":
+                for result in results.results:
+                    f.write(f"{result.url}\n")
+            else:
+                # Default to JSON
+                import json
+
+                json.dump(results.model_dump(), f, indent=2, default=str)
+
+        console.print(f"[green]Results saved to {filename}[/green]")
+
+    except Exception as e:
+        console.print(f"[red]Failed to save results: {e}[/red]")
+
+
 async def check_cache_status(urls: List[str], cfg: IfetcherConfig) -> tuple[int, int]:
     """Check how many URLs are already cached vs need to be fetched."""
     fetcher = PageFetcher(cfg)
@@ -852,6 +1350,21 @@ def extract(
         "-s",
         help="URL to process or path to file containing URLs (JSONL or plaintext). If not provided, uses training_data from config.",
     ),
+    search_query: Optional[str] = typer.Option(
+        None,
+        "--search-query",
+        help="Search for papers using this query instead of using a source file. Use with --search-backend to choose backend.",
+    ),
+    search_backend: Optional[str] = typer.Option(
+        None,
+        "--search-backend",
+        help="Search backend to use with --search-query (pubmed, perplexica)",
+    ),
+    search_max_results: Optional[int] = typer.Option(
+        None,
+        "--search-max-results",
+        help="Maximum search results to process (default: 50)",
+    ),
     fetch_only: bool = typer.Option(
         False,
         "--fetch-only",
@@ -944,8 +1457,26 @@ def extract(
         handle_operation_error("loading configuration", e)
         raise typer.Exit(1)
 
+    # Handle search query option first
+    if search_query is not None:
+        if verbose:
+            console.print(f"[dim]Using search query: '{search_query}'[/dim]")
+
+        # Run search to get URLs
+        search_results = asyncio.run(
+            _run_search_for_extract(
+                search_query, search_backend, search_max_results, cfg, term, verbose
+            )
+        )
+
+        urls = [result.url for result in search_results.results]
+        source_type = "search"
+
+        if verbose:
+            console.print(f"[dim]Found {len(urls)} URLs from search[/dim]")
+
     # Handle case where no source is provided - use training_data from config
-    if source is None:
+    elif source is None:
         if not term:
             # Show available terms and require term selection
             available_terms = scan_available_terms(cfg)
@@ -1058,13 +1589,18 @@ def extract(
             # Set up output path
             if output is None:
                 # Use config's output.path template with available variables
+                # Get model name and strip provider prefix
+                full_model = model or str(
+                    cfg.agents.get("_", cfg.AgentSpec()).llm or "gpt-4o"
+                )
+                clean_model = (
+                    full_model.split(":", 1)[-1] if ":" in full_model else full_model
+                )
+
                 template_vars = {
                     "term": term or "unknown",
                     "mode": mode or "default",
-                    "model": model
-                    or str(
-                        cfg.agents.get("_", cfg.AgentSpec()).llm or "gpt-4o"
-                    ).replace(":", "_"),
+                    "model": clean_model,
                     "repeat": 1,  # Could be made configurable in future
                 }
                 output_path = cfg.abspath(cfg.output.path + ".jsonl", **template_vars)
@@ -1093,33 +1629,109 @@ def extract(
                 )
             )
 
-            # Run extraction using extraction_graph
-            from .extraction_graph import extract_from_urls
+            # Log extraction start
+            logfire.info(
+                f"Starting extraction pipeline: {len(urls)} URLs, target: {cfg.task.get_kind_names()} → {cfg.task.relation}"
+            )
+
+            # Run extraction using extraction_graph_v2
+            from .extraction_graph_v2.run import (
+                extract_from_urls_v2 as extract_from_urls,
+            )
+
+            logfire.info("Using extraction pipeline v2")
             from .fetcher import PageFetcher
 
             # Create PageFetcher with appropriate settings
             page_fetcher = PageFetcher(cfg, show_status=True, verbose=verbose)
 
+            import time
+
+            pipeline_start_time = time.time()
+
             # Run extraction
+            logfire.info(
+                f"Starting extraction pipeline with parallelism={parallelism or cfg.tools.crawl4ai.max_concurrent}"
+            )
+
+            # Create incremental save callback if output path is provided
+            save_callback = None
+            processed_term = term or "unknown"
+            processed_mode = mode or "default"
+            if output_path and processed_term and processed_mode:
+
+                def incremental_save(intermediate_result):
+                    try:
+                        from .extraction_graph_v2.run import save_results_v2
+
+                        save_results_v2(
+                            intermediate_result,
+                            output_path,
+                            term=processed_term,
+                            mode=processed_mode,
+                            repeat=1,
+                            entity_kinds=cfg.task.get_kind_names(),
+                        )
+                        if verbose:
+                            pairs_count = len(intermediate_result.entity_pairs)
+                            print(f"  Saved intermediate results: {pairs_count} pairs")
+                    except Exception as e:
+                        if verbose:
+                            print(
+                                f"  Warning: Failed to save intermediate results: {e}"
+                            )
+
+            # Run extraction directly using v2
             result = asyncio.run(
-                _run_extraction_pipeline(
-                    urls=urls, config=cfg, page_fetcher=page_fetcher, model=model
+                extract_from_urls(
+                    urls=urls,
+                    config=cfg,
+                    page_fetcher=page_fetcher,
+                    model=model,
+                    verbose=verbose,
+                    save_callback=save_callback,
+                    parallelism=parallelism,
+                    target_term=term,
+                    output_dir=output_path.with_suffix(
+                        ""
+                    ),  # Remove .jsonl, use directory
                 )
             )
 
-            # Save results
-            from .extraction_graph import save_results
+            pipeline_time = time.time() - pipeline_start_time
 
-            save_results(result, output_path)
+            # Log comprehensive results
+            logfire.info(f"Extraction pipeline completed in {pipeline_time:.1f}s")
+            logfire.info(
+                f"Results: {result.total_pairs} pairs from {result.successful_groups}/{result.total_groups} groups"
+            )
+            logfire.info(f"Entities found: {result.total_entities}")
+
+            # Save results using v2 format
+            from .extraction_graph_v2.run import save_results_v2 as save_results
+
+            save_results(
+                result,
+                output_path,
+                term=term or "unknown",
+                mode=mode or "basic",
+                repeat=1,  # Could be made configurable in future
+                entity_kinds=cfg.task.get_kind_names(),
+            )
+
+            logfire.info(
+                f"Results saved to: {os.path.relpath(output_path.parent, Path.cwd())}"
+            )
 
             # Display summary using existing function
             _display_extraction_summary(result)
 
         except Exception as e:
+            logfire.error(f"Extraction pipeline failed: {str(e)}")
             if verbose:
                 console.print(Traceback(show_locals=True))
             else:
-                console.print(f"[bold red]Error:[/bold red] {e}", style="red")
+                console.print(f"Error: {e}", style="bold red")
             raise typer.Exit(1)
 
 
@@ -1200,13 +1812,53 @@ async def _run_extraction_pipeline(
     config: IfetcherConfig,
     page_fetcher: "PageFetcher",
     model: Optional[str],
+    verbose: bool = False,
+    output_path: Optional[Path] = None,
+    term: Optional[str] = None,
+    mode: Optional[str] = None,
+    parallelism: Optional[int] = None,
 ) -> Any:
     """Run the entity extraction pipeline."""
-    from .extraction_graph import extract_from_urls
+    from .extraction_graph import extract_from_urls, save_results
+
+    # Create incremental save callback if output path is provided
+    save_callback = None
+    # Use processed values (with defaults) instead of original CLI params
+    processed_term = term or "unknown"
+    processed_mode = mode or "default"
+    if output_path and processed_term and processed_mode:
+
+        def incremental_save(intermediate_result):
+            try:
+                save_results(
+                    intermediate_result,
+                    output_path,
+                    term=processed_term,
+                    mode=processed_mode,
+                    repeat=1,
+                    entity_kinds=config.task.get_kind_names(),
+                )
+                if verbose:
+                    pairs_count = len(intermediate_result.entity_pairs)
+                    groups_processed = len(intermediate_result.group_summaries)
+                    print(
+                        f"  Saved intermediate results: {pairs_count} pairs from {groups_processed} groups"
+                    )
+            except Exception as e:
+                if verbose:
+                    print(f"  Warning: Failed to save intermediate results: {e}")
+
+        save_callback = incremental_save
 
     # Run extraction
     result = await extract_from_urls(
-        urls=urls, config=config, page_fetcher=page_fetcher, model=model
+        urls=urls,
+        config=config,
+        page_fetcher=page_fetcher,
+        model=model,
+        verbose=verbose,
+        save_callback=save_callback,
+        parallelism=parallelism,
     )
 
     return result
@@ -1525,6 +2177,10 @@ def config_validate(
 
 def main():
     """Main entry point for the CLI."""
+    # Configure logfire early if available
+    configure_logfire()
+    logfire.info("Starting interaction-finder CLI")
+
     app()
 
 
