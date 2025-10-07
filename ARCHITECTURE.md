@@ -12,16 +12,23 @@ src/interaction_finder/
 ├── settings.py        # TOML-based configuration with validation
 ├── term_parser.py     # Parse "gene # &kind=gene &disease=cancer" format
 ├── agents.py          # AI agents for extraction (gene-disease only)
-└── fetcher/           # Modular web content fetching package
-    ├── page_fetcher.py      # High-level async web content fetcher
-    ├── cache.py             # File-based URL caching system
-    ├── web_client.py        # HTTP client with session management
-    ├── content_processor.py # Content conversion and chunking
-    ├── batch_operations.py  # Concurrent URL processing
-    ├── progress_display.py  # Rich progress bars integration
-    ├── document_grouper.py  # Document clustering orchestrator
-    ├── document_embedding.py # Document embedding strategies
-    └── document_clustering.py # Advanced clustering algorithms
+├── fetcher/           # Modular web content fetching package
+│   ├── page_fetcher.py      # High-level async web content fetcher
+│   ├── cache.py             # File-based URL caching system
+│   ├── web_client.py        # HTTP client with session management
+│   ├── content_processor.py # Content conversion and chunking
+│   ├── batch_operations.py  # Concurrent URL processing
+│   ├── progress_display.py  # Rich progress bars integration
+│   ├── document_grouper.py  # Document clustering orchestrator
+│   ├── document_embedding.py # Document embedding strategies
+│   └── document_clustering.py # Advanced clustering algorithms
+└── extraction_graph/ # Entity extraction pipeline
+    ├── run.py         # High-level extraction API
+    ├── graph.py       # LangGraph-based extraction workflow
+    ├── nodes.py       # Individual processing nodes
+    ├── state.py       # Extraction state management
+    ├── models.py      # Result data models
+    └── deps.py        # Dependency injection
 ```
 
 ## Key Components
