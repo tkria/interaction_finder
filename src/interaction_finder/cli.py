@@ -12,12 +12,16 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, NamedTuple
 
 import typer
+import click
 from rich.console import Console
 from rich.traceback import Traceback
 from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.panel import Panel
+from rich.table import Table
+from rich.text import Text
 
 try:
     import logfire
@@ -40,22 +44,107 @@ except ImportError:
 from rich.table import Table
 from rich.panel import Panel
 
-from .settings import IfetcherConfig, configure_logfire, _rebuild_config_model
+from .settings import IfetcherConfig, configure_logfire
 from .fetcher import PageFetcher
-from .search import SearchQuery
-from .search.backends import PubMedBackend, PerplexicaBackend
-from .search.expansion import create_llm_expander
+from .search import SearchQuery, SearchCache
+from .search.backends import PubMedBackend, PerplexicaBackend, OpenAISearchBackend
+from .search.expansion import create_llm_expander, create_advanced_expander
+from .search.diversification import create_diversified_queries, DiversifiedQuery
+from .search.evaluation import (
+    EvaluationRunner,
+    EvaluationConfig,
+    DEFAULT_BIOMEDICAL_QUERIES,
+    DEFAULT_GENERAL_QUERIES,
+)
 
 app = typer.Typer(
     name="interaction-finder",
     help="A tool for fetching and processing web content for interaction discovery.",
     rich_markup_mode="rich",
+    add_completion=False,  # Disable default completion flags
 )
 
 console = Console()
 
 # Initialize configuration models after all imports
-_rebuild_config_model()
+# Import SearchConfig and make it available for forward references
+from .search.config import SearchConfig
+from . import settings
+import sys
+
+# Make SearchConfig available for forward references in settings
+setattr(settings, "SearchConfig", SearchConfig)
+IfetcherConfig.model_rebuild()
+
+
+class GlobalOptions(NamedTuple):
+    """Common global options for all commands."""
+
+    config: typer.Option = typer.Option(
+        None, "-c", "--config", help="Path to configuration file"
+    )
+    verbose: typer.Option = typer.Option(
+        False, "-v", "--verbose", help="Show verbose output"
+    )
+    overrides: typer.Option = typer.Option(
+        [],
+        "-O",
+        "--override",
+        help="Override config values using dotted paths (e.g., -O tools.search.backend=pubmed)",
+    )
+
+
+GLOBAL_OPTIONS = GlobalOptions()
+
+
+# Global options that apply to all subcommands
+@app.callback()
+def main(
+    config: Optional[str] = GLOBAL_OPTIONS.config,
+    verbose: bool = GLOBAL_OPTIONS.verbose,
+    overrides: List[str] = GLOBAL_OPTIONS.overrides,
+):
+    """
+    A tool for fetching and processing web content for interaction discovery.
+
+    Global options like --config, --verbose, and --override can be used with any subcommand.
+    """
+    # Store options in the context - they will be used as fallbacks if not provided locally
+    ctx = click.get_current_context()
+    ctx.ensure_object(dict)
+    ctx.obj["config"] = config
+    ctx.obj["verbose"] = verbose
+    ctx.obj["overrides"] = overrides
+
+
+def get_options_with_fallback(
+    config: Optional[str] = None,
+    verbose: Optional[bool] = None,
+    overrides: Optional[List[str]] = None,
+):
+    """
+    Get options, using global values as fallback for None/empty local values.
+
+    Args:
+        config: Local config value
+        verbose: Local verbose value
+        overrides: Local overrides value
+
+    Returns:
+        Tuple of (effective_config, effective_verbose, effective_overrides)
+    """
+    ctx = click.get_current_context()
+    if not ctx.obj:
+        return config, verbose or False, overrides or []
+
+    # Use local values if provided, otherwise fall back to global
+    effective_config = config if config is not None else ctx.obj.get("config")
+    effective_verbose = (
+        verbose if verbose is not None else ctx.obj.get("verbose", False)
+    )
+    effective_overrides = overrides if overrides else ctx.obj.get("overrides", [])
+
+    return effective_config, effective_verbose, effective_overrides
 
 
 def group_errors(failed_pairs: List[tuple[str, Exception]]) -> Dict[str, List[str]]:
@@ -591,12 +680,12 @@ def scan_available_terms(config: IfetcherConfig) -> List[str]:
 
 @app.command()
 def terms(
-    config: Optional[str] = typer.Option(
-        None, "-c", "--config", help="Path to configuration file"
-    ),
     mode: Optional[str] = typer.Option(
         None, "-m", "--mode", help="Configuration mode to use"
     ),
+    config: Optional[str] = GLOBAL_OPTIONS.config,
+    verbose: bool = GLOBAL_OPTIONS.verbose,
+    overrides: List[str] = GLOBAL_OPTIONS.overrides,
 ):
     """
     List available terms that have training data files.
@@ -608,8 +697,13 @@ def terms(
         interaction-finder terms
         interaction-finder terms --config my_config.toml
     """
+    # Get effective options with global fallback
+    effective_config, effective_verbose, effective_overrides = (
+        get_options_with_fallback(config, verbose, overrides)
+    )
+
     try:
-        cfg = load_config(config, mode)
+        cfg = load_config(effective_config, mode, effective_overrides)
         available_terms = scan_available_terms(cfg)
 
         if not available_terms:
@@ -635,13 +729,13 @@ def terms(
 def search(
     query: str = typer.Argument(help="Search query for finding relevant papers"),
     backend: Optional[str] = typer.Option(
-        None, "-b", "--backend", help="Search backend to use (e.g., pubmed, europepmc)"
+        None,
+        "-b",
+        "--backend",
+        help="Search backend to use (alias for -O tools.search.backend=VALUE)",
     ),
     max_results: Optional[int] = typer.Option(
         None, "-n", "--max-results", help="Maximum number of results to return"
-    ),
-    expand: bool = typer.Option(
-        False, "--expand", help="Enable query expansion with synonyms and aliases"
     ),
     output_format: str = typer.Option(
         "table", "-f", "--format", help="Output format: table, json, jsonl, urls, csv"
@@ -649,15 +743,12 @@ def search(
     save_results: Optional[str] = typer.Option(
         None, "-o", "--output", help="Save results to file"
     ),
-    config: Optional[str] = typer.Option(
-        None, "-c", "--config", help="Path to configuration file"
-    ),
     mode: Optional[str] = typer.Option(
         None, "-m", "--mode", help="Configuration mode to use"
     ),
-    verbose: bool = typer.Option(
-        False, "-v", "--verbose", help="Show verbose output including search details"
-    ),
+    config: Optional[str] = GLOBAL_OPTIONS.config,
+    verbose: bool = GLOBAL_OPTIONS.verbose,
+    overrides: List[str] = GLOBAL_OPTIONS.overrides,
 ):
     """
     Search for academic papers and documents.
@@ -668,65 +759,104 @@ def search(
     Examples:
         interaction-finder search "BRCA1 mutations"
         interaction-finder search "p53 interactions" --backend pubmed --max-results 50
-        interaction-finder search "diabetes" --expand --format json
+        interaction-finder search "diabetes" --format json -O tools.search.backend=openai_search
         interaction-finder search "TNF alpha" --output results.json
     """
+    # Get effective options with global fallback
+    effective_config, effective_verbose, effective_overrides = (
+        get_options_with_fallback(config, verbose, overrides)
+    )
+
+    # Handle --backend as a config override
+    final_overrides = list(effective_overrides)
+    if backend is not None:
+        final_overrides.append(f"tools.search.backend={backend}")
+
     asyncio.run(
         _run_search_command(
             query=query,
-            backend=backend,
             max_results=max_results,
-            expand=expand,
             output_format=output_format,
             save_results=save_results,
-            config=config,
+            config=effective_config,
             mode=mode,
-            verbose=verbose,
+            overrides=final_overrides,
+            verbose=effective_verbose,
         )
     )
 
 
-async def _run_search_for_extract(
-    query: str,
-    backend: Optional[str],
-    max_results: Optional[int],
-    cfg: IfetcherConfig,
-    term: Optional[str],
-    verbose: bool,
-):
-    """Run search specifically for integration with extract command."""
-    # Use default backend if none specified
-    if backend is None:
-        backend = cfg.tools.search.default_backend
+async def _apply_query_expansion(
+    query: str, search_query: SearchQuery, cfg: IfetcherConfig, verbose: bool = False
+) -> None:
+    """Apply query expansion to search query if enabled in configuration."""
+    if not cfg.tools.search.expansion.enabled:
+        return
 
-    if backend not in cfg.tools.search.enabled_backends:
-        console.print(
-            f"[red]Search backend '{backend}' is not enabled in configuration[/red]"
+    if verbose:
+        console.print(f"[dim]Expanding query: '{query}'[/dim]")
+
+    # Advanced expansion is now always used when expansion is enabled
+    use_advanced = cfg.tools.search.expansion.enabled
+
+    if use_advanced:
+        # Use advanced expansion method (parameters now in main expansion config)
+        expander = create_advanced_expander(
+            model_name=cfg.tools.search.expansion.model_name,
+            max_terms=cfg.tools.search.expansion.max_expansion_terms,
+            per_category_cap=3,  # sensible default
+            mmr_lambda=0.7,  # sensible default
+            temperature=cfg.tools.search.expansion.temperature,
+            deterministic_seed=42,  # sensible default
         )
-        console.print(
-            f"[blue]Available backends:[/blue] {', '.join(cfg.tools.search.enabled_backends)}"
-        )
-        raise typer.Exit(1)
 
-    # Create search query with query expansion enabled by default for extract
-    search_query = SearchQuery(
-        query=query,
-        max_results=max_results or 50,  # Default to 50 for extract
-    )
+        expansion_context = {
+            "max_terms": cfg.tools.search.expansion.max_expansion_terms,
+            "per_category_cap": 3,  # sensible default
+            "mmr_lambda": 0.7,  # sensible default
+            "min_expansion_terms": cfg.tools.search.expansion.min_expansion_terms,
+            "min_confidence": cfg.tools.search.expansion.min_confidence,
+            "domain": "biomedical research",
+        }
 
-    # Apply query expansion automatically
-    if cfg.tools.search.expansion.enabled:
+        expansion_result = await expander.expand_query(query, expansion_context)
+
+        # Convert enhanced result to standard format for compatibility
+        standard_result = expansion_result.to_expanded_query()
+        search_query.expanded_terms = [
+            term.term for term in standard_result.expanded_terms
+        ]
+
         if verbose:
-            console.print(f"[dim]Expanding query: '{query}'[/dim]")
+            if expansion_result.expansion_terms:
+                console.print(
+                    f"[dim]Intent: {expansion_result.intent_card.split('1)')[1].split('2)')[0].strip()}[/dim]"
+                )
+                console.print(
+                    f"[dim]Expanded terms ({len(expansion_result.expansion_terms)}): "
+                    f"{', '.join(term.term for term in expansion_result.expansion_terms)}[/dim]"
+                )
+                if expansion_result.hyde_text:
+                    console.print(
+                        f"[dim]HyDE surrogate generated ({len(expansion_result.hyde_text)} chars)[/dim]"
+                    )
+            else:
+                console.print("[dim]No expansion terms generated[/dim]")
 
-        llm_config = cfg.tools.search.expansion.llm.model_dump()
+    else:
+        # Use standard LLM expansion method (using consolidated configs)
         expander = create_llm_expander(
-            model_name=llm_config.get("model_name", "openai:gpt-4o-mini"),
-            max_terms=llm_config.get("max_terms", 15),
+            model_name=cfg.tools.search.expansion.model_name,
+            max_terms=cfg.tools.search.expansion.max_expansion_terms,
+            min_confidence=cfg.tools.search.expansion.min_confidence,
+            expansion_types=["synonyms", "related", "abbreviations"],
+            domain_context="biomedical research",
+            timeout_seconds=30,
         )
 
         expansion_context = {
             "max_expansion_terms": cfg.tools.search.expansion.max_expansion_terms,
+            "min_expansion_terms": cfg.tools.search.expansion.min_expansion_terms,
             "min_confidence": cfg.tools.search.expansion.min_confidence,
         }
         # Add LLM-specific context
@@ -741,6 +871,29 @@ async def _run_search_for_extract(
                 f"[dim]Expanded terms: {', '.join(term.term for term in expansion_result.expanded_terms)}[/dim]"
             )
 
+
+async def _run_search_for_extract(
+    query: str,
+    backend: Optional[str],
+    max_results: Optional[int],
+    cfg: IfetcherConfig,
+    term: Optional[str],
+    verbose: bool,
+):
+    """Run search specifically for integration with extract command."""
+    # Use configured backend if none specified via --backend
+    if backend is None:
+        backend = cfg.tools.search.backend
+
+    # Create search query with query expansion enabled by default for extract
+    search_query = SearchQuery(
+        query=query,
+        max_results=max_results or 50,  # Default to 50 for extract
+    )
+
+    # Apply query expansion automatically
+    await _apply_query_expansion(query, search_query, cfg, verbose)
+
     # Create and run search backend
     backend_config = cfg.tools.search.get_backend_config(backend)
 
@@ -748,17 +901,23 @@ async def _run_search_for_extract(
         search_backend = PubMedBackend(backend_config)
     elif backend == "perplexica":
         search_backend = PerplexicaBackend(backend_config)
+    elif backend == "openai_search":
+        search_backend = OpenAISearchBackend(backend_config)
     else:
+        available_backends = cfg.tools.search.get_available_backends()
         console.print(f"[red]Backend '{backend}' is not implemented[/red]")
+        console.print(
+            f"[blue]Available backends:[/blue] {', '.join(available_backends)}"
+        )
         raise typer.Exit(1)
+
+    # Display search request details in verbose mode
+    if verbose:
+        _display_search_request(search_query, backend)
 
     try:
         async with search_backend:
             results = await search_backend.search(search_query)
-            if verbose:
-                console.print(
-                    f"[dim]Search completed: {results.result_count} results in {results.search_time:.2f}s[/dim]"
-                )
             return results
     except Exception as e:
         console.print(f"[red]Search failed: {e}[/red]")
@@ -771,90 +930,152 @@ async def _run_search_for_extract(
 
 async def _run_search_command(
     query: str,
-    backend: Optional[str] = None,
     max_results: Optional[int] = None,
-    expand: bool = False,
     output_format: str = "table",
     save_results: Optional[str] = None,
     config: Optional[str] = None,
     mode: Optional[str] = None,
+    overrides: List[str] = None,
     verbose: bool = False,
 ) -> None:
     """Run the search command asynchronously."""
     try:
-        # Load configuration
-        cfg = load_config(config, mode)
+        # Load configuration with overrides
+        cfg = load_config(config, mode, overrides or [])
 
-        # Determine backend to use
-        if backend is None:
-            backend = cfg.tools.search.default_backend
+        # Get backend from configuration (may be overridden by --backend)
+        backend = cfg.tools.search.backend
 
-        if backend not in cfg.tools.search.enabled_backends:
-            console.print(
-                f"[red]Backend '{backend}' is not enabled in configuration[/red]"
-            )
-            console.print(
-                f"[blue]Available backends:[/blue] {', '.join(cfg.tools.search.enabled_backends)}"
-            )
-            raise typer.Exit(1)
+        # Set up search cache if enabled
+        cache = None
+        if cfg.tools.search.cache.enabled:
+            cache_dir = cfg.abspath(cfg.output.cache) / "search"
+            cache = SearchCache(cache_dir, cfg.tools.search.cache.ttl_hours)
 
-        # Create search query
-        search_query = SearchQuery(
-            query=query, max_results=max_results or cfg.tools.search.max_results
+        # Determine search strategy
+        search_strategy = getattr(
+            cfg.tools.search.expansion, "search_strategy", "single_query"
         )
 
-        # Apply query expansion if requested
-        if expand:
-            if verbose:
-                console.print(f"[dim]Expanding query: '{query}'[/dim]")
+        use_multi_query = (
+            cfg.tools.search.expansion.enabled and search_strategy == "multi_query"
+        )
 
-            # Use LLM expansion (only option available)
-            llm_config = cfg.tools.search.expansion.llm.model_dump()
-            expander = create_llm_expander(
-                model_name=llm_config.get("model_name", "openai:gpt-4o-mini"),
-                max_terms=llm_config.get("max_terms", 15),
-            )
+        use_review_informed = (
+            cfg.tools.search.expansion.enabled and search_strategy == "review_informed"
+        )
 
-            expansion_context = {
-                "max_expansion_terms": cfg.tools.search.expansion.max_expansion_terms,
-                "min_confidence": cfg.tools.search.expansion.min_confidence,
-            }
-            # Add LLM-specific context
-            expansion_context.update(llm_config)
-            expansion_result = await expander.expand_query(query, expansion_context)
-            search_query.expanded_terms = [
-                term.term for term in expansion_result.expanded_terms
-            ]
+        use_pubmed_mesh = (
+            cfg.tools.search.expansion.enabled and search_strategy == "pubmed_mesh"
+        )
 
-            if verbose and expansion_result.expanded_terms:
-                console.print(
-                    f"[dim]Expanded terms: {', '.join(term.term for term in expansion_result.expanded_terms)}[/dim]"
-                )
-            elif verbose:
-                console.print("[dim]No expansion terms found[/dim]")
+        # Check if MeSH expansion should be used in other strategies
+        use_mesh_expansion = (
+            cfg.tools.search.expansion.enabled
+            and cfg.tools.search.expansion.use_mesh_expansion
+            and backend == "pubmed"
+            and not use_pubmed_mesh  # Don't double-apply
+        )
 
-        # Create search backend
-        backend_config = cfg.tools.search.get_backend_config(backend)
-
-        if backend == "pubmed":
-            search_backend = PubMedBackend(backend_config)
-        elif backend == "perplexica":
-            search_backend = PerplexicaBackend(backend_config)
-        else:
-            console.print(f"[red]Backend '{backend}' is not implemented yet[/red]")
-            console.print(f"[blue]Available backends:[/blue] pubmed, perplexica")
-            raise typer.Exit(1)
-
-        # Perform search
-        if verbose:
-            console.print(f"[dim]Searching with {backend} backend...[/dim]")
+        if use_mesh_expansion and verbose:
+            console.print("[dim]MeSH expansion enabled for PubMed queries[/dim]")
 
         try:
-            async with search_backend:
-                results = await search_backend.search(search_query)
+            if use_pubmed_mesh:
+                # Use PubMed MeSH strategy: LLM decomposition + MeSH expansion per component
+                if verbose:
+                    console.print(
+                        "[dim]Using PubMed MeSH strategy: LLM decomposition + MeSH expansion[/dim]"
+                    )
 
-                # Display results
-                _display_search_results(results, output_format, verbose, save_results)
+                # Force PubMed backend
+                if backend != "pubmed":
+                    if verbose:
+                        console.print(
+                            "[yellow]Switching to PubMed backend for MeSH strategy[/yellow]"
+                        )
+                    backend = "pubmed"
+
+                target_results = max_results or cfg.tools.search.max_results
+
+                results = await _perform_pubmed_mesh_strategy(
+                    original_query=query,
+                    cfg=cfg,
+                    max_results=target_results,
+                    verbose=verbose,
+                    cache=cache,
+                )
+            elif use_review_informed:
+                # Use review-informed search strategy
+                if verbose:
+                    console.print(
+                        "[dim]Using review-informed search strategy for expert-guided coverage[/dim]"
+                    )
+
+                # Pass the full max_results - review-informed search will handle per-query limits internally
+                target_results = max_results or cfg.tools.search.max_results
+
+                results = await _perform_review_informed_search(
+                    original_query=query,
+                    backend=backend,
+                    cfg=cfg,
+                    max_results_per_query=target_results,
+                    verbose=verbose,
+                    cache=cache,
+                )
+            elif use_multi_query:
+                # Use multi-query deep search
+                if verbose:
+                    console.print(
+                        "[dim]Using multi-query search strategy for deep coverage[/dim]"
+                    )
+
+                max_per_query = (
+                    max_results or cfg.tools.search.max_results
+                ) // cfg.tools.search.expansion.target_searches
+                max_per_query = max(max_per_query, 10)  # Minimum 10 results per query
+
+                results = await _perform_multi_query_search(
+                    original_query=query,
+                    backend=backend,
+                    cfg=cfg,
+                    max_results_per_query=max_per_query,
+                    verbose=verbose,
+                    cache=cache,
+                )
+            else:
+                # Use single-query approach (original behavior)
+                search_query = SearchQuery(
+                    query=query, max_results=max_results or cfg.tools.search.max_results
+                )
+
+                # Apply traditional query expansion
+                await _apply_query_expansion(query, search_query, cfg, verbose)
+
+                # Check cache first
+                if cache:
+                    cached_results = await cache.get(search_query, backend)
+                    if cached_results:
+                        if verbose:
+                            console.print(
+                                f"[dim]Found cached results for '{query}' with {backend}[/dim]"
+                            )
+                        _display_search_results(
+                            cached_results, output_format, verbose, save_results
+                        )
+                        return
+
+                # Perform single search
+                results = await _perform_single_search(
+                    search_query, backend, cfg, cache, verbose
+                )
+
+                # Cache results if cache is enabled
+                if cache:
+                    await cache.set(search_query, backend, results)
+
+            # Display results
+            _display_search_results(results, output_format, verbose, save_results)
 
         except Exception as e:
             console.print(f"[red]Search failed: {e}[/red]")
@@ -869,10 +1090,581 @@ async def _run_search_command(
         raise typer.Exit(1)
 
 
+async def _perform_multi_query_search(
+    original_query: str,
+    backend: str,
+    cfg: IfetcherConfig,
+    max_results_per_query: int = 20,
+    verbose: bool = False,
+    cache: Optional[SearchCache] = None,
+) -> "SearchResults":
+    """Perform multi-query deep search using advanced expansion."""
+    from .search.base import SearchResults, SearchResult
+
+    # Step 1: Get advanced expansion
+    if not cfg.tools.search.expansion.enabled:
+        # Fallback to single query if expansion disabled
+        search_query = SearchQuery(
+            query=original_query, max_results=max_results_per_query
+        )
+        return await _perform_single_search(search_query, backend, cfg, cache, verbose)
+
+    # Use advanced expansion (parameters now in main expansion config)
+    expander = create_advanced_expander(
+        model_name=cfg.tools.search.expansion.model_name,
+        max_terms=cfg.tools.search.expansion.max_expansion_terms,
+        per_category_cap=3,  # sensible default
+        mmr_lambda=0.7,  # sensible default
+        temperature=cfg.tools.search.expansion.temperature,
+        deterministic_seed=42,  # sensible default
+    )
+
+    expansion_context = {
+        "max_terms": cfg.tools.search.expansion.max_expansion_terms,
+        "per_category_cap": 3,  # sensible default
+        "mmr_lambda": 0.7,  # sensible default
+        "min_expansion_terms": cfg.tools.search.expansion.min_expansion_terms,
+        "min_confidence": cfg.tools.search.expansion.min_confidence,
+        "domain": "biomedical research",
+    }
+
+    if verbose:
+        console.print(f"[dim]Generating diverse queries for: '{original_query}'[/dim]")
+
+    expansion_result = await expander.expand_query(original_query, expansion_context)
+
+    # Step 2: Generate diversified queries
+    target_searches = cfg.tools.search.expansion.target_searches
+    diversified_queries = await create_diversified_queries(
+        expansion_result, target_queries=target_searches, context=expansion_context
+    )
+
+    if verbose:
+        console.print(
+            f"[dim]Generated {len(diversified_queries)} diverse search queries[/dim]"
+        )
+        for i, div_query in enumerate(diversified_queries, 1):
+            console.print(
+                f"[dim]{i}. {div_query.focus}: {div_query.query[:60]}{'...' if len(div_query.query) > 60 else ''}[/dim]"
+            )
+
+    # Step 3: Execute all searches
+    backend_config = cfg.tools.search.get_backend_config(backend)
+
+    if backend == "pubmed":
+        search_backend = PubMedBackend(backend_config)
+    elif backend == "perplexica":
+        search_backend = PerplexicaBackend(backend_config)
+    elif backend == "openai_search":
+        search_backend = OpenAISearchBackend(backend_config)
+    else:
+        raise ValueError(f"Unsupported backend: {backend}")
+
+    all_results = []
+    successful_queries = 0
+
+    async with search_backend:
+        for i, div_query in enumerate(diversified_queries, 1):
+            try:
+                search_query = SearchQuery(
+                    query=div_query.query,
+                    max_results=max_results_per_query,
+                )
+
+                # Check cache first
+                cached_result = None
+                if cache:
+                    cached_result = await cache.get(search_query, backend)
+
+                if cached_result:
+                    results = cached_result
+                    if verbose:
+                        console.print(
+                            f"[dim]Query {i}/{len(diversified_queries)} (cached): {div_query.focus}[/dim]"
+                        )
+                else:
+                    results = await search_backend.search(search_query)
+                    if cache:
+                        await cache.set(search_query, backend, results)
+                    if verbose:
+                        console.print(
+                            f"[dim]Query {i}/{len(diversified_queries)}: {div_query.focus} -> {len(results.results)} results[/dim]"
+                        )
+
+                # Add metadata to results indicating the query strategy
+                for result in results.results:
+                    result.metadata = result.metadata or {}
+                    result.metadata["query_focus"] = div_query.focus
+                    result.metadata["query_rationale"] = div_query.rationale
+                    result.metadata["query_weight"] = div_query.weight
+
+                all_results.extend(results.results)
+                successful_queries += 1
+
+            except Exception as e:
+                if verbose:
+                    console.print(
+                        f"[yellow]Query {i} failed ({div_query.focus}): {e}[/yellow]"
+                    )
+                continue
+
+    # Step 4: Combine and deduplicate results
+    unique_results = {}
+    for result in all_results:
+        # Use URL or title as deduplication key
+        key = result.url or result.title
+        if key not in unique_results:
+            unique_results[key] = result
+        else:
+            # Merge metadata from multiple query strategies
+            existing = unique_results[key]
+            if existing.metadata and result.metadata:
+                existing_focuses = existing.metadata.get("query_focus", "")
+                new_focus = result.metadata.get("query_focus", "")
+                if new_focus and new_focus not in existing_focuses:
+                    existing.metadata["query_focus"] = (
+                        f"{existing_focuses}, {new_focus}"
+                    )
+
+    final_results = list(unique_results.values())
+
+    # Create combined SearchResults
+    combined_query = SearchQuery(query=original_query, max_results=len(final_results))
+    combined_results = SearchResults(
+        query=combined_query,
+        results=final_results,
+        total_found=len(final_results),
+        search_time=0.0,  # Would need to track timing
+        backend=backend,
+    )
+
+    if verbose:
+        console.print(
+            f"[green]Multi-query search completed: {successful_queries}/{len(diversified_queries)} queries successful[/green]"
+        )
+        console.print(
+            f"[green]Total results: {len(all_results)} raw -> {len(final_results)} unique[/green]"
+        )
+
+    return combined_results
+
+
+async def _perform_review_informed_search(
+    original_query: str,
+    backend: str,
+    cfg: IfetcherConfig,
+    max_results_per_query: int = 20,
+    verbose: bool = False,
+    cache: Optional[SearchCache] = None,
+) -> "SearchResults":
+    """Perform review-informed search using review papers to guide query generation."""
+    from .search.review_informed import create_review_informed_search
+    from .fetcher import PageFetcher
+
+    # Get simplified review-informed configuration (only the few specific settings)
+    review_config = cfg.tools.search.expansion.review_informed.model_dump()
+
+    # Build LLM configuration from consolidated expansion config
+    llm_config = {
+        "model_name": cfg.tools.search.expansion.model_name,
+        "temperature": cfg.tools.search.expansion.temperature,
+        "max_terms": cfg.tools.search.expansion.target_searches,
+        "min_confidence": cfg.tools.search.expansion.min_confidence,
+        "domain_context": "biomedical research",
+        "timeout_seconds": 30,
+    }
+
+    # Create PageFetcher for content retrieval
+    fetcher = PageFetcher(cfg, show_status=verbose, verbose=verbose)
+
+    # Get search backend
+    from .search.backends.pubmed import PubMedBackend
+    from .search.backends.openai_search import OpenAISearchBackend
+    from .search.backends.perplexica import PerplexicaBackend
+
+    backend_config = cfg.tools.search.get_backend_config(backend)
+
+    if backend == "pubmed":
+        search_backend = PubMedBackend(backend_config)
+    elif backend == "openai_search":
+        search_backend = OpenAISearchBackend(backend_config)
+    elif backend == "perplexica":
+        search_backend = PerplexicaBackend(backend_config)
+    else:
+        raise ValueError(f"Unsupported backend: {backend}")
+
+    # Get agent specification for LLM configuration
+    agent_spec = cfg.agents.get("_")  # Default agent spec
+
+    try:
+        # Perform review-informed search
+        results = await create_review_informed_search(
+            original_query=original_query,
+            backend=search_backend,
+            fetcher=fetcher,
+            review_config=review_config,
+            llm_config=llm_config,
+            agent_spec=agent_spec,
+            max_results_per_query=max_results_per_query,
+            verbose=verbose,
+        )
+
+        return results
+
+    except Exception as e:
+        if verbose:
+            console.print(f"[red]Review-informed search failed: {e}[/red]")
+        # Fallback to single search
+        search_query = SearchQuery(
+            query=original_query, max_results=max_results_per_query
+        )
+        return await _perform_single_search(search_query, backend, cfg, cache, verbose)
+
+    finally:
+        # Clean up resources
+        await search_backend.close()
+
+
+async def _apply_mesh_expansion_to_query(
+    query: str,
+    cfg: IfetcherConfig,
+    verbose: bool = False,
+) -> str:
+    """Apply PubMed MeSH co-occurrence expansion to a query.
+
+    Returns the expanded query string, or original if expansion fails/disabled.
+    """
+    from .search.expansion import create_pubmed_mesh_expander
+
+    # Get PubMed MeSH expansion config
+    mesh_config = cfg.tools.search.expansion.pubmed_mesh.model_dump()
+
+    # Get PubMed backend config for credentials
+    pubmed_config = cfg.tools.search.pubmed.model_dump()
+
+    # Merge NCBI credentials
+    mesh_config["email"] = pubmed_config.get("email")
+    mesh_config["api_key"] = pubmed_config.get("api_key")
+
+    try:
+        # Create MeSH expander
+        expander = create_pubmed_mesh_expander(**mesh_config)
+
+        # Expand the query
+        expanded_query = await expander.expand_query(query)
+
+        if verbose and expanded_query.expanded_terms:
+            query_preview = query[:50] + "..." if len(query) > 50 else query
+            console.print(f"[dim]  → MeSH expansion for '{query_preview}':[/dim]")
+            for term in expanded_query.expanded_terms:
+                console.print(f"[dim]     • {term.term}[/dim]")
+
+        # Build expanded search query
+        if expanded_query.expanded_terms:
+            # Combine original query with MeSH terms using OR
+            mesh_terms = " OR ".join(
+                f'"{term.term}"' for term in expanded_query.expanded_terms
+            )
+            full_query = f"({query}) OR ({mesh_terms})"
+        else:
+            full_query = query
+
+        await expander.close()
+        return full_query
+
+    except Exception as e:
+        if verbose:
+            console.print(f"[yellow]MeSH expansion failed: {e}[/yellow]")
+        return query
+
+
+async def _perform_pubmed_mesh_strategy(
+    original_query: str,
+    cfg: IfetcherConfig,
+    max_results: int = 100,
+    verbose: bool = False,
+    cache: Optional[SearchCache] = None,
+) -> "SearchResults":
+    """
+    Perform PubMed MeSH strategy: LLM decomposition + MeSH expansion per component.
+
+    Workflow:
+    1. Use LLM to decompose query into 3-5 focused components
+    2. Apply MeSH expansion to each component
+    3. Search PubMed with each expanded query
+    4. Merge results with frequency tracking
+    """
+    from .search.backends.pubmed import PubMedBackend
+    from .search.base import SearchQuery, SearchResults
+    from pydantic import BaseModel, Field
+    from pydantic_ai import Agent
+    from collections import Counter
+
+    class QueryComponent(BaseModel):
+        """A focused component of the original query."""
+
+        component: str = Field(description="Focused search component")
+        rationale: str = Field(description="Why this component is important")
+
+    class QueryDecomposition(BaseModel):
+        """Decomposition of a complex query into key concepts."""
+
+        components: list[QueryComponent] = Field(
+            description="2-4 key concepts extracted from the query",
+            min_length=2,
+            max_length=4,
+        )
+
+    # Step 1: Decompose query with LLM
+    if verbose:
+        console.print("[dim]📋 Decomposing query into focused components...[/dim]")
+
+    agent = Agent(
+        cfg.tools.search.expansion.model_name,
+        output_type=QueryDecomposition,
+        instructions="""
+        You are a biomedical search expert. Extract the KEY CONCEPTS from the user's query.
+        DO NOT invent new concepts or add domain knowledge - only extract what's explicitly present.
+
+        Rules:
+        - Identify the main entities/concepts mentioned in the query
+        - Keep the original terminology (don't paraphrase or elaborate)
+        - Separate different concepts (e.g., separate "genes" from "disease name")
+        - Return 2-4 components (usually 2-3 is sufficient)
+        - Each component should be a distinct concept that can be independently expanded with MeSH terms
+
+        Examples:
+
+        Query: "Genes associated with Pulmonary Arterial Hypertension"
+        Components:
+        1. "Genes" (genetic/molecular concept)
+        2. "Pulmonary Arterial Hypertension" (disease concept)
+
+        Query: "BRCA1 mutations in breast cancer treatment response"
+        Components:
+        1. "BRCA1" (specific gene)
+        2. "breast cancer" (disease)
+        3. "treatment response" (outcome)
+
+        Query: "microRNA regulation of inflammation"
+        Components:
+        1. "microRNA" (molecular entity)
+        2. "inflammation" (biological process)
+
+        Query: "diabetes complications"
+        Components:
+        1. "diabetes" (disease)
+        2. "complications" (disease outcomes)
+        """,
+    )
+
+    try:
+        decomp_result = await agent.run(f"Decompose this query: {original_query}")
+        decomposition = decomp_result.output
+
+        if verbose:
+            console.print(
+                f"[dim]Found {len(decomposition.components)} components:[/dim]"
+            )
+            for i, comp in enumerate(decomposition.components, 1):
+                console.print(f"  [dim]{i}. {comp.component}[/dim]")
+
+    except Exception as e:
+        if verbose:
+            console.print(
+                f"[yellow]Decomposition failed: {e}, using original query[/yellow]"
+            )
+        decomposition = QueryDecomposition(
+            components=[QueryComponent(component=original_query, rationale="Fallback")]
+        )
+
+    # Step 2: Apply MeSH expansion to each component
+    if verbose:
+        console.print(
+            f"[dim]🔬 Applying MeSH expansion to {len(decomposition.components)} components...[/dim]"
+        )
+
+    expanded_components = []
+    for i, comp in enumerate(decomposition.components, 1):
+        if verbose:
+            console.print(f"[dim]Component {i}: {comp.component}[/dim]")
+
+        expanded_query = await _apply_mesh_expansion_to_query(
+            comp.component, cfg, verbose
+        )
+        expanded_components.append(expanded_query)
+
+    # Step 3: Combine all expanded components with AND
+    if verbose:
+        console.print(
+            f"[dim]🔗 Combining {len(expanded_components)} expanded components with AND...[/dim]"
+        )
+
+    # Join all expanded components with AND
+    combined_query = " AND ".join(f"({comp})" for comp in expanded_components)
+
+    if verbose:
+        # Show a preview of the combined query
+        preview = (
+            combined_query
+            if len(combined_query) <= 200
+            else combined_query[:200] + "..."
+        )
+        console.print(f"[dim]Combined query: {preview}[/dim]")
+
+    # Step 4: Single search with combined query
+    pubmed_config = cfg.tools.search.pubmed.model_dump()
+    backend = PubMedBackend(pubmed_config)
+    search_query = SearchQuery(query=combined_query, max_results=max_results)
+
+    try:
+        results = await backend.search(search_query)
+        await backend.close()
+
+        if verbose:
+            console.print(f"[dim]✓ Found {len(results.results)} results[/dim]")
+
+        return results
+
+    except Exception as e:
+        await backend.close()
+        if verbose:
+            console.print(f"[red]Search failed: {e}[/red]")
+        # Fallback to original query
+        backend = PubMedBackend(pubmed_config)
+        search_query = SearchQuery(query=original_query, max_results=max_results)
+        results = await backend.search(search_query)
+        await backend.close()
+        return results
+
+
+async def _perform_single_search(
+    search_query: SearchQuery,
+    backend: str,
+    cfg: IfetcherConfig,
+    cache: Optional[SearchCache] = None,
+    verbose: bool = False,
+) -> "SearchResults":
+    """Perform a single search query (original behavior)."""
+    backend_config = cfg.tools.search.get_backend_config(backend)
+
+    if backend == "pubmed":
+        search_backend = PubMedBackend(backend_config)
+    elif backend == "perplexica":
+        search_backend = PerplexicaBackend(backend_config)
+    elif backend == "openai_search":
+        search_backend = OpenAISearchBackend(backend_config)
+    else:
+        available_backends = cfg.tools.search.get_available_backends()
+        raise ValueError(
+            f"Backend '{backend}' is not implemented. Available: {available_backends}"
+        )
+
+    if verbose:
+        _display_search_request(search_query, backend)
+
+    async with search_backend:
+        return await search_backend.search(search_query)
+
+
+def _display_search_request(search_query: SearchQuery, backend: str) -> None:
+    """Display pretty search request details."""
+
+    # Create search details table
+    details_table = Table(show_header=False, show_edge=False, pad_edge=False)
+    details_table.add_column("key", style="bold cyan", no_wrap=True, width=12)
+    details_table.add_column("value", style="white")
+
+    # Add basic search info
+    details_table.add_row("Backend:", f"[yellow]{backend}[/yellow]")
+    details_table.add_row("Query:", f'"{search_query.query}"')
+    details_table.add_row("Max Results:", str(search_query.max_results))
+
+    # Add expanded terms if any
+    if search_query.expanded_terms:
+        expanded_text = Text()
+        for i, term in enumerate(search_query.expanded_terms):
+            if i > 0:
+                expanded_text.append(", ")
+            expanded_text.append(f'"{term}"', style="green")
+        details_table.add_row("Expanded:", expanded_text)
+
+    # Add filters if any
+    if search_query.filters:
+        filter_items = []
+        for key, value in search_query.filters.items():
+            filter_items.append(f"{key}={value}")
+        details_table.add_row("Filters:", ", ".join(filter_items))
+
+    # Create panel with search details
+    panel = Panel(
+        details_table,
+        title="🔍 Search Request",
+        title_align="left",
+        border_style="blue",
+        expand=False,
+    )
+
+    console.print(panel)
+
+
+def _display_search_summary(results) -> None:
+    """Display pretty search results summary."""
+
+    # Create summary table
+    summary_table = Table(show_header=False, show_edge=False, pad_edge=False)
+    summary_table.add_column("key", style="bold magenta", no_wrap=True, width=12)
+    summary_table.add_column("value", style="white")
+
+    # Add summary info
+    summary_table.add_row("Results:", f"[green]{results.result_count}[/green]")
+    if results.total_found and results.total_found != results.result_count:
+        summary_table.add_row("Total Found:", f"[yellow]{results.total_found}[/yellow]")
+
+    if results.search_time:
+        summary_table.add_row("Time:", f"[cyan]{results.search_time:.2f}s[/cyan]")
+
+    summary_table.add_row("Backend:", f"[yellow]{results.backend}[/yellow]")
+
+    # Add domain diversity
+    if hasattr(results, "unique_domains"):
+        domains = results.unique_domains
+        if len(domains) > 5:
+            domain_text = f"{len(domains)} unique domains"
+        else:
+            domain_text = ", ".join(domains[:5])
+            if len(domains) > 5:
+                domain_text += f" (+{len(domains) - 5} more)"
+        summary_table.add_row("Domains:", domain_text)
+
+    # Create panel with summary
+    panel = Panel(
+        summary_table,
+        title="📊 Search Results",
+        title_align="left",
+        border_style="green",
+        expand=False,
+    )
+
+    console.print(panel)
+
+
 def _display_search_results(
     results, output_format: str, verbose: bool, save_results: Optional[str] = None
 ) -> None:
     """Display search results in the specified format."""
+
+    # If saving to file, show summary but skip console output of results
+    if save_results:
+        if verbose:
+            _display_search_summary(results)
+        _save_search_results(results, save_results, output_format)
+        return
+
+    # Otherwise, display to console as usual
+    # Show summary first in verbose mode
+    if verbose:
+        _display_search_summary(results)
     if output_format == "table":
         _display_results_table(results, verbose)
     elif output_format == "json":
@@ -886,10 +1678,6 @@ def _display_search_results(
     else:
         console.print(f"[red]Unknown output format: {output_format}[/red]")
         return
-
-    # Save results if requested
-    if save_results:
-        _save_search_results(results, save_results, output_format)
 
 
 def _display_results_table(results, verbose: bool = False) -> None:
@@ -931,32 +1719,34 @@ def _display_results_table(results, verbose: bool = False) -> None:
 
     # Create results table
     results_table = Table(show_header=True, header_style="bold blue")
-    results_table.add_column("Title", style="white", max_width=60)
-    results_table.add_column("Authors", style="dim white", max_width=30)
-    results_table.add_column("Journal", style="cyan", max_width=25)
-    results_table.add_column("Year", style="green", justify="center", max_width=6)
+    results_table.add_column("Title", style="white", max_width=70)
+    results_table.add_column("Backend", style="dim white", max_width=15)
+    results_table.add_column("Domain", style="cyan", max_width=20)
 
     if verbose:
-        results_table.add_column("PMID", style="yellow", justify="center", max_width=8)
+        results_table.add_column(
+            "Relevance", style="yellow", justify="center", max_width=10
+        )
 
     for result in results.results:
-        authors_str = ", ".join(result.authors[:3])  # First 3 authors
-        if len(result.authors) > 3:
-            authors_str += " et al."
-
-        year_str = ""
-        if result.publication_date:
-            year_str = str(result.publication_date.year)
+        domain = (
+            result.domain
+            if hasattr(result, "domain")
+            else result.url.split("/")[2]
+            if "/" in result.url
+            else result.url
+        )
 
         row = [
-            result.short_title,
-            authors_str or "[dim]No authors[/dim]",
-            result.journal or "[dim]Unknown[/dim]",
-            year_str or "[dim]N/A[/dim]",
+            result.title[:67] + "..." if len(result.title) > 70 else result.title,
+            result.backend,
+            domain,
         ]
 
-        if verbose and result.pmid:
-            row.append(result.pmid)
+        if verbose and result.relevance_score:
+            row.append(f"{result.relevance_score:.2f}")
+        elif verbose:
+            row.append("[dim]N/A[/dim]")
 
         results_table.add_row(*row)
 
@@ -992,22 +1782,20 @@ def _display_results_csv(results) -> None:
     writer = csv.writer(output)
 
     # Write header
-    writer.writerow(["Title", "Authors", "Journal", "Year", "URL", "DOI", "PMID"])
+    writer.writerow(
+        ["title", "url", "backend", "snippet", "relevance_score", "frequency"]
+    )
 
     # Write data
     for result in results.results:
-        authors_str = "; ".join(result.authors)
-        year_str = str(result.publication_date.year) if result.publication_date else ""
-
         writer.writerow(
             [
                 result.title,
-                authors_str,
-                result.journal or "",
-                year_str,
                 result.url,
-                result.doi or "",
-                result.pmid or "",
+                result.backend,
+                result.snippet or "",
+                result.relevance_score or "",
+                result.metadata.get("frequency", 1),
             ]
         )
 
@@ -1019,20 +1807,25 @@ def _display_results_jsonl(results) -> None:
     import json
 
     for result in results.results:
-        # Format compatible with extract command's expected JSONL structure
+        # Only include fields that contain actual data
         record = {
             "url": result.url,
             "title": result.title,
-            "authors": result.authors,
-            "journal": result.journal,
-            "publication_date": result.publication_date.isoformat()
-            if result.publication_date
-            else None,
-            "doi": result.doi,
-            "pmid": result.pmid,
             "backend": result.backend,
-            "relevance_score": result.relevance_score,
         }
+
+        # Include snippet if it exists
+        if result.snippet:
+            record["snippet"] = result.snippet
+
+        # Include relevance score for ranking
+        if result.relevance_score is not None:
+            record["relevance_score"] = result.relevance_score
+
+        # Include frequency as top-level field
+        if "frequency" in result.metadata:
+            record["frequency"] = result.metadata["frequency"]
+
         console.print(json.dumps(record, default=str))
 
 
@@ -1049,26 +1842,25 @@ def _save_search_results(results, filename: str, format_type: str) -> None:
 
                 writer = csv.writer(f)
                 writer.writerow(
-                    ["Title", "Authors", "Journal", "Year", "URL", "DOI", "PMID"]
+                    [
+                        "title",
+                        "url",
+                        "backend",
+                        "snippet",
+                        "relevance_score",
+                        "frequency",
+                    ]
                 )
 
                 for result in results.results:
-                    authors_str = "; ".join(result.authors)
-                    year_str = (
-                        str(result.publication_date.year)
-                        if result.publication_date
-                        else ""
-                    )
-
                     writer.writerow(
                         [
                             result.title,
-                            authors_str,
-                            result.journal or "",
-                            year_str,
                             result.url,
-                            result.doi or "",
-                            result.pmid or "",
+                            result.backend,
+                            result.snippet or "",
+                            result.relevance_score or "",
+                            result.metadata.get("frequency", 1),
                         ]
                     )
             elif format_type == "jsonl":
@@ -1078,16 +1870,15 @@ def _save_search_results(results, filename: str, format_type: str) -> None:
                     record = {
                         "url": result.url,
                         "title": result.title,
-                        "authors": result.authors,
-                        "journal": result.journal,
-                        "publication_date": result.publication_date.isoformat()
-                        if result.publication_date
-                        else None,
-                        "doi": result.doi,
-                        "pmid": result.pmid,
+                        "snippet": result.snippet,
                         "backend": result.backend,
                         "relevance_score": result.relevance_score,
                     }
+
+                    # Include frequency as top-level field if present
+                    if "frequency" in result.metadata:
+                        record["frequency"] = result.metadata["frequency"]
+
                     f.write(json.dumps(record, default=str) + "\n")
             elif format_type == "urls":
                 for result in results.results:
@@ -1376,9 +2167,6 @@ def extract(
         "--output",
         help="Output file path (defaults to extraction_results.jsonl)",
     ),
-    config: Optional[str] = typer.Option(
-        None, "-c", "--config", help="Path to configuration file"
-    ),
     mode: Optional[str] = typer.Option(
         None, "-m", "--mode", help="Configuration mode to use"
     ),
@@ -1391,24 +2179,15 @@ def extract(
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Show what would be processed without executing"
     ),
-    verbose: bool = typer.Option(
-        False,
-        "-v",
-        "--verbose",
-        help="Show verbose output and pretty tracebacks on errors",
-    ),
     failfast: bool = typer.Option(
         False, "--failfast", help="Stop on first error during processing"
     ),
     retry: bool = typer.Option(
         False, "--retry", help="Force retry of URLs previously marked as failed"
     ),
-    overrides: List[str] = typer.Option(
-        [],
-        "-O",
-        "--override",
-        help="Override config values using dotted paths (e.g., -O agents.llm=openai:gpt-4)",
-    ),
+    config: Optional[str] = GLOBAL_OPTIONS.config,
+    verbose: bool = GLOBAL_OPTIONS.verbose,
+    overrides: List[str] = GLOBAL_OPTIONS.overrides,
 ):
     """
     Extract entity interactions from web content.
@@ -1443,9 +2222,14 @@ def extract(
         # Preview processing
         interaction-finder extract -t diabetes --dry-run --verbose
     """
+    # Get effective options with global fallback
+    effective_config, effective_verbose, effective_overrides = (
+        get_options_with_fallback(config, verbose, overrides)
+    )
+
     # Load configuration first to handle case where no input_source is provided
     try:
-        cfg = load_config(config, mode, overrides)
+        cfg = load_config(effective_config, mode, effective_overrides)
 
         # Update task context with term if provided
         if term and not cfg.task.context:
@@ -1459,20 +2243,25 @@ def extract(
 
     # Handle search query option first
     if search_query is not None:
-        if verbose:
+        if effective_verbose:
             console.print(f"[dim]Using search query: '{search_query}'[/dim]")
 
         # Run search to get URLs
         search_results = asyncio.run(
             _run_search_for_extract(
-                search_query, search_backend, search_max_results, cfg, term, verbose
+                search_query,
+                search_backend,
+                search_max_results,
+                cfg,
+                term,
+                effective_verbose,
             )
         )
 
         urls = [result.url for result in search_results.results]
         source_type = "search"
 
-        if verbose:
+        if effective_verbose:
             console.print(f"[dim]Found {len(urls)} URLs from search[/dim]")
 
     # Handle case where no source is provided - use training_data from config
@@ -2076,21 +2865,20 @@ app.add_typer(config_app, name="config")
 
 @config_app.command("info")
 def config_info(
-    config: Optional[str] = typer.Option(
-        None, "-c", "--config", help="Path to configuration file"
-    ),
     mode: Optional[str] = typer.Option(
         None, "-m", "--mode", help="Configuration mode to use"
     ),
-    overrides: List[str] = typer.Option(
-        [],
-        "-O",
-        help="Override config values using dotted paths (e.g., -O workflow.grouping.enabled=false)",
-    ),
+    config: Optional[str] = GLOBAL_OPTIONS.config,
+    verbose: bool = GLOBAL_OPTIONS.verbose,
+    overrides: List[str] = GLOBAL_OPTIONS.overrides,
 ):
     """Show current configuration information."""
+    # Get effective options with global fallback
+    effective_config, effective_verbose, effective_overrides = (
+        get_options_with_fallback(config, verbose, overrides)
+    )
     try:
-        cfg = load_config(config, mode, overrides)
+        cfg = load_config(effective_config, mode, effective_overrides)
 
         table = Table(title="Configuration Information")
         table.add_column("Setting", style="cyan")
@@ -2134,28 +2922,36 @@ def config_info(
 
 @config_app.command("edit")
 def config_edit(
-    config: Optional[str] = typer.Option(
-        None, "-c", "--config", help="Path to configuration file to edit"
-    ),
+    config: Optional[str] = GLOBAL_OPTIONS.config,
+    verbose: bool = GLOBAL_OPTIONS.verbose,
+    overrides: List[str] = GLOBAL_OPTIONS.overrides,
 ):
     """Open interactive configuration editor."""
     from .settings_editor import run_config_editor
 
-    run_config_editor(config)
+    # Get effective options with global fallback
+    effective_config, effective_verbose, effective_overrides = (
+        get_options_with_fallback(config, verbose, overrides)
+    )
+    run_config_editor(effective_config)
 
 
 @config_app.command("validate")
 def config_validate(
-    config: Optional[str] = typer.Option(
-        None, "-c", "--config", help="Path to configuration file to validate"
-    ),
     mode: Optional[str] = typer.Option(
         None, "-m", "--mode", help="Configuration mode to validate"
     ),
+    config: Optional[str] = GLOBAL_OPTIONS.config,
+    verbose: bool = GLOBAL_OPTIONS.verbose,
+    overrides: List[str] = GLOBAL_OPTIONS.overrides,
 ):
     """Validate configuration file without loading full settings."""
+    # Get effective options with global fallback
+    effective_config, effective_verbose, effective_overrides = (
+        get_options_with_fallback(config, verbose, overrides)
+    )
     try:
-        cfg = load_config(config, mode)
+        cfg = load_config(effective_config, mode, effective_overrides)
         console.print(f"[green]✓ Configuration is valid[/green]")
 
         # Show some basic info
@@ -2173,6 +2969,292 @@ def config_validate(
         console.print(f"[red]✗ Configuration validation failed:[/red]")
         console.print(f"[red]  {e}[/red]")
         raise typer.Exit(1)
+
+
+@app.command()
+def evaluate(
+    backends: str = typer.Argument(
+        ...,
+        help="Backend names to evaluate, comma-separated (e.g., 'pubmed,perplexica')",
+    ),
+    query_set: str = typer.Option(
+        "biomedical",
+        "--query-set",
+        "-q",
+        help="Query set to use: 'biomedical', 'general', or path to custom file",
+    ),
+    output: Optional[str] = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Output file for evaluation results (JSON format)",
+    ),
+    max_results: int = typer.Option(
+        20, "--max-results", help="Maximum results to evaluate per query"
+    ),
+    timeout: int = typer.Option(
+        60, "--timeout", help="Timeout for search operations in seconds"
+    ),
+    mode: Optional[str] = typer.Option(
+        None, "-m", "--mode", help="Configuration mode to use"
+    ),
+    config: Optional[str] = GLOBAL_OPTIONS.config,
+    verbose: bool = GLOBAL_OPTIONS.verbose,
+    overrides: List[str] = GLOBAL_OPTIONS.overrides,
+) -> None:
+    """
+    Evaluate and compare search backends.
+
+    This command runs comparative evaluations of different search backends
+    using predefined or custom query sets. It measures performance metrics
+    like search time, result count, and similarity between backends.
+
+    Examples:
+        interaction-finder evaluate pubmed
+        interaction-finder evaluate pubmed,perplexica --query-set biomedical
+        interaction-finder evaluate pubmed,perplexica --output evaluation_results.json
+    """
+    # Get effective options with global fallback
+    effective_config, effective_verbose, effective_overrides = (
+        get_options_with_fallback(config, verbose, overrides)
+    )
+    asyncio.run(
+        _run_evaluate_command(
+            backends=backends,
+            query_set=query_set,
+            output=output,
+            max_results=max_results,
+            timeout=timeout,
+            config=effective_config,
+            mode=mode,
+            verbose=effective_verbose,
+            overrides=effective_overrides,
+        )
+    )
+
+
+async def _run_evaluate_command(
+    backends: str,
+    query_set: str,
+    output: Optional[str],
+    max_results: int,
+    timeout: int,
+    config: Optional[str],
+    mode: Optional[str],
+    verbose: bool,
+    overrides: List[str],
+) -> None:
+    """Run evaluation command asynchronously."""
+    try:
+        # Load configuration
+        cfg = load_config(config, mode, overrides)
+
+        # Parse backend list
+        backend_names = [name.strip() for name in backends.split(",")]
+
+        # Validate backends
+        for backend_name in backend_names:
+            if backend_name not in cfg.tools.search.enabled_backends:
+                console.print(f"[red]Backend '{backend_name}' is not enabled[/red]")
+                console.print(
+                    f"[blue]Enabled backends:[/blue] {', '.join(cfg.tools.search.enabled_backends)}"
+                )
+                raise typer.Exit(1)
+
+        # Get query set
+        if query_set == "biomedical":
+            queries = DEFAULT_BIOMEDICAL_QUERIES
+        elif query_set == "general":
+            queries = DEFAULT_GENERAL_QUERIES
+        elif Path(query_set).exists():
+            # Load custom query set from file
+            with open(query_set, "r") as f:
+                queries = [line.strip() for line in f if line.strip()]
+        else:
+            console.print(
+                f"[red]Unknown query set or file not found: {query_set}[/red]"
+            )
+            console.print(
+                "[blue]Available query sets:[/blue] biomedical, general, or path to file"
+            )
+            raise typer.Exit(1)
+
+        console.print(
+            f"[blue]Evaluating {len(backend_names)} backend(s) with {len(queries)} queries[/blue]"
+        )
+
+        # Set up evaluation configuration
+        eval_config = EvaluationConfig(
+            max_results_to_evaluate=max_results,
+            timeout_seconds=timeout,
+        )
+
+        runner = EvaluationRunner(eval_config)
+
+        if len(backend_names) == 1:
+            # Single backend evaluation
+            backend_name = backend_names[0]
+            backend_config = cfg.tools.search.get_backend_config(backend_name)
+
+            results = await runner.run_backend_evaluation(
+                queries=queries,
+                backend_name=backend_name,
+                backend_config=backend_config,
+                output_file=output,
+            )
+
+            runner.display_evaluation_results(results)
+
+        else:
+            # Comparative evaluation
+            backend_configs = {}
+            for backend_name in backend_names:
+                backend_configs[backend_name] = cfg.tools.search.get_backend_config(
+                    backend_name
+                )
+
+            results = await runner.run_comparison_evaluation(
+                queries=queries,
+                backend_configs=backend_configs,
+                output_file=output,
+            )
+
+            runner.display_evaluation_results(results)
+
+    except Exception as e:
+        handle_operation_error("during evaluation", e)
+
+
+@app.command()
+def cache(
+    action: str = typer.Argument(
+        ...,
+        help="Action to perform: 'stats', 'clear', 'clear-expired'",
+    ),
+    mode: Optional[str] = typer.Option(
+        None, "-m", "--mode", help="Configuration mode to use"
+    ),
+    config: Optional[str] = GLOBAL_OPTIONS.config,
+    verbose: bool = GLOBAL_OPTIONS.verbose,
+    overrides: List[str] = GLOBAL_OPTIONS.overrides,
+) -> None:
+    """
+    Manage search result cache.
+
+    Actions:
+    - stats: Show cache statistics
+    - clear: Clear all cached results
+    - clear-expired: Remove only expired cache entries
+
+    Examples:
+        interaction-finder cache stats
+        interaction-finder cache clear
+        interaction-finder cache clear-expired
+    """
+    # Get effective options with global fallback
+    effective_config, effective_verbose, effective_overrides = (
+        get_options_with_fallback(config, verbose, overrides)
+    )
+    asyncio.run(
+        _run_cache_command(
+            action, effective_config, mode, effective_verbose, effective_overrides
+        )
+    )
+
+
+async def _run_cache_command(
+    action: str,
+    config: Optional[str],
+    mode: Optional[str],
+    verbose: bool,
+    overrides: List[str],
+) -> None:
+    """Run cache management command asynchronously."""
+    try:
+        # Load configuration
+        cfg = load_config(config, mode, overrides)
+
+        # Set up cache
+        cache_dir = cfg.abspath(cfg.output.cache) / "search"
+        cache = SearchCache(cache_dir, cfg.tools.search.cache.ttl_hours)
+
+        if action == "stats":
+            stats = await cache.get_stats()
+            console.print("[blue]Search Cache Statistics[/blue]")
+            console.print(f"Total entries: {stats['total_entries']}")
+            console.print(f"Valid entries: {stats['valid_entries']}")
+            console.print(f"Expired entries: {stats['expired_entries']}")
+            console.print(
+                f"Cache size: {stats['cache_size_bytes'] / (1024 * 1024):.2f} MB"
+            )
+
+        elif action == "clear":
+            removed = await cache.clear_all()
+            if removed > 0:
+                console.print(f"[green]Cleared {removed} cache entries[/green]")
+            else:
+                console.print("[dim]Cache was already empty[/dim]")
+
+        elif action == "clear-expired":
+            removed = await cache.clear_expired()
+            if removed > 0:
+                console.print(f"[green]Removed {removed} expired cache entries[/green]")
+            else:
+                console.print("[dim]No expired entries found[/dim]")
+
+        else:
+            console.print(f"[red]Unknown action: {action}[/red]")
+            console.print("[blue]Available actions:[/blue] stats, clear, clear-expired")
+            raise typer.Exit(1)
+
+    except Exception as e:
+        handle_operation_error("during cache management", e)
+
+
+# Hidden completion subcommands
+@app.command(name="install-completion", hidden=True)
+def install_completion():
+    """Install shell completion for the current shell."""
+    console.print("[blue]Shell completion setup:[/blue]")
+    console.print("")
+    console.print("[green]For Bash, add this to ~/.bashrc:[/green]")
+    console.print(
+        'eval "$(_INTERACTION_FINDER_COMPLETE=bash_source interaction-finder)"'
+    )
+    console.print("")
+    console.print("[green]For Zsh, add this to ~/.zshrc:[/green]")
+    console.print(
+        'eval "$(_INTERACTION_FINDER_COMPLETE=zsh_source interaction-finder)"'
+    )
+    console.print("")
+    console.print(
+        "[green]For Fish, add this to ~/.config/fish/completions/interaction-finder.fish:[/green]"
+    )
+    console.print(
+        "eval (env _INTERACTION_FINDER_COMPLETE=fish_source interaction-finder)"
+    )
+
+
+@app.command(name="show-completion", hidden=True)
+def show_completion(
+    shell: str = typer.Option("bash", help="Shell type: bash, zsh, fish"),
+):
+    """Show shell completion script for the current shell."""
+    import os
+
+    # Set the completion environment variable and call the app
+    env_var = f"_INTERACTION_FINDER_COMPLETE"
+    shell_source = f"{shell}_source"
+
+    console.print(f"# Completion script for {shell}")
+    console.print(
+        f'# Run: eval "$(_INTERACTION_FINDER_COMPLETE={shell_source} interaction-finder)"'
+    )
+    console.print("")
+    console.print(f"export {env_var}={shell_source}")
+    console.print(
+        "# Note: This requires the Click completion system to be properly set up"
+    )
 
 
 def main():
