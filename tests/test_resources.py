@@ -9,6 +9,7 @@ import pytest
 from pydantic import ValidationError
 from interaction_finder.resources import (
     normalize_text_for_matching,
+    expand_scientific_shorthand,
     ResourceId,
     Resource,
     ResourcePool,
@@ -126,6 +127,67 @@ class TestNormalizeTextForMatching:
         assert "0001" in result
 
 
+class TestExpandScientificShorthand:
+    """Test scientific shorthand expansion function."""
+
+    def test_comma_separated_variants(self):
+        """Test comma-separated gene variants like ISCA1,2."""
+        # Basic comma pattern
+        assert expand_scientific_shorthand("ISCA1,2") == ["ISCA1", "ISCA2"]
+        assert expand_scientific_shorthand("COL1A1,A2") == ["COL1A1", "COL1A2"]
+        assert expand_scientific_shorthand("NFU1,2") == ["NFU1", "NFU2"]
+
+    def test_slash_separated_variants(self):
+        """Test slash-separated variants."""
+        # Greek letter variants
+        assert expand_scientific_shorthand("p53α/β") == ["p53α", "p53β"]
+        # Basic slash pattern should be caught by comma pattern
+        assert expand_scientific_shorthand("COL1A1/A2") == ["COL1A1", "COL1A2"]
+
+    def test_numeric_ranges(self):
+        """Test numeric range expansion."""
+        assert expand_scientific_shorthand("exons 2-4") == [
+            "exon 2",
+            "exon 3",
+            "exon 4",
+        ]
+        assert expand_scientific_shorthand("chapters 1-3") == [
+            "chapter 1",
+            "chapter 2",
+            "chapter 3",
+        ]
+        assert expand_scientific_shorthand("domains 5-7") == [
+            "domain 5",
+            "domain 6",
+            "domain 7",
+        ]
+
+    def test_no_expansion_needed(self):
+        """Test cases where no expansion is possible."""
+        # Single entities
+        assert expand_scientific_shorthand("BRCA1") == ["BRCA1"]
+        assert expand_scientific_shorthand("breast cancer") == ["breast cancer"]
+
+        # Complex text without patterns
+        assert expand_scientific_shorthand("The protein is important") == [
+            "The protein is important"
+        ]
+
+    def test_range_size_limit(self):
+        """Test that large ranges are not expanded."""
+        # Should not expand ranges > 20 items
+        result = expand_scientific_shorthand("pages 1-50")
+        assert result == ["pages 1-50"]  # Original returned, no expansion
+
+    def test_original_functionality_preserved(self):
+        """Test the exact case from the user's example."""
+        # This is the specific case that was failing validation
+        expansions = expand_scientific_shorthand("ISCA1,2 and IBA57 are required")
+        # Should expand to versions with ISCA1 and ISCA2 separately
+        expected = ["ISCA1 and IBA57 are required", "ISCA2 and IBA57 are required"]
+        assert expansions == expected
+
+
 class TestResourceId:
     """Test ResourceId creation and validation."""
 
@@ -137,7 +199,7 @@ class TestResourceId:
 
         assert resource_id.url == url
         assert resource_id.id.startswith("1_")
-        assert len(resource_id.id.split("_")[1]) == 8  # 8-char hash
+        assert len(resource_id.id.split("_")[1]) == 8  # 8-hex chars (4-byte digest)
 
     def test_stable_id_generation(self):
         """Test that same URL + counter produces same ID."""
@@ -176,7 +238,7 @@ class TestResourceId:
 
         # Verify the ID format is correct
         assert resource_id.id.startswith("1_")
-        assert len(resource_id.id) == 10  # "1_" + 8 character hash
+        assert len(resource_id.id) == 10  # "1_" + 8 hex chars
         assert resource_id.url == "https://example.com"
 
 
@@ -311,13 +373,12 @@ class TestResource:
 
         # Test successful quote creation
         quote = resource.quote("BRCA1 gene")
-        assert quote is not None
         assert quote.get_quote_text() == "BRCA1 gene"
         assert quote.resource == resource
 
-        # Test non-existent quote
-        no_quote = resource.quote("nonexistent text")
-        assert no_quote is None
+        # Test non-existent quote raises ValueError
+        with pytest.raises(ValueError, match="Quote text not found in resource"):
+            resource.quote("nonexistent text")
 
 
 class TestResourcePool:
@@ -634,7 +695,6 @@ class TestResourceQuote:
 
         # Test Resource.quote() method
         quote = resource.quote("BRCA1")
-        assert quote is not None
         assert quote.count == 3
 
         # Test error handling for non-existent occurrence
@@ -732,8 +792,7 @@ class TestIntegrationScenarios:
         quotes = []
         for quote_text in test_quotes:
             quote = resource.quote(quote_text)  # Use new quote() method
-            assert quote is not None, f"Could not find quote: {quote_text}"
-            # Quote is valid if constructor succeeded
+            # Quote is valid if constructor succeeded (no ValueError raised)
             quotes.append(quote)
 
         # Test context extraction
