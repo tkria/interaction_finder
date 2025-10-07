@@ -7,13 +7,22 @@ Provides a menu-driven interface for editing configuration files.
 # SECTION 1: Imports and Constants
 # ============================================================================
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union, get_type_hints
+from typing import (
+    Any,
+    Dict,
+    List,
+    Optional,
+    Tuple,
+    Union,
+    get_origin,
+    get_args,
+)
 from datetime import datetime
 import copy
-import re
 import sys
 import tty
 import termios
+import inspect
 
 try:
     import tomli
@@ -26,213 +35,490 @@ from rich.table import Table
 from rich.prompt import Prompt, IntPrompt, Confirm, FloatPrompt
 from rich.panel import Panel
 from rich.text import Text
-from rich.columns import Columns
-from rich.rule import Rule
-from rich.align import Align
 from rich.layout import Layout
 from rich.live import Live
 from rich.tree import Tree
-from pydantic import ValidationError
+from pydantic import ValidationError, BaseModel
+from pydantic.fields import FieldInfo
 from .settings import IfetcherConfig
 
-# ============================================================================
-# SECTION 2: Configuration Field Metadata
-# ============================================================================
-FIELD_METADATA = {
-    # Tools Configuration
-    "tools.crawl4ai.timeout": {
-        "type": "int",
-        "help": "Request timeout in seconds",
-        "min": 1,
-        "max": 600,
-    },
-    "tools.crawl4ai.max_retries": {
-        "type": "int",
-        "help": "Maximum number of retry attempts",
-        "min": 0,
-        "max": 10,
-    },
-    "tools.crawl4ai.max_concurrent": {
-        "type": "int",
-        "help": "Maximum concurrent requests",
-        "min": 1,
-        "max": 50,
-    },
-    "tools.crawl4ai.delay_between_requests": {
-        "type": "float",
-        "help": "Delay between requests in seconds",
-        "min": 0.0,
-        "max": 10.0,
-    },
-    "tools.crawl4ai.user_agent": {
-        "type": "string",
-        "help": "HTTP User-Agent string for requests",
-    },
-    "tools.searxng.categories": {
-        "type": "string",
-        "help": "Search categories for SearXNG",
-    },
-    "tools.enabled": {
-        "type": "list",
-        "help": "List of enabled tools (e.g., crawl4ai, searxng)",
-    },
-    "tools.searxng.blocked_sites": {
-        "type": "list",
-        "help": "List of sites to block in search results",
-    },
-    # Workflow Configuration
-    "workflow.grouping.enabled": {
-        "type": "bool",
-        "help": "Enable document grouping by semantic similarity",
-    },
-    "workflow.grouping.constraint_type": {
-        "type": "choice",
-        "choices": ["count", "words"],
-        "help": "Group by document count or total word count",
-    },
-    "workflow.grouping.min_size": {
-        "type": "int",
-        "help": "Minimum group size",
-        "min": 1,
-        "max": 100,
-    },
-    "workflow.grouping.max_size": {
-        "type": "int",
-        "help": "Maximum group size",
-        "min": 1,
-        "max": 100,
-    },
-    "workflow.grouping.linkage_method": {
-        "type": "choice",
-        "choices": ["average", "complete", "single"],
-        "help": "Clustering linkage method for grouping",
-    },
-    "workflow.max_loops": {
-        "type": "int",
-        "help": "Maximum processing loops",
-        "min": 1,
-        "max": 50,
-    },
-    "workflow.max_tokens": {
-        "type": "int",
-        "help": "Maximum tokens for processing",
-        "min": 1000,
-        "max": 2000000,
-    },
-    "workflow.max_requests": {
-        "type": "int",
-        "help": "Maximum number of requests (null for unlimited)",
-        "min": 1,
-        "max": 10000,
-        "nullable": True,
-    },
-    "workflow.summary.chunksize": {
-        "type": "int",
-        "help": "Chunk size for summarization",
-        "min": 1,
-        "max": 100,
-    },
-    "workflow.summary.maxchars": {
-        "type": "int",
-        "help": "Maximum characters for summarization",
-        "min": 1000,
-        "max": 200000,
-    },
-    "workflow.unstructured_comparison": {
-        "type": "bool",
-        "help": "Enable unstructured comparison mode",
-    },
-    # Output Configuration
-    "output.path": {
-        "type": "string",
-        "help": "Output path template (supports {mode}, {model}, {repeat}, {term})",
-    },
-    "output.cache": {"type": "string", "help": "Cache directory path"},
-    # Training Data
-    "training_data": {
-        "type": "string",
-        "help": "Training data path template (supports {term})",
-    },
-    # Researcher
-    "researcher": {
-        "type": "choice",
-        "choices": [""],
-        "help": "Research mode (currently only default supported)",
-    },
-    # Additional Tool Settings
-    "tools.ontologies.hpo_path": {
-        "type": "string",
-        "help": "Path to HPO (Human Phenotype Ontology) file",
-    },
-    "tools.ontologies.cl_path": {
-        "type": "string",
-        "help": "Path to CL (Cell Ontology) file",
-    },
-    "tools.external_researcher.cmd": {
-        "type": "list",
-        "help": "External researcher command and arguments",
-    },
-    "tools.external_researcher.strip_re": {
-        "type": "list",
-        "help": "List of regex patterns to strip from external researcher output",
-    },
-    "tools.external_researcher.dir": {
-        "type": "string",
-        "help": "Working directory for external researcher",
-    },
-    # Task Configuration
-    "task.relation": {
-        "type": "string",
-        "help": "Type of relation to extract (e.g., 'Interaction')",
-    },
-    "task.pairs": {"type": "string", "help": "Pair extraction mode"},
-    "task.context": {"type": "string", "help": "Context information for task"},
-    "task.example": {
-        "type": "list",
-        "help": "Example interactions for the task",
-    },
-}
 
-# Menu structure definition
-MENU_STRUCTURE = {
-    "1": {
-        "title": "Tools Configuration",
-        "section": "tools",
-        "subsections": {
-            "1": {"title": "Crawl4AI Settings", "prefix": "tools.crawl4ai"},
-            "2": {"title": "SearXNG Settings", "prefix": "tools.searxng"},
-            "3": {"title": "Ontologies Settings", "prefix": "tools.ontologies"},
-            "4": {
-                "title": "External Researcher",
-                "prefix": "tools.external_researcher",
-            },
-        },
-    },
-    "2": {
-        "title": "Workflow Configuration",
-        "section": "workflow",
-        "subsections": {
-            "1": {"title": "Document Grouping", "prefix": "workflow.grouping"},
-            "2": {"title": "Summarization", "prefix": "workflow.summary"},
-            "3": {"title": "General Workflow", "prefix": "workflow"},
-        },
-    },
-    "3": {
-        "title": "Task Configuration",
-        "section": "task",
-        "subsections": {"1": {"title": "Task Settings", "prefix": "task"}},
-    },
-    "4": {
-        "title": "Output Settings",
-        "section": "output",
-        "subsections": {"1": {"title": "Output Configuration", "prefix": "output"}},
-    },
-    "5": {
-        "title": "Training & Research",
-        "section": "misc",
-        "subsections": {"1": {"title": "Training Data", "prefix": ""}},
-    },
-}
+# ============================================================================
+# SECTION 2: Model Inspector for Dynamic Configuration
+# ============================================================================
+class ModelInspector:
+    """Inspects Pydantic models to extract field metadata dynamically."""
+
+    @staticmethod
+    def get_field_type(field_info: FieldInfo, annotation: type) -> str:
+        """Extract field type from annotation and field info."""
+        # Handle Optional types
+        origin = get_origin(annotation)
+        args = get_args(annotation)
+
+        # Check for Union[T, None] (Optional[T])
+        if origin is Union:
+            # Filter out NoneType to get the actual type
+            non_none_types = [arg for arg in args if arg is not type(None)]
+            if len(non_none_types) == 1:
+                annotation = non_none_types[0]
+                origin = get_origin(annotation)
+                args = get_args(annotation)
+
+        # Handle generic types like List, Dict
+        if origin is list or annotation is list:
+            return "list"
+        elif origin is dict or annotation is dict:
+            # Check if this is a Dict[str, BaseModel] (structured dict)
+            if args and len(args) == 2:
+                key_type, value_type = args
+                if (
+                    key_type is str
+                    and inspect.isclass(value_type)
+                    and issubclass(value_type, BaseModel)
+                ):
+                    return "structured_dict"
+            return "dict"
+        elif annotation is bool:
+            return "bool"
+        elif annotation is int:
+            return "int"
+        elif annotation is float:
+            return "float"
+        elif annotation is str:
+            return "string"
+        else:
+            return "string"  # Default fallback
+
+    @staticmethod
+    def get_field_constraints(field_info: FieldInfo) -> Dict[str, Any]:
+        """Extract constraints from FieldInfo metadata."""
+        constraints = {}
+
+        # Check metadata list for constraint objects
+        if hasattr(field_info, "metadata") and field_info.metadata:
+            for constraint_obj in field_info.metadata:
+                # Handle Ge (greater than or equal) constraints
+                if hasattr(constraint_obj, "ge") and constraint_obj.ge is not None:
+                    constraints["min"] = constraint_obj.ge
+                # Handle Le (less than or equal) constraints
+                elif hasattr(constraint_obj, "le") and constraint_obj.le is not None:
+                    constraints["max"] = constraint_obj.le
+                # Handle Gt (greater than) constraints
+                elif hasattr(constraint_obj, "gt") and constraint_obj.gt is not None:
+                    constraints["min"] = constraint_obj.gt + (
+                        1 if isinstance(constraint_obj.gt, int) else 0.1
+                    )
+                # Handle Lt (less than) constraints
+                elif hasattr(constraint_obj, "lt") and constraint_obj.lt is not None:
+                    constraints["max"] = constraint_obj.lt - (
+                        1 if isinstance(constraint_obj.lt, int) else 0.1
+                    )
+                # Handle MinLen constraints
+                elif (
+                    hasattr(constraint_obj, "min_length")
+                    and constraint_obj.min_length is not None
+                ):
+                    constraints["min_length"] = constraint_obj.min_length
+                # Handle MaxLen constraints
+                elif (
+                    hasattr(constraint_obj, "max_length")
+                    and constraint_obj.max_length is not None
+                ):
+                    constraints["max_length"] = constraint_obj.max_length
+
+        return constraints
+
+    @staticmethod
+    def extract_choices_from_validator(
+        model: type, field_name: str
+    ) -> Optional[List[str]]:
+        """Extract choices from field validators."""
+        # Look for methods that validate this specific field
+        validator_method_name = f"validate_{field_name}"
+        if hasattr(model, validator_method_name):
+            try:
+                validator_func = getattr(model, validator_method_name)
+                source = inspect.getsource(validator_func)
+
+                # Look for common patterns that define choices
+                import re
+
+                # Pattern for "not in (" followed by quoted values
+                match = re.search(r"not in \(([^)]+)\)", source)
+                if match:
+                    choices_str = match.group(1)
+                    # Parse quoted strings
+                    choices = re.findall(r'["\']([^"\']+)["\']', choices_str)
+                    return choices
+
+                # Pattern for "not in [" followed by quoted values
+                match = re.search(r"not in \[([^\]]+)\]", source)
+                if match:
+                    choices_str = match.group(1)
+                    choices = re.findall(r'["\']([^"\']+)["\']', choices_str)
+                    return choices
+
+                # Pattern for variable assignment followed by "not in variable"
+                # Look for: valid_modes = [...] followed by if v not in valid_modes
+                var_assignment = re.search(r"(\w+)\s*=\s*\[([^\]]+)\]", source)
+                if var_assignment:
+                    var_name = var_assignment.group(1)
+                    choices_str = var_assignment.group(2)
+                    # Check if this variable is used in not in check
+                    if f"not in {var_name}" in source:
+                        choices = re.findall(r'["\']([^"\']+)["\']', choices_str)
+                        return choices
+
+            except Exception:
+                pass
+        return None
+
+    @classmethod
+    def inspect_model(cls, model: type, prefix: str = "") -> Dict[str, Dict[str, Any]]:
+        """Recursively inspect a Pydantic model and return field metadata."""
+        metadata = {}
+
+        if not issubclass(model, BaseModel):
+            return metadata
+
+        for field_name, field_info in model.model_fields.items():
+            field_path = f"{prefix}.{field_name}" if prefix else field_name
+            annotation = model.model_fields[field_name].annotation
+
+            # Handle Optional types first
+            origin = get_origin(annotation)
+            args = get_args(annotation)
+
+            # Handle Optional[NestedModel]
+            if origin is Union:
+                non_none_types = [arg for arg in args if arg is not type(None)]
+                if len(non_none_types) == 1:
+                    annotation = non_none_types[0]
+                    origin = get_origin(annotation)
+
+            # Check if this is a BaseModel subclass - if so, recurse but don't create metadata for it
+            if (
+                inspect.isclass(annotation)
+                and issubclass(annotation, BaseModel)
+                and annotation is not BaseModel
+            ):
+                # Recursively inspect nested BaseModel fields (don't create metadata for the container)
+                nested_meta = cls.inspect_model(annotation, field_path)
+                metadata.update(nested_meta)
+            else:
+                # This is a leaf field - create metadata for it
+                field_type = cls.get_field_type(field_info, annotation)
+                constraints = cls.get_field_constraints(field_info)
+
+                field_meta = {
+                    "type": field_type,
+                    "help": field_info.description or f"Configuration for {field_name}",
+                    **constraints,
+                }
+
+                # For structured dicts, store the value model type for better formatting
+                origin = get_origin(annotation)
+                if field_type == "structured_dict" and origin is dict:
+                    args = get_args(annotation)
+                    if len(args) == 2:
+                        _, value_type = args
+                        field_meta["value_model"] = value_type.__name__
+
+                # Check if field is nullable
+                if get_origin(annotation) is Union:
+                    args = get_args(annotation)
+                    if type(None) in args:
+                        field_meta["nullable"] = True
+
+                # Look for choices in validators
+                choices = cls.extract_choices_from_validator(model, field_name)
+                if choices:
+                    field_meta["type"] = "choice"
+                    field_meta["choices"] = choices
+
+                metadata[field_path] = field_meta
+
+        return metadata
+
+    @classmethod
+    def build_menu_structure(cls, model: type) -> Dict[str, Dict[str, Any]]:
+        """Build menu structure dynamically from model hierarchy."""
+        structure = {}
+        counter = 1
+
+        # First, add sections for nested BaseModel classes
+        for field_name, field_info in model.model_fields.items():
+            annotation = field_info.annotation
+
+            # Handle Optional types
+            origin = get_origin(annotation)
+            if origin is Union:
+                args = get_args(annotation)
+                non_none_types = [arg for arg in args if arg is not type(None)]
+                if len(non_none_types) == 1:
+                    annotation = non_none_types[0]
+
+            # Only create sections for nested BaseModel classes
+            if (
+                inspect.isclass(annotation)
+                and issubclass(annotation, BaseModel)
+                and annotation is not BaseModel
+            ):
+                # Get the class docstring for the section title
+                title = (
+                    getattr(annotation, "__doc__", "").strip().split("\n")[0]
+                    if annotation.__doc__
+                    else field_name.title()
+                )
+                if not title:
+                    title = field_name.replace("_", " ").title()
+
+                # Clean up redundant prefixes for better readability
+                title = cls._clean_title(title)
+
+                structure[str(counter)] = {
+                    "title": title,
+                    "section": field_name,
+                    "subsections": cls._build_subsections(annotation, field_name),
+                }
+                counter += 1
+
+        # Check if there are any root-level fields (non-BaseModel fields)
+        root_fields = []
+        for field_name, field_info in model.model_fields.items():
+            annotation = field_info.annotation
+            origin = get_origin(annotation)
+            if origin is Union:
+                args = get_args(annotation)
+                non_none_types = [arg for arg in args if arg is not type(None)]
+                if len(non_none_types) == 1:
+                    annotation = non_none_types[0]
+
+            # If not a nested BaseModel, it's a root field
+            if not (
+                inspect.isclass(annotation)
+                and issubclass(annotation, BaseModel)
+                and annotation is not BaseModel
+            ):
+                root_fields.append(field_name)
+
+        # If there are root-level fields, add a "General Settings" section
+        if root_fields:
+            structure[str(counter)] = {
+                "title": "General Settings",
+                "section": "general",
+                "subsections": {"1": {"title": "General Configuration", "prefix": ""}},
+            }
+
+        return structure
+
+    @staticmethod
+    def _clean_title(title: str) -> str:
+        """Clean up redundant prefixes and make titles more concise."""
+        # Remove common redundant prefixes
+        prefixes_to_remove = ["Configuration for ", "Settings for ", "Config for "]
+
+        for prefix in prefixes_to_remove:
+            if title.startswith(prefix):
+                title = title[len(prefix) :]
+                break
+
+        # Remove trailing periods
+        title = title.rstrip(".")
+
+        # Simplify some common patterns
+        replacements = {
+            "web scraping tool": "Web Scraping",
+            "search engine integration": "Search Engine",
+            "file paths": "File Paths",
+            "research tools and commands": "External Research",
+            "task definition and parameters": "Task Definition",
+            "document handling": "Document Processing",
+            "document summarization parameters": "Summarization",
+            "document grouping within workflow": "Document Grouping",
+            "file paths and caching": "Output & Caching",
+        }
+
+        for old, new in replacements.items():
+            if old in title.lower():
+                title = new
+                break
+
+        # Capitalize first letter if not already done
+        if title:
+            title = title[0].upper() + title[1:]
+
+        return title
+
+    @classmethod
+    def _build_subsections(
+        cls, model: type, parent_prefix: str
+    ) -> Dict[str, Dict[str, str]]:
+        """Build subsections for nested models."""
+        subsections = {}
+        counter = 1
+
+        for field_name, field_info in model.model_fields.items():
+            annotation = field_info.annotation
+
+            # Handle Optional types
+            origin = get_origin(annotation)
+            if origin is Union:
+                args = get_args(annotation)
+                non_none_types = [arg for arg in args if arg is not type(None)]
+                if len(non_none_types) == 1:
+                    annotation = non_none_types[0]
+
+            if (
+                inspect.isclass(annotation)
+                and issubclass(annotation, BaseModel)
+                and annotation is not BaseModel
+            ):
+                # Get class docstring for title
+                title = (
+                    getattr(annotation, "__doc__", "").strip().split("\n")[0]
+                    if annotation.__doc__
+                    else field_name.title()
+                )
+                if not title:
+                    title = field_name.replace("_", " ").title()
+
+                # Clean up redundant prefixes
+                title = cls._clean_title(title)
+
+                subsections[str(counter)] = {
+                    "title": title,
+                    "prefix": f"{parent_prefix}.{field_name}",
+                }
+                counter += 1
+
+        # If no nested models, create a generic subsection for the fields
+        if not subsections:
+            # For subsections without nested models, use a simplified title
+            # This avoids redundant titles like "Task Definition -> Task Definition"
+            subsections["1"] = {"title": "Settings", "prefix": parent_prefix}
+
+        return subsections
+
+
+class ConfigValueFormatter:
+    """Smart formatters for different types of configuration values."""
+
+    @staticmethod
+    def format_value(
+        value: Any, field_type: str, field_name: str = "", metadata: dict = None
+    ) -> str:
+        """Format a configuration value for display in the tree."""
+        metadata = metadata or {}
+
+        if value is None:
+            return "[dim]None[/dim]"
+
+        if field_type == "bool":
+            return "[green]true[/green]" if value else "[red]false[/red]"
+
+        elif field_type in ("int", "float"):
+            return f"[cyan]{value}[/cyan]"
+
+        elif field_type == "string":
+            return ConfigValueFormatter._format_string(value, field_name)
+
+        elif field_type == "list":
+            return ConfigValueFormatter._format_list(value, field_name)
+
+        elif field_type == "structured_dict":
+            return ConfigValueFormatter._format_structured_dict(
+                value, metadata.get("value_model", "")
+            )
+
+        elif field_type == "dict":
+            return ConfigValueFormatter._format_dict(value, field_name)
+
+        else:
+            return str(value)
+
+    @staticmethod
+    def _format_string(value: str, field_name: str) -> str:
+        """Format string values with smart truncation."""
+        if not value:
+            return '[dim]""[/dim]'
+
+        # Show path templates nicely
+        if "{" in value and "}" in value:
+            if len(value) > 25:
+                return f"[bright_green]{value[:22]}…[/bright_green]"
+            return f"[bright_green]{value}[/bright_green]"
+
+        # Regular strings
+        if len(value) > 20:
+            return f"[bright_green]{value[:17]}…[/bright_green]"
+        return f"[bright_green]{value}[/bright_green]"
+
+    @staticmethod
+    def _format_list(value: list, field_name: str) -> str:
+        """Format list values with smart summaries."""
+        if not value:
+            return "[dim][][/dim]"
+
+        count = len(value)
+        if count == 0:
+            return "[dim][][/dim]"
+
+        # For short lists of strings, show them
+        if count <= 3 and all(isinstance(item, str) for item in value):
+            items_str = ", ".join(str(item) for item in value)
+            if len(items_str) <= 25:
+                return f"[magenta][{items_str}][/magenta]"
+
+        # For longer lists or complex items, show count with context
+        if "site" in field_name.lower():
+            return f"[magenta][{count} sites][/magenta]"
+        elif "tool" in field_name.lower():
+            return f"[magenta][{count} tools][/magenta]"
+        else:
+            return f"[magenta][{count} items][/magenta]"
+
+    @staticmethod
+    def _format_structured_dict(value: dict, value_model: str) -> str:
+        """Format structured dictionaries like agents, kinds."""
+        if not value:
+            return "[dim]{}[/dim]"
+
+        count = len(value)
+        if count == 0:
+            return "[dim]{}[/dim]"
+
+        keys = list(value.keys())
+
+        # Show configured items with their names
+        if count <= 3:
+            keys_str = ", ".join(keys)
+            if value_model:
+                return f"[yellow]{{{keys_str}}}[/yellow] [dim]({count} {value_model.lower()}s)[/dim]"
+            else:
+                return f"[yellow]{{{keys_str}}}[/yellow]"
+        else:
+            if value_model:
+                return f"[yellow]{{{count} {value_model.lower()}s configured}}[/yellow]"
+            else:
+                return f"[yellow]{{{count} items}}[/yellow]"
+
+    @staticmethod
+    def _format_dict(value: dict, field_name: str) -> str:
+        """Format generic dictionaries."""
+        if not value:
+            return "[dim]{}[/dim]"
+
+        count = len(value)
+        if count == 0:
+            return "[dim]{}[/dim]"
+
+        # For mode overrides or similar
+        if "mode" in field_name.lower():
+            return f"[yellow]{{{count} modes}}[/yellow]"
+        else:
+            return f"[yellow]{{{count} keys}}[/yellow]"
 
 
 # ============================================================================
@@ -721,7 +1007,133 @@ class ValueEditor:
 
 
 # ============================================================================
-# SECTION 6: Configuration Navigation and Manipulation
+# SECTION 6: Structured Dict Editor
+# ============================================================================
+class StructuredDictEditor:
+    """Interactive editor for Dict[str, BaseModel] configurations with tab navigation."""
+
+    def __init__(
+        self,
+        current_value: dict,
+        value_model: type,
+        field_path: str,
+        help_text: str = "",
+    ):
+        self.entries = current_value.copy() if current_value else {}
+        self.value_model = value_model
+        self.field_path = field_path
+        self.help_text = help_text
+        self.console = Console()
+
+        # Navigation state
+        self.selected_entry_index = 0
+        self.focused_field = 0  # 0 = key, 1+ = value fields
+        self.mode = "browse"  # browse | edit_field | add_entry
+
+        # Get model field information for form layout
+        self.model_fields = self._get_model_fields()
+
+        # Current editing state
+        self.edit_key = ""
+        self.edit_value = None
+        self.original_key = ""
+
+    def _get_model_fields(self) -> list:
+        """Extract field information from the value model."""
+        fields = [("_key", "string", "Entry identifier")]  # Field 0: the key
+
+        # Add fields from the BaseModel
+        if hasattr(self.value_model, "model_fields"):
+            for name, field_info in self.value_model.model_fields.items():
+                field_type = ModelInspector.get_field_type(
+                    field_info, field_info.annotation
+                )
+                description = field_info.description or f"Configuration for {name}"
+                fields.append((name, field_type, description))
+
+        return fields
+
+    def edit_interactive(self) -> dict:
+        """Main interactive editing loop with tab navigation."""
+        if not self.entries:
+            # If empty, start by adding first entry
+            return self._prompt_for_first_entry()
+
+        entry_keys = list(self.entries.keys())
+        self.selected_entry_index = 0
+
+        while True:
+            self._render_display()
+            key = self._get_key()
+
+            if self.mode == "browse":
+                if key == "UP":
+                    self.selected_entry_index = max(0, self.selected_entry_index - 1)
+                elif key == "DOWN":
+                    self.selected_entry_index = min(
+                        len(entry_keys) - 1, self.selected_entry_index + 1
+                    )
+                elif key == "ENTER":
+                    self.mode = "edit_field"
+                    self.focused_field = 0
+                elif key == "+":
+                    self._add_new_entry()
+                    entry_keys = list(self.entries.keys())
+                elif key == "DELETE":
+                    self._delete_current_entry()
+                    entry_keys = list(self.entries.keys())
+                    if not entry_keys:
+                        break
+                elif key == "ESCAPE":
+                    return self.entries
+
+            elif self.mode == "edit_field":
+                if key == "TAB":
+                    self.focused_field = (self.focused_field + 1) % len(
+                        self.model_fields
+                    )
+                elif key == "SHIFT+TAB":
+                    self.focused_field = (self.focused_field - 1) % len(
+                        self.model_fields
+                    )
+                elif key == "ENTER":
+                    self._edit_current_field()
+                elif key == "ESCAPE":
+                    self.mode = "browse"
+
+        return self.entries
+
+    def _prompt_for_first_entry(self) -> dict:
+        """Prompt to add the first entry when dict is empty."""
+        # TODO: Implement proper input handling
+        return self.entries
+
+    def _add_new_entry(self):
+        """Add a new entry to the dict."""
+        # TODO: Implement key input and value creation
+        pass
+
+    def _delete_current_entry(self):
+        """Delete the currently selected entry."""
+        # TODO: Implement deletion with confirmation
+        pass
+
+    def _edit_current_field(self):
+        """Edit the currently focused field."""
+        # TODO: Implement field editing based on field type
+        pass
+
+    def _render_display(self):
+        """Render the current state."""
+        # TODO: Implement Rich panel display
+        pass
+
+    def _get_key(self) -> str:
+        """Get keyboard input."""
+        return KeyboardInput.get_key()
+
+
+# SECTION 7: Configuration Navigation and Manipulation
 # ============================================================================
 class ConfigNavigator:
     """Navigate and manipulate nested configuration dictionaries."""
@@ -763,12 +1175,12 @@ class ConfigNavigator:
 
     @staticmethod
     def get_section_fields(
-        config_dict: dict, prefix: str
+        config_dict: dict, prefix: str, field_metadata: Dict[str, dict]
     ) -> List[Tuple[str, Any, dict]]:
         """Get all fields in a section with their metadata."""
         fields = []
 
-        for field_path, metadata in FIELD_METADATA.items():
+        for field_path, metadata in field_metadata.items():
             if field_path.startswith(prefix):
                 # For exact prefix matches or direct children
                 remaining = field_path[len(prefix) :].lstrip(".")
@@ -825,13 +1237,13 @@ class MenuDisplay:
         return Panel(content, title="Configuration Editor", border_style="blue")
 
     @staticmethod
-    def create_main_menu() -> Table:
+    def create_main_menu(menu_structure: Dict[str, Dict[str, Any]]) -> Table:
         """Create the main menu table."""
         menu = Table(title="Select Configuration Section", show_header=False, box=None)
         menu.add_column("Option", style="cyan", width=8)
         menu.add_column("Description", min_width=30)
 
-        for key, section in MENU_STRUCTURE.items():
+        for key, section in menu_structure.items():
             menu.add_row(f"  {key}", section["title"])
 
         menu.add_row("", "")
@@ -841,9 +1253,11 @@ class MenuDisplay:
         return menu
 
     @staticmethod
-    def create_section_menu(section_key: str) -> Table:
+    def create_section_menu(
+        section_key: str, menu_structure: Dict[str, Dict[str, Any]]
+    ) -> Table:
         """Create menu for a configuration section."""
-        section = MENU_STRUCTURE.get(section_key, {})
+        section = menu_structure.get(section_key, {})
         menu = Table(
             title=f"{section.get('title', 'Section')} - Choose Subsection",
             show_header=False,
@@ -1048,6 +1462,10 @@ class ConfigEditor:
         self.modified = False
         self.navigation_stack = []  # Track menu navigation
 
+        # Generate dynamic metadata from model inspection
+        self.field_metadata = ModelInspector.inspect_model(IfetcherConfig)
+        self.menu_structure = ModelInspector.build_menu_structure(IfetcherConfig)
+
     def run(self) -> None:
         """Main menu loop."""
         try:
@@ -1074,7 +1492,9 @@ class ConfigEditor:
                 elif choice == "back":
                     if self.navigation_stack:
                         self.navigation_stack.pop()
-                elif choice and isinstance(choice, str) and choice in MENU_STRUCTURE:
+                elif (
+                    choice and isinstance(choice, str) and choice in self.menu_structure
+                ):
                     # Navigation to a main section
                     self.navigation_stack.append(choice)
                 elif (
@@ -1082,7 +1502,9 @@ class ConfigEditor:
                     and isinstance(choice, str)
                     and len(self.navigation_stack) == 1
                     and choice
-                    in MENU_STRUCTURE[self.navigation_stack[0]].get("subsections", {})
+                    in self.menu_structure[self.navigation_stack[0]].get(
+                        "subsections", {}
+                    )
                 ):
                     # Navigation to a subsection
                     self.navigation_stack.append(choice)
@@ -1116,7 +1538,7 @@ class ConfigEditor:
         menu = InteractiveMenu(self.console, "Select Configuration Section")
 
         # Add main menu items
-        for key, section in MENU_STRUCTURE.items():
+        for key, section in self.menu_structure.items():
             menu.add_item(
                 section["title"], key, "Configure " + section["title"].lower()
             )
@@ -1143,7 +1565,7 @@ class ConfigEditor:
         self.console.print()
 
         section_key = self.navigation_stack[0]
-        section = MENU_STRUCTURE[section_key]
+        section = self.menu_structure[section_key]
 
         menu = InteractiveMenu(self.console, f"{section['title']} - Choose Subsection")
 
@@ -1167,11 +1589,13 @@ class ConfigEditor:
         section_key = self.navigation_stack[0]
         subsection_key = self.navigation_stack[1]
 
-        section = MENU_STRUCTURE[section_key]
+        section = self.menu_structure[section_key]
         subsection = section.get("subsections", {}).get(subsection_key, {})
         prefix = subsection.get("prefix", "")
 
-        fields = ConfigNavigator.get_section_fields(self.working_config, prefix)
+        fields = ConfigNavigator.get_section_fields(
+            self.working_config, prefix, self.field_metadata
+        )
 
         if not fields:
             self.console.print("[red]No editable fields found in this section[/red]")
@@ -1281,6 +1705,21 @@ class ConfigEditor:
                 new_value = ValueEditor.edit_list(
                     current_value or [], field_path, help_text
                 )
+            elif field_type == "structured_dict":
+                # Get value model from metadata
+                value_model_name = metadata.get("value_model", "")
+                value_model = self._get_value_model_class(value_model_name)
+
+                if value_model:
+                    editor = StructuredDictEditor(
+                        current_value or {}, value_model, field_path, help_text
+                    )
+                    new_value = editor.edit_interactive()
+                else:
+                    # Fallback to dict editing if model not found
+                    new_value = ValueEditor.edit_dict(
+                        current_value or {}, field_path, help_text
+                    )
             else:  # string
                 new_value = ValueEditor.edit_string(
                     current_value or "", field_path, help_text
@@ -1318,7 +1757,7 @@ class ConfigEditor:
             return True
 
         except ValidationError as e:
-            self.console.print(f"[red]Validation Error:[/red]")
+            self.console.print("[red]Validation Error:[/red]")
             for error in e.errors():
                 field = ".".join(str(loc) for loc in error["loc"])
                 msg = error["msg"]
@@ -1444,7 +1883,7 @@ class TextInputWidget:
 
         # Build content with optional help text
         content_parts = [
-            f"[bold]New Value:[/bold]",
+            "[bold]New Value:[/bold]",
             "",
             top_border,
             input_line,
@@ -1573,6 +2012,9 @@ class TreeNode:
         value: Any = None,
         metadata: dict = None,
         is_explicit: bool = False,
+        is_dict_entry: bool = False,
+        is_action_node: bool = False,
+        dict_key: str = None,
     ):
         self.name = name
         self.path = path  # dotted path like "workflow.grouping.enabled"
@@ -1590,6 +2032,9 @@ class TreeNode:
             False  # Value differs from default (for view filtering)
         )
         self.visible = True  # For tree view state filtering
+        self.is_dict_entry = is_dict_entry  # True if this node represents a dict key
+        self.is_action_node = is_action_node  # True for action nodes like "[+ Add]"
+        self.dict_key = dict_key  # Store original dict key for dict entries
 
     def add_child(self, child: "TreeNode") -> "TreeNode":
         """Add a child node and return it."""
@@ -1597,32 +2042,57 @@ class TreeNode:
         self.children.append(child)
         return child
 
+    def is_expandable(self) -> bool:
+        """Check if this node can be expanded to show children."""
+        # Action nodes are not expandable
+        if self.is_action_node:
+            return False
+
+        # Structured dict nodes are expandable if they have entries
+        if self.node_type == "field" and self.metadata.get("type") == "structured_dict":
+            return isinstance(self.value, dict) and len(self.value) > 0
+
+        # Dict entry nodes are expandable if they represent BaseModel instances
+        if self.is_dict_entry and hasattr(self.value, "model_fields"):
+            return True
+
+        # Regular section nodes are expandable if they have children
+        return len(self.children) > 0
+
     def get_display_value(self) -> str:
         """Get formatted display value for this node."""
+        # Action nodes show specialized text
+        if self.is_action_node:
+            return "[dim][bright_green]+[/bright_green] Click to add[/dim]"
+
+        # Dict entry nodes should not show values - they're containers for their fields
+        if self.is_dict_entry:
+            return ""
+
         if self.node_type != "field":
             return ""
-        if self.value is None:
-            return "[dim]None[/dim]"
 
-        # Show unset and default values in grey, explicit values in color
+        field_type = self.metadata.get("type", "string")
+        field_name = self.path.split(".")[-1] if self.path else self.name
+
+        # Show unset and default values in dim grey
         if not self.is_explicit:
-            # Default/inherited values shown in dim grey
-            return f"[dim]{self.value}[/dim]"
+            if self.value is None:
+                return "[dim]None[/dim]"
+            # Use formatter but make it dim for default values
+            formatted = ConfigValueFormatter.format_value(
+                self.value, field_type, field_name, self.metadata
+            )
+            # Remove existing color markup and make it dim
+            import re
 
-        # Explicitly configured values shown in color
-        if isinstance(self.value, bool):
-            return "[green]true[/green]" if self.value else "[red]false[/red]"
-        elif isinstance(self.value, (int, float)):
-            return f"[cyan]{self.value}[/cyan]"
-        elif isinstance(self.value, str):
-            if len(str(self.value)) > 20:
-                return f"[bright_green]{str(self.value)[:17]}…[/bright_green]"
-            else:
-                return f"[bright_green]{self.value}[/bright_green]"
-        elif isinstance(self.value, list):
-            return f"[magenta][{len(self.value)} items][/magenta]"
-        else:
-            return f"{str(self.value)}"
+            clean_value = re.sub(r"\[/?[^\]]*\]", "", formatted)
+            return f"[dim]{clean_value}[/dim]"
+
+        # Explicitly configured values use full formatting
+        return ConfigValueFormatter.format_value(
+            self.value, field_type, field_name, self.metadata
+        )
 
     def get_all_visible_nodes(self) -> List["TreeNode"]:
         """Get all visible nodes in traversal order."""
@@ -1660,6 +2130,10 @@ class TreeConfigEditor:
 
         # Load raw TOML data to distinguish defaults from explicit values
         self.explicit_config = self._load_explicit_config()
+
+        # Generate dynamic metadata from model inspection
+        self.field_metadata = ModelInspector.inspect_model(IfetcherConfig)
+        self.menu_structure = ModelInspector.build_menu_structure(IfetcherConfig)
 
         # Build tree structure
         self.root_node = self._build_tree_structure()
@@ -1814,7 +2288,7 @@ class TreeConfigEditor:
         """Get list field info panel showing the list items."""
         content_lines = [
             f"[bold]Field:[/bold] {field_path}",
-            f"[bold]Type:[/bold] list",
+            "[bold]Type:[/bold] list",
             "",
             f"[dim]{help_text}[/dim]",
             "",
@@ -1845,7 +2319,7 @@ class TreeConfigEditor:
 
         content_lines = [
             f"[bold]Field:[/bold] {field_path}",
-            f"[bold]Type:[/bold] list",
+            "[bold]Type:[/bold] list",
             "",
             f"[dim]{help_text}[/dim]",
             "",
@@ -2014,7 +2488,7 @@ class TreeConfigEditor:
         )
 
         content_parts = [
-            f"[bold]New Value:[/bold]",
+            "[bold]New Value:[/bold]",
             "",
             top_border,
             input_line,
@@ -2051,10 +2525,10 @@ class TreeConfigEditor:
             )
 
     def _build_tree_structure(self) -> TreeNode:
-        """Build the tree structure from MENU_STRUCTURE and field metadata."""
+        """Build the tree structure from dynamic model inspection."""
         root = TreeNode("Configuration", node_type="root")
 
-        for section_key, section_info in MENU_STRUCTURE.items():
+        for section_key, section_info in self.menu_structure.items():
             section_node = root.add_child(
                 TreeNode(
                     name=section_info["title"],
@@ -2077,7 +2551,9 @@ class TreeConfigEditor:
 
                 # Add fields for this subsection
                 prefix = subsection_info["prefix"]
-                fields = ConfigNavigator.get_section_fields(self.working_config, prefix)
+                fields = ConfigNavigator.get_section_fields(
+                    self.working_config, prefix, self.field_metadata
+                )
 
                 for field_path, current_value, metadata in fields:
                     field_name = field_path.split(".")[-1]
@@ -2104,6 +2580,14 @@ class TreeConfigEditor:
                     # Set flag for values that differ from defaults (for view filtering)
                     field_node.differs_from_default = differs_from_default
 
+                    # Expand structured_dict fields to show their entries
+                    if metadata.get("type") == "structured_dict" and isinstance(
+                        current_value, dict
+                    ):
+                        self._expand_structured_dict(
+                            field_node, current_value, metadata
+                        )
+
                 # Collapse subsection if it has no explicit values
                 if not subsection_node.has_explicit_values():
                     subsection_node.expanded = False
@@ -2116,6 +2600,105 @@ class TreeConfigEditor:
         self._compact_single_child_branches(root)
 
         return root
+
+    def _expand_structured_dict(
+        self, parent_node: TreeNode, dict_value: dict, metadata: dict
+    ):
+        """Expand a structured dict into tree nodes for each entry and their fields."""
+        value_model_name = metadata.get("value_model", "")
+
+        # Get the actual BaseModel instances from the config object instead of dumped dict
+        if "." not in parent_node.path:
+            # Top-level field like 'agents'
+            actual_dict_value = getattr(self.config_obj, parent_node.path, dict_value)
+        else:
+            # Nested field like 'task.kinds'
+            parts = parent_node.path.split(".")
+            current = self.config_obj
+            for part in parts:
+                current = getattr(current, part, None)
+                if current is None:
+                    break
+            actual_dict_value = current if current is not None else dict_value
+
+        # Add each dict entry as a child node
+        for key, value in actual_dict_value.items():
+            # Create entry node for the dict key
+            entry_node = parent_node.add_child(
+                TreeNode(
+                    name=key,
+                    path=f"{parent_node.path}.{key}",
+                    node_type="field",
+                    value=value,
+                    metadata={"type": "dict_entry", "value_model": value_model_name},
+                    is_explicit=True,  # Dict entries are always explicit
+                    is_dict_entry=True,
+                    dict_key=key,
+                )
+            )
+
+            # Dict entries are always non-default (they represent user configuration)
+            entry_node.differs_from_default = True
+
+            # If the value is a BaseModel, expand its fields as children
+            is_basemodel = hasattr(value, "model_dump") and hasattr(
+                type(value), "model_fields"
+            )
+            if is_basemodel:
+                value_dict = value.model_dump()
+                value_class = type(value)
+
+                for field_name, field_value in value_dict.items():
+                    # Get field metadata for this specific field
+                    field_info = value_class.model_fields.get(field_name)
+                    if field_info:
+                        # Build metadata manually using ModelInspector methods
+                        field_type = ModelInspector.get_field_type(
+                            field_info, field_info.annotation
+                        )
+                        constraints = ModelInspector.get_field_constraints(field_info)
+
+                        field_metadata = {
+                            "type": field_type,
+                            "help": field_info.description
+                            or f"Configuration for {field_name}",
+                            **constraints,
+                        }
+
+                        field_node = entry_node.add_child(
+                            TreeNode(
+                                name=field_name,
+                                path=f"{entry_node.path}.{field_name}",
+                                node_type="field",
+                                value=field_value,
+                                metadata=field_metadata,
+                                is_explicit=True,
+                            )
+                        )
+
+                        # Dict entry fields are considered non-default if they have non-empty values
+                        field_node.differs_from_default = (
+                            field_value is not None
+                            and field_value != []
+                            and field_value != {}
+                            and field_value != ""
+                        )
+
+        # Add "[+ Add]" action node for adding new entries
+        parent_node.add_child(
+            TreeNode(
+                name=f"[+ Add {value_model_name}]",
+                path=f"{parent_node.path}._add",
+                node_type="action",
+                value=None,
+                metadata={
+                    "type": "action",
+                    "action": "add_entry",
+                    "value_model": value_model_name,
+                },
+                is_action_node=True,
+            )
+        )
 
     def _compact_single_child_branches(self, node: TreeNode):
         """Recursively compact single-child branches to flatten unnecessary hierarchy.
@@ -2362,8 +2945,18 @@ class TreeConfigEditor:
                 node.visible = True
             elif node.node_type == "field":
                 if has_any_non_defaults:
-                    # Show only non-default fields when they exist
-                    node.visible = node.differs_from_default
+                    # Dict entries and action nodes should be visible if they have non-default children
+                    if node.is_dict_entry or node.is_action_node:
+                        node.visible = (
+                            node.is_action_node
+                            or self._has_non_default_descendants(node)
+                            or any(
+                                child.differs_from_default for child in node.children
+                            )
+                        )
+                    else:
+                        # Show only non-default fields when they exist
+                        node.visible = node.differs_from_default
                 else:
                     # Show all fields when no non-defaults exist
                     node.visible = True
@@ -2493,6 +3086,42 @@ class TreeConfigEditor:
             self.edit_input_value = (
                 str(current_value) if current_value is not None else ""
             )
+
+    def _handle_action_node(self):
+        """Handle action nodes like [+ Add] entries."""
+        if not self.selected_node.is_action_node:
+            return
+
+        action = self.selected_node.metadata.get("action")
+        if action == "add_entry":
+            self._add_dict_entry()
+
+    def _add_dict_entry(self):
+        """Add a new entry to a structured dict."""
+        # Find the parent structured dict node
+        parent_node = self.selected_node.parent
+        if not parent_node or parent_node.metadata.get("type") != "structured_dict":
+            return
+
+        # Get value model info
+        value_model_name = self.selected_node.metadata.get("value_model", "")
+
+        # Simple implementation: prompt for key name
+        # TODO: This should be replaced with a proper input widget
+        self.console.print(f"\n[bold]Add new {value_model_name}[/bold]")
+        self.console.print("Enter key name (or ESC to cancel):")
+
+        # For now, just show placeholder - will implement proper input later
+        self.console.print("[dim]TODO: Implement key input widget[/dim]")
+
+    def _get_value_model_class(self, value_model_name: str) -> type:
+        """Get the BaseModel class from the value model name."""
+        if value_model_name == "AgentSpec":
+            return IfetcherConfig.AgentSpec
+        elif value_model_name == "Kind":
+            return IfetcherConfig.Task.Kind
+        # Add more mappings as needed for other structured dict types
+        return None
 
     def _handle_edit_input(self, key: str) -> bool:
         """Handle keyboard input during editing mode. Returns True if editing should continue."""
@@ -3144,7 +3773,7 @@ class TreeConfigEditor:
 
         if self.editing_mode:
             # Dim the header when editing
-            return Panel(f"[dim]{header_text}[/dim]", style="dim")
+            return Panel(header_text, style="dim")
         else:
             return Panel(header_text, style="blue")
 
@@ -3313,7 +3942,7 @@ class TreeConfigEditor:
             return True
 
         except ValidationError as e:
-            self.console.print(f"[red]Validation Error:[/red]")
+            self.console.print("[red]Validation Error:[/red]")
             for error in e.errors():
                 field = ".".join(str(loc) for loc in error["loc"])
                 msg = error["msg"]
@@ -3373,7 +4002,9 @@ class TreeConfigEditor:
                         elif key == "SHIFT+TAB":
                             self._cycle_tree_view_state()
                         elif key in ("ENTER", "\r", "\n"):
-                            if self.selected_node.node_type == "field":
+                            if self.selected_node.is_action_node:
+                                self._handle_action_node()
+                            elif self.selected_node.node_type == "field":
                                 self._edit_selected_field()
                         elif key.upper() == "R":
                             # Reset field to default value
