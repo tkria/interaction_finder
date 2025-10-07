@@ -42,24 +42,14 @@ class SearchQuery(BaseModel):
 class SearchResult(BaseModel):
     """Represents a single search result from any backend."""
 
-    title: str = Field(description="Paper title")
-    url: str = Field(description="Direct URL to the paper")
-    abstract: Optional[str] = Field(None, description="Paper abstract if available")
-    authors: List[str] = Field(default_factory=list, description="List of author names")
-    publication_date: Optional[datetime] = Field(
-        None, description="Publication or online date"
-    )
-    journal: Optional[str] = Field(None, description="Journal or venue name")
-    doi: Optional[str] = Field(None, description="Digital Object Identifier")
-    pmid: Optional[str] = Field(None, description="PubMed ID if available")
+    title: str = Field(description="Result title")
+    url: str = Field(description="Direct URL to the resource")
+    snippet: Optional[str] = Field(None, description="Content snippet if available")
     relevance_score: Optional[float] = Field(
         None,
         description="Relevance score from search backend (0.0-1.0)",
         ge=0.0,
         le=1.0,
-    )
-    citation_count: Optional[int] = Field(
-        None, description="Number of citations if available", ge=0
     )
     backend: str = Field(description="Which search backend found this result")
     metadata: Dict[str, Any] = Field(
@@ -195,9 +185,23 @@ class ExpansionTerm:
     confidence: float = 1.0  # 0.0 to 1.0 confidence score
     source: str = "unknown"  # Source of expansion (dictionary, llm, mesh, etc.)
     category: Optional[str] = None  # gene, disease, protein, etc.
+    weight_hint: Optional[int] = None  # Optional weight hint for advanced expansion
+    rationale: Optional[str] = None  # Optional rationale for term selection
 
     def __str__(self) -> str:
         return self.term
+
+
+@dataclass
+class EnhancedExpansionTerm:
+    """Enhanced expansion term for advanced query expansion."""
+
+    term: str
+    category: str  # synonym, entity, method, timeframe, abbreviation
+    weight_hint: int = 1  # 1-3 weight hint based on tertile scoring
+    rationale: str = ""  # Explanation for term relevance
+    source: str = "LLM"
+    confidence: float = 1.0  # For compatibility
 
 
 @dataclass
@@ -220,6 +224,48 @@ class ExpandedQuery:
         return [
             term.term for term in self.expanded_terms if term.confidence >= threshold
         ]
+
+
+@dataclass
+class EnhancedExpandedQuery:
+    """Result of advanced query expansion with structured outputs."""
+
+    original_query: str
+    intent_card: str  # Concise statement of research intent
+    expansion_terms: List[EnhancedExpansionTerm]  # Selected diverse terms
+    hyde_text: str  # Surrogate abstract for dense retrieval
+    expansion_method: str = "advanced"
+    total_confidence: float = 1.0
+
+    @property
+    def all_terms(self) -> List[str]:
+        """Get all terms including original query."""
+        return [self.original_query] + [term.term for term in self.expansion_terms]
+
+    @property
+    def weighted_terms(self) -> List[tuple[str, int]]:
+        """Get terms with their weight hints."""
+        return [(term.term, term.weight_hint) for term in self.expansion_terms]
+
+    def to_expanded_query(self) -> ExpandedQuery:
+        """Convert to standard ExpandedQuery for compatibility."""
+        standard_terms = [
+            ExpansionTerm(
+                term=term.term,
+                confidence=term.confidence,
+                source=term.source,
+                category=term.category,
+                weight_hint=term.weight_hint,
+                rationale=term.rationale,
+            )
+            for term in self.expansion_terms
+        ]
+        return ExpandedQuery(
+            original_query=self.original_query,
+            expanded_terms=standard_terms,
+            expansion_method=self.expansion_method,
+            total_confidence=self.total_confidence,
+        )
 
 
 class QueryExpander(ABC):

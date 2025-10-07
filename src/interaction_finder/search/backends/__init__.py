@@ -7,8 +7,10 @@ for various academic search services.
 
 from .pubmed import PubMedBackend
 from .perplexica import PerplexicaBackend
+from .openai_search import OpenAISearchBackend
 
 __all__ = [
     "PubMedBackend",
     "PerplexicaBackend",
+    "OpenAISearchBackend",
 ]

@@ -34,7 +34,7 @@ class PerplexicaBackend(SearchBackend):
 
         self.base_url = config.get("base_url", "http://localhost:3000")
         self.timeout = config.get("timeout", 60)
-        self.search_mode = config.get("search_mode", "academicSearch")
+        self.search_mode = config.get("search_mode", "webSearch")
         self.max_sources = config.get("max_sources", 20)
 
         # Model configurations
@@ -70,35 +70,11 @@ class PerplexicaBackend(SearchBackend):
             "stream": False,  # Use non-streaming for simpler processing
         }
 
-        # Add academic-focused system instructions
-        system_instructions = []
-
+        # Add system instructions only for academic searches
         if self.search_mode == "academicSearch":
-            system_instructions.append(
-                "Focus on peer-reviewed scientific literature, research papers, and academic sources. "
-                "Prioritize recent publications and high-impact journals."
+            request_data["systemInstructions"] = (
+                "Focus on peer-reviewed scientific literature, research papers, and academic sources."
             )
-
-        # Add context based on query content or filters
-        if query.filters:
-            if "publication_type" in query.filters:
-                pub_types = query.filters["publication_type"]
-                if isinstance(pub_types, list):
-                    types_str = ", ".join(pub_types)
-                    system_instructions.append(f"Focus on {types_str} publications.")
-
-            if "date_range" in query.filters:
-                date_range = query.filters["date_range"]
-                if isinstance(date_range, dict):
-                    start = date_range.get("start")
-                    end = date_range.get("end")
-                    if start and end:
-                        system_instructions.append(
-                            f"Prioritize publications from {start} to {end}."
-                        )
-
-        if system_instructions:
-            request_data["systemInstructions"] = " ".join(system_instructions)
 
         return request_data
 
@@ -137,19 +113,10 @@ class PerplexicaBackend(SearchBackend):
         if not url or not title:
             return None
 
-        # Try to extract additional metadata from content and URL
-        authors = self._extract_authors_from_content(page_content, url)
-        journal = self._extract_journal_from_url_or_content(url, page_content, title)
-        pub_date = self._extract_publication_date(page_content, url)
-        doi = self._extract_doi_from_content(page_content, url)
-        pmid = self._extract_pmid_from_url(url)
+        # Don't extract anything - just use what Perplexica provides
 
-        # Use page content as abstract if it looks academic
-        abstract = (
-            page_content
-            if len(page_content) > 50 and len(page_content) < 2000
-            else None
-        )
+        # Use page content as abstract - no filtering
+        abstract = page_content if page_content else None
 
         # Calculate a simple relevance score based on position (earlier = more relevant)
         relevance_score = max(0.1, 1.0 - (index * 0.05))
@@ -157,167 +124,14 @@ class PerplexicaBackend(SearchBackend):
         return SearchResult(
             title=title,
             url=url,
-            abstract=abstract,
-            authors=authors,
-            publication_date=pub_date,
-            journal=journal,
-            doi=doi,
-            pmid=pmid,
+            snippet=abstract,
             relevance_score=relevance_score,
-            citation_count=None,  # Not available from Perplexica
             backend=self.backend_name,
             metadata={
                 "perplexica_source": source,
                 "page_content_length": len(page_content),
             },
         )
-
-    def _extract_authors_from_content(self, content: str, url: str) -> List[str]:
-        """Extract author names from page content."""
-        authors = []
-
-        # Look for common author patterns in academic content
-        author_patterns = [
-            r"(?i)(?:authors?|by):\s*([^.]+)",
-            r"(?i)([A-Z][a-z]+(?:\s+[A-Z]\.?\s*)*[A-Z][a-z]+)(?:\s*,\s*([A-Z][a-z]+(?:\s+[A-Z]\.?\s*)*[A-Z][a-z]+))*",
-            r"(?i)([A-Z][a-z]+,\s*[A-Z]\.(?:\s*[A-Z]\.)*)",
-        ]
-
-        for pattern in author_patterns:
-            matches = re.findall(pattern, content)
-            if matches:
-                for match in matches[:5]:  # Limit to first 5 matches
-                    if isinstance(match, tuple):
-                        author = match[0].strip()
-                    else:
-                        author = match.strip()
-
-                    if (
-                        len(author) > 3 and len(author) < 50
-                    ):  # Reasonable author name length
-                        authors.append(author)
-
-        # Clean up and deduplicate
-        cleaned_authors = []
-        seen = set()
-        for author in authors:
-            clean_author = re.sub(r"[^\w\s\.-]", "", author).strip()
-            if clean_author and clean_author.lower() not in seen:
-                seen.add(clean_author.lower())
-                cleaned_authors.append(clean_author)
-
-        return cleaned_authors[:10]  # Limit to reasonable number
-
-    def _extract_journal_from_url_or_content(
-        self, url: str, content: str, title: str
-    ) -> Optional[str]:
-        """Extract journal name from URL or content."""
-        # Try to extract from URL domain
-        parsed_url = urlparse(url)
-        domain = parsed_url.netloc.lower()
-
-        # Common journal domains
-        journal_domains = {
-            "pubmed.ncbi.nlm.nih.gov": "PubMed",
-            "www.ncbi.nlm.nih.gov": "NCBI",
-            "www.nature.com": "Nature",
-            "science.org": "Science",
-            "www.cell.com": "Cell",
-            "www.nejm.org": "New England Journal of Medicine",
-            "jamanetwork.com": "JAMA",
-            "www.bmj.com": "BMJ",
-            "www.thelancet.com": "The Lancet",
-            "journals.plos.org": "PLOS",
-            "www.frontiersin.org": "Frontiers",
-            "link.springer.com": "Springer",
-            "onlinelibrary.wiley.com": "Wiley",
-            "www.sciencedirect.com": "ScienceDirect",
-            "academic.oup.com": "Oxford Academic",
-            "www.tandfonline.com": "Taylor & Francis",
-        }
-
-        for domain_pattern, journal_name in journal_domains.items():
-            if domain_pattern in domain:
-                return journal_name
-
-        # Try to extract journal name from content
-        journal_patterns = [
-            r"(?i)(?:published in|journal|in)\s+([A-Z][^.,]{5,50})",
-            r"(?i)([A-Z][a-z\s]+(?:Journal|Review|Letters|Science|Medicine|Biology))",
-        ]
-
-        for pattern in journal_patterns:
-            matches = re.findall(pattern, content)
-            if matches:
-                journal = matches[0].strip()
-                if 5 < len(journal) < 50:  # Reasonable journal name length
-                    return journal
-
-        return None
-
-    def _extract_publication_date(self, content: str, url: str) -> Optional[datetime]:
-        """Extract publication date from content."""
-        # Look for various date patterns
-        date_patterns = [
-            r"(?i)(?:published|date|year):\s*(\d{4})",
-            r"(?i)(\d{1,2}/\d{1,2}/\d{4})",
-            r"(?i)(\d{4}-\d{2}-\d{2})",
-            r"(?i)((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2},?\s+\d{4})",
-            r"(\d{4})",  # Just year as fallback
-        ]
-
-        for pattern in date_patterns:
-            matches = re.findall(pattern, content)
-            if matches:
-                date_str = matches[0].strip()
-                try:
-                    # Try different date formats
-                    if len(date_str) == 4 and date_str.isdigit():  # Just year
-                        return datetime(int(date_str), 1, 1)
-                    elif "/" in date_str:  # MM/DD/YYYY
-                        return datetime.strptime(date_str, "%m/%d/%Y")
-                    elif "-" in date_str:  # YYYY-MM-DD
-                        return datetime.strptime(date_str, "%Y-%m-%d")
-                    else:  # Try natural language date
-                        import dateutil.parser
-
-                        return dateutil.parser.parse(date_str)
-                except (ValueError, ImportError):
-                    continue
-
-        return None
-
-    def _extract_doi_from_content(self, content: str, url: str) -> Optional[str]:
-        """Extract DOI from content or URL."""
-        # Check if URL is a DOI link
-        if "doi.org" in url:
-            doi_match = re.search(r"doi\.org/(.+)", url)
-            if doi_match:
-                return doi_match.group(1)
-
-        # Look for DOI in content
-        doi_patterns = [
-            r"(?i)DOI:\s*(10\.\d+/[^\s]+)",
-            r"(?i)(10\.\d+/[^\s]+)",
-        ]
-
-        for pattern in doi_patterns:
-            matches = re.findall(pattern, content)
-            if matches:
-                doi = matches[0].strip()
-                if doi.startswith("10."):
-                    return doi
-
-        return None
-
-    def _extract_pmid_from_url(self, url: str) -> Optional[str]:
-        """Extract PubMed ID from URL if it's a PubMed link."""
-        if "pubmed.ncbi.nlm.nih.gov" in url:
-            pmid_match = re.search(r"pubmed\.ncbi\.nlm\.nih\.gov/(\d+)", url)
-            if pmid_match:
-                return pmid_match.group(1)
-
-        return None
 
     async def search(self, query: SearchQuery) -> SearchResults:
         """Perform a search with the given query."""

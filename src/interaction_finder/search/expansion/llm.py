@@ -87,8 +87,8 @@ class LLMQueryExpander(QueryExpander):
 
         self.agent = Agent(
             model_name,
-            result_type=ExpansionResponse,
-            system_prompt=self.base_system_prompt,
+            output_type=ExpansionResponse,
+            instructions=self.base_system_prompt,
         )
 
     @property
@@ -144,7 +144,9 @@ class LLMQueryExpander(QueryExpander):
 
             # Convert to ExpansionTerm objects
             expansion_terms = []
-            for term_data in result.data.expanded_terms:
+            # In PydanticAI 1.0.0, the structured result is in the .output attribute
+            result_data = result.output
+            for term_data in result_data.expanded_terms:
                 expansion_terms.append(
                     ExpansionTerm(
                         term=term_data.term,
@@ -218,10 +220,26 @@ class LLMQueryExpander(QueryExpander):
 
         filtered = list(expansion_terms)
 
-        # Filter by minimum confidence
-        min_confidence = context.get("min_confidence", 0.3)  # Higher default for LLM
+        # Apply confidence filtering with automatic fallback
+        min_confidence = context.get("min_confidence", 0.3)
+        min_expansion_terms = context.get("min_expansion_terms", 1)
+
+        # First, try with the main confidence threshold
         if min_confidence > 0.0:
-            filtered = [term for term in filtered if term.confidence >= min_confidence]
+            high_confidence_terms = [
+                term for term in filtered if term.confidence >= min_confidence
+            ]
+        else:
+            high_confidence_terms = filtered
+
+        # If we don't have enough terms, automatically use the best available terms
+        if len(high_confidence_terms) < min_expansion_terms:
+            # Sort all terms by confidence (best first)
+            filtered.sort(key=lambda x: -x.confidence)
+            # Take the best terms up to the minimum required
+            filtered = filtered[:min_expansion_terms]
+        else:
+            filtered = high_confidence_terms
 
         # Filter by entity types if specified
         entity_types = context.get("entity_types", [])

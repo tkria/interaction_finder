@@ -5,7 +5,7 @@ This module defines Pydantic models for configuring different search backends
 and query expansion strategies.
 """
 
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Literal
 from pydantic import BaseModel, Field
 
 
@@ -68,7 +68,7 @@ class PerplexicaConfig(BaseModel):
     """Configuration for Perplexica local search backend."""
 
     base_url: str = Field(
-        "http://localhost:3001", description="Base URL for Perplexica API"
+        "http://localhost:3000", description="Base URL for Perplexica API"
     )
     timeout: int = Field(
         60,
@@ -77,10 +77,31 @@ class PerplexicaConfig(BaseModel):
         le=300,
     )
     search_mode: str = Field(
-        "academic", description="Search mode for Perplexica (academic, web, etc.)"
+        "webSearch",
+        description="Search mode for Perplexica (webSearch, academicSearch, etc.)",
     )
     max_sources: int = Field(
         20, description="Maximum sources to retrieve per query", ge=5, le=50
+    )
+
+
+class OpenAISearchConfig(BaseModel):
+    """Configuration for OpenAI web search backend."""
+
+    api_key: Optional[str] = Field(None, description="OpenAI API key for web search")
+    base_url: str = Field(
+        "https://api.openai.com/v1", description="OpenAI API base URL"
+    )
+    timeout: int = Field(60, description="Request timeout in seconds", ge=10, le=300)
+    model: str = Field("gpt-4o-mini", description="Model to use for web search")
+    reasoning_effort: str = Field(
+        "low", description="Reasoning effort: low, medium, high"
+    )
+    allowed_domains: List[str] = Field(
+        default_factory=list, description="List of allowed domains (max 20)"
+    )
+    user_location: Dict[str, Any] = Field(
+        default_factory=dict, description="User location for geo-specific results"
     )
 
 
@@ -104,34 +125,45 @@ class HybridConfig(BaseModel):
     )
 
 
-class LLMExpansionConfig(BaseModel):
-    """Configuration for LLM-based query expansion."""
+class ReviewInformedConfig(BaseModel):
+    """Configuration for review-informed search mode."""
 
-    model_name: str = Field(
-        "openai:gpt-4o-mini", description="LLM model to use for expansion"
+    target_reviews: int = Field(
+        3, description="Target number of review papers to analyze", ge=1, le=10
     )
-    max_terms: int = Field(
-        15, description="Maximum expansion terms to generate", ge=1, le=30
+    include_reviews_in_results: bool = Field(
+        True, description="Include review papers in final results"
     )
-    min_confidence: float = Field(
-        0.5, description="Minimum confidence threshold", ge=0.0, le=1.0
+
+
+class PubMedMeshExpansionConfig(BaseModel):
+    """Configuration for PubMed MeSH co-occurrence expansion."""
+
+    max_seed_results: int = Field(
+        100,
+        description="Maximum PMIDs to analyze for MeSH co-occurrence",
+        ge=10,
+        le=500,
     )
-    expansion_types: List[str] = Field(
-        default_factory=lambda: ["synonyms", "related", "abbreviations"],
-        description="Types of expansion to include: synonyms, related, abbreviations, broader, narrower",
+    top_terms: int = Field(
+        5, description="Number of top MeSH terms to include in expansion", ge=1, le=20
     )
-    domain_context: str = Field(
-        "academic research", description="Domain context to guide expansion"
+    tree_filters: List[str] = Field(
+        default_factory=lambda: ["C", "D"],
+        description="MeSH tree number prefixes to filter (e.g., C=Diseases, D=Drugs)",
     )
-    timeout_seconds: int = Field(
-        30, description="LLM request timeout in seconds", ge=5, le=120
+    min_frequency: int = Field(
+        3, description="Minimum co-occurrence count to include a term", ge=1, le=50
     )
 
 
 class QueryExpansionConfig(BaseModel):
     """Configuration for query expansion strategies."""
 
-    enabled: bool = Field(True, description="Enable query expansion")
+    enabled: bool = Field(False, description="Enable query expansion")
+    min_expansion_terms: int = Field(
+        1, description="Minimum number of expansion terms to generate", ge=0, le=20
+    )
     max_expansion_terms: int = Field(
         10, description="Maximum number of expansion terms to add", ge=0, le=50
     )
@@ -141,13 +173,38 @@ class QueryExpansionConfig(BaseModel):
         ge=0.0,
         le=1.0,
     )
+    search_strategy: Literal[
+        "single_query", "multi_query", "review_informed", "pubmed_mesh"
+    ] = Field(
+        "single_query",
+        description="Search strategy: 'single_query' (combine all terms), 'multi_query' (separate focused searches), 'review_informed' (use review papers to inform queries), or 'pubmed_mesh' (LLM decomposition + MeSH expansion per component)",
+    )
+    use_mesh_expansion: bool = Field(
+        False,
+        description="Apply PubMed MeSH co-occurrence expansion to queries in other strategies (only works with PubMed backend)",
+    )
+    target_searches: int = Field(
+        8,
+        description="Number of diverse searches to perform in multi_query mode",
+        ge=2,
+        le=20,
+    )
 
-    # LLM configuration
-    llm: LLMExpansionConfig = Field(default_factory=LLMExpansionConfig)
+    # Advanced expansion parameters (consolidated from removed AdvancedExpansionConfig)
+    model_name: str = Field(
+        "openai:gpt-4o-mini", description="LLM model to use for expansion"
+    )
+    temperature: float = Field(
+        0.3, description="LLM temperature for expansion", ge=0.0, le=1.0
+    )
 
-    def get_llm_config(self) -> Dict[str, Any]:
-        """Get configuration dictionary for LLM expansion."""
-        return self.llm.model_dump()
+    # Review-informed search configuration
+    review_informed: ReviewInformedConfig = Field(default_factory=ReviewInformedConfig)
+
+    # PubMed MeSH expansion configuration
+    pubmed_mesh: PubMedMeshExpansionConfig = Field(
+        default_factory=PubMedMeshExpansionConfig
+    )
 
 
 class SearchCacheConfig(BaseModel):
@@ -172,13 +229,7 @@ class SearchCacheConfig(BaseModel):
 class SearchConfig(BaseModel):
     """Main configuration for search functionality."""
 
-    enabled_backends: List[str] = Field(
-        default_factory=lambda: ["pubmed"],
-        description="List of enabled search backends",
-    )
-    default_backend: str = Field(
-        "pubmed", description="Default backend to use for searches"
-    )
+    backend: str = Field("pubmed", description="Search backend to use")
     max_results: int = Field(
         100, description="Default maximum results per search", ge=1, le=1000
     )
@@ -190,6 +241,7 @@ class SearchConfig(BaseModel):
         default_factory=SemanticScholarConfig
     )
     perplexica: PerplexicaConfig = Field(default_factory=PerplexicaConfig)
+    openai_search: OpenAISearchConfig = Field(default_factory=OpenAISearchConfig)
     hybrid: HybridConfig = Field(default_factory=HybridConfig)
 
     # Query expansion and caching
@@ -214,6 +266,7 @@ class SearchConfig(BaseModel):
             "europepmc": self.europepmc.model_dump(),
             "semantic_scholar": self.semantic_scholar.model_dump(),
             "perplexica": self.perplexica.model_dump(),
+            "openai_search": self.openai_search.model_dump(),
             "hybrid": self.hybrid.model_dump(),
         }
 
@@ -222,30 +275,20 @@ class SearchConfig(BaseModel):
 
         return backend_configs[backend_name]
 
-    def validate_backend_availability(self) -> Dict[str, bool]:
-        """Check which backends are properly configured and available."""
-        availability = {}
+    def get_available_backends(self) -> List[str]:
+        """Get list of all configured backends."""
+        return ["pubmed", "perplexica", "openai_search"]
 
-        for backend in self.enabled_backends:
-            if backend == "pubmed":
-                # PubMed is always available (no API key required)
-                availability[backend] = True
-            elif backend == "europepmc":
-                # Europe PMC is always available (no API key required)
-                availability[backend] = True
-            elif backend == "semantic_scholar":
-                # Semantic Scholar works without API key but with lower limits
-                availability[backend] = True
-            elif backend == "perplexica":
-                # Perplexica requires local installation
-                availability[backend] = False  # Will be checked at runtime
-            elif backend == "hybrid":
-                # Hybrid depends on other backends being available
-                availability[backend] = (
-                    len([b for b in self.hybrid.backends if b in self.enabled_backends])
-                    > 0
-                )
-            else:
-                availability[backend] = False
-
-        return availability
+    def is_backend_available(self, backend_name: str) -> bool:
+        """Check if a specific backend is available."""
+        if backend_name == "pubmed":
+            # PubMed is always available (no API key required)
+            return True
+        elif backend_name == "perplexica":
+            # Perplexica requires local installation - will be checked at runtime
+            return True  # Assume available, let connection attempt determine
+        elif backend_name == "openai_search":
+            # OpenAI search requires API key - will be checked at runtime
+            return True  # Assume available, let API call determine
+        else:
+            return backend_name in ["pubmed", "perplexica", "openai_search"]

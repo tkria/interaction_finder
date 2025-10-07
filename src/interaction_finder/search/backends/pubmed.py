@@ -131,8 +131,17 @@ class PubMedBackend(SearchBackend):
 
         session = await self._get_session()
 
+        # Use POST for long queries to avoid URI length limits
+        query_length = len(params.get("term", ""))
+        use_post = query_length > 2000  # Use POST if query is long
+
         try:
-            response = await session.get(url, params=params)
+            if use_post:
+                # Use POST with form data for long queries
+                response = await session.post(url, data=params)
+            else:
+                # Use GET for short queries
+                response = await session.get(url, params=params)
 
             if response.status_code == 429:
                 raise SearchRateLimitError(
@@ -211,8 +220,17 @@ class PubMedBackend(SearchBackend):
         url = f"{self.base_url}/esummary.fcgi"
         session = await self._get_session()
 
+        # Use POST for many PMIDs to avoid URI length limits
+        id_list_length = len(params["id"])
+        use_post = id_list_length > 2000 or len(pmids) > 200
+
         try:
-            response = await session.get(url, params=params)
+            if use_post:
+                # Use POST with form data for long PMID lists
+                response = await session.post(url, data=params)
+            else:
+                # Use GET for short PMID lists
+                response = await session.get(url, params=params)
 
             if response.status_code == 429:
                 raise SearchRateLimitError(
@@ -285,64 +303,15 @@ class PubMedBackend(SearchBackend):
         # Build URL
         url = f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"
 
-        # Parse authors
-        authors = []
-        author_list = summary.get("AuthorList", [])
-        if isinstance(author_list, list):
-            authors = [str(author) for author in author_list if author]
-
-        # Parse publication date
-        pub_date = None
-        pub_date_str = summary.get("PubDate", "")
-        if pub_date_str:
-            # PubMed dates can be in various formats, try to parse
-            try:
-                # Common format: "2023 Jan 15"
-                parts = pub_date_str.strip().split()
-                if len(parts) >= 2:
-                    year = int(parts[0])
-                    month_map = {
-                        "jan": 1,
-                        "feb": 2,
-                        "mar": 3,
-                        "apr": 4,
-                        "may": 5,
-                        "jun": 6,
-                        "jul": 7,
-                        "aug": 8,
-                        "sep": 9,
-                        "oct": 10,
-                        "nov": 11,
-                        "dec": 12,
-                    }
-                    month = month_map.get(parts[1].lower()[:3], 1)
-                    day = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 1
-                    pub_date = datetime(year, month, day)
-                else:
-                    # Just year
-                    year = int(parts[0])
-                    pub_date = datetime(year, 1, 1)
-            except (ValueError, IndexError):
-                # If parsing fails, leave as None
-                pass
-
-        # Journal information
-        journal = summary.get("Source", "")
-
-        # DOI (may not always be available in summary)
-        doi = summary.get("DOI")
+        # Note: Additional metadata like authors, DOI, journal, etc. is available
+        # in the summary but moved to metadata since it's not reliably extractable
+        # from all search backends
 
         return SearchResult(
             title=title,
             url=url,
-            abstract=None,  # Not available in summary, would need EFetch
-            authors=authors,
-            publication_date=pub_date,
-            journal=journal,
-            doi=doi,
-            pmid=pmid,
+            snippet=None,  # Could extract from abstract if available
             relevance_score=None,  # PubMed doesn't provide relevance scores
-            citation_count=None,  # Not available in summary
             backend=self.backend_name,
             metadata={"pubmed_summary": summary},
         )
