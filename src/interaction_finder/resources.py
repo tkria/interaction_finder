@@ -7,6 +7,7 @@ supporting quotes.
 """
 
 import hashlib
+from urllib.parse import urlparse, urlunparse
 import re
 import bisect
 import unicodedata
@@ -115,6 +116,204 @@ def normalize_text_for_matching(text: str) -> str:
     return "".join(normalized).strip()
 
 
+def expand_scientific_shorthand(text: str) -> List[str]:
+    """
+    Expand scientific shorthand notation into individual components.
+
+    Handles common scientific notation patterns:
+    - Comma-separated: "ISCA1,2" → ["ISCA1", "ISCA2"]
+    - Slash-separated: "COL1A1/A2" → ["COL1A1", "COL1A2"]
+    - Numeric ranges: "exons 2-4" → ["exon 2", "exon 3", "exon 4"]
+
+    For text containing shorthand, returns variants where the shorthand
+    is replaced with expanded forms.
+
+    Args:
+        text: Text potentially containing scientific shorthand
+
+    Returns:
+        List of expanded forms (includes original if no expansion possible)
+    """
+    import re
+
+    expanded = []
+    text = text.strip()
+
+    # Try to find and expand patterns within the text
+
+    # Pattern 1a: Simple numeric variant like "ISCA1,2"
+    numeric_pattern = r"(\w+)(\d+)([,/])(\d+)"
+    numeric_match = re.search(numeric_pattern, text)
+    if numeric_match:
+        base = numeric_match.group(1)
+        first_num = numeric_match.group(2)
+        separator = numeric_match.group(3)
+        second_num = numeric_match.group(4)
+
+        # Create expanded versions by replacing the pattern
+        original_pattern = numeric_match.group(0)
+        first_replacement = f"{base}{first_num}"
+        second_replacement = f"{base}{second_num}"
+
+        expanded.append(text.replace(original_pattern, first_replacement))
+        expanded.append(text.replace(original_pattern, second_replacement))
+        return expanded
+
+    # Pattern 1b: Letter variant like "COL1A1,A2"
+    letter_pattern = r"(\w+)([A-Z]\d+)([,/])([A-Z]\d+)"
+    letter_match = re.search(letter_pattern, text)
+    if letter_match:
+        base = letter_match.group(1)
+        first_suffix = letter_match.group(2)
+        separator = letter_match.group(3)
+        second_suffix = letter_match.group(4)
+
+        # Create expanded versions by replacing the pattern
+        original_pattern = letter_match.group(0)
+        first_replacement = f"{base}{first_suffix}"
+        second_replacement = f"{base}{second_suffix}"
+
+        expanded.append(text.replace(original_pattern, first_replacement))
+        expanded.append(text.replace(original_pattern, second_replacement))
+        return expanded
+
+    # Pattern 2: Numeric ranges like "exons 2-4" or "chapters 1-3"
+    range_pattern = r"(\w+s?)\s+(\d+)-(\d+)"
+    range_match = re.search(range_pattern, text, re.IGNORECASE)
+    if range_match:
+        base_word = range_match.group(1).rstrip("s")  # Remove plural 's'
+        start_num = int(range_match.group(2))
+        end_num = int(range_match.group(3))
+
+        # Generate range (limit to reasonable size)
+        if end_num - start_num <= 20:  # Prevent huge expansions
+            original_pattern = range_match.group(0)
+            for num in range(start_num, end_num + 1):
+                replacement = f"{base_word} {num}"
+                expanded.append(text.replace(original_pattern, replacement))
+            return expanded
+
+    # Pattern 3a: Slash with Greek letters like "p53α/β"
+    greek_slash_pattern = (
+        r"(\w+)([αβγδεζηθικλμνξοπρστυφχψω]+)/([αβγδεζηθικλμνξοπρστυφχψω]+)"
+    )
+    greek_match = re.search(greek_slash_pattern, text)
+    if greek_match:
+        base = greek_match.group(1)
+        first_variant = greek_match.group(2)
+        second_variant = greek_match.group(3)
+
+        original_pattern = greek_match.group(0)
+        first_replacement = f"{base}{first_variant}"
+        second_replacement = f"{base}{second_variant}"
+
+        expanded.append(text.replace(original_pattern, first_replacement))
+        expanded.append(text.replace(original_pattern, second_replacement))
+        return expanded
+
+    # Pattern 3b: Slash with alphanumeric variants like "p53a/b" or "IgG1/2"
+    alphanumeric_slash_pattern = r"(\w+)([a-zA-Z0-9]+)/([a-zA-Z0-9]+)"
+    alphanumeric_match = re.search(alphanumeric_slash_pattern, text)
+    if alphanumeric_match:
+        base = alphanumeric_match.group(1)
+        first_variant = alphanumeric_match.group(2)
+        second_variant = alphanumeric_match.group(3)
+
+        # Only expand if:
+        # 1. Variants are short (avoid false positives like "protein/function")
+        # 2. Base looks like scientific identifier (has digits OR is short)
+        # 3. Variants look like suffixes (single chars/short alphanumeric)
+        if (
+            len(first_variant) <= 3
+            and len(second_variant) <= 3
+            and len(base) >= 2
+            and len(base) <= 10  # Reasonable identifier length
+            and (
+                any(c.isdigit() for c in base)  # Contains numbers: p53, IgG1, CD4
+                or (
+                    len(base) <= 4 and base.isupper()
+                )  # Short uppercase: DNA->no, IL->yes
+                or base[-1].isdigit()  # Ends with digit: p53, CD4
+            )
+        ):
+            original_pattern = alphanumeric_match.group(0)
+            first_replacement = f"{base}{first_variant}"
+            second_replacement = f"{base}{second_variant}"
+
+            expanded.append(text.replace(original_pattern, first_replacement))
+            expanded.append(text.replace(original_pattern, second_replacement))
+            return expanded
+
+    # No expansion possible, return original
+    return [text]
+
+
+def compute_chunk_spans(
+    full_text: str, chunk_texts: List[str]
+) -> List[Tuple[int, int]]:
+    """
+    Efficiently compute chunk spans by sequential forward search.
+
+    Args:
+        full_text: Complete document text (e.g., from get_markdown())
+        chunk_texts: List of chunk texts (e.g., from get_chunks())
+
+    Returns:
+        List of (start, end) positions for each chunk in the full text
+    """
+    spans = []
+    search_start = 0
+
+    for i, chunk_text in enumerate(chunk_texts):
+        if not chunk_text.strip():  # Skip empty chunks
+            continue
+
+        # Try exact match first
+        chunk_start = full_text.find(chunk_text, search_start)
+
+        if chunk_start == -1:
+            # Try with whitespace normalization fallback
+            chunk_normalized = " ".join(chunk_text.split())
+            if not chunk_normalized:
+                continue  # Skip empty normalized chunks
+
+            search_text = full_text[search_start:]
+
+            # Look for normalized version within a reasonable window
+            window_size = min(len(search_text), len(chunk_normalized) * 2)
+            for j in range(
+                min(window_size - len(chunk_normalized) + 1, 1000)
+            ):  # Limit search to avoid performance issues
+                candidate_end = min(j + len(chunk_normalized), len(search_text))
+                candidate = " ".join(search_text[j:candidate_end].split())
+                if candidate == chunk_normalized:
+                    chunk_start = search_start + j
+                    break
+
+        if chunk_start == -1:
+            # Last resort: try normalized text matching
+            normalized_chunk = normalize_text_for_matching(chunk_text)
+            normalized_search = normalize_text_for_matching(full_text[search_start:])
+
+            if normalized_chunk and normalized_search:
+                norm_pos = normalized_search.find(normalized_chunk)
+                if norm_pos != -1:
+                    # Approximate mapping back (this is imprecise but better than nothing)
+                    chunk_start = search_start + norm_pos
+
+        if chunk_start == -1:
+            # Skip this chunk if we still can't find it
+            continue
+
+        chunk_end = chunk_start + len(chunk_text)
+        spans.append((chunk_start, chunk_end))
+
+        # Next search starts after this chunk
+        search_start = chunk_end
+
+    return spans
+
+
 class ResourceId(BaseModel):
     """
     Lightweight identifier for a document resource.
@@ -133,8 +332,29 @@ class ResourceId(BaseModel):
             url: Document URL
             counter: Sequential counter for this resource
         """
-        # Generate stable ID: counter_hash
-        url_hash = hashlib.shake_128(url.encode()).hexdigest(4)
+        # Generate stable ID using same scheme as cache hashing:
+        # sha256(normalize_url(url)) first 4 bytes → 8 hex chars
+        # Normalize URL inline (remove fragment) to align with cache hashing behavior
+        parsed = urlparse(url)
+        url_to_hash = urlunparse(parsed._replace(fragment=""))
+
+        # Compute base36 of first 8 bytes of sha256, then take first 8 chars
+        hash_bytes = hashlib.sha256(url_to_hash.encode()).digest()[:8]
+        hash_int = int.from_bytes(hash_bytes, byteorder="big")
+
+        # Manual base36 conversion
+        if hash_int == 0:
+            base36 = "0"
+        else:
+            digits = "0123456789abcdefghijklmnopqrstuvwxyz"
+            chars = []
+            while hash_int:
+                chars.append(digits[hash_int % 36])
+                hash_int //= 36
+            base36 = "".join(reversed(chars))
+
+        # Ensure at least 8 characters (pad with leading zeros), then truncate to 8
+        url_hash = base36.rjust(8, "0")[:8]
         resource_id = f"{counter}_{url_hash}"
 
         super().__init__(id=resource_id, url=url, **data)
@@ -160,7 +380,8 @@ class Resource(BaseModel):
 
     Self-contained resource that includes both identification and content,
     with normalized text and position offset mapping cached for efficient
-    quote matching and position translation.
+    quote matching and position translation. Optionally includes chunk boundaries
+    for mapping quotes to specific document chunks.
     """
 
     id: ResourceId = Field(description="Resource identifier")
@@ -174,8 +395,19 @@ class Resource(BaseModel):
         exclude=True,
         description="Binary-searchable list of (normalized_pos, original_pos) for position mapping",
     )
+    chunks: List[Tuple[int, int]] = Field(
+        default_factory=list,
+        description="List of (start, end) character positions for document chunks",
+    )
 
-    def __init__(self, id: ResourceId, title: str, text: str, **data):
+    def __init__(
+        self,
+        id: ResourceId,
+        title: str,
+        text: str,
+        chunks: Optional[List[Tuple[int, int]]] = None,
+        **data,
+    ):
         """
         Create Resource with automatic normalized text and position mapping.
 
@@ -183,17 +415,24 @@ class Resource(BaseModel):
             id: ResourceId for the document
             title: Human-readable document title
             text: Full document text content
+            chunks: Optional list of (start, end) positions for document chunks.
+                   Defaults to single chunk spanning entire document.
         """
         # Build normalized text with Greek letter support
         normalized_text, position_offsets = self._build_normalized_text_and_offsets(
             text
         )
 
+        # Default chunks to entire document if not provided
+        if chunks is None:
+            chunks = [(0, len(text))]
+
         super().__init__(
             id=id,
             title=title,
             text=text,
             normalized_text=normalized_text,
+            chunks=chunks,
             **data,
         )
         self.position_offsets = position_offsets
@@ -297,7 +536,7 @@ class Resource(BaseModel):
 
         return normalized_text, position_offsets
 
-    def quote(self, text: str) -> Optional["ResourceQuote"]:
+    def quote(self, text: str) -> "ResourceQuote":
         """
         Create a ResourceQuote by finding all occurrences of the given text in this resource.
 
@@ -305,12 +544,12 @@ class Resource(BaseModel):
             text: Text to find and quote
 
         Returns:
-            ResourceQuote with all occurrences if text found, None otherwise
+            ResourceQuote with all occurrences
+
+        Raises:
+            ValueError: If quote text is not found in the resource
         """
-        try:
-            return ResourceQuote(self, text)
-        except ValueError:
-            return None
+        return ResourceQuote(self, text)
 
     def __repr__(self) -> str:
         """Informative representation for REPL display."""
@@ -361,6 +600,53 @@ class Resource(BaseModel):
         original_end = self._find_original_position(norm_start + norm_length)
         return original_start, original_end
 
+    def get_chunk_for_position(self, pos: int) -> Optional[int]:
+        """
+        Get chunk index containing the given character position.
+
+        Args:
+            pos: Character position in the document text
+
+        Returns:
+            Index of chunk containing the position, or None if not found
+        """
+        for i, (start, end) in enumerate(self.chunks):
+            if start <= pos < end:
+                return i
+        return None
+
+    def get_chunks_for_span(self, start: int, end: int) -> List[int]:
+        """
+        Get all chunk indices that overlap with the given character span.
+
+        Args:
+            start: Start character position
+            end: End character position
+
+        Returns:
+            List of chunk indices that overlap with the span
+        """
+        chunks = []
+        for i, (chunk_start, chunk_end) in enumerate(self.chunks):
+            if chunk_start < end and chunk_end > start:  # Overlap check
+                chunks.append(i)
+        return chunks
+
+    def get_chunk_text(self, chunk_index: int) -> Optional[str]:
+        """
+        Get the text content of a specific chunk.
+
+        Args:
+            chunk_index: Index of the chunk to retrieve
+
+        Returns:
+            Text content of the chunk, or None if index is invalid
+        """
+        if 0 <= chunk_index < len(self.chunks):
+            start, end = self.chunks[chunk_index]
+            return self.text[start:end]
+        return None
+
 
 class ResourcePool(BaseModel):
     """
@@ -400,7 +686,11 @@ class ResourcePool(BaseModel):
         return resource_id
 
     def add_content(
-        self, resource_id: ResourceId, title: str, document_text: str
+        self,
+        resource_id: ResourceId,
+        title: str,
+        document_text: str,
+        chunks: Optional[List[Tuple[int, int]]] = None,
     ) -> Resource:
         """
         Add content to a previously registered resource.
@@ -409,6 +699,7 @@ class ResourcePool(BaseModel):
             resource_id: Previously registered ResourceId
             title: Human-readable document title
             document_text: Full text content of the document
+            chunks: Optional list of (start, end) positions for document chunks
 
         Returns:
             Complete Resource with content
@@ -424,12 +715,20 @@ class ResourcePool(BaseModel):
             raise ValueError(f"Resource {resource_id.id} already has content")
 
         # Create Resource with content
-        resource = Resource(id=resource_id, title=title, text=document_text)
+        resource = Resource(
+            id=resource_id, title=title, text=document_text, chunks=chunks
+        )
         self.resource_map[resource_id] = resource
 
         return resource
 
-    def add(self, url: str, title: str, document_text: str) -> Resource:
+    def add(
+        self,
+        url: str,
+        title: str,
+        document_text: str,
+        chunks: Optional[List[Tuple[int, int]]] = None,
+    ) -> Resource:
         """
         Add a complete resource (register ID + content) in one step.
 
@@ -437,6 +736,7 @@ class ResourcePool(BaseModel):
             url: Document URL (must be unique)
             title: Human-readable document title
             document_text: Full text content of the document
+            chunks: Optional list of (start, end) positions for document chunks
 
         Returns:
             Complete Resource
@@ -445,7 +745,7 @@ class ResourcePool(BaseModel):
             ValueError: If URL already exists in pool
         """
         resource_id = self.register(url)
-        return self.add_content(resource_id, title, document_text)
+        return self.add_content(resource_id, title, document_text, chunks)
 
     def _find_resource_id(self, key) -> Optional[ResourceId]:
         """
@@ -839,3 +1139,95 @@ class ResourceQuote(BaseModel):
                 lines.append(f"  [{i + 1}] '{quote_text}' at {start}-{end}")
 
         return "\n".join(lines)
+
+    @property
+    def chunk_indices(self) -> List[int]:
+        """
+        Get chunk indices for all quote spans.
+
+        Returns:
+            List of unique chunk indices containing this quote, sorted
+        """
+        chunks = set()
+        for start, end in self.spans:
+            chunks.update(self.resource.get_chunks_for_span(start, end))
+        return sorted(chunks)
+
+    def get_chunk_contexts(self, chunk_padding: int = 50) -> List[str]:
+        """
+        Get the text context within each chunk containing this quote.
+
+        Args:
+            chunk_padding: Characters to include before/after quote within chunk
+
+        Returns:
+            List of context strings, one per chunk containing the quote
+        """
+        contexts = []
+        for chunk_idx in self.chunk_indices:
+            chunk_text = self.resource.get_chunk_text(chunk_idx)
+            if chunk_text is None:
+                continue
+
+            chunk_start, chunk_end = self.resource.chunks[chunk_idx]
+
+            # Find quote spans within this chunk
+            quote_spans_in_chunk = []
+            for start, end in self.spans:
+                if chunk_start <= start < chunk_end or chunk_start < end <= chunk_end:
+                    # Convert absolute positions to chunk-relative positions
+                    rel_start = max(0, start - chunk_start)
+                    rel_end = min(len(chunk_text), end - chunk_start)
+                    quote_spans_in_chunk.append((rel_start, rel_end))
+
+            if quote_spans_in_chunk:
+                # Get context around the quote spans within the chunk
+                first_span_start = min(span[0] for span in quote_spans_in_chunk)
+                last_span_end = max(span[1] for span in quote_spans_in_chunk)
+
+                ctx_start = max(0, first_span_start - chunk_padding)
+                ctx_end = min(len(chunk_text), last_span_end + chunk_padding)
+
+                context = chunk_text[ctx_start:ctx_end]
+                contexts.append(context)
+
+        return contexts
+
+    def get_chunk_text_for_occurrence(self, occurrence: int = 1) -> Optional[str]:
+        """
+        Get the chunk text containing a specific occurrence of the quote.
+
+        Args:
+            occurrence: Which occurrence to get chunk for (1-based)
+
+        Returns:
+            Full text of the chunk containing this occurrence, or None if not found
+
+        Raises:
+            IndexError: If occurrence doesn't exist
+        """
+        if occurrence < 1 or occurrence > self.count:
+            raise IndexError(
+                f"Occurrence {occurrence} not found (have {self.count} occurrences)"
+            )
+
+        if self.is_disjoint:
+            # For disjoint quotes, use the first segment's position
+            segments_in_query = len(
+                [
+                    s.strip()
+                    for s in re.split(r"\s*(?:\.{3,}|…)\s*", self.query_text)
+                    if s.strip()
+                ]
+            )
+            span_idx = (occurrence - 1) * segments_in_query
+        else:
+            # For continuous quotes
+            span_idx = occurrence - 1
+
+        start, _ = self.spans[span_idx]
+        chunk_idx = self.resource.get_chunk_for_position(start)
+
+        if chunk_idx is not None:
+            return self.resource.get_chunk_text(chunk_idx)
+        return None
