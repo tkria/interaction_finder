@@ -9,6 +9,11 @@ provenance throughout the pipeline.
 from .models import EntityWithQuotes, IndividualAssessment, EntityPairOut
 from .state import ExtractionState
 from .deps import ExtractionDeps
+from .nodes import (
+    ExtractEntities,
+    AssessIndividually,
+    AggregateIntoPairs,
+)
 
 __all__ = [
     "EntityWithQuotes",
@@ -16,4 +21,7 @@ __all__ = [
     "EntityPairOut",
     "ExtractionState",
     "ExtractionDeps",
+    "ExtractEntities",
+    "AssessIndividually",
+    "AggregateIntoPairs",
 ]

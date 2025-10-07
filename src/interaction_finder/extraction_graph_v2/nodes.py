@@ -20,6 +20,9 @@ from .state import ExtractionState
 from .deps import ExtractionDeps
 from .models import EntityWithQuotes, IndividualAssessment, EntityPairOut
 from .agents import create_entity_extractor, create_assessment_agent
+from .directextract import extract_cited_entities
+from .parallelism import with_parallelism_control, ParallelismController
+from .quote_logging import save_quote_errors_incremental
 
 if TYPE_CHECKING:
     pass
@@ -70,48 +73,118 @@ class ExtractEntities(BaseNode[ExtractionState, ExtractionDeps]):
     the end-to-end pipeline.
     """
 
-    async def run(
-        self, ctx: GraphRunContext[ExtractionState, ExtractionDeps]
-    ) -> "AssessIndividually":
+    async def run(self, ctx: GraphRunContext[ExtractionState, ExtractionDeps]) -> None:
         """
         Extract entities using LLM agent and create ResourceQuotes.
 
-        Phase 3 implementation: Real LLM-powered entity extraction.
+        Processes each document individually for better reliability and simpler quote validation.
         """
-        logger.info("Starting LLM entity extraction with ResourceQuote creation")
+        logger.info(
+            "Starting individual document entity extraction with ResourceQuote creation"
+        )
 
         # Get configuration
         entity_kinds = ctx.deps.get_entity_kinds()
         task_context = ctx.deps.get_task_context()
+        target_term = getattr(ctx.deps, "target_term", None)
         logger.info(f"Looking for entity kinds: {entity_kinds}")
 
-        # Build prompt with current group's document content
-        group_resources = ctx.state.get_current_group_resources()
-        logger.info(
-            f"Processing group {ctx.state.current_group_index + 1} with {len(group_resources)} documents"
+        # Get all documents directly (no grouping needed for individual processing)
+        all_resources = list(ctx.state.resource_pool.resources)
+        logger.info(f"Processing {len(all_resources)} documents individually")
+
+        # Process each document individually
+        document_results = await self._process_documents_individually(
+            all_resources, entity_kinds, task_context, target_term, ctx
         )
 
-        # Format documents with resource IDs for the LLM
-        all_text_parts = []
-        for resource in group_resources:
-            doc_header = f"Resource {resource.id.id}: {resource.title}"
-            all_text_parts.append(f"[{doc_header}]\n{resource.text}")
-        all_text = "\n\n---\n\n".join(all_text_parts)
+        # Merge entities found across all documents
+        entities_found = self._merge_document_entities(document_results, ctx)
 
-        # Build prompt to extract ALL entities (target term is handled by agent internally)
-        prompt = f"Extract ALL {', '.join(entity_kinds)} entities from the following scientific text. Documents are labeled with Resource IDs - use these exact IDs in your output:\n\n{all_text}"
+        logger.info(
+            f"ExtractEntities complete: {entities_found} unique entities found across all documents"
+        )
 
-        # Create and run entity extraction agent
-        logger.info("Running entity extraction agent")
-        target_term = getattr(ctx.deps, "target_term", None)
+    async def _process_documents_individually(
+        self,
+        resources,
+        entity_kinds,
+        task_context,
+        target_term,
+        ctx: GraphRunContext[ExtractionState, ExtractionDeps],
+    ):
+        """
+        Process each document individually with configurable parallelism.
+
+        Returns:
+            List of (resource, extracted_entities) tuples
+        """
+        if not resources:
+            return []
+
+        # Create extraction function for each resource
+        async def extract_from_resource(resource):
+            return await self._extract_entities_from_document(
+                resource, entity_kinds, task_context, target_term, ctx
+            )
+
+        # Use parallelism control from deps
+        parallelism = ctx.deps.parallelism
+        parallelism_desc = f"unlimited" if parallelism == 0 else f"limit={parallelism}"
+        logger.info(
+            f"Processing {len(resources)} documents with parallelism {parallelism_desc}"
+        )
+
+        # Process documents with parallelism control
+        results = await with_parallelism_control(
+            resources,
+            extract_from_resource,
+            parallelism=parallelism,
+            description="document extraction",
+        )
+
+        # Handle results and exceptions
+        document_results = []
+        for i, result in enumerate(results):
+            resource = resources[i]
+            if isinstance(result, Exception):
+                logger.error(
+                    f"Document processing failed for {resource.title}: {result}"
+                )
+                continue
+            if result:
+                document_results.append((resource, result))
+
+        return document_results
+
+    async def _extract_entities_from_document(
+        self,
+        resource,
+        entity_kinds,
+        task_context,
+        target_term,
+        ctx: GraphRunContext[ExtractionState, ExtractionDeps],
+    ):
+        """
+        Extract entities from a single document.
+
+        Returns:
+            List of EntityWithQuotes objects from this document
+        """
+        logger.debug(f"Processing document: {resource.title}")
+
+        # Build focused prompt for this document
+        prompt = f"Extract ALL {', '.join(entity_kinds)} entities from the following scientific document:\n\n{resource.text}"
+
+        # Create agent for this extraction
         agent = create_entity_extractor(
             ctx.deps.model, entity_kinds, task_context, target_term
         )
 
-        # Set current resources in deps for validation
-        ctx.deps.current_resources = group_resources
+        # Set current resource for validation (single document)
+        ctx.deps.current_resources = [resource]
 
-        # Record timing and success
+        # Run extraction with timing
         start_time = time.time()
         try:
             result = await agent.run(prompt, deps=ctx.deps)
@@ -119,191 +192,128 @@ class ExtractEntities(BaseNode[ExtractionState, ExtractionDeps]):
             ctx.state.metrics.record_extraction_call(
                 success=True, duration=agent_duration
             )
-            logger.info(f"Agent extracted {len(result.output.entities)} entities")
+            logger.debug(
+                f"Extracted {len(result.output.entities)} entities from {resource.title}"
+            )
         except Exception as e:
             agent_duration = time.time() - start_time
             ctx.state.metrics.record_extraction_call(
                 success=False, duration=agent_duration
             )
-            logger.error(f"Entity extraction agent failed: {e}")
-            # Continue with empty entities rather than crash
-            result = None
+            logger.error(f"Entity extraction failed for {resource.title}: {e}")
+            return []
 
-        # Convert agent output to ResourceQuotes
-        entities_found = 0
-        if result and result.output:
-            # Debug: Log what the agent returned
-            logger.info(
-                f"Agent output - entities: {len(result.output.entities)}, reasoning length: {len(result.output.reasoning)}"
-            )
-
-            if not result.output.entities:
-                logger.warning("Agent returned no entities in the entities list")
-                if result.output.reasoning:
-                    logger.info(
-                        f"Agent reasoning (first 200 chars): {result.output.reasoning[:200]}..."
-                    )
-                    # Look for potential entities mentioned in reasoning
-                    reasoning_text = result.output.reasoning
-                    if len(reasoning_text) > 50:  # If reasoning is substantial
-                        logger.warning(
-                            "Entities may have been incorrectly placed in reasoning field instead of entities list"
-                        )
-
+        # Convert to EntityWithQuotes objects
+        document_entities = []
+        if result and result.output and result.output.entities:
             for entity_data in result.output.entities:
-                entity_name = entity_data.name
-                entity_kind = entity_data.kind
-                llm_quotes = entity_data.quotes
-
-                # Process LLM-provided quotes to create ResourceQuotes
-                # Since validation now ensures quotes are valid, this should succeed
-                quotes = []
-                if llm_quotes:
-                    quotes = self._process_llm_quotes(
-                        entity_name, llm_quotes, group_resources
-                    )
-                    if quotes:
-                        logger.info(
-                            f"Created ResourceQuotes for '{entity_name}' from validated LLM quotes: {len(quotes)} total quotes"
-                        )
-
-                # Minimal fallback for edge cases that slip through validation
-                if not quotes:
-                    logger.warning(
-                        f"Unexpected: no quotes after validation for '{entity_name}', trying exact match fallback"
-                    )
-                    for resource in group_resources:
-                        try:
-                            quote = resource.quote(entity_name)
-                            if quote and quote.count > 0:
-                                quotes.append(quote)
-                                logger.info(
-                                    f"Fallback: Created ResourceQuote for '{entity_name}' with {quote.count} occurrences in {resource.id.url}"
-                                )
-                                break  # Only need one successful match
-                        except ValueError:
-                            continue
+                # Create quotes directly from this single document
+                quotes = self._create_quotes_from_document(entity_data, resource)
 
                 if quotes:
-                    # Create EntityWithQuotes and store in state
                     entity = EntityWithQuotes(
-                        name=entity_name,
-                        kind=entity_kind,
+                        name=entity_data.name,
+                        kind=entity_data.kind,
+                        aliases=entity_data.aliases,
                         quotes=quotes,
-                        confidence=0.8,  # Default confidence since not in EntityOut model
+                        confidence=0.8,
                     )
 
-                    # Validate the entity has valid quotes and record metrics
-                    ctx.state.metrics.record_entity_validation(entity)
+                    # Validate entity
                     if entity.validate():
-                        ctx.state.entities_found[entity_name] = entity
-                        entities_found += 1
-                        logger.info(
-                            f"Successfully added entity '{entity_name}' with {entity.total_occurrences} total occurrences"
+                        document_entities.append(entity)
+                        logger.debug(
+                            f"Created entity '{entity.name}' with {len(quotes)} quotes from {resource.title}"
                         )
                     else:
-                        logger.warning(f"Entity '{entity_name}' failed validation")
-                else:
-                    logger.warning(
-                        f"No ResourceQuotes found for LLM-extracted entity '{entity_name}'"
-                    )
-        else:
-            logger.warning("No entities extracted by LLM or extraction failed")
+                        logger.warning(f"Entity '{entity.name}' failed validation")
 
-        logger.info(
-            f"Entity extraction complete: {entities_found} entities with valid quotes"
-        )
+        # Save quote errors incrementally after processing this document
+        if ctx.deps.output_dir and ctx.deps.quote_error_log:
+            # Only save new errors since last save
+            ctx.deps.saved_error_count = save_quote_errors_incremental(
+                ctx.deps.quote_error_log,
+                ctx.deps.output_dir,
+                append_mode=True,
+                saved_count=ctx.deps.saved_error_count,
+            )
 
-        # Control flow decision stays in node
-        if not ctx.state.entities_found:
-            raise ValueError("No entities found with verifiable quotes")
+        return document_entities
 
-        return AssessIndividually()
-
-    def _process_llm_quotes(self, entity_name, llm_quotes, group_resources):
+    def _create_quotes_from_document(self, entity_data, resource):
         """
-        Process LLM-provided quotes to create ResourceQuotes.
+        Create ResourceQuotes from entity data for a single document.
 
-        Args:
-            entity_name: Name of the entity
-            llm_quotes: List of quotes from LLM with text and source
-            group_resources: List of Resource objects from current group
-
-        Returns:
-            List of ResourceQuote objects
+        Much simpler than the old _process_llm_quotes since we only have one document.
         """
         quotes = []
 
-        # Create a mapping of resource identifiers to resources
-        source_to_resource = {}
-        for resource in group_resources:
-            # Map various formats the LLM might use for the resource
-            resource_id = resource.id.id
-            title = resource.title
+        # Process quotes directly from the simple list structure
+        if entity_data.quotes:
+            for quote_text in entity_data.quotes:
+                if not quote_text or not quote_text.strip():
+                    continue
 
-            source_to_resource[resource_id] = resource
-            source_to_resource[title] = resource
-            source_to_resource[f"Resource {resource_id}"] = resource
-            source_to_resource[f"Resource {resource_id}: {title}"] = resource
-
-        for quote_data in llm_quotes:
-            quote_text = quote_data.text.strip()
-            quote_source = quote_data.source.strip()
-
-            # Extract resource ID from various possible formats
-            original_source = quote_source
-            if quote_source.startswith("Resource "):
-                quote_source = quote_source[9:]  # Remove "Resource " (9 characters)
-                # Also strip any trailing colon and title if present
-                if ":" in quote_source:
-                    quote_source = quote_source.split(":")[0].strip()
-
-            if not quote_text:
-                logger.warning(f"Empty quote text for entity '{entity_name}', skipping")
-                continue
-
-            logger.debug(
-                f"Looking for source '{quote_source}' (original: '{original_source}') in mapping with keys: {list(source_to_resource.keys())}"
-            )
-
-            # Find the resource by matching the source
-            resource = source_to_resource.get(quote_source)
-            if not resource:
-                logger.warning(
-                    f"Could not find resource for source '{quote_source}' (original: '{original_source}'), trying fuzzy match"
-                )
-                # Try fuzzy matching on source
-                for source_key, res in source_to_resource.items():
-                    if quote_source in source_key or source_key in quote_source:
-                        resource = res
-                        break
-
-            if resource:
-                # Try to create ResourceQuote directly
+                quote_text = quote_text.strip()
                 try:
                     resource_quote = resource.quote(quote_text)
-                    if resource_quote and resource_quote.count > 0:
-                        quotes.append(resource_quote)
-                        logger.info(
-                            f"Created ResourceQuote from LLM quote for '{entity_name}': '{quote_text[:50]}...'"
-                        )
-                    else:
-                        log_resourcequote_failure(
-                            quote_text,
-                            resource.id.id,
-                            resource.id.url,
-                            "ResourceQuote created but found no occurrences",
-                        )
+                    quotes.append(resource_quote)
+                    logger.debug(
+                        f"Created quote for '{entity_data.name}': '{quote_text[:50]}...'"
+                    )
                 except ValueError as e:
                     log_resourcequote_failure(
                         quote_text, resource.id.id, resource.id.url, str(e)
                     )
-            else:
-                logger.warning(
-                    f"Could not match source '{quote_source}' to any document"
-                )
 
         return quotes
+
+    def _merge_document_entities(self, document_results, ctx):
+        """
+        Merge entities found across multiple documents, combining quotes.
+
+        Args:
+            document_results: List of (resource, entities_list) tuples
+            ctx: Graph context
+
+        Returns:
+            Number of unique entities found
+        """
+        entity_map = {}  # name -> EntityWithQuotes
+
+        for resource, entities in document_results:
+            for entity in entities:
+                entity_name = entity.name
+
+                if entity_name in entity_map:
+                    # Merge with existing entity
+                    existing = entity_map[entity_name]
+                    # Combine quotes from both entities
+                    existing.quotes.extend(entity.quotes)
+                    # Combine aliases
+                    existing.aliases = list(set(existing.aliases + entity.aliases))
+                    logger.debug(
+                        f"Merged entity '{entity_name}' - now has {len(existing.quotes)} total quotes"
+                    )
+                else:
+                    # New entity
+                    entity_map[entity_name] = entity
+
+        # Store merged entities in state
+        entities_found = 0
+        for entity_name, entity in entity_map.items():
+            # Record final validation
+            ctx.state.metrics.record_entity_validation(entity)
+            if entity.validate():
+                ctx.state.entities_found[entity_name] = entity
+                entities_found += 1
+                logger.info(
+                    f"Final entity '{entity_name}' with {entity.total_occurrences} total occurrences"
+                )
+            else:
+                logger.warning(f"Final entity '{entity_name}' failed validation")
+
+        return entities_found
 
 
 @dataclass
@@ -315,9 +325,7 @@ class AssessIndividually(BaseNode[ExtractionState, ExtractionDeps]):
     process each entity with its specific context.
     """
 
-    async def run(
-        self, ctx: GraphRunContext[ExtractionState, ExtractionDeps]
-    ) -> "AggregateIntoPairs":
+    async def run(self, ctx: GraphRunContext[ExtractionState, ExtractionDeps]) -> None:
         """
         Process each entity individually with its contexts.
 
@@ -360,8 +368,6 @@ class AssessIndividually(BaseNode[ExtractionState, ExtractionDeps]):
         logger.info(
             f"Individual assessment complete: {len(valid_assessments)} entities with relationship potential"
         )
-
-        return AggregateIntoPairs()
 
     async def _assess_one_entity(
         self,
@@ -439,13 +445,12 @@ Analyze these contexts to determine if "{entity.name}" has potential relationshi
                 for resource in ctx.state.resource_pool.resources:
                     try:
                         quote = resource.quote(evidence_text)
-                        if quote and quote.count > 0:
-                            evidence_quotes.append(quote)
-                            evidence_found += 1
-                            logger.debug(
-                                f"Found evidence quote for {entity.name}: '{evidence_text[:50]}...'"
-                            )
-                            break
+                        evidence_quotes.append(quote)
+                        evidence_found += 1
+                        logger.debug(
+                            f"Found evidence quote for {entity.name}: '{evidence_text[:50]}...'"
+                        )
+                        break
                     except ValueError:
                         # Quote not found in this resource, try next
                         continue
@@ -476,9 +481,7 @@ Analyze these contexts to determine if "{entity.name}" has potential relationshi
 
 
 @dataclass
-class AggregateIntoPairs(
-    BaseNode[ExtractionState, ExtractionDeps, list[EntityPairOut]]
-):
+class AggregateIntoPairs(BaseNode[ExtractionState, ExtractionDeps]):
     """
     Combine individual assessments into verified pairs.
 
@@ -486,9 +489,7 @@ class AggregateIntoPairs(
     with complete ResourceQuote provenance.
     """
 
-    async def run(
-        self, ctx: GraphRunContext[ExtractionState, ExtractionDeps]
-    ) -> End[list[EntityPairOut]]:
+    async def run(self, ctx: GraphRunContext[ExtractionState, ExtractionDeps]) -> None:
         """
         Aggregate individual assessments into entity pairs.
         """
@@ -559,8 +560,6 @@ class AggregateIntoPairs(
         logger.info(
             f"Aggregation complete: {pairs_created} pairs created with full provenance"
         )
-
-        return End(ctx.state.final_pairs)
 
     def _find_existing_pair(
         self, existing_pairs: list[EntityPairOut], name_a: str, name_b: str

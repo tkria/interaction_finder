@@ -6,6 +6,7 @@ import logging
 import re
 from typing import List, Optional, Tuple, TYPE_CHECKING
 
+from .alignment import SequenceAligner, AlignmentResult
 from .utilities import (
     find_longest_matching_prefix,
     find_longest_matching_suffix,
@@ -31,62 +32,81 @@ class QuoteCorrector:
         self.auto_accept_threshold = auto_accept_threshold
 
     def generate_suggestions(
-        self, quote_text: str, resource: "Resource"
+        self, quote_text: str, resource: "Resource", aligner: SequenceAligner = None
     ) -> List[Tuple[str, float]]:
         """
-        Generate correction suggestions for a failed quote.
+        Generate correction suggestions using alignment analysis.
 
         Args:
             quote_text: The failed quote text
             resource: Resource to search within
+            aligner: SequenceAligner instance (creates new one if None)
 
         Returns:
             List of (suggestion, confidence_percentage) tuples
         """
+        if aligner is None:
+            aligner = SequenceAligner()
+
+        # Use alignment analysis as primary method
+        alignment = aligner.align_quote_to_resource(quote_text, resource)
         suggestions = []
 
-        # Try to find the longest matching subquote
-        longest_match = find_longest_matching_subquote(quote_text, resource)
-        if longest_match:
-            confidence = self._calculate_match_percentage(quote_text, longest_match)
+        # Extract suggestions from alignment corrections with confidence as percentage
+        for correction in alignment.corrections:
+            confidence_percentage = correction.confidence * 100.0
+            suggestions.append((correction.text, confidence_percentage))
 
-            # Try to extend the match in both directions for better context
-            extended_suggestions = self._extend_match_for_context(
-                longest_match, resource
-            )
+        # If alignment-based suggestions are insufficient, fall back to legacy methods
+        if len(suggestions) < 2:
+            # Legacy fallback: Try to find the longest matching subquote
+            longest_match = find_longest_matching_subquote(quote_text, resource)
+            if longest_match:
+                confidence = self._calculate_match_percentage(quote_text, longest_match)
 
-            for extended in extended_suggestions:
-                ext_confidence = self._calculate_match_percentage(quote_text, extended)
-                suggestions.append((extended, ext_confidence))
+                # Try to extend the match in both directions for better context
+                extended_suggestions = self._extend_match_for_context(
+                    longest_match, resource
+                )
 
-            # Always include the basic longest match
-            suggestions.append((longest_match, confidence))
+                for extended in extended_suggestions:
+                    ext_confidence = self._calculate_match_percentage(
+                        quote_text, extended
+                    )
+                    suggestions.append((extended, ext_confidence))
 
-        # Try prefix-based corrections
-        prefix_match = find_longest_matching_prefix(quote_text, resource)
-        if prefix_match:
-            confidence = self._calculate_match_percentage(quote_text, prefix_match)
+                # Always include the basic longest match
+                suggestions.append((longest_match, confidence))
 
-            # Try to extend prefix match for better context
-            extended_prefix = self._extend_match_for_context(prefix_match, resource)
-            for extended in extended_prefix:
-                ext_confidence = self._calculate_match_percentage(quote_text, extended)
-                suggestions.append((extended, ext_confidence))
+            # Legacy fallback: Try prefix-based corrections
+            prefix_match = find_longest_matching_prefix(quote_text, resource)
+            if prefix_match:
+                confidence = self._calculate_match_percentage(quote_text, prefix_match)
 
-            suggestions.append((prefix_match, confidence))
+                # Try to extend prefix match for better context
+                extended_prefix = self._extend_match_for_context(prefix_match, resource)
+                for extended in extended_prefix:
+                    ext_confidence = self._calculate_match_percentage(
+                        quote_text, extended
+                    )
+                    suggestions.append((extended, ext_confidence))
 
-        # Try suffix-based corrections
-        suffix_match = find_longest_matching_suffix(quote_text, resource)
-        if suffix_match:
-            confidence = self._calculate_match_percentage(quote_text, suffix_match)
+                suggestions.append((prefix_match, confidence))
 
-            # Try to extend suffix match for better context
-            extended_suffix = self._extend_match_for_context(suffix_match, resource)
-            for extended in extended_suffix:
-                ext_confidence = self._calculate_match_percentage(quote_text, extended)
-                suggestions.append((extended, ext_confidence))
+            # Legacy fallback: Try suffix-based corrections
+            suffix_match = find_longest_matching_suffix(quote_text, resource)
+            if suffix_match:
+                confidence = self._calculate_match_percentage(quote_text, suffix_match)
 
-            suggestions.append((suffix_match, confidence))
+                # Try to extend suffix match for better context
+                extended_suffix = self._extend_match_for_context(suffix_match, resource)
+                for extended in extended_suffix:
+                    ext_confidence = self._calculate_match_percentage(
+                        quote_text, extended
+                    )
+                    suggestions.append((extended, ext_confidence))
+
+                suggestions.append((suffix_match, confidence))
 
         # Remove duplicates and sort by confidence
         unique_suggestions = {}
@@ -105,12 +125,15 @@ class QuoteCorrector:
 
         return result[:3]  # Return top 3 suggestions
 
-    def should_auto_accept(self, suggestions: List[Tuple[str, float]]) -> bool:
+    def should_auto_accept(
+        self, suggestions: List[Tuple[str, float]], alignment_quality: float = None
+    ) -> bool:
         """
-        Check if the best suggestion should be auto-accepted.
+        Check if the best suggestion should be auto-accepted using enhanced criteria.
 
         Args:
             suggestions: List of (suggestion, confidence) tuples
+            alignment_quality: Optional alignment quality score (0.0 to 1.0)
 
         Returns:
             True if should auto-accept the best suggestion
@@ -119,7 +142,17 @@ class QuoteCorrector:
             return False
 
         best_confidence = suggestions[0][1]
-        return best_confidence >= self.auto_accept_threshold
+
+        # Basic confidence threshold
+        meets_confidence = best_confidence >= self.auto_accept_threshold
+
+        # If alignment quality is provided, factor it in
+        if alignment_quality is not None:
+            # Require both high confidence AND high alignment quality
+            meets_alignment = alignment_quality > 0.85
+            return meets_confidence and meets_alignment
+
+        return meets_confidence
 
     def get_best_suggestion(
         self, suggestions: List[Tuple[str, float]]
@@ -138,27 +171,20 @@ class QuoteCorrector:
         return suggestions[0][0]
 
     def _calculate_match_percentage(self, original: str, suggestion: str) -> float:
-        """Calculate percentage match between original and suggestion."""
+        """Calculate percentage match using pure sequence alignment."""
         if not original.strip() or not suggestion.strip():
             return 0.0
+
+        # Use sequence alignment as the single source of truth
+        from difflib import SequenceMatcher
 
         orig_words = original.lower().split()
         sugg_words = suggestion.lower().split()
 
-        # Count matching words
-        matching_words = 0
-        orig_set = set(orig_words)
-        sugg_set = set(sugg_words)
-
-        # Use intersection for word-level matching
-        matching_words = len(orig_set.intersection(sugg_set))
-        total_unique_words = len(orig_set.union(sugg_set))
-
-        if total_unique_words == 0:
-            return 0.0
-
-        # Calculate percentage based on word overlap
-        return (matching_words / len(orig_set)) * 100.0
+        # Trust SequenceMatcher.ratio() completely - it already considers
+        # word presence, order, and optimal alignment
+        matcher = SequenceMatcher(None, orig_words, sugg_words)
+        return matcher.ratio() * 100.0
 
     def _extend_match_for_context(
         self, match_text: str, resource: "Resource"

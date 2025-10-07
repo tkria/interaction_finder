@@ -6,26 +6,33 @@ Simple entry point for testing the complete pipeline.
 
 import logging
 from typing import List
+import json
 
 from typing import Optional, Callable
 from pathlib import Path
 
-from ..resources import ResourcePool, ResourceId
+from pydantic_graph import GraphRunContext
+from rich.console import Console
+from rich.panel import Panel
+from rich.text import Text
+
+from ..resources import ResourcePool, ResourceId, compute_chunk_spans
 from ..fetcher import PageFetcher
 from ..settings import IfetcherConfig
 from .state import ExtractionState
 from .deps import ExtractionDeps
-from .graph import extraction_graph_v2
 from .nodes import ExtractEntities
 from .models import EntityPairOut, BatchExtractionResultV2
+from .quote_logging import save_quote_errors_incremental
 
 logger = logging.getLogger(__name__)
+console = Console()
 
 
 async def run_extraction_v2(
     resource_pool: ResourcePool,
     deps: ExtractionDeps,
-    document_groups: Optional[List[List[ResourceId]]] = None,
+    verbose: bool = False,
 ) -> List[EntityPairOut]:
     """
     Run the complete extraction pipeline.
@@ -33,17 +40,15 @@ async def run_extraction_v2(
     Args:
         resource_pool: ResourcePool with loaded documents
         deps: External dependencies (model, config, etc.)
-        document_groups: Optional list of groups as ResourceId lists
+        verbose: Enable verbose Rich logging
 
     Returns:
         List of EntityPairOut objects with complete provenance
     """
     logger.info("Starting extraction graph V2 pipeline")
 
-    # Create initial state with document groups
-    state = ExtractionState(
-        resource_pool=resource_pool, document_groups=document_groups or []
-    )
+    # Create initial state (single-group processing in v2)
+    state = ExtractionState(resource_pool=resource_pool)
 
     # Log initial state
     summary = state.get_summary()
@@ -53,50 +58,48 @@ async def run_extraction_v2(
     all_pairs = []
 
     try:
-        # If no groups defined, run once on all documents (backward compatibility)
-        if not document_groups:
-            logger.info("No document groups defined, processing all documents together")
-            result = await extraction_graph_v2.run(
-                start_node=ExtractEntities(), state=state, deps=deps
-            )
-            # Extract pairs from result
-            if hasattr(result, "output") and isinstance(result.output, list):
-                all_pairs = result.output
-            else:
-                all_pairs = state.final_pairs
-        else:
-            # Process each group sequentially
-            logger.info(f"Processing {len(document_groups)} document groups")
+        # Process all documents together (no grouping in v2)
+        logger.info("Processing all documents together (no document groups in v2)")
 
-            for group_index in range(len(document_groups)):
-                state.current_group_index = group_index
-                current_group = document_groups[group_index]
+        # Phase 1: Extract entities from all documents as single group
+        logger.info("Phase 1: Extracting entities from all documents")
+        from .nodes import ExtractEntities
 
-                logger.info(
-                    f"Processing group {group_index + 1}/{len(document_groups)} ({len(current_group)} documents)"
-                )
+        extract_node = ExtractEntities()
+        await extract_node.run(GraphRunContext(state=state, deps=deps))
+        all_extracted_entities = list(state.entities_found.values())
+        logger.info(
+            f"Phase 1 complete: {len(all_extracted_entities)} entities extracted"
+        )
 
-                # Clear previous group's results but preserve metrics
-                state.entities_found.clear()
-                state.individual_assessments.clear()
-                state.final_pairs.clear()
+        # Phase 2: No deduplication needed for single group
+        logger.info("Phase 2: No deduplication needed (single group)")
+        merged_entities = all_extracted_entities
 
-                # Run extraction for this group
-                result = await extraction_graph_v2.run(
-                    start_node=ExtractEntities(), state=state, deps=deps
-                )
+        # Phase 3: Global assessment
+        logger.info("Phase 3: Assessing all entities")
+        state.entities_found = {entity.name: entity for entity in merged_entities}
+        state.individual_assessments.clear()
 
-                # Collect pairs from this group
-                group_pairs = []
-                if hasattr(result, "output") and isinstance(result.output, list):
-                    group_pairs = result.output
-                else:
-                    group_pairs = state.final_pairs
+        from .nodes import AssessIndividually
 
-                all_pairs.extend(group_pairs)
-                logger.info(
-                    f"Group {group_index + 1} completed: {len(group_pairs)} pairs found"
-                )
+        assess_node = AssessIndividually()
+        await assess_node.run(GraphRunContext(state=state, deps=deps))
+        logger.info(
+            f"Phase 3 complete: {len(state.individual_assessments)} assessments"
+        )
+
+        # Phase 4: Form pairs
+        logger.info("Phase 4: Forming pairs")
+        state.final_pairs.clear()
+
+        from .nodes import AggregateIntoPairs
+
+        pair_node = AggregateIntoPairs()
+        await pair_node.run(GraphRunContext(state=state, deps=deps))
+
+        all_pairs = state.final_pairs
+        logger.info(f"Phase 4 complete: {len(all_pairs)} pairs formed")
 
         # Update state with all collected pairs
         state.final_pairs = all_pairs
@@ -120,6 +123,62 @@ async def run_extraction_v2(
         logger.error(f"Pipeline failed: {e}")
         # Return partial results if available
         return all_pairs
+
+
+def _merge_duplicate_entities(entities):
+    """
+    Merge entities with same name+kind, combining ALL evidence.
+
+    The primary goal is to aggregate all quotes, mentions, and evidence
+    for each unique entity across all document batches.
+
+    Args:
+        entities: List of EntityWithQuotes objects
+
+    Returns:
+        List of merged EntityWithQuotes objects with combined evidence
+    """
+    from .models import EntityWithQuotes
+
+    entity_map = {}
+    for entity in entities:
+        # Create key based on normalized name and kind
+        key = (entity.name.lower().strip(), entity.kind.lower().strip())
+
+        if key in entity_map:
+            # Combine ALL evidence for this entity
+            existing_entity = entity_map[key]
+
+            # Merge all quotes (preserving resource provenance)
+            existing_entity.quotes.extend(entity.quotes)
+
+            # Update confidence (take maximum - best assessment seen)
+            existing_entity.confidence = max(
+                existing_entity.confidence, entity.confidence
+            )
+
+            # Use the most complete name variant (longest one)
+            if len(entity.name) > len(existing_entity.name):
+                existing_entity.name = entity.name
+
+            logger.debug(f"Combined evidence for entity: {entity.name} ({entity.kind})")
+        else:
+            entity_map[key] = entity
+
+    merged_entities = list(entity_map.values())
+
+    # Log evidence aggregation statistics
+    total_quotes_before = sum(len(e.quotes) for e in entities)
+    total_quotes_after = sum(len(e.quotes) for e in merged_entities)
+
+    if len(merged_entities) < len(entities):
+        duplicates_merged = len(entities) - len(merged_entities)
+        logger.info(f"Entity deduplication: {duplicates_merged} duplicates merged")
+        logger.info(
+            f"Evidence aggregation: {total_quotes_before} → {total_quotes_after} total quotes"
+        )
+
+    return merged_entities
 
 
 def create_test_resource_pool(documents: List[tuple[str, str, str]]) -> ResourcePool:
@@ -150,6 +209,7 @@ async def extract_from_urls_v2(
     save_callback: Optional[Callable[[BatchExtractionResultV2], None]] = None,
     parallelism: Optional[int] = None,
     target_term: Optional[str] = None,
+    output_dir: Optional[Path] = None,
 ) -> BatchExtractionResultV2:
     """
     Complete V2 pipeline from URLs to entity pairs.
@@ -212,36 +272,65 @@ async def extract_from_urls_v2(
             for url in group_data["documents"]:
                 if url not in url_to_resource_id:
                     try:
-                        # Fetch content - get_chunks returns List[str] (chunk texts)
+                        # Fetch both full document and chunks
                         chunk_texts = await page_fetcher.get_chunks(url)
                         if chunk_texts:
-                            # Combine chunks into single content
-                            content = "\n\n".join(chunk_texts)
+                            # Try to get full document for better chunk mapping
+                            full_document = None
+                            chunk_spans = None
+
+                            try:
+                                full_document = await page_fetcher.get_markdown(url)
+                                if full_document:
+                                    # Compute chunk spans in full document
+                                    chunk_spans = compute_chunk_spans(
+                                        full_document, chunk_texts
+                                    )
+                                    if verbose and chunk_spans:
+                                        logger.info(
+                                            f"Computed {len(chunk_spans)} chunk spans for {url}"
+                                        )
+                            except Exception as e:
+                                if verbose:
+                                    logger.warning(
+                                        f"Could not get full document for {url}: {e}"
+                                    )
+
+                            # Use full document if available, otherwise fall back to joined chunks
+                            if full_document:
+                                content = full_document
+                            else:
+                                content = "\n\n".join(chunk_texts)
+                                chunk_spans = (
+                                    None  # No chunks if we don't have full document
+                                )
 
                             # Try to extract title
                             title = f"Document from {url}"
                             try:
-                                # Try to get cached markdown to extract title
-                                if await page_fetcher.cache.has_path(url, "markdown"):
-                                    md_content = await page_fetcher.cache.get_content(
-                                        url, "markdown"
-                                    )
-                                    # Simple title extraction from markdown
-                                    lines = md_content.split("\n")
-                                    for line in lines[:10]:  # Check first 10 lines
-                                        line = line.strip()
-                                        if line.startswith("# "):
-                                            title = line[2:].strip()
-                                            break
+                                # Simple title extraction from content
+                                lines = content.split("\n")
+                                for line in lines[:10]:  # Check first 10 lines
+                                    line = line.strip()
+                                    if line.startswith("# "):
+                                        title = line[2:].strip()
+                                        break
                             except Exception:
                                 pass  # Use default title
 
-                            resource = resource_pool.add(url, title, content)
+                            resource = resource_pool.add(
+                                url, title, content, chunks=chunk_spans
+                            )
                             url_to_resource_id[url] = resource.id
                             successful_urls += 1
                             if verbose:
+                                chunk_info = (
+                                    f" with {len(chunk_spans)} chunks"
+                                    if chunk_spans
+                                    else ""
+                                )
                                 logger.info(
-                                    f"Added document: {resource.id.id} - {title}"
+                                    f"Added document: {resource.id.id} - {title}{chunk_info}"
                                 )
                         else:
                             logger.warning(f"No content retrieved from {url}")
@@ -250,31 +339,24 @@ async def extract_from_urls_v2(
                         logger.error(f"Failed to fetch {url}: {e}")
                         errors.append({"url": url, "error": str(e)})
 
-        # Convert groups to ResourceId lists
-        document_groups = []
-        for group_data in groups_with_chunks:
-            group_ids = []
-            for url in group_data["documents"]:
-                if url in url_to_resource_id:
-                    group_ids.append(url_to_resource_id[url])
-            if group_ids:  # Only add non-empty groups
-                document_groups.append(group_ids)
-
-        if verbose and document_groups:
-            logger.info(f"Created {len(document_groups)} document groups:")
-            for i, group in enumerate(document_groups):
-                logger.info(f"  Group {i + 1}: {len(group)} documents")
-
         if resource_pool.resources:
             # Create extraction dependencies
-            deps = ExtractionDeps.from_config(config, page_fetcher, model, target_term)
+            deps = ExtractionDeps.from_config(
+                config,
+                page_fetcher,
+                model,
+                target_term,
+                parallelism or 0,
+                output_dir=output_dir,
+            )
 
-            # Run extraction pipeline with document groups
-            pairs = await run_extraction_v2(resource_pool, deps, document_groups)
+            # Run extraction pipeline (v2 processes all documents together)
+            pairs = await run_extraction_v2(resource_pool, deps, verbose=verbose)
 
             # Create result object
             result = BatchExtractionResultV2.from_pairs(pairs)
             result.errors = errors
+            result.quote_errors = deps.quote_error_log
             result.total_groups = 1  # V2 doesn't use grouping yet
             result.successful_groups = 1 if pairs else 0
 
@@ -390,7 +472,12 @@ def save_results_v2(
     with open(summary_file, "w", encoding="utf-8") as f:
         json.dump(summary_data, f, indent=2, ensure_ascii=False)
 
+    # Save quote errors log (overwrite with final version)
+    save_quote_errors_incremental(
+        result.quote_errors, output_dir, append_mode=False, saved_count=0
+    )
+
     logger.info(f"V2 results saved to: {output_dir}")
     logger.info(
-        f"Files: pairs.json ({len(all_pairs)} pairs), resources.json ({len(resources_data)} resources)"
+        f"Files: pairs.json ({len(all_pairs)} pairs), resources.json ({len(resources_data)} resources), quote_errors.json ({len(result.quote_errors)} errors)"
     )

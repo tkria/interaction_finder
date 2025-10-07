@@ -10,6 +10,7 @@ from rich.panel import Panel
 from rich.text import Text
 from datetime import datetime
 
+from .alignment import SequenceAligner, ErrorType
 from .corrections import QuoteCorrector
 from .error_messages import build_retry_message
 
@@ -21,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 class QuoteValidator:
-    """Handles quote validation with auto-correction and error logging."""
+    """Handles quote validation with alignment-based auto-correction and error logging."""
 
     def __init__(self, auto_accept_threshold: float = 85.0):
         """
@@ -31,6 +32,7 @@ class QuoteValidator:
             auto_accept_threshold: Threshold for auto-accepting corrections (%)
         """
         self.corrector = QuoteCorrector(auto_accept_threshold)
+        self.aligner = SequenceAligner()
         self.console = Console()
 
     def validate_and_correct_quote(
@@ -84,33 +86,48 @@ class QuoteValidator:
         """Handle quote validation failure with correction attempts."""
         from ..models import QuoteErrorRecord
 
-        # Generate correction suggestions
-        suggestions = self.corrector.generate_suggestions(quote_text, resource)
+        # Generate correction suggestions using alignment analysis
+        suggestions = self.corrector.generate_suggestions(
+            quote_text, resource, self.aligner
+        )
 
-        # Check if we can auto-accept the best suggestion
-        if suggestions and self.corrector.should_auto_accept(suggestions):
+        # Check if we can auto-accept using enhanced alignment-based confidence
+        if suggestions and self._should_auto_accept_with_alignment(
+            suggestions, quote_text, resource
+        ):
             best_suggestion = self.corrector.get_best_suggestion(suggestions)
 
             try:
                 # Try to use the auto-corrected quote
                 corrected_quote = resource.quote(best_suggestion)
 
-                # Log the auto-correction
-                self._log_auto_correction(
-                    entity_name, quote_text, best_suggestion, suggestions[0][1]
+                # Get alignment details for logging
+                alignment = self.aligner.align_quote_to_resource(
+                    best_suggestion, resource
                 )
 
-                # Record as resolved error
+                # Log the auto-correction with alignment info
+                self._log_auto_correction(
+                    entity_name,
+                    quote_text,
+                    best_suggestion,
+                    suggestions[0][1],
+                    alignment,
+                )
+
+                # Record as resolved error with enhanced details
                 error_record = QuoteErrorRecord(
                     entity_name=entity_name,
                     entity_kind=entity_kind,
                     original_quote=quote_text,
-                    error_type="not_found",
+                    error_type=self._classify_error_type(
+                        quote_text, resource, suggestions
+                    ),
                     suggested_corrections=[s[0] for s in suggestions[:3]],
                     matched_percentage=suggestions[0][1],
                     final_accepted_quote=best_suggestion,
                     retry_attempt=current_retry,
-                    retry_message="Auto-corrected with high confidence",
+                    retry_message=f"Auto-corrected with high alignment confidence ({alignment.similarity_ratio:.1%})",
                     resolved=True,
                 )
                 quote_error_log.append(error_record)
@@ -156,22 +173,57 @@ class QuoteValidator:
     def _classify_error_type(
         self, quote_text: str, resource: "Resource", suggestions: List[tuple]
     ) -> str:
-        """Classify the type of quote error for logging."""
-        from .utilities import detect_split_quote
+        """Classify the type of quote error using alignment analysis."""
+        # Use alignment analysis for precise error classification
+        alignment = self.aligner.align_quote_to_resource(quote_text, resource)
 
-        # Check if it's a split quote
-        if detect_split_quote(quote_text, resource):
-            return "split_quote"
+        # Map alignment error types to string format for compatibility
+        error_type_mapping = {
+            ErrorType.SPLIT_QUOTE: "split_quote",
+            ErrorType.WORD_SUBSTITUTION: "word_substitution",
+            ErrorType.INSERTION: "insertion",
+            ErrorType.DELETION: "deletion",
+            ErrorType.PARAPHRASE: "paraphrased",
+            ErrorType.REORDERING: "reordering",
+            ErrorType.NOT_FOUND: "not_found",
+        }
 
-        # Check if we have good partial matches
-        if suggestions and suggestions[0][1] > 50:
-            return "not_found"  # Likely paraphrased or minor differences
+        return error_type_mapping.get(alignment.error_type, "not_found")
 
-        # Check if it's likely a placeholder
-        if quote_text.strip() in ["...", ".", ""]:
-            return "paraphrased"
+    def _should_auto_accept_with_alignment(
+        self, suggestions, original_quote: str, resource
+    ) -> bool:
+        """Enhanced auto-acceptance logic using alignment quality metrics."""
+        if not suggestions:
+            return False
 
-        return "not_found"
+        best_suggestion, confidence = suggestions[0]
+
+        # Use standard confidence threshold as baseline
+        if not self.corrector.should_auto_accept(suggestions):
+            return False
+
+        # Additional alignment-based validation
+        try:
+            # Verify the correction is actually valid by checking alignment
+            corrected_alignment = self.aligner.align_quote_to_resource(
+                best_suggestion, resource
+            )
+
+            # Require high alignment quality for auto-acceptance
+            alignment_requirements = (
+                corrected_alignment.similarity_ratio > 0.9  # Very high similarity
+                and corrected_alignment.coverage_ratio > 0.85  # Good coverage
+                and corrected_alignment.contiguous  # Must be contiguous
+                and corrected_alignment.error_type
+                != ErrorType.SPLIT_QUOTE  # No split quotes
+            )
+
+            return alignment_requirements
+
+        except Exception:
+            # If alignment analysis fails, fall back to confidence only
+            return confidence >= self.corrector.auto_accept_threshold
 
     def _log_auto_correction(
         self,
@@ -179,14 +231,24 @@ class QuoteValidator:
         original_quote: str,
         corrected_quote: str,
         confidence: float,
+        alignment=None,
     ) -> None:
-        """Log successful auto-correction."""
+        """Log successful auto-correction with alignment details."""
+        alignment_info = ""
+        if alignment:
+            alignment_info = (
+                f"[blue]Alignment:[/blue] {alignment.similarity_ratio:.1%} similarity, "
+                f"{alignment.coverage_ratio:.1%} coverage, "
+                f"{'contiguous' if alignment.contiguous else 'fragmented'}\n"
+            )
+
         self.console.print(
             Panel(
                 f"[green]✅ AUTO-CORRECTED[/green] {entity_name}\n"
                 f"[yellow]Original:[/yellow] {original_quote[:100]}...\n"
                 f"[green]Corrected:[/green] {corrected_quote[:100]}...\n"
-                f"[blue]Confidence:[/blue] {confidence:.1f}%",
+                f"[blue]Confidence:[/blue] {confidence:.1f}%\n"
+                f"{alignment_info}",
                 title="Quote Auto-Correction",
                 border_style="green",
             )

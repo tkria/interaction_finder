@@ -108,10 +108,6 @@ class ExtractionState:
     # Document management
     resource_pool: ResourcePool = field(default_factory=ResourcePool)
 
-    # Document grouping support - groups as ResourceId references
-    document_groups: List[List[ResourceId]] = field(default_factory=list)
-    current_group_index: int = 0
-
     # Extracted entities with their quotes (key insight: preserve provenance)
     entities_found: Dict[str, EntityWithQuotes] = field(default_factory=dict)
 
@@ -136,39 +132,10 @@ class ExtractionState:
         """Get number of final pairs generated."""
         return len(self.final_pairs)
 
-    def get_current_group_resources(self) -> List:
-        """Get Resource objects for the current group."""
-        if not self.document_groups or self.current_group_index >= len(
-            self.document_groups
-        ):
-            # Fallback: return all resources if no grouping
-            return list(self.resource_pool.resources)
-
-        current_group = self.document_groups[self.current_group_index]
-        return [self.resource_pool.get(resource_id) for resource_id in current_group]
-
-    def has_more_groups(self) -> bool:
-        """Check if there are more groups to process."""
-        return self.current_group_index < len(self.document_groups) - 1
-
-    def advance_to_next_group(self) -> bool:
-        """
-        Advance to the next group.
-
-        Returns:
-            True if advanced to next group, False if no more groups
-        """
-        if self.has_more_groups():
-            self.current_group_index += 1
-            return True
-        return False
-
     def get_summary(self) -> Dict[str, any]:
         """Get processing summary with Phase 3 metrics."""
         base_summary = {
             "documents": len(self.resource_pool.resources),
-            "groups": len(self.document_groups),
-            "current_group": self.current_group_index,
             "entities": self.get_entity_count(),
             "assessments": self.get_assessment_count(),
             "pairs": self.get_pairs_count(),

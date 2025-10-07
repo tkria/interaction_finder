@@ -5,7 +5,8 @@ These models maintain the essential pattern of individual entity assessment
 while ensuring every entity and claim has verifiable quotes with exact positions.
 """
 
-from typing import List, Dict, Any, Literal
+from typing import List, Dict, Any, Literal, Optional
+from datetime import datetime
 from pydantic import BaseModel, Field
 
 # Import with TYPE_CHECKING to avoid circular imports
@@ -25,6 +26,10 @@ class EntityWithQuotes(BaseModel):
 
     name: str = Field(description="Entity name (e.g., 'BRCA1', 'breast cancer')")
     kind: str = Field(description="Entity type from task configuration")
+    aliases: List[str] = Field(
+        default_factory=list,
+        description="Alternative names for this entity (e.g., gene symbols vs full names)",
+    )
     quotes: List["ResourceQuote"] = Field(
         description="All occurrences with exact positions", min_length=1
     )
@@ -34,9 +39,7 @@ class EntityWithQuotes(BaseModel):
 
     def validate(self) -> bool:
         """Ensure all quotes are valid and non-empty."""
-        if not self.quotes:
-            return False
-        return all(quote.count > 0 for quote in self.quotes)
+        return len(self.quotes) > 0
 
     @property
     def all_contexts(self) -> List[str]:
@@ -211,28 +214,48 @@ class EntityPairOut(BaseModel):
 
 
 # Output models for agents
-class EntityQuoteOut(BaseModel):
-    """Schema for individual entity quote with source attribution."""
-
-    text: str = Field(description="Exact quote text from the document")
-    source: str = Field(description="Resource identifier (e.g., 'Resource abc123')")
-
-
 class EntityOut(BaseModel):
-    """Schema for individual entity with quotes and metadata."""
+    """Schema for individual entity with quotes and metadata (multi-document extraction)."""
 
     name: str = Field(description="Exact entity name as it appears in text")
     kind: str = Field(description="Entity kind (gene, disease, etc.)")
-    quotes: List[EntityQuoteOut] = Field(
-        description="Supporting quotes with text and source attribution",
-        min_length=1,  # Require at least one quote per entity
+    aliases: List[str] = Field(
+        default_factory=list,
+        description="Alternative names for this entity (e.g., gene symbols vs full names)",
+    )
+    quotes: Dict[str, List[str]] = Field(
+        description="Supporting quotes grouped by resource ID. Keys are Resource IDs (e.g., 'Resource 1_a1b2c3d4'), values are lists of quote texts from that resource."
+    )
+
+
+class SimpleEntityOut(BaseModel):
+    """Schema for individual entity with simple quotes (single-document extraction)."""
+
+    name: str = Field(description="Exact entity name as it appears in text")
+    kind: str = Field(description="Entity kind (gene, disease, etc.)")
+    aliases: List[str] = Field(
+        default_factory=list,
+        description="Alternative names for this entity (e.g., gene symbols vs full names)",
+    )
+    quotes: List[str] = Field(
+        description="Supporting quotes from the document as exact text passages"
     )
 
 
 class EntityListOut(BaseModel):
-    """Output from entity extraction agent."""
+    """Output from entity extraction agent (multi-document)."""
 
     entities: List[EntityOut] = Field(
+        description="Extracted entities with name, kind, and supporting quotes"
+    )
+    entity_kinds: List[str] = Field(description="Entity kinds that were searched for")
+    reasoning: str = Field(description="Explanation of extraction process", default="")
+
+
+class SimpleEntityListOut(BaseModel):
+    """Output from entity extraction agent (single-document)."""
+
+    entities: List[SimpleEntityOut] = Field(
         description="Extracted entities with name, kind, and supporting quotes"
     )
     entity_kinds: List[str] = Field(description="Entity kinds that were searched for")
@@ -254,6 +277,56 @@ class AssessmentOut(BaseModel):
     reasoning: str = Field(description="Detailed reasoning for the assessment")
 
 
+class QuoteErrorRecord(BaseModel):
+    """Record of a quote validation failure and its correction."""
+
+    entity_name: str = Field(description="Name of the entity being extracted")
+    entity_kind: str = Field(description="Type of the entity")
+
+    # Original error details
+    original_quote: str = Field(description="The quote that failed validation")
+    error_type: Literal["not_found", "split_quote", "paraphrased"] = Field(
+        description="Type of validation error"
+    )
+
+    # Correction suggestions
+    suggested_corrections: List[str] = Field(
+        description="Corrections suggested by the recovery system", default_factory=list
+    )
+    matched_percentage: Optional[float] = Field(
+        description="Match percentage for paraphrasing detection", default=None
+    )
+
+    # Final resolution
+    final_accepted_quote: Optional[str] = Field(
+        description="The quote that was finally accepted", default=None
+    )
+    retry_attempt: int = Field(
+        description="Which retry attempt this represents", default=1
+    )
+    retry_message: Optional[str] = Field(
+        description="Exact message sent to LLM for this retry", default=None
+    )
+    resolved: bool = Field(
+        description="Whether this error was eventually resolved", default=False
+    )
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for JSON serialization."""
+        return {
+            "entity_name": self.entity_name,
+            "entity_kind": self.entity_kind,
+            "original_quote": self.original_quote,
+            "error_type": self.error_type,
+            "suggested_corrections": self.suggested_corrections,
+            "matched_percentage": self.matched_percentage,
+            "final_accepted_quote": self.final_accepted_quote,
+            "retry_attempt": self.retry_attempt,
+            "retry_message": self.retry_message,
+            "resolved": self.resolved,
+        }
+
+
 class BatchExtractionResultV2(BaseModel):
     """Result of V2 extraction pipeline, compatible with CLI expectations."""
 
@@ -272,6 +345,9 @@ class BatchExtractionResultV2(BaseModel):
     )
     errors: List[Dict[str, Any]] = Field(
         default_factory=list, description="Errors encountered during processing"
+    )
+    quote_errors: List[QuoteErrorRecord] = Field(
+        default_factory=list, description="Quote validation errors and corrections"
     )
 
     @classmethod

@@ -5,13 +5,18 @@ Following pydantic-graph pattern: only external services,
 no derived configuration data (that belongs in State).
 """
 
-from dataclasses import dataclass
-from typing import Union, Optional, List
+from dataclasses import dataclass, field
+from typing import Union, Optional, List, TYPE_CHECKING
+from pathlib import Path
 
 from pydantic_ai.models import Model
 
 from ..settings import IfetcherConfig
 from ..fetcher import PageFetcher
+
+if TYPE_CHECKING:
+    from ..resources import Resource
+    from .models import QuoteErrorRecord
 
 
 @dataclass
@@ -35,8 +40,20 @@ class ExtractionDeps:
     # Target term for extraction context
     target_term: Optional[str] = None
 
+    # Parallelism control (0 = unlimited, >0 = max concurrent operations)
+    parallelism: int = 0
+
     # Current resources for validation (set by nodes before agent runs)
-    current_resources: Optional[List] = None
+    current_resources: Optional[List["Resource"]] = None
+
+    # Quote error tracking
+    quote_error_log: List["QuoteErrorRecord"] = field(default_factory=list)
+
+    # Track which errors have been saved to avoid duplication
+    saved_error_count: int = 0
+
+    # Incremental output directory (optional)
+    output_dir: Optional[Path] = None
 
     @classmethod
     def from_config(
@@ -45,7 +62,9 @@ class ExtractionDeps:
         page_fetcher: PageFetcher,
         model: Union[Model, str, None] = None,
         target_term: Optional[str] = None,
-        current_resources: Optional[List] = None,
+        parallelism: int = 0,
+        current_resources: Optional[List["Resource"]] = None,
+        output_dir: Optional[Path] = None,
     ) -> "ExtractionDeps":
         """
         Create deps from configuration with sensible defaults.
@@ -55,6 +74,7 @@ class ExtractionDeps:
             page_fetcher: PageFetcher instance
             model: Optional model override
             target_term: Optional target term for extraction context
+            parallelism: Parallelism limit (0 = unlimited)
             current_resources: Optional list of resources for validation
 
         Returns:
@@ -70,7 +90,9 @@ class ExtractionDeps:
             config=config,
             page_fetcher=page_fetcher,
             target_term=target_term,
+            parallelism=parallelism,
             current_resources=current_resources,
+            output_dir=output_dir,
         )
 
     def get_entity_kinds(self) -> list[str]:
