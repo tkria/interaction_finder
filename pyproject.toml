@@ -9,8 +9,11 @@ dependencies = [
     "aiofiles>=24.1.0",
     "chonkie[semantic]>=1.1.2",
     "crawl4ai[pdf]>=0.7.4",
+    "httpx>=0.28.1",
+    "logfire>=0.4",
     "playwright-stealth>=2.0.0",
     "pydantic>=2.11.7",
+    "pydantic-ai==1",
     "rich>=14.1.0",
     "scikit-learn>=1.7.1",
     "tomli>=2.2.1",
@@ -25,5 +28,12 @@ interaction-finder = "interaction_finder.cli:main"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.logfire]
+ignore_no_config = true
+
 [dependency-groups]
-dev = ["pytest-cov>=6.2.1", "pytest-asyncio>=0.24.0"]
+dev = [
+    "pytest-cov>=6.2.1",
+    "pytest-asyncio>=0.24.0",
+    "dirty-equals>=0.9.0",
+]
