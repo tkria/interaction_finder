@@ -1,0 +1,39 @@
+"""
+Reverse search functionality for finding known resources via iterative queries.
+
+This package provides models and algorithms for reverse search: given a set of
+known resources (papers/documents), generate queries that will retrieve them
+through standard search backends. Used for query evaluation and coverage analysis.
+
+Main exports:
+    KnownResource: Target resource representation with canonical URL
+    ResourceMatch: Records how a resource matched to a search result
+    ReverseSearchResult: Result of a single query execution
+    ReverseSearchSession: Complete session with all queries and metrics
+    ReverseSearchConfig: Configuration with validated constraints
+    ReverseSearchError: Base error class and subclasses
+"""
+
+from interaction_finder.search.reverse.models import (
+    KnownResource,
+    MatchingError,
+    QueryGenerationError,
+    ResourceMatch,
+    ResourceParseError,
+    ReverseSearchConfig,
+    ReverseSearchError,
+    ReverseSearchResult,
+    ReverseSearchSession,
+)
+
+__all__ = [
+    "KnownResource",
+    "ResourceMatch",
+    "ReverseSearchResult",
+    "ReverseSearchSession",
+    "ReverseSearchConfig",
+    "ReverseSearchError",
+    "ResourceParseError",
+    "QueryGenerationError",
+    "MatchingError",
+]

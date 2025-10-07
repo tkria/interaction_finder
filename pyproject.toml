@@ -31,6 +31,9 @@ build-backend = "hatchling.build"
 [tool.logfire]
 ignore_no_config = true
 
+[tool.hatch.build.targets.wheel]
+packages = ["src/interaction_finder"]
+
 [dependency-groups]
 dev = [
     "pytest-cov>=6.2.1",
