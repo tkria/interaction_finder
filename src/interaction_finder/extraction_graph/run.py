@@ -6,7 +6,7 @@ and extracting entity pairs.
 """
 
 import time
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Callable
 from pathlib import Path
 from rich.console import Console
 from rich.panel import Panel
@@ -14,6 +14,25 @@ from rich.table import Table
 from rich.spinner import Spinner
 from rich.live import Live
 from rich import box
+
+try:
+    import logfire
+except ImportError:
+    # Create a no-op logfire if not available
+    class _NoOpLogfire:
+        def info(self, *args, **kwargs):
+            pass
+
+        def warning(self, *args, **kwargs):
+            pass
+
+        def error(self, *args, **kwargs):
+            pass
+
+        def debug(self, *args, **kwargs):
+            pass
+
+    logfire = _NoOpLogfire()
 
 from ..fetcher import PageFetcher
 from ..settings import IfetcherConfig
@@ -259,11 +278,47 @@ async def prepare_document_groups(
     return document_groups
 
 
+def _save_incremental_results(
+    all_entity_pairs: List,
+    group_summaries: List,
+    errors: List,
+    total_entities: Dict[str, int],
+    deps: Deps,
+    save_callback: Optional[Callable[[BatchExtractionResult], None]] = None,
+) -> None:
+    """Save incremental results after each group processing."""
+    if not save_callback:
+        return
+
+    # Create intermediate batch result
+    intermediate_result = BatchExtractionResult(
+        total_groups=len(group_summaries) + len(errors),  # Approximate
+        successful_groups=len([s for s in group_summaries if s.pairs_validated > 0]),
+        total_entities=total_entities.copy(),
+        total_pairs=len(all_entity_pairs),
+        entity_pairs=all_entity_pairs.copy(),
+        group_summaries=group_summaries.copy(),
+        errors=errors.copy(),
+        processing_config={
+            "entity_kinds": deps.entity_kinds,
+            "relation_type": deps.relation_type,
+            "task_context": deps.task_context,
+            "model": str(deps.model),
+        },
+    )
+
+    # Call the save callback
+    save_callback(intermediate_result)
+
+
 async def extract_entity_pairs(
     document_groups: List[DocumentGroup],
     config: IfetcherConfig,
     page_fetcher: PageFetcher,
     model: Optional[str] = None,
+    verbose: bool = False,
+    save_callback: Optional[Callable[[BatchExtractionResult], None]] = None,
+    parallelism: Optional[int] = None,
 ) -> BatchExtractionResult:
     """
     Extract entity pairs from document groups using the graph pipeline.
@@ -273,6 +328,8 @@ async def extract_entity_pairs(
         config: Configuration for extraction
         page_fetcher: PageFetcher instance for any additional content needs
         model: Optional model override
+        verbose: Enable verbose progress reporting
+        save_callback: Optional function to call after each group with intermediate results
 
     Returns:
         BatchExtractionResult with all extracted pairs and metadata
@@ -289,22 +346,39 @@ async def extract_entity_pairs(
         )
 
     # Create dependencies
-    deps = Deps.from_config(config, page_fetcher, model)
+    deps = Deps.from_config(config, page_fetcher, model, verbose, parallelism)
 
     # Initialize batch results
     all_pairs = []
+    all_entity_pairs = []  # Store actual EntityPairOut objects
     group_summaries = []
     errors = []
     successful_groups = 0
     total_entities = {kind: 0 for kind in deps.entity_kinds}
 
-    print(f"Processing {len(document_groups)} document groups...")
+    # Initialize progress tracker for verbose mode
+    progress_tracker = None
+    if verbose:
+        from .progress_tracker import create_progress_tracker
+
+        progress_tracker = create_progress_tracker()
+        if progress_tracker:
+            progress_tracker.start(len(document_groups))
+
+    if not verbose:
+        print(f"Processing {len(document_groups)} document groups...")
 
     # Process each document group
     for group_idx, document_group in enumerate(document_groups):
-        print(f"\nProcessing group {group_idx + 1}/{len(document_groups)}")
-        print(f"  URLs: {len(document_group.urls)}")
-        print(f"  Chunks: {document_group.get_total_chunks()}")
+        # Update progress tracker
+        if progress_tracker:
+            progress_tracker.update_group(
+                group_idx, document_group.urls, document_group.get_total_chunks()
+            )
+        else:
+            print(f"\nProcessing group {group_idx + 1}/{len(document_groups)}")
+            print(f"  URLs: {len(document_group.urls)}")
+            print(f"  Chunks: {document_group.get_total_chunks()}")
 
         try:
             start_time = time.time()
@@ -316,6 +390,10 @@ async def extract_entity_pairs(
                 entity_kinds=deps.entity_kinds,
                 relation_type=deps.relation_type,
             )
+
+            # Store progress tracker in state for access by nodes
+            if progress_tracker:
+                state.add_processing_note("progress_tracker", progress_tracker)
 
             # Run the graph
             result = await extraction_graph.run(InitialRouter(), state=state, deps=deps)
@@ -329,12 +407,55 @@ async def extract_entity_pairs(
             else:
                 group_pairs = []
 
+            # Extract EntityPairOut objects from state for output formatting
+            from .models import EntityPairOut
+
+            for pair_data in state.entity_pairs:
+                if isinstance(pair_data, dict):
+                    try:
+                        # Convert dict back to EntityPairOut object
+                        entity_pair = EntityPairOut.model_validate(pair_data)
+                        all_entity_pairs.append(entity_pair)
+                    except Exception:
+                        # Skip invalid pairs
+                        pass
+
             # Update totals
             for kind in deps.entity_kinds:
                 total_entities[kind] += state.get_entity_count(kind)
 
-            if group_pairs:
+            if group_pairs or state.entity_pairs:
                 successful_groups += 1
+
+            # Update progress tracker with entity counts
+            if progress_tracker:
+                entities_by_kind = {
+                    kind: state.get_entity_count(kind) for kind in deps.entity_kinds
+                }
+                progress_tracker.update_entities(entities_by_kind)
+
+            # Show intermediate results for debugging
+            if not verbose:
+                entity_counts = {
+                    kind: state.get_entity_count(kind) for kind in deps.entity_kinds
+                }
+                total_entities_found = sum(entity_counts.values())
+                print(
+                    f"    Entities found: {total_entities_found} ({dict(entity_counts)})"
+                )
+                print(
+                    f"    Individual assessments: {len(state.individual_entity_assessments)}"
+                )
+                print(f"    Pairs generated: {len(state.entity_pairs)}")
+
+                # Show routing decision
+                routing_decision = state.processing_notes.get("routing_decision", {})
+                if routing_decision:
+                    classification = routing_decision.get("classification", "unknown")
+                    confidence = routing_decision.get("confidence", 0)
+                    print(
+                        f"    Content classification: {classification} (confidence: {confidence:.2f})"
+                    )
 
             # Create summary
             summary = ExtractionSummary(
@@ -361,6 +482,20 @@ async def extract_entity_pairs(
                 f"  Result: {len(group_pairs)} validated pairs in {processing_time:.1f}s"
             )
 
+            logfire.info(
+                f"Group {group_idx + 1}/{len(document_groups)} completed: {len(group_pairs)} pairs in {processing_time:.1f}s"
+            )
+
+            # Save incremental results after successful processing
+            _save_incremental_results(
+                all_entity_pairs,
+                group_summaries,
+                errors,
+                total_entities,
+                deps,
+                save_callback,
+            )
+
         except Exception as e:
             error_info = {
                 "group_index": group_idx,
@@ -370,14 +505,18 @@ async def extract_entity_pairs(
             }
             errors.append(error_info)
 
-            # Show concise error message
-            error_type = type(e).__name__
-            if "api_key" in str(e).lower():
-                print(f"  Failed: API key not configured")
-            elif len(str(e)) > 50:
-                print(f"  Failed: {error_type}")
+            # Update progress tracker
+            if progress_tracker:
+                progress_tracker.increment_errors()
             else:
-                print(f"  Failed: {e}")
+                # Show concise error message in non-verbose mode
+                error_type = type(e).__name__
+                if "api_key" in str(e).lower():
+                    print(f"  Failed: API key not configured")
+                elif len(str(e)) > 50:
+                    print(f"  Failed: {error_type}")
+                else:
+                    print(f"  Failed: {e}")
 
             # Create minimal summary for failed group
             summary = ExtractionSummary(
@@ -392,12 +531,27 @@ async def extract_entity_pairs(
             )
             group_summaries.append(summary)
 
+            # Save incremental results after failed processing too
+            _save_incremental_results(
+                all_entity_pairs,
+                group_summaries,
+                errors,
+                total_entities,
+                deps,
+                save_callback,
+            )
+
+    # Cleanup progress tracker
+    if progress_tracker:
+        progress_tracker.stop()
+
     # Create final result
     result = BatchExtractionResult(
         total_groups=len(document_groups),
         successful_groups=successful_groups,
         total_entities=total_entities,
-        total_pairs=len(all_pairs),
+        total_pairs=len(all_entity_pairs),
+        entity_pairs=all_entity_pairs,
         group_summaries=group_summaries,
         errors=errors,
         processing_config={
@@ -408,13 +562,14 @@ async def extract_entity_pairs(
         },
     )
 
-    print(f"\nBatch processing complete:")
-    print(f"  Groups processed: {len(document_groups)}")
-    print(f"  Successful groups: {successful_groups}")
-    print(f"  Total entity pairs: {len(all_pairs)}")
-    print(f"  Entities by kind: {total_entities}")
-    if errors:
-        print(f"  Errors: {len(errors)}")
+    if not verbose:
+        print(f"\nBatch processing complete:")
+        print(f"  Groups processed: {len(document_groups)}")
+        print(f"  Successful groups: {successful_groups}")
+        print(f"  Total entity pairs: {len(all_entity_pairs)}")
+        print(f"  Entities by kind: {total_entities}")
+        if errors:
+            print(f"  Errors: {len(errors)}")
 
     return result
 
@@ -424,6 +579,9 @@ async def extract_from_urls(
     config: IfetcherConfig,
     page_fetcher: Optional[PageFetcher] = None,
     model: Optional[str] = None,
+    verbose: bool = False,
+    save_callback: Optional[Callable[[BatchExtractionResult], None]] = None,
+    parallelism: Optional[int] = None,
 ) -> BatchExtractionResult:
     """
     Complete pipeline from URLs to entity pairs.
@@ -435,6 +593,8 @@ async def extract_from_urls(
         config: Configuration
         page_fetcher: Optional PageFetcher instance
         model: Optional model override
+        verbose: Enable verbose progress reporting
+        save_callback: Optional function to call after each group with intermediate results
 
     Returns:
         BatchExtractionResult with extracted pairs
@@ -462,40 +622,91 @@ async def extract_from_urls(
         )
 
     # Extract entity pairs
-    return await extract_entity_pairs(document_groups, config, page_fetcher, model)
+    return await extract_entity_pairs(
+        document_groups,
+        config,
+        page_fetcher,
+        model,
+        verbose,
+        save_callback,
+        parallelism,
+    )
 
 
-def save_results(result: BatchExtractionResult, output_path: Path) -> None:
+def save_results(
+    result: BatchExtractionResult,
+    output_path: Path,
+    term: str,
+    mode: str = "basic",
+    repeat: int = 1,
+    entity_kinds: Optional[List[str]] = None,
+) -> None:
     """
-    Save extraction results to JSON Lines format.
+    Save extraction results using OutputFormatter for compliance.
 
     Args:
         result: BatchExtractionResult to save
-        output_path: Path for output file
+        output_path: Path for output file (legacy compatibility)
+        term: Research term for directory structure
+        mode: Research mode for directory structure
+        repeat: Repeat number for directory structure
+        entity_kinds: List of entity kinds for normalization
     """
+    from .output_formatter import OutputFormatter
+    from .usage_tracker import get_usage_summary
+    from .models import EntityPairOut, convert_pairs_to_final_format
+
+    # Use the CLI-generated path directly instead of OutputFormatter structure
+    # The output_path from CLI is a .jsonl file, we want to save to a directory with the same name
+    output_dir = output_path.with_suffix("")
+
+    # Ensure directory exists
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Save files directly to the CLI-generated path structure
     import json
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    # Get entity pairs from the batch result
+    all_pairs = result.entity_pairs
 
-    with open(output_path, "w") as f:
-        # Write metadata header
-        metadata = {
-            "total_groups": result.total_groups,
-            "successful_groups": result.successful_groups,
-            "total_entities": result.total_entities,
-            "total_pairs": result.total_pairs,
-            "processing_config": result.processing_config,
-            "errors": result.errors,
-        }
-        f.write(json.dumps({"metadata": metadata}) + "\n")
+    # Use entity kinds from config if not provided
+    if entity_kinds is None:
+        entity_kinds = list(
+            result.processing_config.get("entity_kinds", ["gene", "disease"])
+        )
 
-        # Write each pair as a separate line
-        for summary in result.group_summaries:
-            # In a real implementation, we'd extract pairs from the summary
-            # For now, write the summary itself
-            f.write(json.dumps(summary.model_dump()) + "\n")
+    # Save pairs.json - convert to final aggregated format
+    pairs_file = output_dir / "pairs.json"
+    # Convert EntityPairOut objects to final format with aggregation
+    aggregated_pairs = convert_pairs_to_final_format(all_pairs)
 
-    import os
+    with open(pairs_file, "w", encoding="utf-8") as f:
+        json.dump(aggregated_pairs, f, indent=2, ensure_ascii=False)
 
-    relative_path = os.path.relpath(output_path, os.getcwd())
-    print(f"Results saved to {relative_path}")
+    # Get and save usage data
+    usage_data = get_usage_summary()
+    usage_file = output_dir / "usage.json"
+    with open(usage_file, "w", encoding="utf-8") as f:
+        json.dump(usage_data, f, indent=2)
+
+    # Save metadata.json
+    metadata = {
+        "total_groups": result.total_groups,
+        "successful_groups": result.successful_groups,
+        "total_entities": result.total_entities,
+        "total_pairs": result.total_pairs,
+        "processing_config": result.processing_config,
+        "errors": result.errors,
+        "group_summaries": [
+            summary.model_dump() if hasattr(summary, "model_dump") else summary
+            for summary in result.group_summaries
+        ],
+    }
+    metadata_file = output_dir / "metadata.json"
+    with open(metadata_file, "w", encoding="utf-8") as f:
+        json.dump(metadata, f, indent=2, ensure_ascii=False)
+
+    print(f"Results saved to {output_dir}")
+    print(f"  - pairs.json: {len(aggregated_pairs)} aggregated pairs")
+    print(f"  - usage.json: {len(usage_data)} model(s) tracked")
+    print(f"  - metadata.json: batch processing metadata")

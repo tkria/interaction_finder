@@ -136,76 +136,41 @@ class EntityExtraction(BaseNode[EntityExtractionState, Deps]):
             logfire.warning("No document group to process in EntityExtraction")
             return End("No document group to process")
 
-        # Get extraction agent
-        from .agents import create_entity_extractor_agent, run_agent_with_tracking
-
-        extractor_agent = create_entity_extractor_agent(
-            ctx.deps.model, ctx.deps.entity_kinds, ctx.deps.task_context
-        )
+        # Use direct extraction approach instead of agent-based approach
+        from ..extraction_graph_v2.directextract import extract_cited_entities
 
         # Populate ResourcePool with document content for resource tracking
         resources = current_group.populate_resource_pool(ctx.deps.resource_pool)
         logfire.debug(f"Populated ResourcePool with {len(resources)} resources")
 
-        # Process each document in the group
-        all_extracted = []
-        total_docs = len(current_group.urls)
+        # Convert resources to list format expected by directextract
+        resource_list = list(resources.values())
 
-        for doc_idx, url in enumerate(current_group.urls):
-            # Update progress tracker
-            if progress_tracker:
-                progress_tracker.update_stage(
-                    f"Processing document {doc_idx + 1}/{total_docs}"
-                )
-
-            if url not in current_group.chunks:
-                continue
-
-            # Combine chunks from this document
-            chunks = current_group.chunks[url]
-            document_text = "\n\n".join([chunk.get("text", "") for chunk in chunks])
-
-            if not document_text.strip():
-                continue
-
-            # Get resource information for this document
-            resource = resources.get(url)
-            resource_info = ""
-            if resource:
-                resource_info = f"""
-RESOURCE TRACKING INFORMATION:
-- Resource ID: {resource.id.id}
-- Resource URL: {resource.id.url}
-- Available for creating ResourceQuotes to support entity extractions
-
-When extracting entities, you can reference this Resource ID in your response.
-"""
-
-            # Extract entities from this document
-            prompt = f"""Extract {", ".join(ctx.deps.entity_kinds)} entities from this document:
-
-Source URL: {url}
-{resource_info}
-Content:
-{document_text[:30000]}  # Limit to avoid token limits
-
-Identify all entities found in this document. If Resource ID is available, consider providing ResourceQuotes for supporting evidence."""
-
-            result = await run_agent_with_tracking(
-                extractor_agent,
-                prompt,
-                str(ctx.deps.model),
-                deps=ctx.deps,
+        try:
+            # Use directextract pipeline for complete extraction + validation
+            entities_with_quotes, metrics = await extract_cited_entities(
+                resource_list, ctx.deps.model, ctx.deps.entity_kinds
             )
 
-            # Add source URL and chunk attribution to each entity
-            for entity_data in result.output.entities:
-                # Convert to dict for state storage
-                entity_dict = entity_data.model_dump()
-                entity_dict["source_url"] = url
+            # Convert DirectExtraction results to v1 state format
+            for entity in entities_with_quotes:
+                # Convert to EntityInfo dict format expected by v1 pipeline
+                entity_dict = {
+                    "name": entity.name,
+                    "kind": entity.kind,
+                    "aliases": [],
+                    "source_url": entity.quotes[0].source.url if entity.quotes else "",
+                }
 
-                all_extracted.append(entity_dict)
-                ctx.state.add_entity(entity_data.kind, entity_dict)
+                ctx.state.add_entity(entity.kind, entity_dict)
+
+            logfire.info(
+                f"Direct extraction completed: {len(entities_with_quotes)} entities found"
+            )
+
+        except Exception as e:
+            logfire.error(f"Direct entity extraction failed: {e}")
+            return End(f"Direct entity extraction failed: {e}")
 
         # Check if any entities were found
         total_entities = ctx.state.get_entity_count()
