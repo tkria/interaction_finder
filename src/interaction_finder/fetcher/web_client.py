@@ -519,10 +519,10 @@ class WebClient:
     ):
         """Higher-order function for retry escalation pattern."""
         try:
-            if self.verbose:
-                self._debug_console.print(
-                    f"\r[blue]Fetching {url} (simple mode)[/blue]"
-                )
+            # if self.verbose:
+            #     self._debug_console.print(
+            #         f"\r[blue]Fetching {url} (simple mode)[/blue]"
+            #     )
             result = await simple_fetcher(url)
 
             if force_retry or self._should_retry_with_stealth(result):
@@ -543,10 +543,11 @@ class WebClient:
                     )
                 return stealth_result
             else:
-                if self.verbose:
-                    self._debug_console.print(
-                        f"\r[green]Simple fetch successful for {url}[/green]"
-                    )
+                pass
+                # if self.verbose:
+                #     self._debug_console.print(
+                #         f"\r[green]Simple fetch successful for {url}[/green]"
+                #     )
             return result
         except Exception as e:
             if force_retry:
