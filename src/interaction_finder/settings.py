@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List, Dict, Union, Any, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 import tomli
 import shlex
 import os
@@ -12,38 +12,32 @@ if TYPE_CHECKING:
     from .search.config import SearchConfig
 
 
-def configure_logfire() -> None:
+def configure_logfire(verbose: bool = False) -> None:
     """Configure logfire if LOGFIRE_WRITE_TOKEN is available."""
     token = os.environ.get("LOGFIRE_WRITE_TOKEN")
-    if token:
-        try:
-            import logfire
+    import logfire
+    from logfire import ConsoleOptions
 
-            logfire.configure(token=token, scrubbing=False)
-            logfire.instrument_pydantic_ai()
-        except ImportError:
-            # Logfire not available, skip configuration
-            pass
+    if verbose:
+        coptions = ConsoleOptions()
+    else:
+        coptions = ConsoleOptions(min_log_level="warn", show_project_link=False)
+    _ = logfire.configure(
+        send_to_logfire="if-token-present",
+        token=token,
+        scrubbing=False,
+        console=coptions,
+    )
+    _ = logfire.instrument_pydantic_ai()
 
 
 def _create_search_config():
     """Create SearchConfig instance - helper to avoid circular imports."""
     from .search.config import SearchConfig
 
-    return SearchConfig()
-
-
-# Rebuild the model after all imports are available
-def _rebuild_config_model():
-    """Rebuild the config model after all dependencies are loaded."""
-    try:
-        from .search.config import SearchConfig
-
-        # Need to rebuild nested models that reference SearchConfig too
-        IfetcherConfig.Tools.model_rebuild()
-        IfetcherConfig.model_rebuild()
-    except ImportError:
-        pass
+    return SearchConfig(
+        backend="pubmed", max_results=100, concurrent_backends=2, global_timeout=120
+    )
 
 
 class IfetcherConfig(BaseModel):
@@ -76,7 +70,7 @@ class IfetcherConfig(BaseModel):
             None, description="Custom prompt template for the agent"
         )
 
-    agents: Dict[str, AgentSpec] = Field(
+    agents: dict[str, AgentSpec] = Field(
         default_factory=dict,
         description="Configuration for different AI agents by name",
     )
@@ -87,7 +81,7 @@ class IfetcherConfig(BaseModel):
 
     @field_validator("researcher")
     @classmethod
-    def validate_researcher(cls, v):
+    def validate_researcher(cls, v: str) -> str:
         """Validate that researcher is a valid research mode"""
         # NOTE: Currently no researcher modes are implemented
         # This list is prepared for future implementation of different research strategies
@@ -100,7 +94,7 @@ class IfetcherConfig(BaseModel):
     class Tools(BaseModel):
         """Configuration for external tools and services."""
 
-        enabled: List[str] = Field(
+        enabled: list[str] = Field(
             default_factory=list,
             description="List of enabled tools (e.g., crawl4ai, searxng, search)",
         )
@@ -111,7 +105,7 @@ class IfetcherConfig(BaseModel):
             categories: str = Field(
                 "general", description="Search categories for SearXNG"
             )
-            blocked_sites: List[str] = Field(
+            blocked_sites: list[str] = Field(
                 default_factory=list,
                 description="List of sites to block in search results",
             )
@@ -149,14 +143,14 @@ class IfetcherConfig(BaseModel):
         class ExternalResearcher(BaseModel):
             """Configuration for external research tools and commands."""
 
-            cmd: Union[str, List[str]] = Field(
+            cmd: str | list[str] = Field(
                 default_factory=list,
                 description="External researcher command and arguments",
             )
             dir: str | None = Field(
                 None, description="Working directory for external researcher"
             )
-            env: Dict[str, str] = Field(
+            env: dict[str, str] = Field(
                 default_factory=dict,
                 description="Environment variables for external researcher",
             )
@@ -166,14 +160,14 @@ class IfetcherConfig(BaseModel):
             strip_suffix_re: str = Field(
                 "", description="Regex pattern to strip from output suffix"
             )
-            strip_re: Union[str, List[str]] = Field(
+            strip_re: str | list[str] = Field(
                 default_factory=list,
                 description="List of regex patterns to strip from external researcher output",
             )
 
             @field_validator("cmd", mode="before")
             @classmethod
-            def normalize_cmd(cls, v):
+            def normalize_cmd(cls, v: Any) -> list[str]:
                 """Convert string command to list using shell parsing"""
                 if isinstance(v, str):
                     if not v.strip():
@@ -186,16 +180,16 @@ class IfetcherConfig(BaseModel):
 
             @field_validator("strip_re", mode="before")
             @classmethod
-            def normalize_strip_re(cls, v):
+            def normalize_strip_re(cls, v: Any) -> list[str]:
                 """Convert string values to single-item lists for consistency"""
                 if isinstance(v, str):
                     return [v] if v else []
                 return v if v is not None else []
 
-        crawl4ai: Crawl4AI = Field(default_factory=Crawl4AI)
-        searxng: SearXNG = Field(default_factory=SearXNG)
-        ontologies: Ontologies = Field(default_factory=Ontologies)
-        external_researcher: ExternalResearcher = Field(
+        crawl4ai: "Crawl4AI" = Field(default_factory=Crawl4AI)
+        searxng: "SearXNG" = Field(default_factory=SearXNG)
+        ontologies: "Ontologies" = Field(default_factory=Ontologies)
+        external_researcher: "ExternalResearcher" = Field(
             default_factory=ExternalResearcher
         )
 
@@ -204,7 +198,7 @@ class IfetcherConfig(BaseModel):
             description="Configuration for document search functionality",
         )
 
-    tools: Tools = Field(
+    tools: "Tools" = Field(
         default_factory=Tools,
         description="Configuration for external tools and services",
     )
@@ -215,25 +209,25 @@ class IfetcherConfig(BaseModel):
         class Kind(BaseModel):
             """Configuration for entity kind definitions in extraction tasks."""
 
-            kind: List[str] = Field(
+            kind: list[str] = Field(
                 default_factory=list,
                 serialization_alias="is",
                 description="Entity types for this kind",
             )
-            form: List[str] = Field(
+            form: list[str] = Field(
                 default_factory=lambda: ["name"],
                 description="Form variants for entity recognition",
             )
-            example: List[str] = Field(
+            example: list[str] = Field(
                 default_factory=list, description="Example entities of this kind"
             )
-            normalise: Dict[str, str] = Field(
+            normalise: dict[str, str] = Field(
                 default_factory=dict, description="Entity name normalization mappings"
             )
 
             @field_validator("kind", "example", "form", mode="before")
             @classmethod
-            def normalise_to_list(cls, v):
+            def normalise_to_list(cls, v: Any) -> list[str]:
                 """Convert string values to single-item lists for consistency"""
                 if isinstance(v, str):
                     return [v]
@@ -245,24 +239,24 @@ class IfetcherConfig(BaseModel):
         )
         pairs: str = Field("pairs", description="Pair extraction mode")
         context: str = Field("", description="Context information for task")
-        kinds: Dict[str, Kind] = Field(
+        kinds: dict[str, "Kind"] = Field(
             default_factory=dict, description="Entity kind definitions for extraction"
         )
-        synonyms: Dict[str, str] = Field(
+        synonyms: dict[str, str] = Field(
             default_factory=dict, description="Entity synonym mappings"
         )
-        example: List[str] = Field(
+        example: list[str] = Field(
             default_factory=list, description="Example interactions for the task"
         )
 
         @field_validator("kinds", mode="before")
         @classmethod
-        def normalise_kinds(cls, v):
+        def normalise_kinds(cls, v: Any) -> dict[str, "Task.Kind"]:
             """
             Normalizes the kinds field from various input formats:
 
             1. Direct Kind object → {"default": Kind}
-            2. Array format like ["celltype", "biomarker"] → {"celltype": Kind(kind="celltype"), "biomarker": Kind(kind="biomarker")}
+            2. Array format like ["celltype", "biomarker"] → {"celltype": Kind(kind=["celltype"]), "biomarker": Kind(kind=["biomarker"])}
             3. Raw dict with Kind properties → {"default": Kind}
             4. Dict of named kinds → unchanged
             """
@@ -276,7 +270,7 @@ class IfetcherConfig(BaseModel):
                 for item in v:
                     if isinstance(item, str):
                         # Create a Kind object for each string in the list with the string as both key and kind value
-                        kind_obj = cls.Kind(kind=item)
+                        kind_obj = cls.Kind(kind=[item])
                         result[item] = kind_obj
                 return result
 
@@ -298,14 +292,16 @@ class IfetcherConfig(BaseModel):
 
         @field_validator("kinds")
         @classmethod
-        def validate_kinds_not_empty(cls, v):
+        def validate_kinds_not_empty(
+            cls, v: dict[str, "Task.Kind"]
+        ) -> dict[str, "Task.Kind"]:
             if not v:
                 raise ValueError(
                     "At least one kind must be defined in [task.kinds] or [task.kinds.*]"
                 )
             return v
 
-        def get_kind_names(self) -> List[str]:
+        def get_kind_names(self) -> list[str]:
             """Get the list of kind names defined in the task."""
             return list(self.kinds.keys())
 
@@ -321,8 +317,9 @@ class IfetcherConfig(BaseModel):
                     "Cannot get complementary kind: more than two kinds defined."
                 )
 
-    task: Task = Field(
-        default_factory=Task, description="Configuration for extraction task definition"
+    task: "Task" = Field(
+        default_factory=Task,
+        description="Configuration for extraction task definition",
     )
 
     class Workflow(BaseModel):
@@ -447,18 +444,21 @@ class IfetcherConfig(BaseModel):
             ge=1,
             le=10000,
         )
-        summary: Summarisation = Field(
-            default_factory=Summarisation, description="Document summarization settings"
+        summary: "Summarisation" = Field(
+            default_factory=Summarisation,
+            description="Document summarization settings",
         )
-        grouping: Grouping = Field(
-            default_factory=Grouping, description="Document grouping configuration"
+        grouping: "Grouping" = Field(
+            default_factory=Grouping,
+            description="Document grouping configuration",
         )
         unstructured_comparison: bool = Field(
             False, description="Enable unstructured comparison mode"
         )
 
-    workflow: Workflow = Field(
-        default_factory=Workflow, description="Configuration for processing workflow"
+    workflow: "Workflow" = Field(
+        default_factory=Workflow,
+        description="Configuration for processing workflow",
     )
 
     class Output(BaseModel):
@@ -477,8 +477,9 @@ class IfetcherConfig(BaseModel):
                 raise ValueError("output paths must be relative")
             return v
 
-    output: Output = Field(
-        default_factory=Output, description="Configuration for output paths and caching"
+    output: "Output" = Field(
+        default_factory=Output,
+        description="Configuration for output paths and caching",
     )
 
     training_data: str = Field(
@@ -486,11 +487,11 @@ class IfetcherConfig(BaseModel):
         description="Training data path template (supports {term})",
     )
 
-    modes: Dict[str, Dict[str, Any]] = Field(
+    modes: dict[str, dict[str, Any]] = Field(
         default_factory=dict, description="Mode-specific configuration overrides"
     )
 
-    def abspath(self, path: str | Path, **kwargs) -> Path:
+    def abspath(self, path: str | Path, **kwargs: Any) -> Path:
         """
         Resolve a path relative to the config file directory.
 
@@ -509,8 +510,8 @@ class IfetcherConfig(BaseModel):
 
     @staticmethod
     def apply_overrides(
-        data: Dict[str, Any], overrides: Dict[str, Any]
-    ) -> Dict[str, Any]:
+        data: dict[str, Any], overrides: dict[str, Any]
+    ) -> dict[str, Any]:
         """
         Apply overrides to a configuration dictionary.
 
@@ -530,7 +531,7 @@ class IfetcherConfig(BaseModel):
 
             # Navigate to the nested dict location
             current = result
-            for i, key in enumerate(keys[:-1]):
+            for key in keys[:-1]:
                 # Handle array indexing with [n] syntax
                 if "[" in key and key.endswith("]"):
                     base_key, index_str = key.split("[", 1)
@@ -588,9 +589,9 @@ class IfetcherConfig(BaseModel):
     def from_path(
         cls,
         path: str | Path,
-        overrides: Optional[Dict[str, Any]] = None,
-        mode: Optional[str] = None,
-    ) -> IfetcherConfig:
+        overrides: dict[str, Any] | None = None,
+        mode: str | None = None,
+    ) -> "IfetcherConfig":
         """
         Load configuration from a file path with optional overrides and mode.
 
@@ -636,8 +637,8 @@ class IfetcherConfig(BaseModel):
 
     @staticmethod
     def _flatten_nested_overrides(
-        nested_dict: Dict[str, Any], parent_key: str = ""
-    ) -> Dict[str, Any]:
+        nested_dict: dict[str, Any], parent_key: str = ""
+    ) -> dict[str, Any]:
         """
         Convert nested dictionary to flat dictionary with dotted keys.
 
@@ -661,3 +662,15 @@ class IfetcherConfig(BaseModel):
                 items.append((new_key, v))
 
         return dict(items)
+
+
+# Rebuild models to resolve forward references
+def _rebuild_config_models():
+    """Rebuild models after imports are available."""
+    from .search.config import SearchConfig
+
+    IfetcherConfig.model_rebuild()
+
+
+# Import and rebuild on module load
+_rebuild_config_models()
