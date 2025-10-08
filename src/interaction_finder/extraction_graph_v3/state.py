@@ -8,7 +8,7 @@ Extends V2's minimal state pattern with:
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 # Import V2 models for reuse
 from ..extraction_graph_v2.models import (
@@ -127,7 +127,7 @@ class ExtractionMetricsV3(ExtractionMetrics):
             "overall_hit_rate": overall_rate,
         }
 
-    def get_pair_metrics(self) -> Dict[str, any]:
+    def get_pair_metrics(self) -> Dict[str, Any]:
         """Get pair-related metrics."""
         evaluation_rate = (
             (self.pair_evaluation_successes / self.pair_evaluation_calls * 100)
@@ -225,7 +225,7 @@ class ExtractionStateV3:
 
         return True
 
-    def get_summary(self) -> Dict[str, any]:
+    def get_summary(self) -> Dict[str, Any]:
         """Get processing summary with V3 metrics."""
         base_summary = {
             "documents": len(self.resource_pool.resources),
