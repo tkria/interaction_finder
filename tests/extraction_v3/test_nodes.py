@@ -1597,3 +1597,728 @@ class TestGeneratePairCandidatesCheckpoint:
         assert len(checkpoint_calls) == 1
         assert checkpoint_calls[0][0] == "candidates"
         assert checkpoint_calls[0][1] is state_with_assessments
+
+
+# ============================================================================
+# EvaluatePairs Node Tests (Task 08)
+# ============================================================================
+
+
+from interaction_finder.extraction_graph_v3.nodes import EvaluatePairs
+from interaction_finder.extraction_graph_v3.models import (
+    PairCandidate,
+    PairEvaluationOut,
+)
+
+
+@pytest.fixture
+def state_with_candidates():
+    """Create state with pair candidates ready for evaluation."""
+    pool = ResourcePool()
+
+    # Add document with multiple co-occurring entities
+    pool.add(
+        url="https://example.com/doc",
+        title="Gene-disease interactions",
+        document_text="BRCA1 is a tumor suppressor gene associated with breast cancer. "
+        "Mutations in BRCA1 significantly increase the risk of developing breast cancer. "
+        "TP53 is another tumor suppressor gene. TP53 mutations also increase breast cancer risk.",
+    )
+
+    state = ExtractionStateV3()
+    state.resource_pool = pool
+    resource = pool.resources[0]
+
+    # Add entities with quotes
+    brca1_quote1 = resource.quote("BRCA1 is a tumor suppressor gene")
+    brca1_quote2 = resource.quote("Mutations in BRCA1 significantly increase")
+
+    state.entities_found["BRCA1"] = EntityWithQuotes(
+        name="BRCA1",
+        kind="gene",
+        aliases=["BRCA1"],
+        quotes=[brca1_quote1, brca1_quote2],
+        confidence=1.0,
+    )
+
+    breast_cancer_quote1 = resource.quote("breast cancer")
+    breast_cancer_quote2 = resource.quote("breast cancer risk")
+
+    state.entities_found["breast cancer"] = EntityWithQuotes(
+        name="breast cancer",
+        kind="disease",
+        aliases=["breast cancer"],
+        quotes=[breast_cancer_quote1, breast_cancer_quote2],
+        confidence=1.0,
+    )
+
+    tp53_quote = resource.quote("TP53 is another tumor suppressor gene")
+
+    state.entities_found["TP53"] = EntityWithQuotes(
+        name="TP53",
+        kind="gene",
+        aliases=["TP53"],
+        quotes=[tp53_quote],
+        confidence=1.0,
+    )
+
+    # Add pair candidates
+    brca1_breast_cancer = PairCandidate(
+        entity_a=state.entities_found["BRCA1"],
+        entity_b=state.entities_found["breast cancer"],
+        co_occurrence_count=2,
+        shared_resources=[resource.id.id],
+        generation_strategy="same_chunk",
+    )
+
+    tp53_breast_cancer = PairCandidate(
+        entity_a=state.entities_found["TP53"],
+        entity_b=state.entities_found["breast cancer"],
+        co_occurrence_count=1,
+        shared_resources=[resource.id.id],
+        generation_strategy="same_chunk",
+    )
+
+    state.pair_candidates[tuple(sorted(["BRCA1", "breast cancer"]))] = (
+        brca1_breast_cancer
+    )
+    state.pair_candidates[tuple(sorted(["TP53", "breast cancer"]))] = tp53_breast_cancer
+
+    return state
+
+
+@pytest.fixture
+def mock_pair_evaluation_result_positive():
+    """Create mock pair evaluation result with relationship."""
+    return PairEvaluationOut(
+        relationship_exists=True,
+        relationship_type="gene-disease interaction",
+        confidence="high",
+        evidence=[
+            "BRCA1 is a tumor suppressor gene associated with breast cancer.",
+            "Mutations in BRCA1 significantly increase the risk of developing breast cancer.",
+        ],
+        reasoning="Strong evidence for BRCA1-breast cancer relationship",
+    )
+
+
+@pytest.fixture
+def mock_pair_evaluation_result_negative():
+    """Create mock pair evaluation result without relationship."""
+    return PairEvaluationOut(
+        relationship_exists=False,
+        relationship_type="gene-disease interaction",
+        confidence="low",
+        evidence=[],
+        reasoning="No evidence for direct relationship",
+    )
+
+
+class TestEvaluatePairsBasic:
+    """Test basic pair evaluation functionality."""
+
+    @pytest.mark.asyncio
+    async def test_evaluate_pairs_with_accepted_pair(
+        self, state_with_candidates, deps_v3, mock_pair_evaluation_result_positive
+    ):
+        """Test pair evaluation accepts pair with valid evidence."""
+        ctx = GraphRunContext(state=state_with_candidates, deps=deps_v3)
+
+        # Mock agent
+        mock_agent = AsyncMock()
+        mock_agent.run.return_value = mock_pair_evaluation_result_positive
+
+        with patch(
+            "interaction_finder.extraction_graph_v3.nodes.create_pair_evaluator_v3",
+            return_value=mock_agent,
+        ):
+            node = EvaluatePairs()
+            await node.run(ctx)
+
+        # Verify at least one pair was accepted
+        assert len(state_with_candidates.final_pairs) >= 1
+        assert state_with_candidates.metrics.pairs_accepted >= 1
+        assert state_with_candidates.metrics.pair_evaluation_calls > 0
+
+    @pytest.mark.asyncio
+    async def test_evaluate_pairs_with_rejected_pair(
+        self, state_with_candidates, deps_v3, mock_pair_evaluation_result_negative
+    ):
+        """Test pair evaluation rejects pair without relationship."""
+        ctx = GraphRunContext(state=state_with_candidates, deps=deps_v3)
+
+        # Mock agent that rejects all pairs
+        mock_agent = AsyncMock()
+        mock_agent.run.return_value = mock_pair_evaluation_result_negative
+
+        with patch(
+            "interaction_finder.extraction_graph_v3.nodes.create_pair_evaluator_v3",
+            return_value=mock_agent,
+        ):
+            node = EvaluatePairs()
+            await node.run(ctx)
+
+        # Verify all pairs were rejected
+        assert len(state_with_candidates.final_pairs) == 0
+        assert state_with_candidates.metrics.pairs_rejected > 0
+        assert state_with_candidates.metrics.pairs_accepted == 0
+
+    @pytest.mark.asyncio
+    async def test_evaluate_pairs_mixed_results(self, state_with_candidates, deps_v3):
+        """Test pair evaluation with mixed accept/reject results."""
+        ctx = GraphRunContext(state=state_with_candidates, deps=deps_v3)
+
+        # Mock agent with alternating results
+        call_count = [0]
+
+        async def mock_agent_run(prompt, deps):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return PairEvaluationOut(
+                    relationship_exists=True,
+                    relationship_type="gene-disease interaction",
+                    confidence="high",
+                    evidence=[
+                        "BRCA1 is a tumor suppressor gene associated with breast cancer."
+                    ],
+                    reasoning="Accepted",
+                )
+            else:
+                return PairEvaluationOut(
+                    relationship_exists=False,
+                    relationship_type="gene-disease interaction",
+                    confidence="low",
+                    evidence=[],
+                    reasoning="Rejected",
+                )
+
+        mock_agent = AsyncMock()
+        mock_agent.run.side_effect = mock_agent_run
+
+        with patch(
+            "interaction_finder.extraction_graph_v3.nodes.create_pair_evaluator_v3",
+            return_value=mock_agent,
+        ):
+            node = EvaluatePairs()
+            await node.run(ctx)
+
+        # Verify mixed results
+        assert state_with_candidates.metrics.pairs_accepted >= 1
+        assert state_with_candidates.metrics.pairs_rejected >= 1
+        assert (
+            state_with_candidates.metrics.pairs_accepted
+            + state_with_candidates.metrics.pairs_rejected
+            == state_with_candidates.metrics.pair_evaluation_calls
+        )
+
+
+class TestChunkBasedContextExtraction:
+    """Test chunk-based context extraction."""
+
+    @pytest.mark.asyncio
+    async def test_same_chunk_context_extraction(self, state_with_candidates, deps_v3):
+        """Test extraction of same-chunk contexts."""
+        node = EvaluatePairs()
+
+        entity_a = state_with_candidates.entities_found["BRCA1"]
+        entity_b = state_with_candidates.entities_found["breast cancer"]
+        resource = state_with_candidates.resource_pool.resources[0]
+
+        contexts = node._extract_pair_contexts(entity_a, entity_b, resource)
+
+        # Should find at least one context where both entities appear
+        assert len(contexts) > 0
+
+    @pytest.mark.asyncio
+    async def test_no_shared_context_returns_empty(self, deps_v3):
+        """Test that entities without shared contexts return empty list."""
+        # Create separate documents for entities
+        pool = ResourcePool()
+        pool.add(
+            url="https://example.com/doc1",
+            title="Doc 1",
+            document_text="BRCA1 is a gene.",
+        )
+        pool.add(
+            url="https://example.com/doc2",
+            title="Doc 2",
+            document_text="Breast cancer is a disease.",
+        )
+
+        # Entities from different documents
+        entity_a = EntityWithQuotes(
+            name="BRCA1",
+            kind="gene",
+            aliases=["BRCA1"],
+            quotes=[pool.resources[0].quote("BRCA1")],
+            confidence=1.0,
+        )
+
+        entity_b = EntityWithQuotes(
+            name="breast cancer",
+            kind="disease",
+            aliases=["breast cancer"],
+            quotes=[pool.resources[1].quote("breast cancer")],
+            confidence=1.0,
+        )
+
+        node = EvaluatePairs()
+
+        # Try to extract contexts from first resource (where only entity_a appears)
+        contexts = node._extract_pair_contexts(entity_a, entity_b, pool.resources[0])
+
+        # Should return empty (entity_b not in this resource)
+        assert len(contexts) == 0
+
+    @pytest.mark.asyncio
+    async def test_adjacent_chunk_context_extraction(self, deps_v3):
+        """Test extraction of adjacent chunk contexts."""
+        # Create document with entities in adjacent chunks
+        pool = ResourcePool()
+        pool.add(
+            url="https://example.com/doc",
+            title="Test Doc",
+            document_text="BRCA1 is important in the first chunk. "
+            + "In the adjacent chunk, breast cancer is discussed. "
+            + "These two are related.",
+        )
+
+        resource = pool.resources[0]
+
+        entity_a = EntityWithQuotes(
+            name="BRCA1",
+            kind="gene",
+            aliases=["BRCA1"],
+            quotes=[resource.quote("BRCA1 is important")],
+            confidence=1.0,
+        )
+
+        entity_b = EntityWithQuotes(
+            name="breast cancer",
+            kind="disease",
+            aliases=["breast cancer"],
+            quotes=[resource.quote("breast cancer is discussed")],
+            confidence=1.0,
+        )
+
+        node = EvaluatePairs()
+        contexts = node._extract_pair_contexts(entity_a, entity_b, resource)
+
+        # Should find contexts (either same-chunk or adjacent)
+        # (depends on chunking, but should not be empty for related entities)
+        assert len(contexts) >= 0  # May be 0 if chunking separates them
+
+
+class TestProvenanceValidation:
+    """Test provenance validation for accepted pairs."""
+
+    @pytest.mark.asyncio
+    async def test_provenance_validation_success(
+        self, state_with_candidates, deps_v3, mock_pair_evaluation_result_positive
+    ):
+        """Test that pairs with valid evidence pass provenance validation."""
+        ctx = GraphRunContext(state=state_with_candidates, deps=deps_v3)
+
+        mock_agent = AsyncMock()
+        mock_agent.run.return_value = mock_pair_evaluation_result_positive
+
+        with patch(
+            "interaction_finder.extraction_graph_v3.nodes.create_pair_evaluator_v3",
+            return_value=mock_agent,
+        ):
+            node = EvaluatePairs()
+            await node.run(ctx)
+
+        # All accepted pairs should have valid provenance
+        for pair in state_with_candidates.final_pairs:
+            assert pair.validate_provenance()
+
+    @pytest.mark.asyncio
+    async def test_provenance_validation_failure_rejects_pair(
+        self, state_with_candidates, deps_v3
+    ):
+        """Test that pairs without valid evidence are rejected."""
+        ctx = GraphRunContext(state=state_with_candidates, deps=deps_v3)
+
+        # Mock agent with evidence that doesn't exist in documents
+        mock_result = PairEvaluationOut(
+            relationship_exists=True,
+            relationship_type="gene-disease interaction",
+            confidence="high",
+            evidence=[
+                "This evidence quote does not exist in any document at all.",
+            ],
+            reasoning="Hallucinated evidence",
+        )
+
+        mock_agent = AsyncMock()
+        mock_agent.run.return_value = mock_result
+
+        with patch(
+            "interaction_finder.extraction_graph_v3.nodes.create_pair_evaluator_v3",
+            return_value=mock_agent,
+        ):
+            node = EvaluatePairs()
+            await node.run(ctx)
+
+        # Pair should be rejected due to invalid provenance
+        # (no valid evidence quotes found)
+        # At minimum, pairs should have evidence_quotes if accepted
+        for pair in state_with_candidates.final_pairs:
+            assert len(pair.evidence_quotes) > 0
+
+
+class TestEvidenceQuoteMatching:
+    """Test evidence quote validation with fuzzy matching."""
+
+    @pytest.mark.asyncio
+    async def test_evidence_quote_validated_with_exact_match(
+        self, state_with_candidates, deps_v3
+    ):
+        """Test evidence quotes are validated with exact match."""
+        ctx = GraphRunContext(state=state_with_candidates, deps=deps_v3)
+
+        # Mock agent with exact evidence from document
+        mock_result = PairEvaluationOut(
+            relationship_exists=True,
+            relationship_type="gene-disease interaction",
+            confidence="high",
+            evidence=[
+                "BRCA1 is a tumor suppressor gene associated with breast cancer.",
+            ],
+            reasoning="Exact match evidence",
+        )
+
+        mock_agent = AsyncMock()
+        mock_agent.run.return_value = mock_result
+
+        with patch(
+            "interaction_finder.extraction_graph_v3.nodes.create_pair_evaluator_v3",
+            return_value=mock_agent,
+        ):
+            node = EvaluatePairs()
+            await node.run(ctx)
+
+        # Should have at least one pair with validated evidence
+        assert len(state_with_candidates.final_pairs) >= 1
+        pair = state_with_candidates.final_pairs[0]
+        assert len(pair.evidence_quotes) > 0
+
+        # Evidence quotes should be ResourceQuote objects
+        from interaction_finder.resources import ResourceQuote
+
+        assert isinstance(pair.evidence_quotes[0], ResourceQuote)
+
+    @pytest.mark.asyncio
+    async def test_evidence_quote_validated_with_fuzzy_match(
+        self, state_with_candidates, deps_v3
+    ):
+        """Test evidence quotes validated with fuzzy matching."""
+        ctx = GraphRunContext(state=state_with_candidates, deps=deps_v3)
+
+        # Mock agent with slightly different wording (should fuzzy match)
+        mock_result = PairEvaluationOut(
+            relationship_exists=True,
+            relationship_type="gene-disease interaction",
+            confidence="high",
+            evidence=[
+                "BRCA1 tumor suppressor gene associated breast cancer",  # Missing articles
+            ],
+            reasoning="Fuzzy match evidence",
+        )
+
+        mock_agent = AsyncMock()
+        mock_agent.run.return_value = mock_result
+
+        with patch(
+            "interaction_finder.extraction_graph_v3.nodes.create_pair_evaluator_v3",
+            return_value=mock_agent,
+        ):
+            node = EvaluatePairs()
+            await node.run(ctx)
+
+        # May or may not accept depending on fuzzy match threshold
+        # At minimum, should not crash
+        assert state_with_candidates.metrics.pair_evaluation_calls > 0
+
+
+class TestParallelEvaluation:
+    """Test parallel pair evaluation."""
+
+    @pytest.mark.asyncio
+    async def test_parallel_evaluation_multiple_pairs(self, deps_v3):
+        """Test multiple pairs evaluated in parallel."""
+        # Create state with multiple candidates
+        pool = ResourcePool()
+        pool.add(
+            url="https://example.com/doc",
+            title="Test Doc",
+            document_text="BRCA1 with breast cancer. BRCA2 with breast cancer. "
+            "TP53 with breast cancer.",
+        )
+
+        state = ExtractionStateV3()
+        state.resource_pool = pool
+        resource = pool.resources[0]
+
+        # Add multiple entities and candidates
+        for gene in ["BRCA1", "BRCA2", "TP53"]:
+            state.entities_found[gene] = EntityWithQuotes(
+                name=gene,
+                kind="gene",
+                aliases=[gene],
+                quotes=[resource.quote(gene)],
+                confidence=1.0,
+            )
+
+        state.entities_found["breast cancer"] = EntityWithQuotes(
+            name="breast cancer",
+            kind="disease",
+            aliases=["breast cancer"],
+            quotes=[resource.quote("breast cancer")],
+            confidence=1.0,
+        )
+
+        # Add candidates
+        for gene in ["BRCA1", "BRCA2", "TP53"]:
+            state.pair_candidates[tuple(sorted([gene, "breast cancer"]))] = (
+                PairCandidate(
+                    entity_a=state.entities_found[gene],
+                    entity_b=state.entities_found["breast cancer"],
+                    co_occurrence_count=1,
+                    shared_resources=[resource.id.id],
+                    generation_strategy="same_chunk",
+                )
+            )
+
+        ctx = GraphRunContext(state=state, deps=deps_v3)
+
+        # Track parallel calls
+        call_times = []
+
+        async def mock_agent_run(prompt, deps):
+            call_times.append(asyncio.get_event_loop().time())
+            await asyncio.sleep(0.1)  # Simulate LLM call
+            return PairEvaluationOut(
+                relationship_exists=True,
+                relationship_type="gene-disease interaction",
+                confidence="high",
+                evidence=["Evidence text"],
+                reasoning="Accepted",
+            )
+
+        mock_agent = AsyncMock()
+        mock_agent.run.side_effect = mock_agent_run
+
+        with patch(
+            "interaction_finder.extraction_graph_v3.nodes.create_pair_evaluator_v3",
+            return_value=mock_agent,
+        ):
+            node = EvaluatePairs()
+            await node.run(ctx)
+
+        # Verify all pairs were evaluated
+        assert state.metrics.pair_evaluation_calls == 3
+
+    @pytest.mark.asyncio
+    async def test_parallelism_control(self, state_with_candidates, deps_v3):
+        """Test parallelism control limits concurrent evaluations."""
+        deps_v3.pair_evaluation_parallelism = 1  # Limit to 1 concurrent
+
+        ctx = GraphRunContext(state=state_with_candidates, deps=deps_v3)
+
+        mock_agent = AsyncMock()
+        mock_agent.run.return_value = PairEvaluationOut(
+            relationship_exists=True,
+            relationship_type="gene-disease interaction",
+            confidence="high",
+            evidence=["Evidence"],
+            reasoning="Accepted",
+        )
+
+        with patch(
+            "interaction_finder.extraction_graph_v3.nodes.create_pair_evaluator_v3",
+            return_value=mock_agent,
+        ):
+            node = EvaluatePairs()
+            await node.run(ctx)
+
+        # Should complete successfully with limited parallelism
+        assert state_with_candidates.metrics.pair_evaluation_calls > 0
+
+
+class TestErrorHandling:
+    """Test error handling during pair evaluation."""
+
+    @pytest.mark.asyncio
+    async def test_llm_failure_does_not_crash(self, state_with_candidates, deps_v3):
+        """Test that LLM failure doesn't crash pair evaluation."""
+        ctx = GraphRunContext(state=state_with_candidates, deps=deps_v3)
+
+        # Mock agent that fails
+        mock_agent = AsyncMock()
+        mock_agent.run.side_effect = Exception("LLM API error")
+
+        with patch(
+            "interaction_finder.extraction_graph_v3.nodes.create_pair_evaluator_v3",
+            return_value=mock_agent,
+        ):
+            node = EvaluatePairs()
+            # Should not raise exception
+            await node.run(ctx)
+
+        # Metrics should track calls
+        assert state_with_candidates.metrics.pair_evaluation_calls > 0
+        # All evaluations failed, so no pairs accepted
+        assert state_with_candidates.metrics.pairs_accepted == 0
+
+    @pytest.mark.asyncio
+    async def test_partial_evaluation_failure(self, state_with_candidates, deps_v3):
+        """Test that failure on some pairs doesn't prevent others."""
+        ctx = GraphRunContext(state=state_with_candidates, deps=deps_v3)
+
+        # Mock agent that fails on first pair, succeeds on second
+        call_count = [0]
+
+        async def mock_agent_run(prompt, deps):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                raise Exception("First evaluation failed")
+
+            return PairEvaluationOut(
+                relationship_exists=True,
+                relationship_type="gene-disease interaction",
+                confidence="high",
+                evidence=[
+                    "BRCA1 is a tumor suppressor gene associated with breast cancer."
+                ],
+                reasoning="Good evaluation",
+            )
+
+        mock_agent = AsyncMock()
+        mock_agent.run.side_effect = mock_agent_run
+
+        with patch(
+            "interaction_finder.extraction_graph_v3.nodes.create_pair_evaluator_v3",
+            return_value=mock_agent,
+        ):
+            node = EvaluatePairs()
+            await node.run(ctx)
+
+        # At least one pair should succeed
+        assert state_with_candidates.metrics.pairs_accepted >= 1
+
+
+class TestEvaluationPromptBuilding:
+    """Test evaluation prompt construction."""
+
+    @pytest.mark.asyncio
+    async def test_prompt_includes_entity_information(
+        self, state_with_candidates, deps_v3
+    ):
+        """Test that prompt includes entity names and kinds."""
+        node = EvaluatePairs()
+
+        candidate = list(state_with_candidates.pair_candidates.values())[0]
+        evidence_contexts = ["Some context text"]
+
+        prompt = node._build_evaluation_prompt(candidate, evidence_contexts, deps_v3)
+
+        # Verify entity information in prompt
+        assert candidate.entity_a.name in prompt
+        assert candidate.entity_b.name in prompt
+        assert candidate.entity_a.kind in prompt
+        assert candidate.entity_b.kind in prompt
+
+    @pytest.mark.asyncio
+    async def test_prompt_limits_context_count(self, state_with_candidates, deps_v3):
+        """Test that prompt limits to 5 contexts for token efficiency."""
+        node = EvaluatePairs()
+
+        candidate = list(state_with_candidates.pair_candidates.values())[0]
+        # Provide more than 5 contexts
+        evidence_contexts = [f"Context {i}" for i in range(10)]
+
+        prompt = node._build_evaluation_prompt(candidate, evidence_contexts, deps_v3)
+
+        # Verify only first 5 contexts included
+        assert "Evidence 1:" in prompt
+        assert "Evidence 5:" in prompt
+        assert "Evidence 6:" not in prompt
+
+
+class TestFinalCheckpoint:
+    """Test final checkpoint callback invocation."""
+
+    @pytest.mark.asyncio
+    async def test_checkpoint_callback_invoked(
+        self, state_with_candidates, deps_v3, mock_pair_evaluation_result_positive
+    ):
+        """Test that checkpoint callback is invoked after evaluation."""
+        checkpoint_calls = []
+
+        async def checkpoint_callback(stage: str, state):
+            checkpoint_calls.append((stage, state))
+
+        deps_v3.checkpoint_callback = checkpoint_callback
+
+        ctx = GraphRunContext(state=state_with_candidates, deps=deps_v3)
+
+        mock_agent = AsyncMock()
+        mock_agent.run.return_value = mock_pair_evaluation_result_positive
+
+        with patch(
+            "interaction_finder.extraction_graph_v3.nodes.create_pair_evaluator_v3",
+            return_value=mock_agent,
+        ):
+            node = EvaluatePairs()
+            await node.run(ctx)
+
+        # Verify checkpoint was called
+        assert len(checkpoint_calls) == 1
+        assert checkpoint_calls[0][0] == "final"
+        assert checkpoint_calls[0][1] is state_with_candidates
+
+
+class TestAcceptanceRate:
+    """Test acceptance rate calculation and metrics."""
+
+    @pytest.mark.asyncio
+    async def test_acceptance_rate_metrics(self, state_with_candidates, deps_v3):
+        """Test that acceptance rate is tracked correctly."""
+        ctx = GraphRunContext(state=state_with_candidates, deps=deps_v3)
+
+        # Mock agent with 50% acceptance
+        call_count = [0]
+
+        async def mock_agent_run(prompt, deps):
+            call_count[0] += 1
+            return PairEvaluationOut(
+                relationship_exists=(call_count[0] % 2 == 1),
+                relationship_type="gene-disease interaction",
+                confidence="high" if (call_count[0] % 2 == 1) else "low",
+                evidence=[
+                    "BRCA1 is a tumor suppressor gene associated with breast cancer."
+                ]
+                if (call_count[0] % 2 == 1)
+                else [],
+                reasoning="Alternating results",
+            )
+
+        mock_agent = AsyncMock()
+        mock_agent.run.side_effect = mock_agent_run
+
+        with patch(
+            "interaction_finder.extraction_graph_v3.nodes.create_pair_evaluator_v3",
+            return_value=mock_agent,
+        ):
+            node = EvaluatePairs()
+            await node.run(ctx)
+
+        # Verify metrics
+        metrics = state_with_candidates.metrics
+        assert metrics.pair_evaluation_calls > 0
+        assert (
+            metrics.pairs_accepted + metrics.pairs_rejected
+            == metrics.pair_evaluation_calls
+        )

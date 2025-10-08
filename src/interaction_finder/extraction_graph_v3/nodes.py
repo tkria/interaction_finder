@@ -17,13 +17,19 @@ from pydantic_graph import BaseNode, GraphRunContext
 
 from .state import ExtractionStateV3
 from .deps import ExtractionDepsV3
-from .agents import create_entity_extractor_v3, create_assessment_agent_v3
+from .agents import (
+    create_entity_extractor_v3,
+    create_assessment_agent_v3,
+    create_pair_evaluator_v3,
+)
 from .cache import compute_extraction_cache_key, compute_assessment_cache_key
+from .models import PairCandidate, PairEvaluationOut
 from ..extraction_graph_v2.models import (
     EntityWithQuotes,
     SimpleEntityListOut,
     AssessmentOut,
     IndividualAssessment,
+    EntityPairOut,
 )
 from ..extraction_graph_v2.parallelism import with_parallelism_control
 from ..resources import (
@@ -883,3 +889,406 @@ class GeneratePairCandidates(BaseNode[ExtractionStateV3, ExtractionDepsV3]):
             Sorted tuple of entity names for consistent lookup
         """
         return tuple(sorted([name_a, name_b]))
+
+
+@dataclass
+class EvaluatePairs(BaseNode[ExtractionStateV3, ExtractionDepsV3]):
+    """
+    Evaluate candidate entity pairs using evidence from shared contexts.
+
+    Converts PairCandidate objects into EntityPairOut objects by analyzing
+    evidence from shared chunk contexts. Uses parallel evaluation with
+    configurable limits and validates provenance for all accepted pairs.
+
+    Phase 3b of V3 pipeline (final node).
+    """
+
+    async def run(
+        self, ctx: GraphRunContext[ExtractionStateV3, ExtractionDepsV3]
+    ) -> None:
+        """
+        Evaluate all pair candidates in parallel with evidence-based assessment.
+
+        Orchestrates parallel evaluation of candidates with evidence extraction,
+        LLM-based assessment, quote validation, and provenance checking.
+        """
+        state, deps = ctx.state, ctx.deps
+
+        logger.info(
+            f"Starting pair evaluation of {len(state.pair_candidates)} candidates"
+        )
+        logger.info(
+            f"Parallelism: {deps.pair_evaluation_parallelism if deps.pair_evaluation_parallelism > 0 else 'unlimited'}"
+        )
+
+        # Evaluate candidates in parallel with parallelism control
+        evaluation_tasks = []
+        for candidate in state.pair_candidates.values():
+            evaluation_tasks.append(self._evaluate_one_pair(candidate, ctx))
+
+        # Execute with parallelism control (default 5 concurrent evaluations)
+        parallelism_desc = (
+            "unlimited"
+            if deps.pair_evaluation_parallelism == 0
+            else f"limit={deps.pair_evaluation_parallelism}"
+        )
+        logger.info(f"Processing with parallelism {parallelism_desc}")
+
+        start_time = time.time()
+        results = await with_parallelism_control(
+            list(state.pair_candidates.values()),
+            lambda candidate: self._evaluate_one_pair(candidate, ctx),
+            parallelism=deps.pair_evaluation_parallelism,
+            description="pair evaluation",
+        )
+        duration = time.time() - start_time
+        state.metrics.pair_evaluation_time += duration
+
+        # Collect accepted pairs
+        for result in results:
+            if isinstance(result, Exception):
+                logger.error(f"Pair evaluation failed: {result}")
+                state.metrics.pair_evaluation_calls += 1
+                continue
+
+            state.metrics.pair_evaluation_calls += 1
+            if result:  # Pair accepted
+                state.metrics.pair_evaluation_successes += 1
+                state.metrics.pairs_accepted += 1
+                state.final_pairs.append(result)
+            else:  # Pair rejected
+                state.metrics.pairs_rejected += 1
+
+        logger.info(
+            f"Pair evaluation complete: {state.metrics.pairs_accepted} accepted, "
+            f"{state.metrics.pairs_rejected} rejected"
+        )
+        logger.info(
+            f"Acceptance rate: {(state.metrics.pairs_accepted / state.metrics.pair_evaluation_calls * 100):.1f}%"
+            if state.metrics.pair_evaluation_calls > 0
+            else "Acceptance rate: N/A"
+        )
+
+        # Final checkpoint
+        if hasattr(deps, "checkpoint_callback") and deps.checkpoint_callback:
+            await deps.checkpoint_callback("final", state)
+
+    async def _evaluate_one_pair(
+        self,
+        candidate: PairCandidate,
+        ctx: GraphRunContext[ExtractionStateV3, ExtractionDepsV3],
+    ) -> Optional[EntityPairOut]:
+        """
+        Evaluate a single pair candidate with evidence-based assessment.
+
+        Extracts evidence contexts from shared resources, calls pair evaluator
+        agent, validates quotes, and checks provenance chain.
+
+        Args:
+            candidate: PairCandidate to evaluate
+            ctx: Graph context with state and deps
+
+        Returns:
+            EntityPairOut if relationship exists and provenance valid, else None
+        """
+        state, deps = ctx.state, ctx.deps
+
+        logger.debug(
+            f"Evaluating pair: {candidate.entity_a.name} - {candidate.entity_b.name}"
+        )
+
+        # Gather evidence from shared resources
+        evidence_contexts = []
+        for resource_id_str in candidate.shared_resources:
+            # Find resource by ID string in pool
+            resource = None
+            for r in state.resource_pool.resources:
+                if r.id.id == resource_id_str:
+                    resource = r
+                    break
+
+            if resource is None:
+                logger.warning(
+                    f"Resource {resource_id_str} not found in pool for pair "
+                    f"{candidate.entity_a.name} - {candidate.entity_b.name}"
+                )
+                continue
+
+            contexts = self._extract_pair_contexts(
+                candidate.entity_a, candidate.entity_b, resource
+            )
+            evidence_contexts.extend(contexts)
+
+        # Fallback: use individual contexts if no shared resources
+        if not evidence_contexts:
+            logger.debug(
+                f"No shared contexts for {candidate.entity_a.name} - {candidate.entity_b.name}, "
+                f"using individual contexts"
+            )
+            evidence_contexts = (
+                candidate.entity_a.all_contexts[:3]
+                + candidate.entity_b.all_contexts[:3]
+            )
+
+        # Create pair evaluator agent
+        agent = create_pair_evaluator_v3(
+            model=deps.model,
+            relationship_type=deps.get_relation_type(),
+        )
+
+        # Build evaluation prompt
+        prompt = self._build_evaluation_prompt(candidate, evidence_contexts, deps)
+
+        # Run evaluation with timing
+        start_time = time.time()
+        try:
+            result = await agent.run(prompt, deps=deps)
+            duration = time.time() - start_time
+
+            logger.debug(
+                f"Evaluated {candidate.entity_a.name} - {candidate.entity_b.name} "
+                f"in {duration:.2f}s: relationship={result.relationship_exists}, "
+                f"confidence={result.confidence}"
+            )
+        except Exception as e:
+            duration = time.time() - start_time
+            logger.error(
+                f"Evaluation failed for {candidate.entity_a.name} - {candidate.entity_b.name}: {e}"
+            )
+            return None
+
+        # Reject if no relationship
+        if not result.relationship_exists:
+            logger.debug(
+                f"Rejected pair {candidate.entity_a.name} - {candidate.entity_b.name}: "
+                f"no relationship found"
+            )
+            return None
+
+        # Convert to EntityPairOut with validated quotes
+        pair = self._create_pair_with_quotes(candidate, result, state)
+
+        # Validate provenance
+        if not pair.validate_provenance():
+            logger.warning(
+                f"Pair provenance validation failed: {pair.entity_a.name} - {pair.entity_b.name}"
+            )
+            return None
+
+        logger.debug(
+            f"Accepted pair {pair.entity_a.name} - {pair.entity_b.name} "
+            f"with {len(pair.evidence_quotes)} evidence quotes"
+        )
+        return pair
+
+    def _extract_pair_contexts(
+        self,
+        entity_a: EntityWithQuotes,
+        entity_b: EntityWithQuotes,
+        resource: Resource,
+    ) -> List[str]:
+        """
+        Extract contexts where both entities appear using chunk-based co-occurrence.
+
+        Implements three-tier context extraction:
+        - Tier 1: Same-chunk co-occurrence (highest precision)
+        - Tier 2: Adjacent chunks ±1 (boundary cases)
+        - Tier 3: Document-level fallback (if configured)
+
+        Args:
+            entity_a: First entity
+            entity_b: Second entity
+            resource: Resource to search for co-occurrence
+
+        Returns:
+            List of context strings where both entities appear
+        """
+        # Get quotes for both entities in this resource
+        a_quotes = [q for q in entity_a.quotes if q.resource.id == resource.id]
+        b_quotes = [q for q in entity_b.quotes if q.resource.id == resource.id]
+
+        if not (a_quotes and b_quotes):
+            return []
+
+        # Get chunk indices
+        a_chunk_indices = set()
+        for quote in a_quotes:
+            a_chunk_indices.update(quote.chunk_indices)
+
+        b_chunk_indices = set()
+        for quote in b_quotes:
+            b_chunk_indices.update(quote.chunk_indices)
+
+        contexts = []
+
+        # Tier 1: Same-chunk co-occurrence
+        same_chunk = a_chunk_indices & b_chunk_indices
+        for chunk_idx in sorted(same_chunk):
+            chunk_text = resource.get_chunk_text(chunk_idx)
+            if chunk_text:
+                contexts.append(chunk_text)
+                logger.debug(
+                    f"Found same-chunk context at chunk {chunk_idx} for "
+                    f"{entity_a.name} - {entity_b.name}"
+                )
+
+        # Tier 2: Adjacent chunks (±1)
+        adjacent_chunks = set()
+        for a_idx in a_chunk_indices:
+            for b_idx in b_chunk_indices:
+                if abs(a_idx - b_idx) == 1:
+                    adjacent_chunks.add((min(a_idx, b_idx), max(a_idx, b_idx)))
+
+        for chunk_a, chunk_b in sorted(adjacent_chunks):
+            text_a = resource.get_chunk_text(chunk_a)
+            text_b = resource.get_chunk_text(chunk_b)
+            if text_a and text_b:
+                contexts.append(f"{text_a}\n...\n{text_b}")
+                logger.debug(
+                    f"Found adjacent-chunk context at chunks {chunk_a}-{chunk_b} for "
+                    f"{entity_a.name} - {entity_b.name}"
+                )
+
+        # Tier 3: Document-level fallback (only if configured and no contexts found)
+        # Note: enable_document_level_cooccurrence not in deps yet, using False
+        # This will be configured per deployment needs
+
+        return contexts
+
+    def _build_evaluation_prompt(
+        self,
+        candidate: PairCandidate,
+        evidence_contexts: List[str],
+        deps: ExtractionDepsV3,
+    ) -> str:
+        """
+        Build pair evaluation prompt with evidence contexts.
+
+        Constructs a prompt with entity information and evidence contexts,
+        limiting to 5 contexts for token efficiency.
+
+        Args:
+            candidate: PairCandidate being evaluated
+            evidence_contexts: List of context strings
+            deps: Dependencies with task configuration
+
+        Returns:
+            Formatted prompt string for pair evaluator agent
+        """
+        # Limit to 5 contexts for token efficiency
+        limited_contexts = evidence_contexts[:5]
+
+        contexts_text = "\n\n".join(
+            f"Evidence {i + 1}:\n{ctx}" for i, ctx in enumerate(limited_contexts)
+        )
+
+        return f"""Evaluate the relationship between:
+- Entity A: {candidate.entity_a.name} ({candidate.entity_a.kind})
+- Entity B: {candidate.entity_b.name} ({candidate.entity_b.kind})
+
+Evidence contexts:
+{contexts_text}
+
+Task: Determine if a {deps.get_relation_type()} relationship exists.
+
+Consider:
+1. Do the contexts support a direct relationship?
+2. Is the evidence explicit or implicit?
+3. What is your confidence level?
+
+If relationship exists, provide evidence quotes.
+"""
+
+    def _create_pair_with_quotes(
+        self,
+        candidate: PairCandidate,
+        agent_output: PairEvaluationOut,
+        state: ExtractionStateV3,
+    ) -> EntityPairOut:
+        """
+        Convert agent output to EntityPairOut with validated quotes.
+
+        Validates evidence quotes using fuzzy matching across all shared
+        resources. At least one valid evidence quote is required.
+
+        Args:
+            candidate: PairCandidate being converted
+            agent_output: Raw agent output with evidence strings
+            state: Extraction state with resource pool
+
+        Returns:
+            EntityPairOut with validated evidence quotes
+        """
+        # Validate evidence quotes by searching shared resources
+        evidence_quotes = []
+        for evidence_text in agent_output.evidence:
+            if not evidence_text or not evidence_text.strip():
+                continue
+
+            evidence_text = evidence_text.strip()
+
+            # Search shared resources for this evidence
+            for resource_id_str in candidate.shared_resources:
+                # Find resource by ID string in pool
+                resource = None
+                for r in state.resource_pool.resources:
+                    if r.id.id == resource_id_str:
+                        resource = r
+                        break
+
+                if resource is None:
+                    continue
+
+                quote = find_quote_with_fuzzy_matching(
+                    resource=resource,
+                    quote_text=evidence_text,
+                    auto_correct_threshold=0.90,
+                    suggest_threshold=0.75,
+                )
+
+                if quote and not isinstance(quote, FuzzySuggestion):
+                    # Found valid quote in this resource
+                    evidence_quotes.append(quote)
+                    logger.debug(
+                        f"Validated evidence quote for pair "
+                        f"{candidate.entity_a.name} - {candidate.entity_b.name}: "
+                        f"{evidence_text[:50]}..."
+                    )
+                    break  # Found in this resource, move to next evidence
+
+        # If no evidence quotes in shared resources, search all resources as fallback
+        if not evidence_quotes:
+            logger.debug(
+                f"No evidence in shared resources, searching all resources for "
+                f"{candidate.entity_a.name} - {candidate.entity_b.name}"
+            )
+            for evidence_text in agent_output.evidence:
+                if not evidence_text or not evidence_text.strip():
+                    continue
+
+                evidence_text = evidence_text.strip()
+
+                for resource in state.resource_pool.resources:
+                    quote = find_quote_with_fuzzy_matching(
+                        resource=resource,
+                        quote_text=evidence_text,
+                        auto_correct_threshold=0.90,
+                        suggest_threshold=0.75,
+                    )
+
+                    if quote and not isinstance(quote, FuzzySuggestion):
+                        evidence_quotes.append(quote)
+                        logger.debug(
+                            f"Validated evidence quote in fallback search: "
+                            f"{evidence_text[:50]}..."
+                        )
+                        break  # Found in this resource, move to next evidence
+
+        return EntityPairOut(
+            entity_a=candidate.entity_a,
+            entity_b=candidate.entity_b,
+            relationship=agent_output.relationship_type or "interaction",
+            confidence=agent_output.confidence,
+            evidence_quotes=evidence_quotes,
+            reasoning=agent_output.reasoning,
+        )
