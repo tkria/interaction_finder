@@ -21,7 +21,7 @@ from ..resources import ResourcePool
 from .models import PairCandidate
 
 if TYPE_CHECKING:
-    pass  # For type hints in methods
+    from .cache import SemanticCacheManager
 
 
 @dataclass
@@ -185,7 +185,7 @@ class ExtractionStateV3:
     final_pairs: List[EntityPairOut] = field(default_factory=list)
 
     # Semantic cache manager (optional, implemented in task 02)
-    cache: Optional["SemanticCacheManager"] = None  # type: ignore
+    cache: Optional["SemanticCacheManager"] = None
 
     # Enhanced metrics
     metrics: ExtractionMetricsV3 = field(default_factory=ExtractionMetricsV3)
