@@ -37,6 +37,7 @@ from interaction_finder.search.reverse.keyword_extractors import (
 )
 from interaction_finder.search.reverse.utils import normalize_url, TRACKING_PARAMS
 from interaction_finder.search.reverse.matchers import ResourceMatcher
+from interaction_finder.search.reverse.query_generator import QueryGenerator
 
 __all__ = [
     "KnownResource",
@@ -56,4 +57,5 @@ __all__ = [
     "normalize_url",
     "TRACKING_PARAMS",
     "ResourceMatcher",
+    "QueryGenerator",
 ]

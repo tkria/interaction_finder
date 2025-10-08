@@ -17,6 +17,7 @@ dependencies = [
     "rake-nltk>=1.0.6",
     "rich>=14.1.0",
     "scikit-learn>=1.7.1",
+    "sentence-transformers>=2.2.0",
     "tomli>=2.2.1",
     "tomli-w>=1.1.0",
     "typer>=0.16.1",
