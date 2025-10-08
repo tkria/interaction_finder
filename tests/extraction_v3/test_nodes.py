@@ -1436,9 +1436,7 @@ class TestGeneratePairCandidatesFuzzyMatching:
         """Test alias matching."""
         from interaction_finder.extraction_graph_v3.nodes import GeneratePairCandidates
 
-        # Add entity with aliases
-        resource = state_with_assessments.resource_pool.resources[0]
-        gene_quote = resource.quote("TP53")
+        # Add entity with aliases (resource no longer needed)
 
         state_with_assessments.entities_found["TP53"].aliases = [
             "TP53",
@@ -2147,7 +2145,7 @@ class TestParallelEvaluation:
         assert state_with_candidates.metrics.pair_evaluation_calls > 0
 
 
-class TestErrorHandling:
+class TestEvaluationErrorHandling:
     """Test error handling during pair evaluation."""
 
     @pytest.mark.asyncio
