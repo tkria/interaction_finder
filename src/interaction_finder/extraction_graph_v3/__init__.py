@@ -26,6 +26,13 @@ from .models import (
     BatchExtractionResultV3,
 )
 
+# Agent factories (Task 04)
+from .agents import (
+    create_entity_extractor_v3,
+    create_assessment_agent_v3,
+    create_pair_evaluator_v3,
+)
+
 # Placeholder for main pipeline (implemented in later tasks)
 # from .run import run_extraction_v3
 
@@ -40,6 +47,10 @@ __all__ = [
     "PairEvaluationOut",
     "ExtractionMetadata",
     "BatchExtractionResultV3",
+    # Agent factories
+    "create_entity_extractor_v3",
+    "create_assessment_agent_v3",
+    "create_pair_evaluator_v3",
     # Pipeline (placeholder)
     # "run_extraction_v3",
 ]
