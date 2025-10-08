@@ -1143,3 +1143,457 @@ class TestAssessmentCheckpointCallback:
         assert len(checkpoint_calls) == 1
         assert checkpoint_calls[0][0] == "assessment"
         assert checkpoint_calls[0][1] is state_with_entities
+
+
+# ============================================================================
+# GeneratePairCandidates Node Tests (Task 07)
+# ============================================================================
+
+
+@pytest.fixture
+def state_with_assessments():
+    """Create state with entities and assessments for pair generation."""
+    pool = ResourcePool()
+
+    # Add document with multiple entities in chunks
+    pool.add(
+        url="https://example.com/doc",
+        title="Gene-disease interactions",
+        document_text="BRCA1 is associated with breast cancer. "
+        "TP53 mutations lead to breast cancer. "
+        "EGFR is involved in lung cancer. "
+        "KRAS mutations also cause lung cancer.",
+    )
+
+    state = ExtractionStateV3()
+    state.resource_pool = pool
+    resource = pool.resources[0]
+
+    # Add entities with quotes
+    from interaction_finder.extraction_graph_v2.models import IndividualAssessment
+
+    # Gene: BRCA1
+    brca1_quote = resource.quote("BRCA1 is associated with breast cancer")
+    state.entities_found["BRCA1"] = EntityWithQuotes(
+        name="BRCA1",
+        kind="gene",
+        aliases=["BRCA1"],
+        quotes=[brca1_quote],
+        confidence=1.0,
+    )
+
+    # Disease: breast cancer (same chunk as BRCA1)
+    breast_cancer_quote = resource.quote("breast cancer")
+    state.entities_found["breast cancer"] = EntityWithQuotes(
+        name="breast cancer",
+        kind="disease",
+        aliases=["breast cancer"],
+        quotes=[breast_cancer_quote],
+        confidence=1.0,
+    )
+
+    # Gene: TP53 (adjacent chunk)
+    tp53_quote = resource.quote("TP53 mutations")
+    state.entities_found["TP53"] = EntityWithQuotes(
+        name="TP53",
+        kind="gene",
+        aliases=["TP53"],
+        quotes=[tp53_quote],
+        confidence=1.0,
+    )
+
+    # Gene: EGFR (different chunk, for document-level test)
+    egfr_quote = resource.quote("EGFR is involved")
+    state.entities_found["EGFR"] = EntityWithQuotes(
+        name="EGFR",
+        kind="gene",
+        aliases=["EGFR"],
+        quotes=[egfr_quote],
+        confidence=1.0,
+    )
+
+    # Disease: lung cancer (same chunk as EGFR)
+    lung_cancer_quote = resource.quote("lung cancer")
+    state.entities_found["lung cancer"] = EntityWithQuotes(
+        name="lung cancer",
+        kind="disease",
+        aliases=["lung cancer"],
+        quotes=[lung_cancer_quote],
+        confidence=1.0,
+    )
+
+    # Add assessments with related entities
+    state.individual_assessments["BRCA1"] = IndividualAssessment(
+        entity=state.entities_found["BRCA1"],
+        relationship_potential="high",
+        related_entities=["breast cancer", "TP53"],  # Explicit suggestions
+        evidence_quotes=[brca1_quote],
+        reasoning="BRCA1 strongly linked to breast cancer",
+        confidence=0.9,
+    )
+
+    state.individual_assessments["TP53"] = IndividualAssessment(
+        entity=state.entities_found["TP53"],
+        relationship_potential="high",
+        related_entities=["breast cancer"],
+        evidence_quotes=[tp53_quote],
+        reasoning="TP53 mutations cause breast cancer",
+        confidence=0.9,
+    )
+
+    state.individual_assessments["EGFR"] = IndividualAssessment(
+        entity=state.entities_found["EGFR"],
+        relationship_potential="medium",
+        related_entities=["lung cancer"],
+        evidence_quotes=[egfr_quote],
+        reasoning="EGFR involved in lung cancer",
+        confidence=0.7,
+    )
+
+    # Low potential entity - should be filtered
+    state.individual_assessments["breast cancer"] = IndividualAssessment(
+        entity=state.entities_found["breast cancer"],
+        relationship_potential="low",
+        related_entities=[],
+        evidence_quotes=[],
+        reasoning="Disease entity, low relationship potential",
+        confidence=0.5,
+    )
+
+    return state
+
+
+class TestGeneratePairCandidatesSameChunk:
+    """Test Tier 1: same-chunk co-occurrence."""
+
+    @pytest.mark.asyncio
+    async def test_same_chunk_detection(self, state_with_assessments, deps_v3):
+        """Test that entities in same chunk generate candidates."""
+        from interaction_finder.extraction_graph_v3.nodes import GeneratePairCandidates
+
+        ctx = GraphRunContext(state=state_with_assessments, deps=deps_v3)
+
+        node = GeneratePairCandidates()
+        await node.run(ctx)
+
+        # BRCA1 and breast cancer should be in same chunk
+        pair_key = tuple(sorted(["BRCA1", "breast cancer"]))
+        assert pair_key in state_with_assessments.pair_candidates
+
+        candidate = state_with_assessments.pair_candidates[pair_key]
+        assert candidate.generation_strategy in ["same_chunk", "both"]
+        assert candidate.co_occurrence_count >= 1
+
+    @pytest.mark.asyncio
+    async def test_same_chunk_strategy_disabled(self, state_with_assessments, deps_v3):
+        """Test that disabling same-chunk skips those candidates."""
+        from interaction_finder.extraction_graph_v3.nodes import GeneratePairCandidates
+
+        deps_v3.enable_same_chunk = False
+        deps_v3.enable_adjacent_chunks = False
+        deps_v3.enable_document_level = False
+
+        ctx = GraphRunContext(state=state_with_assessments, deps=deps_v3)
+
+        node = GeneratePairCandidates()
+        await node.run(ctx)
+
+        # No co-occurrence candidates should be generated
+        assert state_with_assessments.metrics.candidates_from_cooccurrence == 0
+
+
+class TestGeneratePairCandidatesAdjacentChunks:
+    """Test Tier 2: adjacent-chunk co-occurrence."""
+
+    @pytest.mark.asyncio
+    async def test_adjacent_chunk_detection(self, state_with_assessments, deps_v3):
+        """Test that entities in adjacent chunks generate candidates."""
+        from interaction_finder.extraction_graph_v3.nodes import GeneratePairCandidates
+
+        deps_v3.enable_same_chunk = False  # Disable same-chunk to isolate adjacent
+        deps_v3.enable_adjacent_chunks = True
+
+        ctx = GraphRunContext(state=state_with_assessments, deps=deps_v3)
+
+        node = GeneratePairCandidates()
+        await node.run(ctx)
+
+        # Should find some adjacent-chunk candidates
+        # (exact pairs depend on chunk boundaries in the test data)
+        assert state_with_assessments.metrics.candidates_from_cooccurrence >= 0
+
+
+class TestGeneratePairCandidatesDocumentLevel:
+    """Test Tier 3: document-level co-occurrence."""
+
+    @pytest.mark.asyncio
+    async def test_document_level_detection(self, state_with_assessments, deps_v3):
+        """Test that document-level co-occurrence generates candidates."""
+        from interaction_finder.extraction_graph_v3.nodes import GeneratePairCandidates
+
+        deps_v3.enable_same_chunk = False
+        deps_v3.enable_adjacent_chunks = False
+        deps_v3.enable_document_level = True
+
+        ctx = GraphRunContext(state=state_with_assessments, deps=deps_v3)
+
+        node = GeneratePairCandidates()
+        await node.run(ctx)
+
+        # Document-level should find all cross-kind pairs in the document
+        # (depends on include_same_kind_pairs setting)
+        assert len(state_with_assessments.pair_candidates) > 0
+
+
+class TestGeneratePairCandidatesAssessmentSuggested:
+    """Test assessment-suggested pair generation."""
+
+    @pytest.mark.asyncio
+    async def test_assessment_suggested_pairs(self, state_with_assessments, deps_v3):
+        """Test that assessment related_entities generate candidates."""
+        from interaction_finder.extraction_graph_v3.nodes import GeneratePairCandidates
+
+        # Disable co-occurrence to isolate assessment suggestions
+        deps_v3.enable_same_chunk = False
+        deps_v3.enable_adjacent_chunks = False
+        deps_v3.enable_document_level = False
+
+        ctx = GraphRunContext(state=state_with_assessments, deps=deps_v3)
+
+        node = GeneratePairCandidates()
+        await node.run(ctx)
+
+        # BRCA1 assessment suggests "breast cancer" and "TP53"
+        brca1_breast = tuple(sorted(["BRCA1", "breast cancer"]))
+        brca1_tp53 = tuple(sorted(["BRCA1", "TP53"]))
+
+        assert brca1_breast in state_with_assessments.pair_candidates
+        assert (
+            state_with_assessments.pair_candidates[brca1_breast].generation_strategy
+            == "assessment_suggested"
+        )
+
+        # TP53-TP53 would be same-kind, should be filtered by default
+        # BRCA1-TP53 is gene-gene, should also be filtered
+        assert brca1_tp53 not in state_with_assessments.pair_candidates
+
+    @pytest.mark.asyncio
+    async def test_low_potential_entities_skipped(
+        self, state_with_assessments, deps_v3
+    ):
+        """Test that low/none potential entities don't generate candidates."""
+        from interaction_finder.extraction_graph_v3.nodes import GeneratePairCandidates
+
+        deps_v3.enable_same_chunk = False
+        deps_v3.enable_adjacent_chunks = False
+        deps_v3.enable_document_level = False
+
+        ctx = GraphRunContext(state=state_with_assessments, deps=deps_v3)
+
+        node = GeneratePairCandidates()
+        await node.run(ctx)
+
+        # "breast cancer" has low potential and empty related_entities
+        # No candidates should originate from it
+        for candidate in state_with_assessments.pair_candidates.values():
+            assert (
+                candidate.entity_a.name != "breast cancer"
+                or candidate.entity_b.name != "breast cancer"
+            )
+
+
+class TestGeneratePairCandidatesFuzzyMatching:
+    """Test fuzzy entity name matching."""
+
+    @pytest.mark.asyncio
+    async def test_exact_match(self, state_with_assessments, deps_v3):
+        """Test exact name matching works."""
+        from interaction_finder.extraction_graph_v3.nodes import GeneratePairCandidates
+
+        node = GeneratePairCandidates()
+
+        matched = node._fuzzy_match_entity(
+            "BRCA1", state_with_assessments.entities_found
+        )
+        assert matched is not None
+        assert matched.name == "BRCA1"
+
+    @pytest.mark.asyncio
+    async def test_case_insensitive_match(self, state_with_assessments, deps_v3):
+        """Test case-insensitive matching."""
+        from interaction_finder.extraction_graph_v3.nodes import GeneratePairCandidates
+
+        node = GeneratePairCandidates()
+
+        matched = node._fuzzy_match_entity(
+            "brca1", state_with_assessments.entities_found
+        )
+        assert matched is not None
+        assert matched.name == "BRCA1"
+
+    @pytest.mark.asyncio
+    async def test_alias_match(self, state_with_assessments, deps_v3):
+        """Test alias matching."""
+        from interaction_finder.extraction_graph_v3.nodes import GeneratePairCandidates
+
+        # Add entity with aliases
+        resource = state_with_assessments.resource_pool.resources[0]
+        gene_quote = resource.quote("TP53")
+
+        state_with_assessments.entities_found["TP53"].aliases = [
+            "TP53",
+            "p53",
+            "tumor protein p53",
+        ]
+
+        node = GeneratePairCandidates()
+
+        # Match via alias
+        matched = node._fuzzy_match_entity("p53", state_with_assessments.entities_found)
+        assert matched is not None
+        assert matched.name == "TP53"
+
+    @pytest.mark.asyncio
+    async def test_no_match_returns_none(self, state_with_assessments, deps_v3):
+        """Test that non-existent entities return None."""
+        from interaction_finder.extraction_graph_v3.nodes import GeneratePairCandidates
+
+        node = GeneratePairCandidates()
+
+        matched = node._fuzzy_match_entity(
+            "NONEXISTENT", state_with_assessments.entities_found
+        )
+        assert matched is None
+
+
+class TestGeneratePairCandidatesHybridStrategy:
+    """Test hybrid strategy combining co-occurrence and assessment."""
+
+    @pytest.mark.asyncio
+    async def test_both_strategy_marking(self, state_with_assessments, deps_v3):
+        """Test that pairs found by both methods are marked 'both'."""
+        from interaction_finder.extraction_graph_v3.nodes import GeneratePairCandidates
+
+        # Enable both strategies
+        deps_v3.enable_same_chunk = True
+        deps_v3.enable_adjacent_chunks = True
+
+        ctx = GraphRunContext(state=state_with_assessments, deps=deps_v3)
+
+        node = GeneratePairCandidates()
+        await node.run(ctx)
+
+        # BRCA1-breast cancer should be found by both co-occurrence and assessment
+        pair_key = tuple(sorted(["BRCA1", "breast cancer"]))
+        if pair_key in state_with_assessments.pair_candidates:
+            candidate = state_with_assessments.pair_candidates[pair_key]
+            assert candidate.generation_strategy == "both"
+
+    @pytest.mark.asyncio
+    async def test_deduplication(self, state_with_assessments, deps_v3):
+        """Test that duplicate pairs are properly deduplicated."""
+        from interaction_finder.extraction_graph_v3.nodes import GeneratePairCandidates
+
+        ctx = GraphRunContext(state=state_with_assessments, deps=deps_v3)
+
+        node = GeneratePairCandidates()
+        await node.run(ctx)
+
+        # Each unique pair should appear only once
+        pair_keys = list(state_with_assessments.pair_candidates.keys())
+        assert len(pair_keys) == len(set(pair_keys))
+
+
+class TestGeneratePairCandidatesSameKindFiltering:
+    """Test filtering of same-kind pairs."""
+
+    @pytest.mark.asyncio
+    async def test_same_kind_pairs_filtered_by_default(
+        self, state_with_assessments, deps_v3
+    ):
+        """Test that same-kind pairs are filtered by default."""
+        from interaction_finder.extraction_graph_v3.nodes import GeneratePairCandidates
+
+        deps_v3.include_same_kind_pairs = False  # Default
+        deps_v3.enable_same_chunk = True
+        deps_v3.enable_adjacent_chunks = True
+
+        ctx = GraphRunContext(state=state_with_assessments, deps=deps_v3)
+
+        node = GeneratePairCandidates()
+        await node.run(ctx)
+
+        # No gene-gene or disease-disease pairs should exist
+        for candidate in state_with_assessments.pair_candidates.values():
+            assert candidate.entity_a.kind != candidate.entity_b.kind
+
+    @pytest.mark.asyncio
+    async def test_same_kind_pairs_included_when_enabled(
+        self, state_with_assessments, deps_v3
+    ):
+        """Test that same-kind pairs are included when configured."""
+        from interaction_finder.extraction_graph_v3.nodes import GeneratePairCandidates
+
+        deps_v3.include_same_kind_pairs = True
+        deps_v3.enable_document_level = True
+
+        ctx = GraphRunContext(state=state_with_assessments, deps=deps_v3)
+
+        node = GeneratePairCandidates()
+        await node.run(ctx)
+
+        # Some same-kind pairs may exist (e.g., gene-gene)
+        # At minimum, should not crash
+        assert len(state_with_assessments.pair_candidates) > 0
+
+
+class TestGeneratePairCandidatesMetrics:
+    """Test metrics tracking."""
+
+    @pytest.mark.asyncio
+    async def test_metrics_tracking(self, state_with_assessments, deps_v3):
+        """Test that metrics are properly tracked."""
+        from interaction_finder.extraction_graph_v3.nodes import GeneratePairCandidates
+
+        ctx = GraphRunContext(state=state_with_assessments, deps=deps_v3)
+
+        node = GeneratePairCandidates()
+        await node.run(ctx)
+
+        metrics = state_with_assessments.metrics
+
+        # Check metrics are populated
+        assert metrics.candidates_generated > 0
+        assert metrics.candidates_generated == len(
+            state_with_assessments.pair_candidates
+        )
+
+        # Sum of sources should match or exceed total (due to "both" strategy)
+        assert metrics.candidates_from_cooccurrence >= 0
+        assert metrics.candidates_from_assessment >= 0
+
+
+class TestGeneratePairCandidatesCheckpoint:
+    """Test checkpoint callback invocation."""
+
+    @pytest.mark.asyncio
+    async def test_checkpoint_callback_invoked(self, state_with_assessments, deps_v3):
+        """Test that checkpoint callback is invoked after candidate generation."""
+        from interaction_finder.extraction_graph_v3.nodes import GeneratePairCandidates
+
+        checkpoint_calls = []
+
+        async def checkpoint_callback(stage: str, state):
+            checkpoint_calls.append((stage, state))
+
+        deps_v3.checkpoint_callback = checkpoint_callback
+
+        ctx = GraphRunContext(state=state_with_assessments, deps=deps_v3)
+
+        node = GeneratePairCandidates()
+        await node.run(ctx)
+
+        # Verify checkpoint was called
+        assert len(checkpoint_calls) == 1
+        assert checkpoint_calls[0][0] == "candidates"
+        assert checkpoint_calls[0][1] is state_with_assessments

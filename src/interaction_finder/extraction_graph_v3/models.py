@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 
 # Import V2 models for reuse
 from ..extraction_graph_v2.models import (
+    EntityWithQuotes,
     EntityPairOut,
     QuoteErrorRecord,
 )
@@ -33,20 +34,24 @@ class PairCandidate(BaseModel):
     (LLM assessment), enabling caching and parallelism optimization.
     """
 
-    entity_a: str = Field(description="First entity name")
-    entity_b: str = Field(description="Second entity name")
+    entity_a: "EntityWithQuotes" = Field(description="First entity")
+    entity_b: "EntityWithQuotes" = Field(description="Second entity")
     co_occurrence_count: int = Field(description="Number of co-occurrences found", ge=0)
     shared_resources: List[str] = Field(
-        description="Resource IDs where entities co-occur", min_length=1
+        description="Resource IDs where entities co-occur", default_factory=list
     )
     generation_strategy: Literal[
-        "same_chunk", "adjacent_chunks", "document_level", "assessment_suggested"
+        "same_chunk",
+        "adjacent_chunks",
+        "document_level",
+        "assessment_suggested",
+        "both",
     ] = Field(description="How this candidate was generated")
 
     def get_pair_key(self) -> tuple[str, str]:
         """Get normalized pair key for deduplication."""
         # Always return in sorted order for consistent lookup
-        return tuple(sorted([self.entity_a, self.entity_b]))
+        return tuple(sorted([self.entity_a.name, self.entity_b.name]))
 
 
 class PairEvaluationOut(BaseModel):

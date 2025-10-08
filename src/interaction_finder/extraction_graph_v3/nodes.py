@@ -11,7 +11,7 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass
-from typing import List, TYPE_CHECKING
+from typing import Dict, List, Optional, TYPE_CHECKING
 
 from pydantic_graph import BaseNode, GraphRunContext
 
@@ -34,7 +34,7 @@ from ..resources import (
 )
 
 if TYPE_CHECKING:
-    pass
+    from .models import PairCandidate
 
 logger = logging.getLogger(__name__)
 
@@ -597,3 +597,289 @@ These specific names will be used to generate pair candidates for evaluation.
             reasoning=agent_output.reasoning,
             confidence=confidence,
         )
+
+
+@dataclass
+class GeneratePairCandidates(BaseNode[ExtractionStateV3, ExtractionDepsV3]):
+    """
+    Generate candidate entity pairs using hybrid strategy.
+
+    Combines tiered co-occurrence analysis (chunk-based, adjacent, document-level)
+    with assessment-suggested pairs to intelligently reduce the N² pair space.
+    This is the key innovation separating V3 from V2.
+
+    Phase 3a of V3 pipeline (before EvaluatePairs in task 08).
+    """
+
+    async def run(
+        self, ctx: GraphRunContext[ExtractionStateV3, ExtractionDepsV3]
+    ) -> None:
+        """
+        Generate pair candidates using co-occurrence and assessment suggestions.
+
+        Orchestrates candidate generation from both strategies, deduplicates,
+        filters same-kind pairs if configured, and saves checkpoint.
+        """
+        state, deps = ctx.state, ctx.deps
+
+        logger.info(
+            f"Starting pair candidate generation from {len(state.entities_found)} entities"
+        )
+        logger.info(
+            f"Co-occurrence strategy: same_chunk={deps.enable_same_chunk}, "
+            f"adjacent={deps.enable_adjacent_chunks}, document={deps.enable_document_level}"
+        )
+
+        candidates = {}
+
+        # Strategy 1: Co-occurrence based
+        cooccurrence_candidates = self._find_cooccurrence_pairs(state, deps)
+        for candidate in cooccurrence_candidates:
+            key = self._make_pair_key(candidate.entity_a.name, candidate.entity_b.name)
+            candidates[key] = candidate
+            state.metrics.candidates_from_cooccurrence += 1
+
+        logger.info(
+            f"Generated {len(cooccurrence_candidates)} candidates from co-occurrence"
+        )
+
+        # Strategy 2: Assessment-suggested
+        assessment_candidates = self._find_assessment_suggested_pairs(state, deps)
+        for candidate in assessment_candidates:
+            key = self._make_pair_key(candidate.entity_a.name, candidate.entity_b.name)
+            if key in candidates:
+                # Mark as "both" - found by both strategies
+                candidates[key].generation_strategy = "both"
+            else:
+                candidates[key] = candidate
+            state.metrics.candidates_from_assessment += 1
+
+        logger.info(
+            f"Generated {len(assessment_candidates)} candidates from assessments"
+        )
+
+        # Filter same-kind pairs if configured
+        if not deps.include_same_kind_pairs:
+            before_filter = len(candidates)
+            candidates = {
+                k: v
+                for k, v in candidates.items()
+                if v.entity_a.kind != v.entity_b.kind
+            }
+            filtered_count = before_filter - len(candidates)
+            if filtered_count > 0:
+                logger.info(f"Filtered {filtered_count} same-kind pairs")
+
+        state.pair_candidates = candidates
+        state.metrics.candidates_generated = len(candidates)
+
+        logger.info(f"Total candidates generated: {len(candidates)}")
+
+        # Save checkpoint if callback provided
+        if hasattr(deps, "checkpoint_callback") and deps.checkpoint_callback:
+            await deps.checkpoint_callback("candidates", state)
+
+    def _find_cooccurrence_pairs(
+        self, state: ExtractionStateV3, deps: ExtractionDepsV3
+    ) -> List["PairCandidate"]:
+        """
+        Find entity pairs using tiered chunk-based co-occurrence.
+
+        Implements three tiers of co-occurrence:
+        - Tier 1: Same semantic chunk (70% of relations, 59% precision)
+        - Tier 2: Adjacent chunks ±1 (25% of relations, 48% precision)
+        - Tier 3: Document-level (remaining, lower precision, optional)
+
+        Args:
+            state: Extraction state with entities and resource pool
+            deps: Dependencies with co-occurrence configuration
+
+        Returns:
+            List of PairCandidate objects from co-occurrence analysis
+        """
+        from collections import defaultdict
+        from .models import PairCandidate
+
+        candidates = {}
+
+        # Build resource → entities mapping
+        resource_to_entities = defaultdict(list)
+        for entity in state.entities_found.values():
+            for quote in entity.quotes:
+                resource_to_entities[quote.resource.id].append(entity)
+
+        # For each resource, find co-occurring pairs
+        for resource_id, entities in resource_to_entities.items():
+            for i, entity_a in enumerate(entities):
+                for entity_b in entities[i + 1 :]:
+                    # Skip same-kind pairs if configured
+                    if (
+                        entity_a.kind == entity_b.kind
+                        and not deps.include_same_kind_pairs
+                    ):
+                        continue
+
+                    # Get chunk indices for each entity in this resource
+                    a_chunks = set()
+                    for quote in entity_a.quotes:
+                        if quote.resource.id == resource_id:
+                            a_chunks.update(quote.chunk_indices)
+
+                    b_chunks = set()
+                    for quote in entity_b.quotes:
+                        if quote.resource.id == resource_id:
+                            b_chunks.update(quote.chunk_indices)
+
+                    # Check tiered co-occurrence
+                    co_occurs = False
+                    strategy = None
+
+                    # Tier 1: Same chunk (highest precision)
+                    if deps.enable_same_chunk and (a_chunks & b_chunks):
+                        co_occurs = True
+                        strategy = "same_chunk"
+
+                    # Tier 2: Adjacent chunks (±1)
+                    if not co_occurs and deps.enable_adjacent_chunks:
+                        for a_idx in a_chunks:
+                            for b_idx in b_chunks:
+                                if abs(a_idx - b_idx) == 1:
+                                    co_occurs = True
+                                    strategy = "adjacent_chunks"
+                                    break
+                            if co_occurs:
+                                break
+
+                    # Tier 3: Document-level (optional, lowest precision)
+                    if not co_occurs and deps.enable_document_level:
+                        co_occurs = True
+                        strategy = "document_level"
+
+                    # Create or update candidate
+                    if co_occurs:
+                        key = tuple(sorted([entity_a.name, entity_b.name]))
+                        if key in candidates:
+                            # Same pair found in another resource
+                            candidates[key].co_occurrence_count += 1
+                            candidates[key].shared_resources.append(resource_id.id)
+                        else:
+                            candidates[key] = PairCandidate(
+                                entity_a=entity_a,
+                                entity_b=entity_b,
+                                co_occurrence_count=1,
+                                shared_resources=[resource_id.id],
+                                generation_strategy=strategy,
+                            )
+
+        return list(candidates.values())
+
+    def _find_assessment_suggested_pairs(
+        self, state: ExtractionStateV3, deps: ExtractionDepsV3
+    ) -> List["PairCandidate"]:
+        """
+        Find pairs suggested by individual assessments.
+
+        Uses the related_entities field from each assessment to identify
+        potential relationships. Fuzzy matches suggested names to actual
+        entities found.
+
+        Args:
+            state: Extraction state with assessments and entities
+            deps: Dependencies with pairing configuration
+
+        Returns:
+            List of PairCandidate objects from assessment suggestions
+        """
+        from .models import PairCandidate
+
+        candidates = []
+
+        for entity_name, assessment in state.individual_assessments.items():
+            # Skip low/none potential entities
+            if assessment.relationship_potential in ["low", "none"]:
+                continue
+
+            # Match related_entities to actual entities_found
+            for related_name in assessment.related_entities:
+                matched_entity = self._fuzzy_match_entity(
+                    related_name, state.entities_found
+                )
+                if not matched_entity:
+                    logger.debug(
+                        f"Could not match related entity '{related_name}' "
+                        f"suggested by {entity_name}"
+                    )
+                    continue
+
+                # Skip same-kind pairs if configured
+                if (
+                    assessment.entity.kind == matched_entity.kind
+                    and not deps.include_same_kind_pairs
+                ):
+                    continue
+
+                candidates.append(
+                    PairCandidate(
+                        entity_a=assessment.entity,
+                        entity_b=matched_entity,
+                        co_occurrence_count=0,  # Not from co-occurrence
+                        shared_resources=[],
+                        generation_strategy="assessment_suggested",
+                    )
+                )
+
+        return candidates
+
+    def _fuzzy_match_entity(
+        self, related_name: str, entities_found: Dict[str, EntityWithQuotes]
+    ) -> Optional[EntityWithQuotes]:
+        """
+        Fuzzy match related entity name to actual entities.
+
+        Tries in order:
+        1. Exact match (case-sensitive)
+        2. Case-insensitive match
+        3. Alias match (case-sensitive)
+        4. Alias match (case-insensitive)
+
+        Args:
+            related_name: Entity name from assessment's related_entities
+            entities_found: Dict of all entities found (name → entity)
+
+        Returns:
+            Matched EntityWithQuotes or None if no match found
+        """
+        # Exact match (case-sensitive)
+        if related_name in entities_found:
+            return entities_found[related_name]
+
+        # Case-insensitive match
+        related_lower = related_name.lower()
+        for name, entity in entities_found.items():
+            if name.lower() == related_lower:
+                return entity
+
+        # Alias match (case-sensitive)
+        for entity in entities_found.values():
+            if related_name in entity.aliases:
+                return entity
+
+        # Alias match (case-insensitive)
+        for entity in entities_found.values():
+            if related_lower in [alias.lower() for alias in entity.aliases]:
+                return entity
+
+        return None
+
+    def _make_pair_key(self, name_a: str, name_b: str) -> tuple[str, str]:
+        """
+        Create normalized pair key for deduplication.
+
+        Args:
+            name_a: First entity name
+            name_b: Second entity name
+
+        Returns:
+            Sorted tuple of entity names for consistent lookup
+        """
+        return tuple(sorted([name_a, name_b]))
