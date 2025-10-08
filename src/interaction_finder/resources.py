@@ -11,7 +11,8 @@ from urllib.parse import urlparse, urlunparse
 import re
 import bisect
 import unicodedata
-from typing import List, Optional, Tuple
+from difflib import SequenceMatcher
+from typing import List, Optional, Tuple, Union
 from pydantic import BaseModel, Field, field_validator, ValidationInfo
 
 
@@ -147,7 +148,7 @@ def expand_scientific_shorthand(text: str) -> List[str]:
     if numeric_match:
         base = numeric_match.group(1)
         first_num = numeric_match.group(2)
-        separator = numeric_match.group(3)
+        _separator = numeric_match.group(3)
         second_num = numeric_match.group(4)
 
         # Create expanded versions by replacing the pattern
@@ -165,7 +166,7 @@ def expand_scientific_shorthand(text: str) -> List[str]:
     if letter_match:
         base = letter_match.group(1)
         first_suffix = letter_match.group(2)
-        separator = letter_match.group(3)
+        _separator = letter_match.group(3)
         second_suffix = letter_match.group(4)
 
         # Create expanded versions by replacing the pattern
@@ -246,6 +247,225 @@ def expand_scientific_shorthand(text: str) -> List[str]:
 
     # No expansion possible, return original
     return [text]
+
+
+class FuzzyMatchResult(BaseModel):
+    """
+    Result from fuzzy matching with auto-corrected quote text.
+
+    Contains the corrected quote that exists in the document, similarity score,
+    and alignment blocks for debugging/validation.
+    """
+
+    corrected_quote: str = Field(
+        description="Auto-corrected quote text that exists in the document"
+    )
+    similarity: float = Field(
+        description="Similarity score between LLM quote and document (0.0-1.0)"
+    )
+    match_blocks: List[Tuple[int, int, int]] = Field(
+        description="Matching blocks from SequenceMatcher (llm_pos, doc_pos, length)"
+    )
+
+
+class FuzzySuggestion(BaseModel):
+    """
+    Suggestion for LLM correction when fuzzy match is below auto-correct threshold.
+
+    Provides the best matching segment from the document for LLM to consider
+    when correcting the quote.
+    """
+
+    suggested_quote: str = Field(
+        description="Suggested quote from document that best matches LLM output"
+    )
+    similarity: float = Field(
+        description="Similarity score between LLM quote and suggestion (0.0-1.0)"
+    )
+    original_quote: str = Field(description="Original LLM quote for reference")
+
+
+def fuzzy_match_quote(
+    llm_quote: str,
+    document_segment: str,
+    threshold: float = 0.90,
+) -> Optional[FuzzyMatchResult]:
+    """
+    Fuzzy match LLM-generated quote against document segment using difflib.
+
+    Uses SequenceMatcher for similarity calculation and alignment-based extraction.
+    Returns auto-corrected quote if similarity meets threshold, otherwise None.
+
+    Args:
+        llm_quote: Quote text from LLM (may be slightly paraphrased)
+        document_segment: Segment of document to match against
+        threshold: Minimum similarity for auto-correction (default: 0.90)
+
+    Returns:
+        FuzzyMatchResult with corrected quote and metadata, or None if below threshold
+
+    Notes:
+        - Uses normalized text for comparison (via normalize_text_for_matching)
+        - Threshold of 0.90 is conservative to avoid false corrections
+        - Very short quotes (<5 chars) are unreliable and return None
+    """
+    # Edge case: skip very short quotes (too unreliable)
+    if len(llm_quote.strip()) < 5:
+        return None
+
+    # Normalize both for comparison
+    normalized_llm = normalize_text_for_matching(llm_quote)
+    normalized_doc = normalize_text_for_matching(document_segment)
+
+    # Edge case: empty after normalization
+    if not normalized_llm or not normalized_doc:
+        return None
+
+    # Calculate similarity using SequenceMatcher
+    matcher = SequenceMatcher(None, normalized_llm, normalized_doc)
+    similarity = matcher.ratio()
+
+    # Return None if below threshold
+    if similarity < threshold:
+        return None
+
+    # Extract aligned text from document using matching blocks
+    corrected_quote = _auto_correct_quote_from_alignment(
+        normalized_llm, normalized_doc, matcher
+    )
+
+    # Get match blocks for provenance
+    match_blocks = matcher.get_matching_blocks()
+
+    return FuzzyMatchResult(
+        corrected_quote=corrected_quote,
+        similarity=similarity,
+        match_blocks=match_blocks,
+    )
+
+
+def _auto_correct_quote_from_alignment(
+    normalized_llm: str,
+    normalized_doc: str,
+    matcher: SequenceMatcher,
+) -> str:
+    """
+    Extract corrected quote from document using SequenceMatcher alignment.
+
+    Builds corrected quote by extracting aligned portions from the document,
+    ensuring the result actually exists in the document.
+
+    Args:
+        normalized_llm: Normalized LLM quote text
+        normalized_doc: Normalized document text
+        matcher: Pre-configured SequenceMatcher for the texts
+
+    Returns:
+        Corrected quote string extracted from document
+
+    Notes:
+        - Uses get_matching_blocks() to identify aligned segments
+        - Extracts text from document at aligned positions
+        - Preserves word boundaries and spacing
+    """
+    # Get matching blocks: (llm_pos, doc_pos, length) tuples
+    blocks = matcher.get_matching_blocks()
+
+    # Extract aligned segments from document
+    segments = []
+    for llm_pos, doc_pos, length in blocks:
+        if length > 0:  # Skip dummy block at end
+            segment = normalized_doc[doc_pos : doc_pos + length]
+            segments.append(segment)
+
+    # Join segments with single space
+    corrected = " ".join(segments)
+
+    # Clean up multiple spaces and strip
+    corrected = " ".join(corrected.split())
+
+    return corrected
+
+
+def find_quote_with_fuzzy_matching(
+    resource: "Resource",
+    quote_text: str,
+    auto_correct_threshold: float = 0.90,
+    suggest_threshold: float = 0.75,
+) -> Union["ResourceQuote", FuzzySuggestion, None]:
+    """
+    Find quote in resource with multi-strategy matching including fuzzy matching.
+
+    Tries multiple strategies in order:
+    1. Exact match via resource.quote()
+    2. Normalized match (existing normalization)
+    3. Shorthand expansion (e.g., "ISCA1,2" → "ISCA1" or "ISCA2")
+    4. Fuzzy matching with auto-correction (≥90% similarity)
+    5. Fuzzy matching with suggestion (75-90% similarity)
+
+    Args:
+        resource: Resource to search within
+        quote_text: Quote text to find
+        auto_correct_threshold: Similarity threshold for auto-correction (default: 0.90)
+        suggest_threshold: Similarity threshold for suggestions (default: 0.75)
+
+    Returns:
+        - ResourceQuote: If exact or auto-corrected match found
+        - FuzzySuggestion: If 75-90% similarity (for LLM correction)
+        - None: If no match found (<75% similarity)
+
+    Notes:
+        - Fuzzy matching searches against entire normalized document text
+        - High auto-correct threshold (90%) prevents false positives
+        - Suggestion threshold (75%) provides helpful hints to LLM
+    """
+    # Strategy 1: Try exact match
+    try:
+        return resource.quote(quote_text)
+    except ValueError:
+        pass
+
+    # Strategy 2: Try normalized match
+    normalized_quote = normalize_text_for_matching(quote_text)
+    try:
+        return resource.quote(normalized_quote)
+    except ValueError:
+        pass
+
+    # Strategy 3: Try shorthand expansion
+    expanded_variants = expand_scientific_shorthand(quote_text)
+    for variant in expanded_variants:
+        try:
+            return resource.quote(variant)
+        except ValueError:
+            continue
+
+    # Strategy 4 & 5: Try fuzzy matching against entire document
+    # Use resource.normalized_text as single candidate segment
+    fuzzy_result = fuzzy_match_quote(
+        quote_text,
+        resource.normalized_text,
+        threshold=suggest_threshold,  # Use lower threshold for suggestions
+    )
+
+    if fuzzy_result is None:
+        return None
+
+    # If similarity is high enough for auto-correction
+    if fuzzy_result.similarity >= auto_correct_threshold:
+        # Try to create ResourceQuote with corrected text
+        try:
+            return resource.quote(fuzzy_result.corrected_quote)
+        except ValueError:
+            # Fall through to suggestion if quote creation fails
+            pass
+
+    # Return suggestion for LLM correction (75-90% similarity)
+    return FuzzySuggestion(
+        suggested_quote=fuzzy_result.corrected_quote,
+        similarity=fuzzy_result.similarity,
+        original_quote=quote_text,
+    )
 
 
 def compute_chunk_spans(
