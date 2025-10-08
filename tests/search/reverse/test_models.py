@@ -12,23 +12,22 @@ Tests cover all acceptance criteria:
 8. Hash/equality operations for KnownResource
 """
 
+
 import pytest
-from datetime import datetime
 from pydantic import ValidationError
 
 from interaction_finder.search.base import SearchQuery, SearchResult, SearchResults
 from interaction_finder.search.reverse import (
     KnownResource,
+    MatchingError,
+    QueryGenerationError,
     ResourceMatch,
-    ReverseSearchResult,
-    ReverseSearchSession,
+    ResourceParseError,
     ReverseSearchConfig,
     ReverseSearchError,
-    ResourceParseError,
-    QueryGenerationError,
-    MatchingError,
+    ReverseSearchResult,
+    ReverseSearchSession,
 )
-
 
 # KnownResource tests
 
@@ -48,8 +47,8 @@ def test_known_resource_canonical_url_from_pmid_with_whitespace():
 def test_known_resource_canonical_url_normalization():
     """Test basic URL normalization when PMID is not available."""
     resource = KnownResource(url="HTTPS://Example.com/Paper/")
-    # Basic normalization: lowercase and strip trailing slash
-    assert resource.canonical_url == "https://example.com/paper"
+    # Basic normalization: lowercase scheme/domain, preserve path case, strip trailing slash
+    assert resource.canonical_url == "https://example.com/Paper"
 
 
 def test_known_resource_canonical_url_no_trailing_slash():

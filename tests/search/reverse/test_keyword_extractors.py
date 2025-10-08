@@ -11,11 +11,12 @@ Tests cover all three extractors (YAKE, RAKE, TF-IDF) with:
 """
 
 import pytest
+
 from interaction_finder.search.reverse.keyword_extractors import (
     KeywordExtractor,
-    YAKEExtractor,
     RAKEExtractor,
     TFIDFExtractor,
+    YAKEExtractor,
     create_extractor,
 )
 

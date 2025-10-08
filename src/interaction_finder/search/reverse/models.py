@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field, model_validator
 
 from interaction_finder.search.base import SearchResult, SearchResults
+from interaction_finder.search.reverse.utils import normalize_url
 
 
 # Core resource models
@@ -55,22 +56,19 @@ class KnownResource(BaseModel):
         Compute canonical URL for deduplication.
 
         If PMID exists, use PubMed URL format.
-        Otherwise, normalize the provided URL (lowercase, strip trailing slash).
+        Otherwise, normalize the provided URL (lowercase, strip trailing slash,
+        remove tracking parameters).
 
         Returns:
             Self with canonical_url set
-
-        Note:
-            URL normalization is currently basic. Task 03 will enhance this
-            with tracking parameter removal and more sophisticated normalization.
         """
         if self.pmid:
             # PMID takes precedence - use canonical PubMed URL
             self.canonical_url = f"https://pubmed.ncbi.nlm.nih.gov/{self.pmid.strip()}/"
         else:
-            # TODO: Use normalize_url() from utils when Task 03 completes
-            # For now, basic normalization: lowercase and strip trailing slash
-            self.canonical_url = self.url.lower().rstrip("/")
+            # Use comprehensive normalization: lowercase, strip trailing slash,
+            # remove tracking parameters, remove fragments
+            self.canonical_url = normalize_url(self.url)
 
         return self
 
