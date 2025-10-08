@@ -1,5 +1,6 @@
 """High-level PageFetcher interface with eliminated duplication using higher-order functions."""
 
+from dataclasses import dataclass
 from typing import Union, List, Optional, Callable, Any, TYPE_CHECKING, Dict
 from .cache import URLCache
 from .web_client import WebClient
@@ -8,6 +9,16 @@ from .content_processor import ContentProcessor
 
 if TYPE_CHECKING:
     from ..settings import IfetcherConfig
+
+
+@dataclass
+class FetchedDocument:
+    """Document fetched from URL with markdown content and metadata."""
+
+    url: str
+    content_markdown: str
+    source_type: Optional[str] = None  # "html" or "pdf"
+    doi: Optional[str] = None
 
 
 def _create_content_getter(content_type: str, single_fetcher: Callable):
@@ -135,6 +146,63 @@ class PageFetcher:
     ) -> None:
         """Prefetch multiple URLs for multiple content types."""
         await self.batch_ops.prefetch_urls(urls, content_types, max_concurrent)
+
+    async def fetch_documents(
+        self,
+        urls: List[str],
+        *,
+        progress: bool = False,
+        fail_fast: bool = False,
+        retry: bool = False,
+    ) -> Dict[str, Optional[FetchedDocument]]:
+        """
+        Fetch multiple URLs and return markdown content with metadata.
+
+        Parameters:
+            urls: List[str] - URLs to fetch
+            progress: bool - Show progress bar
+            fail_fast: bool - Stop on first error
+            retry: bool - Retry failed fetches
+
+        Returns:
+            Dict[url, FetchedDocument] - Mapping of URL to document
+                (None value if fetch failed)
+
+        Raises:
+            Exception - If fail_fast=True and a fetch fails
+        """
+        # Fetch markdown for all URLs using existing batch operation
+        markdown_results = await self.get_markdown(
+            urls, progress=progress, fail_fast=False, retry=retry
+        )
+
+        # Build document dict with metadata
+        documents = {}
+        for url, markdown in zip(urls, markdown_results):
+            if markdown and not isinstance(markdown, Exception):
+                # Fetch additional metadata
+                source_type = await self.get_source_type(url)
+                doi = None
+                if source_type == "html":
+                    doi = await self.get_doi(url, retry=False)
+
+                documents[url] = FetchedDocument(
+                    url=url,
+                    content_markdown=markdown,
+                    source_type=source_type,
+                    doi=doi,
+                )
+            else:
+                documents[url] = None
+                if fail_fast:
+                    error = (
+                        markdown
+                        if isinstance(markdown, Exception)
+                        else Exception(f"Failed to fetch {url}")
+                    )
+                    raise error
+
+        return documents
 
     async def get_doi(self, url: str, *, retry: bool = False) -> Optional[str]:
         """Get DOI for URL if available."""
@@ -656,5 +724,5 @@ class PageFetcher:
             raise TypeError(f"Expected str or List[str], got {type(url)}")
 
 
-# Export the class for backward compatibility
-__all__ = ["PageFetcher"]
+# Export the class and dataclass
+__all__ = ["PageFetcher", "FetchedDocument"]
