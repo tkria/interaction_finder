@@ -14,11 +14,13 @@ dependencies = [
     "playwright-stealth>=2.0.0",
     "pydantic>=2.11.7",
     "pydantic-ai==1",
+    "rake-nltk>=1.0.6",
     "rich>=14.1.0",
     "scikit-learn>=1.7.1",
     "tomli>=2.2.1",
     "tomli-w>=1.1.0",
     "typer>=0.16.1",
+    "yake>=0.4.8",
 ]
 
 [project.scripts]

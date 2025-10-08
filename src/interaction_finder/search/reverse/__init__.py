@@ -12,6 +12,7 @@ Main exports:
     ReverseSearchSession: Complete session with all queries and metrics
     ReverseSearchConfig: Configuration with validated constraints
     ReverseSearchError: Base error class and subclasses
+    KeywordExtractor: Abstract interface for keyword extraction algorithms
 """
 
 from interaction_finder.search.reverse.models import (
@@ -25,6 +26,13 @@ from interaction_finder.search.reverse.models import (
     ReverseSearchResult,
     ReverseSearchSession,
 )
+from interaction_finder.search.reverse.keyword_extractors import (
+    KeywordExtractor,
+    YAKEExtractor,
+    RAKEExtractor,
+    TFIDFExtractor,
+    create_extractor,
+)
 
 __all__ = [
     "KnownResource",
@@ -36,4 +44,9 @@ __all__ = [
     "ResourceParseError",
     "QueryGenerationError",
     "MatchingError",
+    "KeywordExtractor",
+    "YAKEExtractor",
+    "RAKEExtractor",
+    "TFIDFExtractor",
+    "create_extractor",
 ]
