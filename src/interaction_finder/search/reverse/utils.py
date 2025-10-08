@@ -72,11 +72,11 @@ def normalize_url(url: str) -> str:
 
     try:
         parsed = urlparse(url)
-        # Lowercase scheme and netloc (domain)
+        # Lowercase scheme, netloc (domain), and path for case-insensitive matching
         scheme = parsed.scheme.lower() if parsed.scheme else ""
         netloc = parsed.netloc.lower() if parsed.netloc else ""
-        # Remove trailing slash from path
-        path = parsed.path.rstrip("/") if parsed.path else ""
+        # Remove trailing slash and lowercase path
+        path = parsed.path.rstrip("/").lower() if parsed.path else ""
         # Parse and filter query parameters
         # keep_blank_values=True preserves params with empty values
         query_params = parse_qs(parsed.query, keep_blank_values=True)

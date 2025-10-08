@@ -99,6 +99,17 @@ class RAKEExtractor(KeywordExtractor):
 
     def __init__(self):
         from rake_nltk import Rake
+        import nltk
+
+        # Ensure required NLTK data is available
+        required_data = ["corpora/stopwords", "tokenizers/punkt_tab"]
+        for resource in required_data:
+            try:
+                nltk.data.find(resource)
+            except LookupError:
+                # Download missing data
+                resource_name = resource.split("/")[-1]
+                nltk.download(resource_name, quiet=True)
 
         self.rake = Rake()
 

@@ -1,6 +1,5 @@
 """Tests for resource matching logic."""
 
-import pytest
 from interaction_finder.search.reverse.matchers import ResourceMatcher
 from interaction_finder.search.reverse.models import (
     KnownResource,
