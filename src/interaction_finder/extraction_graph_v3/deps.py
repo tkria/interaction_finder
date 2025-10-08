@@ -76,6 +76,9 @@ class ExtractionDepsV3:
     # Incremental output directory (optional)
     output_dir: Optional[Path] = None
 
+    # Checkpoint callback for incremental saves (optional)
+    checkpoint_callback: Optional[callable] = None
+
     @classmethod
     def from_config(
         cls,
@@ -103,6 +106,7 @@ class ExtractionDepsV3:
         # Other
         current_resources: Optional[List["Resource"]] = None,
         output_dir: Optional[Path] = None,
+        checkpoint_callback: Optional[callable] = None,
     ) -> "ExtractionDepsV3":
         """
         Create deps from configuration with sensible defaults.
@@ -127,6 +131,7 @@ class ExtractionDepsV3:
             semantic_cache_enabled: Enable semantic caching (task 02)
             current_resources: Optional list of resources for validation
             output_dir: Optional output directory for incremental saves
+            checkpoint_callback: Optional callback for incremental checkpoints
 
         Returns:
             ExtractionDepsV3 instance
@@ -156,6 +161,7 @@ class ExtractionDepsV3:
             semantic_cache_enabled=semantic_cache_enabled,
             current_resources=current_resources,
             output_dir=output_dir,
+            checkpoint_callback=checkpoint_callback,
         )
 
     def get_entity_kinds(self) -> List[str]:
