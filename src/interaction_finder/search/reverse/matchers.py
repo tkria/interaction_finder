@@ -3,9 +3,11 @@ Resource matching logic for reverse search.
 
 This module implements multi-strategy resource matching to identify when search
 results correspond to known target resources. Strategies are tried in priority
-order: PMID exact match → URL normalized match → title similarity fallback.
+order: PMID exact match → URL normalized match → DOI match (conditional) →
+title similarity fallback.
 """
 
+import logging
 from typing import Any, Dict, List, Set, Optional, Tuple
 
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -15,6 +17,8 @@ from .models import KnownResource, ResourceMatch, ReverseSearchConfig
 from .utils import normalize_url
 from interaction_finder.search.base import SearchResult, SearchResults
 
+logger = logging.getLogger(__name__)
+
 
 class ResourceMatcher:
     """
@@ -23,29 +27,32 @@ class ResourceMatcher:
     Strategies tried in order:
     1. PMID exact match (confidence 1.0)
     2. URL normalized match (confidence 1.0)
-    3. Title similarity (confidence = similarity score)
+    3. DOI match - conditional on title similarity (confidence 1.0)
+    4. Title similarity (confidence = similarity score)
 
     First successful match is returned for each result.
     """
 
-    def __init__(self, config: ReverseSearchConfig):
+    def __init__(self, config: ReverseSearchConfig, fetcher: Any):
         """
         Initialize resource matcher.
 
         Parameters:
             config: ReverseSearchConfig - Configuration including title similarity threshold
+            fetcher: PageFetcher - For fetching DOIs when needed
         """
         self.config = config
+        self.fetcher = fetcher
         self.title_threshold = config.title_similarity_threshold
 
-    def match_results(
+    async def match_results(
         self,
         search_results: SearchResults,
         target_resources: Set[KnownResource],
         query_index: int,
     ) -> List[ResourceMatch]:
         """
-        Match search results against target resources.
+        Match search results against target resources (async).
 
         Parameters:
             search_results: SearchResults - Results from search backend
@@ -57,7 +64,8 @@ class ResourceMatcher:
 
         Note:
             Each search result matches at most one target resource (first match wins).
-            Strategies are tried in priority order: PMID → URL → title similarity.
+            Strategies are tried in priority order: PMID → URL → DOI (conditional) → title.
+            DOI fetching only occurs when title similarity ≥ threshold.
         """
         matches = []
 
@@ -74,7 +82,12 @@ class ResourceMatcher:
                 matched_resource, match_method, confidence = self._try_url_match(
                     result, target_resources
                 )
-            # Strategy 3: Title similarity (fallback)
+            # Strategy 3: DOI match (conditional)
+            if not matched_resource:
+                matched_resource, match_method, confidence = await self._try_doi_match(
+                    result, target_resources
+                )
+            # Strategy 4: Title similarity (fallback)
             if not matched_resource:
                 matched_resource, match_method, confidence = self._try_title_match(
                     result, target_resources
@@ -193,6 +206,70 @@ class ResourceMatcher:
 
         return None, None, 0.0
 
+    async def _try_doi_match(
+        self,
+        result: SearchResult,
+        target_resources: Set[KnownResource],
+    ) -> Tuple[Optional[KnownResource], Optional[str], float]:
+        """
+        Try matching by DOI (conditional on title similarity).
+
+        Only fetches DOI if title similarity with best resource ≥ threshold.
+        This avoids unnecessary network fetches for clearly unrelated results.
+
+        Parameters:
+            result: SearchResult - Search result to match
+            target_resources: Set[KnownResource] - Resources to match against
+
+        Returns:
+            (matched_resource, match_method, confidence) or (None, None, 0.0)
+
+        Note:
+            Requires async because DOI fetching may need network request.
+            Returns confidence 1.0 on successful DOI match.
+        """
+        # Phase 1: Check title similarity for all resources
+        # Only fetch DOI if title suggests potential relevance
+        if not result.title or not result.title.strip():
+            return None, None, 0.0
+        best_similarity = 0.0
+        for resource in target_resources:
+            resource_title = self._get_resource_title(resource)
+            if resource_title:
+                similarity = self._compute_title_similarity(
+                    result.title, resource_title
+                )
+                best_similarity = max(best_similarity, similarity)
+        # Skip DOI fetch if title similarity too low
+        if best_similarity < self.title_threshold:
+            return None, None, 0.0
+        # Phase 2: Fetch DOI conditionally
+        try:
+            result_doi = await self.fetcher.get_doi(result.url)
+        except Exception as e:
+            logger.warning(
+                "DOI fetch failed for %s: %s (will try title similarity)",
+                result.url,
+                str(e),
+            )
+            return None, None, 0.0
+        # If no DOI available, return None
+        if result_doi is None:
+            return None, None, 0.0
+        # Normalize fetched DOI
+        normalized_result_doi = self._normalize_doi(result_doi)
+        # Phase 3: Compare DOI with target resources
+        for resource in target_resources:
+            # Extract DOI from resource URL (if it's a DOI-based URL)
+            if resource.url.startswith("https://doi.org/") or resource.url.startswith(
+                "http://dx.doi.org/"
+            ):
+                resource_doi = self._normalize_doi(resource.url)
+                if resource_doi == normalized_result_doi:
+                    return resource, "doi", 1.0
+
+        return None, None, 0.0
+
     def _try_title_match(
         self,
         result: SearchResult,
@@ -266,12 +343,14 @@ class ResourceMatcher:
 
         Note:
             Returns 0.0 if vectorization fails (e.g., no common words).
+            Clips result to [0.0, 1.0] to handle floating point precision issues.
         """
         try:
             vectorizer = TfidfVectorizer()
             tfidf_matrix = vectorizer.fit_transform([title1, title2])
             similarity = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:2])[0][0]
-            return float(similarity)
+            # Clip to [0.0, 1.0] to handle floating point precision issues
+            return float(max(0.0, min(1.0, similarity)))
         except (ValueError, IndexError):
             # Vectorization failed (no features extracted)
             return 0.0

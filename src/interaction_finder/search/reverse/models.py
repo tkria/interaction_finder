@@ -96,7 +96,7 @@ class ResourceMatch(BaseModel):
     Fields:
         resource: KnownResource - The target resource that was matched
         search_result: SearchResult - The search result that matched
-        match_method: Literal - How the match was determined (pmid/url/title_similarity)
+        match_method: Literal - How the match was determined (pmid/url/doi/title_similarity)
         confidence: float - Match confidence (0.0-1.0)
         query_index: int - Which query found this resource
 
@@ -112,7 +112,7 @@ class ResourceMatch(BaseModel):
 
     resource: KnownResource = Field(description="The target resource that was matched")
     search_result: SearchResult = Field(description="The search result that matched")
-    match_method: Literal["pmid", "url", "title_similarity"] = Field(
+    match_method: Literal["pmid", "url", "doi", "title_similarity"] = Field(
         description="How the match was determined"
     )
     confidence: float = Field(description="Match confidence score", ge=0.0, le=1.0)

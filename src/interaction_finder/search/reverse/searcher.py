@@ -81,7 +81,7 @@ class ReverseSearcher:
         self.fetcher = fetcher
         # Initialize components
         self.query_generator = QueryGenerator(config, fetcher)
-        self.matcher = ResourceMatcher(config)
+        self.matcher = ResourceMatcher(config, fetcher)
         # Console for progress display
         self.console = Console()
 
@@ -164,7 +164,7 @@ class ReverseSearcher:
                 query_index += 1
                 continue
             # Match results to target resources
-            new_matches = self.matcher.match_results(
+            new_matches = await self.matcher.match_results(
                 search_results, unfound, query_index
             )
             matches.extend(new_matches)

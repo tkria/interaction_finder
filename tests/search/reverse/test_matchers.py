@@ -1,6 +1,7 @@
 """Tests for resource matching logic."""
 
 import pytest
+from unittest.mock import Mock, AsyncMock
 
 from interaction_finder.search.reverse.matchers import ResourceMatcher
 from interaction_finder.search.reverse.models import (
@@ -18,16 +19,27 @@ def config():
 
 
 @pytest.fixture
-def matcher(config):
+def mock_fetcher():
+    """Mock PageFetcher for testing DOI matching."""
+    fetcher = Mock()
+    # Default to returning None (no DOI available)
+    # Tests can override with mock_fetcher.get_doi.return_value = "..."
+    fetcher.get_doi = AsyncMock(return_value=None)
+    return fetcher
+
+
+@pytest.fixture
+def matcher(config, mock_fetcher):
     """ResourceMatcher instance for testing."""
-    return ResourceMatcher(config)
+    return ResourceMatcher(config, mock_fetcher)
 
 
 # PMID matching tests
-def test_pmid_exact_match_successful():
+@pytest.mark.asyncio
+async def test_pmid_exact_match_successful(mock_fetcher):
     """PMID exact match should succeed when PMIDs match."""
     config = ReverseSearchConfig()
-    matcher = ResourceMatcher(config)
+    matcher = ResourceMatcher(config, mock_fetcher)
 
     target = KnownResource(pmid="12345678", url="https://example.com/paper")
     result = SearchResult(
@@ -42,7 +54,7 @@ def test_pmid_exact_match_successful():
         backend="pubmed",
     )
 
-    matches = matcher.match_results(results, {target}, query_index=0)
+    matches = await matcher.match_results(results, {target}, query_index=0)
 
     assert len(matches) == 1
     assert matches[0].match_method == "pmid"
@@ -50,10 +62,11 @@ def test_pmid_exact_match_successful():
     assert matches[0].resource == target
 
 
-def test_pmid_no_match():
+@pytest.mark.asyncio
+async def test_pmid_no_match(mock_fetcher):
     """PMID matching should fail when PMIDs don't match."""
     config = ReverseSearchConfig()
-    matcher = ResourceMatcher(config)
+    matcher = ResourceMatcher(config, mock_fetcher)
 
     target = KnownResource(pmid="12345678", url="https://example.com/paper1")
     result = SearchResult(
@@ -68,15 +81,16 @@ def test_pmid_no_match():
         backend="pubmed",
     )
 
-    matches = matcher.match_results(results, {target}, query_index=0)
+    matches = await matcher.match_results(results, {target}, query_index=0)
 
     assert len(matches) == 0
 
 
-def test_pmid_match_with_whitespace():
+@pytest.mark.asyncio
+async def test_pmid_match_with_whitespace(mock_fetcher):
     """PMID matching should handle whitespace differences."""
     config = ReverseSearchConfig()
-    matcher = ResourceMatcher(config)
+    matcher = ResourceMatcher(config, mock_fetcher)
 
     target = KnownResource(pmid=" 12345678 ", url="https://example.com/paper")
     result = SearchResult(
@@ -91,17 +105,18 @@ def test_pmid_match_with_whitespace():
         backend="pubmed",
     )
 
-    matches = matcher.match_results(results, {target}, query_index=0)
+    matches = await matcher.match_results(results, {target}, query_index=0)
 
     assert len(matches) == 1
     assert matches[0].match_method == "pmid"
     assert matches[0].confidence == 1.0
 
 
-def test_pmid_missing_in_result():
+@pytest.mark.asyncio
+async def test_pmid_missing_in_result(mock_fetcher):
     """Should skip PMID strategy when PMID missing from result metadata."""
     config = ReverseSearchConfig()
-    matcher = ResourceMatcher(config)
+    matcher = ResourceMatcher(config, mock_fetcher)
 
     # Note: target has only URL (no PMID), so canonical_url will be normalized URL
     target = KnownResource(url="https://example.com/paper")
@@ -117,7 +132,7 @@ def test_pmid_missing_in_result():
         backend="test",
     )
 
-    matches = matcher.match_results(results, {target}, query_index=0)
+    matches = await matcher.match_results(results, {target}, query_index=0)
 
     # Should match by URL since PMID is missing
     assert len(matches) == 1
@@ -125,10 +140,11 @@ def test_pmid_missing_in_result():
 
 
 # URL matching tests
-def test_url_exact_match_successful():
+@pytest.mark.asyncio
+async def test_url_exact_match_successful(mock_fetcher):
     """URL exact match should succeed after normalization."""
     config = ReverseSearchConfig()
-    matcher = ResourceMatcher(config)
+    matcher = ResourceMatcher(config, mock_fetcher)
 
     target = KnownResource(url="https://example.com/paper")
     result = SearchResult(
@@ -143,17 +159,18 @@ def test_url_exact_match_successful():
         backend="test",
     )
 
-    matches = matcher.match_results(results, {target}, query_index=0)
+    matches = await matcher.match_results(results, {target}, query_index=0)
 
     assert len(matches) == 1
     assert matches[0].match_method == "url"
     assert matches[0].confidence == 1.0
 
 
-def test_url_match_with_tracking_params():
+@pytest.mark.asyncio
+async def test_url_match_with_tracking_params(mock_fetcher):
     """URL matching should work after removing tracking parameters."""
     config = ReverseSearchConfig()
-    matcher = ResourceMatcher(config)
+    matcher = ResourceMatcher(config, mock_fetcher)
 
     target = KnownResource(url="https://example.com/paper")
     result = SearchResult(
@@ -168,16 +185,17 @@ def test_url_match_with_tracking_params():
         backend="test",
     )
 
-    matches = matcher.match_results(results, {target}, query_index=0)
+    matches = await matcher.match_results(results, {target}, query_index=0)
 
     assert len(matches) == 1
     assert matches[0].match_method == "url"
 
 
-def test_url_match_with_case_differences():
+@pytest.mark.asyncio
+async def test_url_match_with_case_differences(mock_fetcher):
     """URL matching should be case-insensitive."""
     config = ReverseSearchConfig()
-    matcher = ResourceMatcher(config)
+    matcher = ResourceMatcher(config, mock_fetcher)
 
     target = KnownResource(url="https://example.com/paper")
     result = SearchResult(
@@ -192,17 +210,18 @@ def test_url_match_with_case_differences():
         backend="test",
     )
 
-    matches = matcher.match_results(results, {target}, query_index=0)
+    matches = await matcher.match_results(results, {target}, query_index=0)
 
     assert len(matches) == 1
     assert matches[0].match_method == "url"
     assert matches[0].confidence == 1.0
 
 
-def test_url_no_match():
+@pytest.mark.asyncio
+async def test_url_no_match(mock_fetcher):
     """URL matching should fail when URLs don't match."""
     config = ReverseSearchConfig()
-    matcher = ResourceMatcher(config)
+    matcher = ResourceMatcher(config, mock_fetcher)
 
     target = KnownResource(url="https://example.com/paper1")
     result = SearchResult(
@@ -217,16 +236,17 @@ def test_url_no_match():
         backend="test",
     )
 
-    matches = matcher.match_results(results, {target}, query_index=0)
+    matches = await matcher.match_results(results, {target}, query_index=0)
 
     assert len(matches) == 0
 
 
 # Title similarity tests
-def test_title_similarity_above_threshold():
+@pytest.mark.asyncio
+async def test_title_similarity_above_threshold(mock_fetcher):
     """Title similarity should match when above threshold."""
     config = ReverseSearchConfig(title_similarity_threshold=0.7)
-    matcher = ResourceMatcher(config)
+    matcher = ResourceMatcher(config, mock_fetcher)
 
     # These titles have ~0.747 similarity
     target = KnownResource(
@@ -245,17 +265,18 @@ def test_title_similarity_above_threshold():
         backend="test",
     )
 
-    matches = matcher.match_results(results, {target}, query_index=0)
+    matches = await matcher.match_results(results, {target}, query_index=0)
 
     assert len(matches) == 1
     assert matches[0].match_method == "title_similarity"
     assert 0.7 <= matches[0].confidence <= 1.0
 
 
-def test_title_similarity_below_threshold():
+@pytest.mark.asyncio
+async def test_title_similarity_below_threshold(mock_fetcher):
     """Title similarity should not match when below threshold."""
     config = ReverseSearchConfig(title_similarity_threshold=0.8)
-    matcher = ResourceMatcher(config)
+    matcher = ResourceMatcher(config, mock_fetcher)
 
     target = KnownResource(
         url="https://example.com/paper1",
@@ -273,15 +294,16 @@ def test_title_similarity_below_threshold():
         backend="test",
     )
 
-    matches = matcher.match_results(results, {target}, query_index=0)
+    matches = await matcher.match_results(results, {target}, query_index=0)
 
     assert len(matches) == 0
 
 
-def test_title_similarity_at_threshold():
+@pytest.mark.asyncio
+async def test_title_similarity_at_threshold(mock_fetcher):
     """Title similarity should match when exactly at threshold."""
     config = ReverseSearchConfig(title_similarity_threshold=0.5)
-    matcher = ResourceMatcher(config)
+    matcher = ResourceMatcher(config, mock_fetcher)
 
     # Create titles with known similarity around 0.5
     target = KnownResource(
@@ -300,7 +322,7 @@ def test_title_similarity_at_threshold():
         backend="test",
     )
 
-    matches = matcher.match_results(results, {target}, query_index=0)
+    matches = await matcher.match_results(results, {target}, query_index=0)
 
     # Should match since similarity >= threshold
     assert len(matches) == 1
@@ -308,10 +330,11 @@ def test_title_similarity_at_threshold():
     assert matches[0].confidence >= 0.5
 
 
-def test_title_missing_in_result():
+@pytest.mark.asyncio
+async def test_title_missing_in_result(mock_fetcher):
     """Should skip title strategy when title missing from result."""
     config = ReverseSearchConfig()
-    matcher = ResourceMatcher(config)
+    matcher = ResourceMatcher(config, mock_fetcher)
 
     target = KnownResource(
         url="https://example.com/paper1",
@@ -329,15 +352,16 @@ def test_title_missing_in_result():
         backend="test",
     )
 
-    matches = matcher.match_results(results, {target}, query_index=0)
+    matches = await matcher.match_results(results, {target}, query_index=0)
 
     assert len(matches) == 0
 
 
-def test_title_missing_in_resource():
+@pytest.mark.asyncio
+async def test_title_missing_in_resource(mock_fetcher):
     """Title matching should fail when resource has no title in hint_fields."""
     config = ReverseSearchConfig()
-    matcher = ResourceMatcher(config)
+    matcher = ResourceMatcher(config, mock_fetcher)
 
     target = KnownResource(
         url="https://example.com/paper1",
@@ -355,16 +379,17 @@ def test_title_missing_in_resource():
         backend="test",
     )
 
-    matches = matcher.match_results(results, {target}, query_index=0)
+    matches = await matcher.match_results(results, {target}, query_index=0)
 
     assert len(matches) == 0
 
 
 # Priority ordering tests
-def test_priority_pmid_over_url():
+@pytest.mark.asyncio
+async def test_priority_pmid_over_url(mock_fetcher):
     """PMID matching should take priority over URL matching."""
     config = ReverseSearchConfig()
-    matcher = ResourceMatcher(config)
+    matcher = ResourceMatcher(config, mock_fetcher)
 
     target = KnownResource(pmid="12345678", url="https://example.com/paper")
     result = SearchResult(
@@ -379,18 +404,19 @@ def test_priority_pmid_over_url():
         backend="pubmed",
     )
 
-    matches = matcher.match_results(results, {target}, query_index=0)
+    matches = await matcher.match_results(results, {target}, query_index=0)
 
     assert len(matches) == 1
     assert matches[0].match_method == "pmid"  # PMID, not URL
 
 
-def test_priority_url_over_title():
+@pytest.mark.asyncio
+async def test_priority_url_over_title(mock_fetcher):
     """URL matching should take priority over title similarity."""
     config = ReverseSearchConfig(
         title_similarity_threshold=0.5
     )  # Minimum threshold allowed
-    matcher = ResourceMatcher(config)
+    matcher = ResourceMatcher(config, mock_fetcher)
 
     target = KnownResource(
         url="https://example.com/paper",
@@ -408,17 +434,18 @@ def test_priority_url_over_title():
         backend="test",
     )
 
-    matches = matcher.match_results(results, {target}, query_index=0)
+    matches = await matcher.match_results(results, {target}, query_index=0)
 
     assert len(matches) == 1
     assert matches[0].match_method == "url"  # URL, not title_similarity
 
 
 # Multiple results and edge cases
-def test_multiple_results_partial_matches():
+@pytest.mark.asyncio
+async def test_multiple_results_partial_matches(mock_fetcher):
     """Should correctly handle multiple results with partial matches."""
     config = ReverseSearchConfig()
-    matcher = ResourceMatcher(config)
+    matcher = ResourceMatcher(config, mock_fetcher)
 
     # Note: target2 has no PMID, so its canonical_url will be the normalized URL
     target1 = KnownResource(pmid="111", url="https://example.com/paper1")
@@ -449,7 +476,7 @@ def test_multiple_results_partial_matches():
         backend="test",
     )
 
-    matches = matcher.match_results(results, {target1, target2}, query_index=0)
+    matches = await matcher.match_results(results, {target1, target2}, query_index=0)
 
     assert len(matches) == 2
     # result1 matches target1 by PMID
@@ -468,10 +495,11 @@ def test_multiple_results_partial_matches():
     assert not any(m.search_result == result2 for m in matches)
 
 
-def test_empty_target_resources():
+@pytest.mark.asyncio
+async def test_empty_target_resources(mock_fetcher):
     """Should return no matches when target_resources is empty."""
     config = ReverseSearchConfig()
-    matcher = ResourceMatcher(config)
+    matcher = ResourceMatcher(config, mock_fetcher)
 
     result = SearchResult(
         title="Test Paper",
@@ -485,15 +513,16 @@ def test_empty_target_resources():
         backend="test",
     )
 
-    matches = matcher.match_results(results, set(), query_index=0)
+    matches = await matcher.match_results(results, set(), query_index=0)
 
     assert len(matches) == 0
 
 
-def test_empty_search_results():
+@pytest.mark.asyncio
+async def test_empty_search_results(mock_fetcher):
     """Should return no matches when search results are empty."""
     config = ReverseSearchConfig()
-    matcher = ResourceMatcher(config)
+    matcher = ResourceMatcher(config, mock_fetcher)
 
     target = KnownResource(pmid="12345678", url="https://example.com/paper")
     results = SearchResults(
@@ -502,15 +531,16 @@ def test_empty_search_results():
         backend="test",
     )
 
-    matches = matcher.match_results(results, {target}, query_index=0)
+    matches = await matcher.match_results(results, {target}, query_index=0)
 
     assert len(matches) == 0
 
 
-def test_query_index_preserved():
+@pytest.mark.asyncio
+async def test_query_index_preserved(mock_fetcher):
     """Should preserve query_index in matches."""
     config = ReverseSearchConfig()
-    matcher = ResourceMatcher(config)
+    matcher = ResourceMatcher(config, mock_fetcher)
 
     target = KnownResource(pmid="12345678", url="https://example.com/paper")
     result = SearchResult(
@@ -525,16 +555,17 @@ def test_query_index_preserved():
         backend="test",
     )
 
-    matches = matcher.match_results(results, {target}, query_index=42)
+    matches = await matcher.match_results(results, {target}, query_index=42)
 
     assert len(matches) == 1
     assert matches[0].query_index == 42
 
 
-def test_first_match_wins():
+@pytest.mark.asyncio
+async def test_first_match_wins(mock_fetcher):
     """When multiple targets could match, first match should win."""
     config = ReverseSearchConfig()
-    matcher = ResourceMatcher(config)
+    matcher = ResourceMatcher(config, mock_fetcher)
 
     # Two targets with same PMID (edge case)
     target1 = KnownResource(pmid="12345678", url="https://example.com/paper1")
@@ -552,7 +583,7 @@ def test_first_match_wins():
         backend="test",
     )
 
-    matches = matcher.match_results(results, {target1, target2}, query_index=0)
+    matches = await matcher.match_results(results, {target1, target2}, query_index=0)
 
     # Should match exactly one target (first found)
     assert len(matches) == 1
@@ -560,10 +591,11 @@ def test_first_match_wins():
     assert matches[0].resource in {target1, target2}
 
 
-def test_title_similarity_selects_best_match():
+@pytest.mark.asyncio
+async def test_title_similarity_selects_best_match(mock_fetcher):
     """Title similarity should select the best matching resource."""
     config = ReverseSearchConfig(title_similarity_threshold=0.5)
-    matcher = ResourceMatcher(config)
+    matcher = ResourceMatcher(config, mock_fetcher)
 
     # Two targets with different title similarities
     target1 = KnownResource(
@@ -587,7 +619,7 @@ def test_title_similarity_selects_best_match():
         backend="test",
     )
 
-    matches = matcher.match_results(results, {target1, target2}, query_index=0)
+    matches = await matcher.match_results(results, {target1, target2}, query_index=0)
 
     # Should match the better title (target2)
     assert len(matches) == 1
@@ -706,3 +738,263 @@ class TestDOINormalization:
         # Edge case: DOI containing "doi:" in suffix
         result = matcher._normalize_doi("doi:10.1234/contains-doi:-text")
         assert result == "10.1234/contains-doi:-text"
+
+
+# DOI matching integration tests (Task 02)
+class TestDOIMatching:
+    """Integration tests for DOI matching with conditional fetching."""
+
+    @pytest.mark.asyncio
+    async def test_doi_match_successful(self, config, mock_fetcher):
+        """DOI matching succeeds when DOIs match and title similar."""
+        # Setup: result with similar title, mock fetcher returns matching DOI
+        mock_fetcher.get_doi.return_value = "10.1234/abc"
+        matcher = ResourceMatcher(config, mock_fetcher)
+
+        target = KnownResource(
+            url="https://doi.org/10.1234/ABC",  # Same DOI, different case
+            hint_fields={"title": "Similar Title to Target"},
+        )
+        result = SearchResult(
+            title="Similar Title to Target Resource",
+            url="https://example.com/paper",
+            backend="test",
+            metadata={},
+        )
+
+        matched, method, confidence = await matcher._try_doi_match(result, {target})
+
+        assert matched == target
+        assert method == "doi"
+        assert confidence == 1.0
+        mock_fetcher.get_doi.assert_called_once_with(result.url)
+
+    @pytest.mark.asyncio
+    async def test_doi_match_skipped_low_similarity(self, config, mock_fetcher):
+        """DOI fetching skipped when title similarity too low."""
+        matcher = ResourceMatcher(config, mock_fetcher)
+
+        target = KnownResource(
+            url="https://doi.org/10.1234/ABC",
+            hint_fields={"title": "Medical Research on Cancer"},
+        )
+        result = SearchResult(
+            title="Completely Unrelated Topic About Quantum Physics",
+            url="https://example.com/paper",
+            backend="test",
+            metadata={},
+        )
+
+        matched, method, confidence = await matcher._try_doi_match(result, {target})
+
+        # Should not call get_doi due to low title similarity
+        mock_fetcher.get_doi.assert_not_called()
+        assert matched is None
+        assert method is None
+        assert confidence == 0.0
+
+    @pytest.mark.asyncio
+    async def test_doi_match_fetch_failure(self, config, mock_fetcher):
+        """DOI matching gracefully handles fetch failures."""
+        import httpx
+
+        mock_fetcher.get_doi.side_effect = httpx.RequestError("Network error")
+        matcher = ResourceMatcher(config, mock_fetcher)
+
+        target = KnownResource(
+            url="https://doi.org/10.1234/ABC",
+            hint_fields={"title": "Similar Title to Target"},
+        )
+        result = SearchResult(
+            title="Similar Title to Target Resource",
+            url="https://example.com/paper",
+            backend="test",
+            metadata={},
+        )
+
+        # Should not raise, should return None and log warning
+        matched, method, confidence = await matcher._try_doi_match(result, {target})
+
+        assert matched is None
+        assert method is None
+        assert confidence == 0.0
+        mock_fetcher.get_doi.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_doi_match_missing_doi(self, config, mock_fetcher):
+        """DOI matching handles case where DOI not available."""
+        mock_fetcher.get_doi.return_value = None
+        matcher = ResourceMatcher(config, mock_fetcher)
+
+        target = KnownResource(
+            url="https://doi.org/10.1234/ABC",
+            hint_fields={"title": "Similar Title to Target"},
+        )
+        result = SearchResult(
+            title="Similar Title to Target Resource",
+            url="https://example.com/paper",
+            backend="test",
+            metadata={},
+        )
+
+        matched, method, confidence = await matcher._try_doi_match(result, {target})
+
+        assert matched is None
+        assert method is None
+        assert confidence == 0.0
+        mock_fetcher.get_doi.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_doi_match_doi_mismatch(self, config, mock_fetcher):
+        """DOI matching returns None when DOIs don't match."""
+        mock_fetcher.get_doi.return_value = "10.1234/different"
+        matcher = ResourceMatcher(config, mock_fetcher)
+
+        target = KnownResource(
+            url="https://doi.org/10.1234/ABC",
+            hint_fields={"title": "Similar Title to Target"},
+        )
+        result = SearchResult(
+            title="Similar Title to Target Resource",
+            url="https://example.com/paper",
+            backend="test",
+            metadata={},
+        )
+
+        matched, method, confidence = await matcher._try_doi_match(result, {target})
+
+        assert matched is None
+        assert method is None
+        assert confidence == 0.0
+        mock_fetcher.get_doi.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_doi_match_with_dx_doi_org(self, config, mock_fetcher):
+        """DOI matching works with dx.doi.org URLs."""
+        mock_fetcher.get_doi.return_value = "10.1234/abc"
+        matcher = ResourceMatcher(config, mock_fetcher)
+
+        target = KnownResource(
+            url="http://dx.doi.org/10.1234/ABC",  # dx.doi.org format
+            hint_fields={"title": "Similar Title to Target"},
+        )
+        result = SearchResult(
+            title="Similar Title to Target Resource",
+            url="https://example.com/paper",
+            backend="test",
+            metadata={},
+        )
+
+        matched, method, confidence = await matcher._try_doi_match(result, {target})
+
+        assert matched == target
+        assert method == "doi"
+        assert confidence == 1.0
+
+    @pytest.mark.asyncio
+    async def test_matching_priority_with_doi(self, config, mock_fetcher):
+        """Verify matching priority: PMID → URL → DOI → title."""
+        # Setup mock to track if DOI fetch is attempted
+        mock_fetcher.get_doi.return_value = "10.1234/result"
+        matcher = ResourceMatcher(config, mock_fetcher)
+
+        # Create resources with different identifiers
+        target_pmid = KnownResource(
+            pmid="12345678",
+            url="https://example.com/paper1",
+            hint_fields={"title": "Target 1"},
+        )
+        target_url = KnownResource(
+            url="https://example.com/paper2",
+            hint_fields={"title": "Target 2"},
+        )
+        target_doi = KnownResource(
+            url="https://doi.org/10.1234/result",
+            hint_fields={"title": "Machine Learning Methods for Data Analysis"},
+        )
+        target_title = KnownResource(
+            url="https://example.com/paper4",
+            hint_fields={"title": "Exact Title Match"},
+        )
+
+        # Test 1: PMID match (should not fetch DOI)
+        result1 = SearchResult(
+            title="Different Title",
+            url="https://different.com/url",
+            backend="test",
+            metadata={"pmid": "12345678"},
+        )
+        results1 = SearchResults(
+            query=SearchQuery(query="test"),
+            results=[result1],
+            backend="test",
+        )
+        matches1 = await matcher.match_results(
+            results1, {target_pmid, target_url, target_doi, target_title}, query_index=0
+        )
+        assert len(matches1) == 1
+        assert matches1[0].match_method == "pmid"
+        assert matches1[0].resource == target_pmid
+        mock_fetcher.get_doi.assert_not_called()  # Should not reach DOI strategy
+
+        # Test 2: URL match (should not fetch DOI)
+        mock_fetcher.reset_mock()
+        result2 = SearchResult(
+            title="Different Title",
+            url="https://example.com/paper2",
+            backend="test",
+            metadata={},
+        )
+        results2 = SearchResults(
+            query=SearchQuery(query="test"),
+            results=[result2],
+            backend="test",
+        )
+        matches2 = await matcher.match_results(
+            results2, {target_url, target_doi, target_title}, query_index=0
+        )
+        assert len(matches2) == 1
+        assert matches2[0].match_method == "url"
+        assert matches2[0].resource == target_url
+        mock_fetcher.get_doi.assert_not_called()  # Should not reach DOI strategy
+
+        # Test 3: DOI match (should fetch DOI, title similarity high enough)
+        mock_fetcher.reset_mock()
+        result3 = SearchResult(
+            title="Machine Learning Methods for Data Analysis Research",  # Similar to target_doi
+            url="https://different.com/paper",
+            backend="test",
+            metadata={},
+        )
+        results3 = SearchResults(
+            query=SearchQuery(query="test"),
+            results=[result3],
+            backend="test",
+        )
+        matches3 = await matcher.match_results(
+            results3, {target_doi, target_title}, query_index=0
+        )
+        assert len(matches3) == 1
+        assert matches3[0].match_method == "doi"
+        assert matches3[0].resource == target_doi
+        mock_fetcher.get_doi.assert_called_once()  # Should fetch DOI
+
+        # Test 4: Title match (DOI fetch attempted but no match)
+        mock_fetcher.reset_mock()
+        mock_fetcher.get_doi.return_value = "10.9999/nomatch"
+        result4 = SearchResult(
+            title="Exact Title Match",  # Exact match with target_title
+            url="https://different.com/paper",
+            backend="test",
+            metadata={},
+        )
+        results4 = SearchResults(
+            query=SearchQuery(query="test"),
+            results=[result4],
+            backend="test",
+        )
+        matches4 = await matcher.match_results(results4, {target_title}, query_index=0)
+        assert len(matches4) == 1
+        assert matches4[0].match_method == "title_similarity"
+        assert matches4[0].resource == target_title
+        mock_fetcher.get_doi.assert_called_once()  # DOI was attempted but didn't match
