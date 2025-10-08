@@ -10,14 +10,24 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from pydantic_graph import GraphRunContext
 
-from interaction_finder.extraction_graph_v3.nodes import ExtractEntities
+from interaction_finder.extraction_graph_v3.nodes import (
+    ExtractEntities,
+    AssessIndividually,
+    EvaluatePairs,
+)
 from interaction_finder.extraction_graph_v3.state import ExtractionStateV3
 from interaction_finder.extraction_graph_v3.deps import ExtractionDepsV3
 from interaction_finder.extraction_graph_v3.cache import SemanticCacheManager
+from interaction_finder.extraction_graph_v3.models import (
+    PairCandidate,
+    PairEvaluationOut,
+)
 from interaction_finder.extraction_graph_v2.models import (
     EntityWithQuotes,
     SimpleEntityOut,
     SimpleEntityListOut,
+    AssessmentOut,
+    IndividualAssessment,
 )
 from interaction_finder.resources import ResourcePool
 from interaction_finder.models import Term
@@ -569,13 +579,6 @@ class TestCheckpointCallback:
 # ============================================================================
 # AssessIndividually Node Tests
 # ============================================================================
-
-
-from interaction_finder.extraction_graph_v3.nodes import AssessIndividually
-from interaction_finder.extraction_graph_v2.models import (
-    AssessmentOut,
-    IndividualAssessment,
-)
 
 
 @pytest.fixture
@@ -1602,13 +1605,6 @@ class TestGeneratePairCandidatesCheckpoint:
 # ============================================================================
 
 
-from interaction_finder.extraction_graph_v3.nodes import EvaluatePairs
-from interaction_finder.extraction_graph_v3.models import (
-    PairCandidate,
-    PairEvaluationOut,
-)
-
-
 @pytest.fixture
 def state_with_candidates():
     """Create state with pair candidates ready for evaluation."""
@@ -2320,3 +2316,212 @@ class TestAcceptanceRate:
             metrics.pairs_accepted + metrics.pairs_rejected
             == metrics.pair_evaluation_calls
         )
+
+
+class TestTieredCooccurrence:
+    """Test tiered co-occurrence candidate generation."""
+
+    @pytest.mark.asyncio
+    async def test_tier1_same_chunk_candidates(self, deps_v3):
+        """Test Tier 1 (same-chunk) candidate generation."""
+        from interaction_finder.extraction_graph_v3.nodes import GeneratePairCandidates
+        from interaction_finder.resources import compute_chunk_spans
+
+        # Create document with entities in same chunk
+        pool = ResourcePool()
+        doc_text = "BRCA1 is associated with breast cancer in this study."
+        chunks = ["BRCA1 is associated with breast cancer in this study."]
+        chunk_spans = compute_chunk_spans(doc_text, chunks)
+
+        resource = pool.add(
+            url="https://example.com/doc",
+            title="Test",
+            document_text=doc_text,
+            chunks=chunk_spans,
+        )
+
+        state = ExtractionStateV3()
+        state.resource_pool = pool
+
+        # Add entities from same chunk
+        state.entities_found["BRCA1"] = EntityWithQuotes(
+            name="BRCA1",
+            kind="gene",
+            quotes=[resource.quote("BRCA1")],
+        )
+        state.entities_found["breast cancer"] = EntityWithQuotes(
+            name="breast cancer",
+            kind="disease",
+            quotes=[resource.quote("breast cancer")],
+        )
+
+        # Add assessments
+        from interaction_finder.extraction_graph_v2.models import IndividualAssessment
+
+        state.individual_assessments["BRCA1"] = IndividualAssessment(
+            entity=state.entities_found["BRCA1"],
+            relationship_potential="high",
+            related_entities=[],
+            evidence_quotes=[],
+            reasoning="Test",
+        )
+        state.individual_assessments["breast cancer"] = IndividualAssessment(
+            entity=state.entities_found["breast cancer"],
+            relationship_potential="high",
+            related_entities=[],
+            evidence_quotes=[],
+            reasoning="Test",
+        )
+
+        ctx = GraphRunContext(state=state, deps=deps_v3)
+
+        # Generate candidates
+        node = GeneratePairCandidates()
+        await node.run(ctx)
+
+        # Should generate same-chunk candidate
+        assert len(state.pair_candidates) >= 1
+        candidate = list(state.pair_candidates.values())[0]
+        assert candidate.generation_strategy in ["same_chunk", "both"]
+        assert candidate.co_occurrence_count > 0
+
+    @pytest.mark.asyncio
+    async def test_tier2_adjacent_chunks_candidates(self, deps_v3):
+        """Test Tier 2 (adjacent chunks) candidate generation."""
+        from interaction_finder.extraction_graph_v3.nodes import GeneratePairCandidates
+        from interaction_finder.resources import compute_chunk_spans
+
+        # Create document with entities in adjacent chunks
+        pool = ResourcePool()
+        doc_text = "BRCA1 is a gene. Breast cancer is a disease."
+        chunks = ["BRCA1 is a gene.", "Breast cancer is a disease."]
+        chunk_spans = compute_chunk_spans(doc_text, chunks)
+
+        resource = pool.add(
+            url="https://example.com/doc",
+            title="Test",
+            document_text=doc_text,
+            chunks=chunk_spans,
+        )
+
+        state = ExtractionStateV3()
+        state.resource_pool = pool
+
+        # Add entities from adjacent chunks
+        state.entities_found["BRCA1"] = EntityWithQuotes(
+            name="BRCA1",
+            kind="gene",
+            quotes=[resource.quote("BRCA1")],
+        )
+        state.entities_found["breast cancer"] = EntityWithQuotes(
+            name="breast cancer",
+            kind="disease",
+            quotes=[resource.quote("Breast cancer")],
+        )
+
+        # Add assessments
+        from interaction_finder.extraction_graph_v2.models import IndividualAssessment
+
+        state.individual_assessments["BRCA1"] = IndividualAssessment(
+            entity=state.entities_found["BRCA1"],
+            relationship_potential="high",
+            related_entities=[],
+            evidence_quotes=[],
+            reasoning="Test",
+        )
+        state.individual_assessments["breast cancer"] = IndividualAssessment(
+            entity=state.entities_found["breast cancer"],
+            relationship_potential="high",
+            related_entities=[],
+            evidence_quotes=[],
+            reasoning="Test",
+        )
+
+        ctx = GraphRunContext(state=state, deps=deps_v3)
+
+        # Generate candidates
+        node = GeneratePairCandidates()
+        await node.run(ctx)
+
+        # Should generate adjacent-chunk or document-level candidate
+        assert len(state.pair_candidates) >= 1
+        candidate = list(state.pair_candidates.values())[0]
+        assert candidate.generation_strategy in [
+            "adjacent_chunks",
+            "document_level",
+            "both",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_tier3_document_level_candidates(self, deps_v3):
+        """Test Tier 3 (document-level) candidate generation."""
+        from interaction_finder.extraction_graph_v3.nodes import GeneratePairCandidates
+        from interaction_finder.resources import compute_chunk_spans
+
+        # Enable tier 3 candidates
+        deps_v3.enable_document_level = True
+
+        # Create document with entities far apart
+        pool = ResourcePool()
+        doc_text = (
+            "BRCA1 is mentioned here. "
+            + " ".join(["Filler text."] * 50)
+            + " Breast cancer is mentioned far away."
+        )
+        chunks = [
+            "BRCA1 is mentioned here.",
+            " ".join(["Filler text."] * 50),
+            "Breast cancer is mentioned far away.",
+        ]
+        chunk_spans = compute_chunk_spans(doc_text, chunks)
+
+        resource = pool.add(
+            url="https://example.com/doc",
+            title="Test",
+            document_text=doc_text,
+            chunks=chunk_spans,
+        )
+
+        state = ExtractionStateV3()
+        state.resource_pool = pool
+
+        # Add entities from distant chunks
+        state.entities_found["BRCA1"] = EntityWithQuotes(
+            name="BRCA1",
+            kind="gene",
+            quotes=[resource.quote("BRCA1")],
+        )
+        state.entities_found["breast cancer"] = EntityWithQuotes(
+            name="breast cancer",
+            kind="disease",
+            quotes=[resource.quote("Breast cancer")],
+        )
+
+        # Add assessments
+        from interaction_finder.extraction_graph_v2.models import IndividualAssessment
+
+        state.individual_assessments["BRCA1"] = IndividualAssessment(
+            entity=state.entities_found["BRCA1"],
+            relationship_potential="high",
+            related_entities=[],
+            evidence_quotes=[],
+            reasoning="Test",
+        )
+        state.individual_assessments["breast cancer"] = IndividualAssessment(
+            entity=state.entities_found["breast cancer"],
+            relationship_potential="high",
+            related_entities=[],
+            evidence_quotes=[],
+            reasoning="Test",
+        )
+
+        ctx = GraphRunContext(state=state, deps=deps_v3)
+
+        # Generate candidates
+        node = GeneratePairCandidates()
+        await node.run(ctx)
+
+        # Should generate document-level candidate
+        assert len(state.pair_candidates) >= 1
+        candidate = list(state.pair_candidates.values())[0]
+        assert candidate.generation_strategy in ["document_level", "both"]
