@@ -6,7 +6,7 @@ results correspond to known target resources. Strategies are tried in priority
 order: PMID exact match → URL normalized match → title similarity fallback.
 """
 
-from typing import List, Set, Optional, Tuple
+from typing import Any, Dict, List, Set, Optional, Tuple
 
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
@@ -93,6 +93,62 @@ class ResourceMatcher:
 
         return matches
 
+    def _extract_pmid_from_metadata(self, metadata: Dict[str, Any]) -> Optional[str]:
+        """
+        Extract PMID from search result metadata (backend-agnostic).
+
+        Tries multiple locations in priority order:
+        1. metadata["pmid"] - direct (OpenAI, Perplexica)
+        2. metadata["pubmed_summary"]["pmid"] - nested (PubMed)
+
+        Parameters:
+            metadata: Dict[str, Any] - Search result metadata
+
+        Returns:
+            Optional[str] - PMID if found, None otherwise
+        """
+        # Try direct location first (most common)
+        pmid = metadata.get("pmid")
+        if pmid:
+            return str(pmid).strip()
+        # Try nested PubMed location
+        pubmed_summary = metadata.get("pubmed_summary")
+        if pubmed_summary and isinstance(pubmed_summary, dict):
+            pmid = pubmed_summary.get("pmid")
+            if pmid:
+                return str(pmid).strip()
+
+        return None
+
+    def _normalize_doi(self, doi: str) -> str:
+        """
+        Normalize DOI for comparison.
+
+        Strips common prefixes and converts to lowercase.
+
+        Parameters:
+            doi: str - Raw DOI string
+
+        Returns:
+            str - Normalized DOI (lowercase, no prefix)
+
+        Example:
+            >>> _normalize_doi("doi:10.1234/ABC")
+            "10.1234/abc"
+            >>> _normalize_doi("https://doi.org/10.1234/ABC")
+            "10.1234/abc"
+        """
+        normalized = doi.strip()
+        # Remove prefixes (case-insensitive for "doi:")
+        if normalized.lower().startswith("doi:"):
+            normalized = normalized[4:]
+        elif normalized.startswith("https://doi.org/"):
+            normalized = normalized[16:]
+        elif normalized.startswith("http://dx.doi.org/"):
+            normalized = normalized[18:]
+        # Lowercase and trim
+        return normalized.strip().lower()
+
     def _try_pmid_match(
         self,
         result: SearchResult,
@@ -104,12 +160,10 @@ class ResourceMatcher:
         Returns:
             (matched_resource, match_method, confidence) or (None, None, 0.0)
         """
-        # Extract PMID from result metadata
-        result_pmid = result.metadata.get("pmid")
+        # Extract PMID from result metadata using backend-agnostic helper
+        result_pmid = self._extract_pmid_from_metadata(result.metadata)
         if not result_pmid:
             return None, None, 0.0
-        # Normalize to string and strip whitespace
-        result_pmid = str(result_pmid).strip()
         # Search for matching resource
         for resource in target_resources:
             if resource.pmid and resource.pmid.strip() == result_pmid:

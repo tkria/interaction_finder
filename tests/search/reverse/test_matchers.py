@@ -1,11 +1,26 @@
 """Tests for resource matching logic."""
 
+import pytest
+
 from interaction_finder.search.reverse.matchers import ResourceMatcher
 from interaction_finder.search.reverse.models import (
     KnownResource,
     ReverseSearchConfig,
 )
 from interaction_finder.search.base import SearchResult, SearchResults, SearchQuery
+
+
+# Fixtures
+@pytest.fixture
+def config():
+    """Basic configuration for matcher tests."""
+    return ReverseSearchConfig()
+
+
+@pytest.fixture
+def matcher(config):
+    """ResourceMatcher instance for testing."""
+    return ResourceMatcher(config)
 
 
 # PMID matching tests
@@ -578,3 +593,116 @@ def test_title_similarity_selects_best_match():
     assert len(matches) == 1
     assert matches[0].resource == target2
     assert matches[0].match_method == "title_similarity"
+
+
+# PMID extraction unit tests (Task 01)
+class TestPMIDExtraction:
+    """Unit tests for _extract_pmid_from_metadata helper."""
+
+    def test_extract_pmid_direct(self, matcher):
+        """Extract PMID from direct metadata location."""
+        metadata = {"pmid": "12345678"}
+        assert matcher._extract_pmid_from_metadata(metadata) == "12345678"
+
+    def test_extract_pmid_pubmed_nested(self, matcher):
+        """Extract PMID from PubMed nested metadata."""
+        metadata = {"pubmed_summary": {"pmid": "12345678"}}
+        assert matcher._extract_pmid_from_metadata(metadata) == "12345678"
+
+    def test_extract_pmid_missing(self, matcher):
+        """Return None when PMID not present in metadata."""
+        metadata = {"other_field": "value"}
+        assert matcher._extract_pmid_from_metadata(metadata) is None
+
+    def test_extract_pmid_priority(self, matcher):
+        """Direct PMID takes priority over nested when both present."""
+        metadata = {"pmid": "11111111", "pubmed_summary": {"pmid": "22222222"}}
+        assert matcher._extract_pmid_from_metadata(metadata) == "11111111"
+
+    def test_extract_pmid_normalization(self, matcher):
+        """Integer PMID converted to string, whitespace stripped."""
+        # Test integer conversion
+        metadata = {"pmid": 12345678}
+        assert matcher._extract_pmid_from_metadata(metadata) == "12345678"
+        # Test whitespace stripping (direct)
+        metadata = {"pmid": "  12345678  "}
+        assert matcher._extract_pmid_from_metadata(metadata) == "12345678"
+        # Test whitespace stripping (nested)
+        metadata = {"pubmed_summary": {"pmid": "  12345678  "}}
+        assert matcher._extract_pmid_from_metadata(metadata) == "12345678"
+
+    def test_extract_pmid_malformed_pubmed_summary(self, matcher):
+        """Handle malformed pubmed_summary gracefully."""
+        # pubmed_summary is not a dict
+        metadata = {"pubmed_summary": "not a dict"}
+        assert matcher._extract_pmid_from_metadata(metadata) is None
+        # pubmed_summary is None
+        metadata = {"pubmed_summary": None}
+        assert matcher._extract_pmid_from_metadata(metadata) is None
+
+    def test_extract_pmid_empty_string(self, matcher):
+        """Empty string PMID is treated as missing."""
+        metadata = {"pmid": ""}
+        assert matcher._extract_pmid_from_metadata(metadata) is None
+
+    def test_extract_pmid_empty_metadata(self, matcher):
+        """Empty metadata returns None."""
+        metadata = {}
+        assert matcher._extract_pmid_from_metadata(metadata) is None
+
+
+# DOI normalization unit tests (Task 01)
+class TestDOINormalization:
+    """Unit tests for _normalize_doi helper."""
+
+    def test_normalize_doi_with_prefix(self, matcher):
+        """Normalize DOI with 'doi:' prefix."""
+        assert matcher._normalize_doi("doi:10.1234/ABC") == "10.1234/abc"
+
+    def test_normalize_doi_with_https(self, matcher):
+        """Normalize DOI with HTTPS URL."""
+        assert matcher._normalize_doi("https://doi.org/10.1234/ABC") == "10.1234/abc"
+
+    def test_normalize_doi_with_dx(self, matcher):
+        """Normalize DOI with http://dx.doi.org/ prefix."""
+        assert matcher._normalize_doi("http://dx.doi.org/10.1234/ABC") == "10.1234/abc"
+
+    def test_normalize_doi_plain(self, matcher):
+        """Plain DOI already normalized remains unchanged."""
+        assert matcher._normalize_doi("10.1234/abc") == "10.1234/abc"
+
+    def test_normalize_doi_case_insensitive_prefix(self, matcher):
+        """DOI: prefix is case-insensitive."""
+        assert matcher._normalize_doi("DOI:10.1234/ABC") == "10.1234/abc"
+        assert matcher._normalize_doi("Doi:10.1234/ABC") == "10.1234/abc"
+        assert matcher._normalize_doi("dOi:10.1234/ABC") == "10.1234/abc"
+
+    def test_normalize_doi_whitespace(self, matcher):
+        """Whitespace is trimmed before and after normalization."""
+        assert matcher._normalize_doi("  doi:10.1234/ABC  ") == "10.1234/abc"
+        assert (
+            matcher._normalize_doi("  https://doi.org/10.1234/ABC  ") == "10.1234/abc"
+        )
+        assert matcher._normalize_doi("  10.1234/ABC  ") == "10.1234/abc"
+
+    def test_normalize_doi_lowercase_conversion(self, matcher):
+        """DOI is converted to lowercase."""
+        assert matcher._normalize_doi("10.1234/ABC") == "10.1234/abc"
+        assert matcher._normalize_doi("10.ABCD/XYZ.test") == "10.abcd/xyz.test"
+
+    def test_normalize_doi_complex_suffix(self, matcher):
+        """DOI with complex suffix normalized correctly."""
+        # Real-world DOI examples
+        assert (
+            matcher._normalize_doi("doi:10.1038/nature12345") == "10.1038/nature12345"
+        )
+        assert (
+            matcher._normalize_doi("https://doi.org/10.1016/j.cell.2023.01.001")
+            == "10.1016/j.cell.2023.01.001"
+        )
+
+    def test_normalize_doi_only_first_prefix_stripped(self, matcher):
+        """Only the first matching prefix is stripped."""
+        # Edge case: DOI containing "doi:" in suffix
+        result = matcher._normalize_doi("doi:10.1234/contains-doi:-text")
+        assert result == "10.1234/contains-doi:-text"
