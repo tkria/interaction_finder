@@ -564,3 +564,582 @@ class TestCheckpointCallback:
         assert len(checkpoint_calls) == 1
         assert checkpoint_calls[0][0] == "extraction"
         assert checkpoint_calls[0][1] is state_v3
+
+
+# ============================================================================
+# AssessIndividually Node Tests
+# ============================================================================
+
+
+from interaction_finder.extraction_graph_v3.nodes import AssessIndividually
+from interaction_finder.extraction_graph_v2.models import (
+    AssessmentOut,
+    IndividualAssessment,
+)
+
+
+@pytest.fixture
+def mock_assessment_result():
+    """Create mock assessment agent result."""
+    return AssessmentOut(
+        potential="high",
+        related=["breast cancer", "ovarian cancer"],
+        evidence=[
+            "BRCA1 is a tumor suppressor gene associated with breast cancer.",
+            "BRCA1 mutations are also linked to ovarian cancer.",
+        ],
+        reasoning="BRCA1 shows high relationship potential with multiple cancers",
+    )
+
+
+@pytest.fixture
+def state_with_entities(sample_resource_pool):
+    """Create state with extracted entities ready for assessment."""
+    state = ExtractionStateV3()
+    state.resource_pool = sample_resource_pool
+
+    # Manually add entities (simulating ExtractEntities output)
+    resources = sample_resource_pool.resources  # This is a list property
+
+    state.entities_found["BRCA1"] = EntityWithQuotes(
+        name="BRCA1",
+        kind="gene",
+        aliases=["BRCA1"],
+        quotes=[
+            resources[0].quote("BRCA1 is a tumor suppressor gene"),
+            resources[1].quote("BRCA1 mutations"),
+        ],
+        confidence=1.0,
+    )
+
+    state.entities_found["breast cancer"] = EntityWithQuotes(
+        name="breast cancer",
+        kind="disease",
+        aliases=["breast cancer"],
+        quotes=[resources[0].quote("breast cancer")],
+        confidence=1.0,
+    )
+
+    return state
+
+
+class TestAssessIndividuallyBasic:
+    """Test basic assessment functionality."""
+
+    @pytest.mark.asyncio
+    async def test_assess_entities_without_cache(
+        self, state_with_entities, deps_v3, mock_assessment_result
+    ):
+        """Test entity assessment without caching."""
+        ctx = GraphRunContext(state=state_with_entities, deps=deps_v3)
+
+        # Mock agent
+        mock_agent = AsyncMock()
+        mock_agent.run.return_value = mock_assessment_result
+
+        with patch(
+            "interaction_finder.extraction_graph_v3.nodes.create_assessment_agent_v3",
+            return_value=mock_agent,
+        ):
+            node = AssessIndividually()
+            await node.run(ctx)
+
+        # Verify assessments were created
+        assert len(state_with_entities.individual_assessments) >= 1
+        assert state_with_entities.metrics.assessment_calls > 0
+        assert (
+            state_with_entities.metrics.cache_misses_assessment == 0
+        )  # Cache disabled
+
+    @pytest.mark.asyncio
+    async def test_assess_entities_with_cache_miss(
+        self, state_with_entities, deps_v3, mock_assessment_result, tmp_path
+    ):
+        """Test assessment with cache miss."""
+        # Enable caching
+        deps_v3.semantic_cache_enabled = True
+        state_with_entities.cache = SemanticCacheManager(tmp_path / "cache")
+
+        ctx = GraphRunContext(state=state_with_entities, deps=deps_v3)
+
+        # Mock agent
+        mock_agent = AsyncMock()
+        mock_agent.run.return_value = mock_assessment_result
+
+        with patch(
+            "interaction_finder.extraction_graph_v3.nodes.create_assessment_agent_v3",
+            return_value=mock_agent,
+        ):
+            node = AssessIndividually()
+            await node.run(ctx)
+
+        # Verify cache miss recorded
+        assert state_with_entities.metrics.cache_misses_assessment > 0
+        assert state_with_entities.metrics.cache_hits_assessment == 0
+
+    @pytest.mark.asyncio
+    async def test_assess_entities_with_cache_hit(
+        self, state_with_entities, deps_v3, tmp_path
+    ):
+        """Test assessment with cache hit."""
+        # Enable caching
+        deps_v3.semantic_cache_enabled = True
+        cache = SemanticCacheManager(tmp_path / "cache")
+        state_with_entities.cache = cache
+
+        # Pre-populate cache with assessment
+        entity = state_with_entities.entities_found["BRCA1"]
+        cached_assessment = IndividualAssessment(
+            entity=entity,
+            relationship_potential="high",
+            related_entities=["breast cancer"],
+            evidence_quotes=[],
+            reasoning="Cached assessment",
+            confidence=0.9,
+        )
+
+        # Compute cache key and save
+        from interaction_finder.extraction_graph_v3.cache import (
+            compute_assessment_cache_key,
+        )
+
+        cache_key = compute_assessment_cache_key(
+            entity_name=entity.name,
+            entity_kind=entity.kind,
+            task_context=deps_v3.get_task_context(),
+            model_version="openai:gpt-4o-mini",
+            prompt_version="v3_2025-10",
+        )
+        await cache.set_assessment(cache_key, cached_assessment)
+
+        ctx = GraphRunContext(state=state_with_entities, deps=deps_v3)
+
+        # Mock agent (should not be called for cache hit)
+        mock_agent = AsyncMock()
+
+        with patch(
+            "interaction_finder.extraction_graph_v3.nodes.create_assessment_agent_v3",
+            return_value=mock_agent,
+        ):
+            node = AssessIndividually()
+            await node.run(ctx)
+
+        # Verify cache hit
+        assert state_with_entities.metrics.cache_hits_assessment > 0
+
+
+class TestRelatedEntitiesExtraction:
+    """Test extraction of related_entities field."""
+
+    @pytest.mark.asyncio
+    async def test_related_entities_populated(self, state_with_entities, deps_v3):
+        """Test that related_entities field is populated from agent output."""
+        ctx = GraphRunContext(state=state_with_entities, deps=deps_v3)
+
+        # Mock agent with specific related entities
+        mock_result = AssessmentOut(
+            potential="high",
+            related=["breast cancer", "ovarian cancer", "TP53"],
+            evidence=["BRCA1 interacts with these entities"],
+            reasoning="High potential for relationships",
+        )
+
+        mock_agent = AsyncMock()
+        mock_agent.run.return_value = mock_result
+
+        with patch(
+            "interaction_finder.extraction_graph_v3.nodes.create_assessment_agent_v3",
+            return_value=mock_agent,
+        ):
+            node = AssessIndividually()
+            await node.run(ctx)
+
+        # Verify related entities are present
+        assert "BRCA1" in state_with_entities.individual_assessments
+        assessment = state_with_entities.individual_assessments["BRCA1"]
+        assert len(assessment.related_entities) == 3
+        assert "breast cancer" in assessment.related_entities
+        assert "ovarian cancer" in assessment.related_entities
+        assert "TP53" in assessment.related_entities
+
+    @pytest.mark.asyncio
+    async def test_empty_related_entities_for_low_potential(
+        self, state_with_entities, deps_v3
+    ):
+        """Test that low potential entities can have empty related_entities."""
+        ctx = GraphRunContext(state=state_with_entities, deps=deps_v3)
+
+        # Mock agent with low potential and no related entities
+        mock_result = AssessmentOut(
+            potential="low",
+            related=[],
+            evidence=[],
+            reasoning="Low potential for relationships",
+        )
+
+        mock_agent = AsyncMock()
+        mock_agent.run.return_value = mock_result
+
+        with patch(
+            "interaction_finder.extraction_graph_v3.nodes.create_assessment_agent_v3",
+            return_value=mock_agent,
+        ):
+            node = AssessIndividually()
+            await node.run(ctx)
+
+        # Verify assessment exists with empty related_entities
+        assert "BRCA1" in state_with_entities.individual_assessments
+        assessment = state_with_entities.individual_assessments["BRCA1"]
+        assert assessment.relationship_potential == "low"
+        assert len(assessment.related_entities) == 0
+
+
+class TestEvidenceQuoteValidation:
+    """Test evidence quote validation with fuzzy matching."""
+
+    @pytest.mark.asyncio
+    async def test_evidence_quotes_validated(self, state_with_entities, deps_v3):
+        """Test that evidence quotes are validated against resources."""
+        ctx = GraphRunContext(state=state_with_entities, deps=deps_v3)
+
+        # Mock agent with evidence that exists in resource
+        mock_result = AssessmentOut(
+            potential="high",
+            related=["breast cancer"],
+            evidence=[
+                "BRCA1 is a tumor suppressor gene associated with breast cancer.",
+            ],
+            reasoning="Strong evidence for relationship",
+        )
+
+        mock_agent = AsyncMock()
+        mock_agent.run.return_value = mock_result
+
+        with patch(
+            "interaction_finder.extraction_graph_v3.nodes.create_assessment_agent_v3",
+            return_value=mock_agent,
+        ):
+            node = AssessIndividually()
+            await node.run(ctx)
+
+        # Verify evidence quotes were validated
+        assessment = state_with_entities.individual_assessments["BRCA1"]
+        assert len(assessment.evidence_quotes) > 0
+        # Evidence quotes should be ResourceQuote objects
+        from interaction_finder.resources import ResourceQuote
+
+        assert isinstance(assessment.evidence_quotes[0], ResourceQuote)
+
+    @pytest.mark.asyncio
+    async def test_invalid_evidence_quotes_skipped(self, state_with_entities, deps_v3):
+        """Test that invalid evidence quotes are skipped without crashing."""
+        ctx = GraphRunContext(state=state_with_entities, deps=deps_v3)
+
+        # Mock agent with evidence that doesn't exist in resource
+        mock_result = AssessmentOut(
+            potential="high",
+            related=["breast cancer"],
+            evidence=[
+                "This evidence quote does not exist in any resource document.",
+            ],
+            reasoning="Some reasoning",
+        )
+
+        mock_agent = AsyncMock()
+        mock_agent.run.return_value = mock_result
+
+        with patch(
+            "interaction_finder.extraction_graph_v3.nodes.create_assessment_agent_v3",
+            return_value=mock_agent,
+        ):
+            node = AssessIndividually()
+            await node.run(ctx)
+
+        # Assessment should exist but with no validated evidence quotes
+        assessment = state_with_entities.individual_assessments["BRCA1"]
+        assert len(assessment.evidence_quotes) == 0
+
+
+class TestConfidenceMapping:
+    """Test mapping of potential levels to confidence scores."""
+
+    @pytest.mark.asyncio
+    async def test_confidence_mapping_high(self, state_with_entities, deps_v3):
+        """Test high potential maps to 0.9 confidence."""
+        ctx = GraphRunContext(state=state_with_entities, deps=deps_v3)
+
+        mock_result = AssessmentOut(
+            potential="high",
+            related=["breast cancer"],
+            evidence=[],
+            reasoning="High potential",
+        )
+
+        mock_agent = AsyncMock()
+        mock_agent.run.return_value = mock_result
+
+        with patch(
+            "interaction_finder.extraction_graph_v3.nodes.create_assessment_agent_v3",
+            return_value=mock_agent,
+        ):
+            node = AssessIndividually()
+            await node.run(ctx)
+
+        assessment = state_with_entities.individual_assessments["BRCA1"]
+        assert assessment.confidence == 0.9
+
+    @pytest.mark.asyncio
+    async def test_confidence_mapping_medium(self, state_with_entities, deps_v3):
+        """Test medium potential maps to 0.7 confidence."""
+        ctx = GraphRunContext(state=state_with_entities, deps=deps_v3)
+
+        mock_result = AssessmentOut(
+            potential="medium",
+            related=["breast cancer"],
+            evidence=[],
+            reasoning="Medium potential",
+        )
+
+        mock_agent = AsyncMock()
+        mock_agent.run.return_value = mock_result
+
+        with patch(
+            "interaction_finder.extraction_graph_v3.nodes.create_assessment_agent_v3",
+            return_value=mock_agent,
+        ):
+            node = AssessIndividually()
+            await node.run(ctx)
+
+        assessment = state_with_entities.individual_assessments["BRCA1"]
+        assert assessment.confidence == 0.7
+
+    @pytest.mark.asyncio
+    async def test_confidence_mapping_low(self, state_with_entities, deps_v3):
+        """Test low potential maps to 0.5 confidence."""
+        ctx = GraphRunContext(state=state_with_entities, deps=deps_v3)
+
+        mock_result = AssessmentOut(
+            potential="low",
+            related=[],
+            evidence=[],
+            reasoning="Low potential",
+        )
+
+        mock_agent = AsyncMock()
+        mock_agent.run.return_value = mock_result
+
+        with patch(
+            "interaction_finder.extraction_graph_v3.nodes.create_assessment_agent_v3",
+            return_value=mock_agent,
+        ):
+            node = AssessIndividually()
+            await node.run(ctx)
+
+        assessment = state_with_entities.individual_assessments["BRCA1"]
+        assert assessment.confidence == 0.5
+
+    @pytest.mark.asyncio
+    async def test_confidence_mapping_none(self, state_with_entities, deps_v3):
+        """Test none potential maps to 0.0 confidence."""
+        ctx = GraphRunContext(state=state_with_entities, deps=deps_v3)
+
+        mock_result = AssessmentOut(
+            potential="none",
+            related=[],
+            evidence=[],
+            reasoning="No potential",
+        )
+
+        mock_agent = AsyncMock()
+        mock_agent.run.return_value = mock_result
+
+        with patch(
+            "interaction_finder.extraction_graph_v3.nodes.create_assessment_agent_v3",
+            return_value=mock_agent,
+        ):
+            node = AssessIndividually()
+            await node.run(ctx)
+
+        assessment = state_with_entities.individual_assessments["BRCA1"]
+        assert assessment.confidence == 0.0
+
+
+class TestConcurrentAssessment:
+    """Test concurrent processing of all entities."""
+
+    @pytest.mark.asyncio
+    async def test_concurrent_assessment_multiple_entities(self, deps_v3):
+        """Test multiple entities assessed concurrently."""
+        # Create state with multiple entities
+        pool = ResourcePool()
+        pool.add(
+            url="https://example.com/doc",
+            title="Test Doc",
+            document_text="BRCA1, BRCA2, and TP53 are important genes. They interact with breast cancer and ovarian cancer.",
+        )
+
+        state = ExtractionStateV3()
+        state.resource_pool = pool
+
+        # Add multiple entities
+        resource = pool.resources[0]
+        for gene in ["BRCA1", "BRCA2", "TP53"]:
+            state.entities_found[gene] = EntityWithQuotes(
+                name=gene,
+                kind="gene",
+                aliases=[gene],
+                quotes=[resource.quote(gene)],
+                confidence=1.0,
+            )
+
+        ctx = GraphRunContext(state=state, deps=deps_v3)
+
+        # Track concurrent calls
+        call_times = []
+
+        async def mock_agent_run(prompt, deps):
+            call_times.append(asyncio.get_event_loop().time())
+            await asyncio.sleep(0.1)  # Simulate LLM call
+            return AssessmentOut(
+                potential="high",
+                related=["breast cancer"],
+                evidence=[],
+                reasoning="Gene with cancer relationship",
+            )
+
+        mock_agent = AsyncMock()
+        mock_agent.run.side_effect = mock_agent_run
+
+        with patch(
+            "interaction_finder.extraction_graph_v3.nodes.create_assessment_agent_v3",
+            return_value=mock_agent,
+        ):
+            node = AssessIndividually()
+            await node.run(ctx)
+
+        # Verify all entities were assessed
+        assert len(state.individual_assessments) == 3
+        assert state.metrics.assessment_calls == 3
+
+
+class TestAssessmentErrorHandling:
+    """Test error handling during assessment."""
+
+    @pytest.mark.asyncio
+    async def test_llm_failure_does_not_crash(self, state_with_entities, deps_v3):
+        """Test that LLM failure doesn't crash assessment pipeline."""
+        ctx = GraphRunContext(state=state_with_entities, deps=deps_v3)
+
+        # Mock agent that fails
+        mock_agent = AsyncMock()
+        mock_agent.run.side_effect = Exception("LLM API error")
+
+        with patch(
+            "interaction_finder.extraction_graph_v3.nodes.create_assessment_agent_v3",
+            return_value=mock_agent,
+        ):
+            node = AssessIndividually()
+            # Should not raise exception
+            await node.run(ctx)
+
+        # Metrics should track calls
+        assert state_with_entities.metrics.assessment_calls > 0
+
+        # Failed assessments should have minimal assessment
+        for assessment in state_with_entities.individual_assessments.values():
+            if "failed" in assessment.reasoning.lower():
+                assert assessment.relationship_potential == "none"
+                assert assessment.confidence == 0.0
+
+    @pytest.mark.asyncio
+    async def test_partial_assessment_failure(self, deps_v3):
+        """Test that failure on some assessments doesn't prevent others."""
+        pool = ResourcePool()
+        pool.add(
+            url="https://example.com/doc",
+            title="Test Doc",
+            document_text="BRCA1 and BRCA2 are genes.",
+        )
+
+        state = ExtractionStateV3()
+        state.resource_pool = pool
+
+        # Add entities
+        resource = pool.resources[0]
+        state.entities_found["BRCA1"] = EntityWithQuotes(
+            name="BRCA1",
+            kind="gene",
+            aliases=["BRCA1"],
+            quotes=[resource.quote("BRCA1")],
+            confidence=1.0,
+        )
+        state.entities_found["BRCA2"] = EntityWithQuotes(
+            name="BRCA2",
+            kind="gene",
+            aliases=["BRCA2"],
+            quotes=[resource.quote("BRCA2")],
+            confidence=1.0,
+        )
+
+        ctx = GraphRunContext(state=state, deps=deps_v3)
+
+        # Mock agent that fails on first entity, succeeds on second
+        call_count = [0]
+
+        async def mock_agent_run(prompt, deps):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                raise Exception("First assessment failed")
+
+            return AssessmentOut(
+                potential="high",
+                related=["breast cancer"],
+                evidence=[],
+                reasoning="Good assessment",
+            )
+
+        mock_agent = AsyncMock()
+        mock_agent.run.side_effect = mock_agent_run
+
+        with patch(
+            "interaction_finder.extraction_graph_v3.nodes.create_assessment_agent_v3",
+            return_value=mock_agent,
+        ):
+            node = AssessIndividually()
+            await node.run(ctx)
+
+        # Both assessments should be present
+        assert len(state.individual_assessments) == 2
+
+
+class TestAssessmentCheckpointCallback:
+    """Test checkpoint callback invocation."""
+
+    @pytest.mark.asyncio
+    async def test_checkpoint_callback_invoked(
+        self, state_with_entities, deps_v3, mock_assessment_result
+    ):
+        """Test that checkpoint callback is invoked after assessment."""
+        checkpoint_calls = []
+
+        async def checkpoint_callback(stage: str, state):
+            checkpoint_calls.append((stage, state))
+
+        deps_v3.checkpoint_callback = checkpoint_callback
+
+        ctx = GraphRunContext(state=state_with_entities, deps=deps_v3)
+
+        mock_agent = AsyncMock()
+        mock_agent.run.return_value = mock_assessment_result
+
+        with patch(
+            "interaction_finder.extraction_graph_v3.nodes.create_assessment_agent_v3",
+            return_value=mock_agent,
+        ):
+            node = AssessIndividually()
+            await node.run(ctx)
+
+        # Verify checkpoint was called
+        assert len(checkpoint_calls) == 1
+        assert checkpoint_calls[0][0] == "assessment"
+        assert checkpoint_calls[0][1] is state_with_entities
