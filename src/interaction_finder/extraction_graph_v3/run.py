@@ -419,8 +419,155 @@ async def run_extraction_v3(
     return result
 
 
+async def extract_from_urls_v3(
+    urls: List[str],
+    config: IfetcherConfig,
+    page_fetcher: Optional[PageFetcher] = None,
+    model: Optional[str] = None,
+    verbose: bool = False,
+    save_callback: Optional[Callable[[BatchExtractionResultV3], None]] = None,
+    parallelism: Optional[int] = None,
+    target_term: Optional[str] = None,
+    output_dir: Optional[Path] = None,
+    checkpoint_path: Optional[Path] = None,
+) -> BatchExtractionResultV3:
+    """
+    Complete V3 pipeline from URLs to entity pairs (CLI-compatible interface).
+
+    Compatible interface with extract_from_urls_v2 for CLI integration.
+    Provides same parameters as V2 for drop-in replacement.
+
+    Args:
+        urls: List of URLs to process
+        config: Configuration object
+        page_fetcher: Optional PageFetcher instance
+        model: Optional model override
+        verbose: Enable verbose logging
+        save_callback: Optional callback for incremental saves
+        parallelism: Optional parallelism override (unused in V3 - configured via config)
+        target_term: Optional target term for entity extraction context
+        output_dir: Optional output directory for intermediate results
+        checkpoint_path: Optional checkpoint path for save/resume
+
+    Returns:
+        BatchExtractionResultV3 with extracted pairs and metadata
+    """
+    logger.info(f"Starting extraction_v3 pipeline with {len(urls)} URLs")
+
+    # Create or use provided page_fetcher
+    if page_fetcher is None:
+        page_fetcher = PageFetcher(config, show_status=True, verbose=verbose)
+
+    # Call main pipeline
+    result = await run_extraction_v3(
+        urls=urls,
+        config=config,
+        page_fetcher=page_fetcher,
+        model=model,
+        verbose=verbose,
+        checkpoint_path=checkpoint_path,
+        save_callback=save_callback,
+    )
+
+    return result
+
+
+def save_results_v3(
+    result: BatchExtractionResultV3,
+    output_path: Path,
+    term: str,
+    mode: str = "basic",
+    repeat: int = 1,
+    entity_kinds: Optional[List[str]] = None,
+) -> None:
+    """
+    Save V3 extraction results in format compatible with V1/V2.
+
+    Args:
+        result: V3 extraction result
+        output_path: Path to save results (.jsonl file)
+        term: Research term for directory structure
+        mode: Research mode for directory structure
+        repeat: Repeat number for directory structure
+        entity_kinds: List of entity kinds for normalization
+    """
+    import json
+
+    # Create output directory using same logic as v1/v2
+    output_dir = output_path.with_suffix("")
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Get entity pairs
+    all_pairs = result.entity_pairs
+
+    # Use provided entity kinds or extract from pairs
+    if entity_kinds is None:
+        kinds_set = set()
+        for pair in all_pairs:
+            kinds_set.add(pair.entity_a.kind)
+            kinds_set.add(pair.entity_b.kind)
+        entity_kinds = list(kinds_set)
+
+    # Save pairs.json - convert to output format
+    pairs_file = output_dir / "pairs.json"
+    pairs_data = [pair.to_output_format() for pair in all_pairs]
+
+    with open(pairs_file, "w", encoding="utf-8") as f:
+        json.dump(pairs_data, f, indent=2, ensure_ascii=False)
+
+    # Save resources.json - extract resource information
+    resources_file = output_dir / "resources.json"
+    resources_data = {}
+
+    for pair in all_pairs:
+        # Add resources from entity quotes
+        for entity in [pair.entity_a, pair.entity_b]:
+            for quote in entity.quotes:
+                resource_id = quote.resource.id.id
+                if resource_id not in resources_data:
+                    resources_data[resource_id] = {
+                        "url": quote.resource.id.url,
+                        "title": quote.resource.title,
+                        "content_length": len(quote.resource.text),
+                    }
+
+    with open(resources_file, "w", encoding="utf-8") as f:
+        json.dump(resources_data, f, indent=2, ensure_ascii=False)
+
+    # Save summary.json with V3-specific metrics
+    summary_file = output_dir / "summary.json"
+    summary_data = {
+        "extraction": {
+            "term": term,
+            "mode": mode,
+            "repeat": repeat,
+            "entity_kinds": entity_kinds,
+            "extraction_version": "v3",
+            "model": result.metadata.model if result.metadata else "unknown",
+            "pipeline_version": "v3",
+        },
+        "results": {
+            "total_pairs": result.total_pairs,
+            "total_entities": result.total_entities,
+            # V3 doesn't use groups, so use document count
+            "total_groups": 1,
+            "successful_groups": 1 if result.total_pairs > 0 else 0,
+            "error_count": len(result.errors) if result.errors else 0,
+        },
+        "cache_stats": result.cache_stats if result.cache_stats else {},
+        "stage_metrics": result.stage_metrics if result.stage_metrics else {},
+    }
+
+    with open(summary_file, "w", encoding="utf-8") as f:
+        json.dump(summary_data, f, indent=2, ensure_ascii=False)
+
+    logger.info(f"Results saved to {output_dir}")
+
+
 __all__ = [
     "run_extraction_v3",
+    "extract_from_urls_v3",
+    "save_results_v3",
     "save_checkpoint",
     "resume_from_checkpoint",
 ]

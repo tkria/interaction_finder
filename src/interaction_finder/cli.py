@@ -2521,6 +2521,12 @@ def extract(
     parallelism: Optional[int] = typer.Option(
         None, "--parallelism", "-p", help="Maximum parallel operations"
     ),
+    ver: int = typer.Option(
+        3, "--ver", help="Pipeline version (1, 2, or 3). Default is 3."
+    ),
+    checkpoint: Optional[str] = typer.Option(
+        None, "--checkpoint", help="Resume from checkpoint (V3 only)"
+    ),
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Show what would be processed without executing"
     ),
@@ -2567,6 +2573,20 @@ def extract(
         # Preview processing
         interaction-finder extract -t diabetes --dry-run --verbose
     """
+    # Validate version parameter
+    if ver not in [1, 2, 3]:
+        console.print(
+            f"[bold red]Error:[/bold red] Invalid version: {ver}. Must be 1, 2, or 3."
+        )
+        raise typer.Exit(1)
+
+    # Validate checkpoint is only used with V3
+    if checkpoint and ver != 3:
+        console.print(
+            f"[bold red]Error:[/bold red] --checkpoint is only supported with --ver 3"
+        )
+        raise typer.Exit(1)
+
     # Get effective options with global fallback
     effective_config, effective_verbose, effective_overrides = (
         get_options_with_fallback(config, verbose, overrides)
@@ -2768,12 +2788,31 @@ def extract(
                 f"Starting extraction pipeline: {len(urls)} URLs, target: {cfg.task.get_kind_names()} → {cfg.task.relation}"
             )
 
-            # Run extraction using extraction_graph_v2
-            from .extraction_graph_v2.run import (
-                extract_from_urls_v2 as extract_from_urls,
-            )
+            # Import extraction function based on version
+            if ver == 3:
+                from .extraction_graph_v3.run import (
+                    extract_from_urls_v3 as extract_from_urls,
+                )
 
-            logfire.info("Using extraction pipeline v2")
+                # NOTE: V3 currently uses default settings from ExtractionDepsV3.from_config()
+                # Configuration via [extraction.v3] config section is planned but not yet implemented
+                # All parallelism, co-occurrence, and caching settings use sensible defaults
+                logfire.info("Using extraction pipeline v3")
+            elif ver == 2:
+                from .extraction_graph_v2.run import (
+                    extract_from_urls_v2 as extract_from_urls,
+                )
+
+                logfire.info("Using extraction pipeline v2")
+            elif ver == 1:
+                from .extraction_graph.run import (
+                    extract_from_urls as extract_from_urls,
+                )
+
+                logfire.info("Using extraction pipeline v1")
+            else:
+                # Should never reach here due to validation
+                raise ValueError(f"Invalid version: {ver}")
             from .fetcher import PageFetcher
 
             # Create PageFetcher with appropriate settings
@@ -2796,16 +2835,30 @@ def extract(
 
                 def incremental_save(intermediate_result):
                     try:
-                        from .extraction_graph_v2.run import save_results_v2
+                        # Import version-specific save function
+                        if ver == 3:
+                            from .extraction_graph_v3.run import save_results_v3
 
-                        save_results_v2(
-                            intermediate_result,
-                            output_path,
-                            term=processed_term,
-                            mode=processed_mode,
-                            repeat=1,
-                            entity_kinds=cfg.task.get_kind_names(),
-                        )
+                            save_results_v3(
+                                intermediate_result,
+                                output_path,
+                                term=processed_term,
+                                mode=processed_mode,
+                                repeat=1,
+                                entity_kinds=cfg.task.get_kind_names(),
+                            )
+                        elif ver == 2:
+                            from .extraction_graph_v2.run import save_results_v2
+
+                            save_results_v2(
+                                intermediate_result,
+                                output_path,
+                                term=processed_term,
+                                mode=processed_mode,
+                                repeat=1,
+                                entity_kinds=cfg.task.get_kind_names(),
+                            )
+                        # V1 doesn't support incremental saves
                         if verbose:
                             pairs_count = len(intermediate_result.entity_pairs)
                             print(f"  Saved intermediate results: {pairs_count} pairs")
@@ -2815,22 +2868,62 @@ def extract(
                                 f"  Warning: Failed to save intermediate results: {e}"
                             )
 
-            # Run extraction directly using v2
-            result = asyncio.run(
-                extract_from_urls(
-                    urls=urls,
-                    config=cfg,
-                    page_fetcher=page_fetcher,
-                    model=model,
-                    verbose=verbose,
-                    save_callback=save_callback,
-                    parallelism=parallelism,
-                    target_term=term,
-                    output_dir=output_path.with_suffix(
-                        ""
-                    ),  # Remove .jsonl, use directory
+            # Run extraction with selected version
+            # Prepare version-specific parameters
+            checkpoint_path_obj = Path(checkpoint) if checkpoint else None
+
+            # Call with version-specific parameters
+            if ver == 1:
+                # V1: Only base parameters (no target_term, output_dir, checkpoint_path)
+                result = asyncio.run(
+                    extract_from_urls(
+                        urls=urls,
+                        config=cfg,
+                        page_fetcher=page_fetcher,
+                        model=model,
+                        verbose=verbose,
+                        save_callback=save_callback,
+                        parallelism=parallelism,
+                    )
                 )
-            )
+            elif ver == 2:
+                # V2: Base + target_term, output_dir (no checkpoint_path)
+                result = asyncio.run(
+                    extract_from_urls(
+                        urls=urls,
+                        config=cfg,
+                        page_fetcher=page_fetcher,
+                        model=model,
+                        verbose=verbose,
+                        save_callback=save_callback,
+                        parallelism=parallelism,
+                        target_term=term,
+                        output_dir=output_path.with_suffix(
+                            ""
+                        ),  # Remove .jsonl, use directory
+                    )
+                )
+            elif ver == 3:
+                # V3: All parameters including checkpoint_path
+                result = asyncio.run(
+                    extract_from_urls(
+                        urls=urls,
+                        config=cfg,
+                        page_fetcher=page_fetcher,
+                        model=model,
+                        verbose=verbose,
+                        save_callback=save_callback,
+                        parallelism=parallelism,
+                        target_term=term,
+                        output_dir=output_path.with_suffix(
+                            ""
+                        ),  # Remove .jsonl, use directory
+                        checkpoint_path=checkpoint_path_obj,
+                    )
+                )
+            else:
+                # Should never reach here due to validation
+                raise ValueError(f"Invalid version: {ver}")
 
             pipeline_time = time.time() - pipeline_start_time
 
@@ -2841,8 +2934,13 @@ def extract(
             )
             logfire.info(f"Entities found: {result.total_entities}")
 
-            # Save results using v2 format
-            from .extraction_graph_v2.run import save_results_v2 as save_results
+            # Save results using version-specific format
+            if ver == 3:
+                from .extraction_graph_v3.run import save_results_v3 as save_results
+            elif ver == 2:
+                from .extraction_graph_v2.run import save_results_v2 as save_results
+            elif ver == 1:
+                from .extraction_graph.run import save_results as save_results
 
             save_results(
                 result,
