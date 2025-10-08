@@ -2127,6 +2127,351 @@ def print_dry_run_summary(
         )
 
 
+def _parse_known_resources_jsonl(jsonl_path: Path) -> List["KnownResource"]:
+    """
+    Parse JSONL file containing known resources.
+
+    Parameters:
+        jsonl_path: Path - Path to JSONL file
+
+    Returns:
+        List[KnownResource] - Parsed resources
+
+    Raises:
+        ValueError: If file is malformed or missing required fields
+        FileNotFoundError: If file doesn't exist
+    """
+    import json
+    from interaction_finder.search.reverse.models import (
+        KnownResource,
+        ResourceParseError,
+    )
+
+    if not jsonl_path.exists():
+        raise FileNotFoundError(f"JSONL file not found: {jsonl_path}")
+
+    resources = []
+    with open(jsonl_path, "r", encoding="utf-8") as f:
+        for line_num, line in enumerate(f, start=1):
+            line = line.strip()
+            if not line:
+                continue  # Skip empty lines
+
+            try:
+                entry = json.loads(line)
+
+                # Extract required and optional fields
+                url = entry.get("url")
+                if not url:
+                    raise ResourceParseError(
+                        f"Missing required field 'url' at line {line_num}",
+                        context={"line": line_num, "entry": entry},
+                    )
+
+                pmid = entry.get("pmid")
+
+                # Extract hint fields (all fields except pmid/url)
+                hint_fields = {
+                    k: v for k, v in entry.items() if k not in ["pmid", "url"]
+                }
+
+                # Create KnownResource
+                resource = KnownResource(
+                    pmid=pmid,
+                    url=url,
+                    hint_fields=hint_fields,
+                )
+                resources.append(resource)
+
+            except json.JSONDecodeError as e:
+                raise ResourceParseError(
+                    f"Invalid JSON at line {line_num}: {e}",
+                    context={"line": line_num},
+                )
+            except Exception as e:
+                raise ResourceParseError(
+                    f"Failed to parse resource at line {line_num}: {e}",
+                    context={
+                        "line": line_num,
+                        "entry": entry if "entry" in locals() else None,
+                    },
+                )
+
+    if not resources:
+        raise ValueError(f"No valid resources found in {jsonl_path}")
+
+    return resources
+
+
+def _write_reverse_search_output(
+    session: "ReverseSearchSession",
+    output_path: Path,
+) -> None:
+    """
+    Write reverse search results to JSONL file.
+
+    Format: One JSON object per line
+    - Per-query results: query, query_index, resources_found, new_finds, coverage, time
+    - Final summary: total_queries, final_coverage, found/unfound counts, stopping_reason
+
+    Parameters:
+        session: ReverseSearchSession - Completed session
+        output_path: Path - Output file path
+    """
+    import json
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        # Write per-query results
+        for result in session.query_results:
+            query_entry = {
+                "query": result.query,
+                "query_index": result.query_index,
+                "resources_found": [r.canonical_url for r in result.resources_found],
+                "new_finds": result.new_finds,
+                "cumulative_coverage": result.cumulative_coverage,
+                "search_time": result.search_time,
+                "backend": result.backend,
+            }
+            f.write(json.dumps(query_entry, ensure_ascii=False) + "\n")
+
+        # Write final summary
+        summary = {
+            "summary": True,
+            "total_queries": session.total_queries,
+            "final_coverage": session.final_coverage,
+            "total_resources": len(session.target_resources),
+            "found_resources": session.found_count,
+            "unfound_resources": [r.canonical_url for r in session.unfound_resources],
+            "total_time": session.total_time,
+            "stopping_reason": session.stopping_reason,
+        }
+        f.write(json.dumps(summary, ensure_ascii=False) + "\n")
+
+
+async def _run_reverse_search_command(
+    target_resources: List["KnownResource"],
+    backend_name: str,
+    cfg: IfetcherConfig,
+    output_path: Path,
+    verbose: bool,
+    dry_run: bool,
+    console: Console,
+) -> None:
+    """
+    Execute reverse search command asynchronously.
+
+    Parameters:
+        target_resources: List[KnownResource] - Resources to find
+        backend_name: str - Search backend name
+        cfg: IfetcherConfig - Configuration
+        output_path: Path - Output file path
+        verbose: bool - Show progress
+        dry_run: bool - Preview only, don't execute
+        console: Console - Rich console for output
+    """
+    from interaction_finder.search.reverse import ReverseSearcher
+    from interaction_finder.search.cache import SearchCache
+    from interaction_finder.fetcher import PageFetcher
+
+    # Instantiate backend (reuse pattern from search command)
+    backend_config = cfg.tools.search.get_backend_config(backend_name)
+
+    if backend_name == "pubmed":
+        search_backend = PubMedBackend(backend_config)
+    elif backend_name == "perplexica":
+        search_backend = PerplexicaBackend(backend_config)
+    elif backend_name == "openai_search":
+        search_backend = OpenAISearchBackend(backend_config)
+    else:
+        available = cfg.tools.search.get_available_backends()
+        console.print(f"[red]Backend '{backend_name}' not available[/red]")
+        console.print(f"[blue]Available backends:[/blue] {', '.join(available)}")
+        raise typer.Exit(1)
+
+    # Create cache with custom TTL for reverse search
+    cache_dir = Path(cfg.output.cache) / "search"
+    cache = SearchCache(
+        cache_dir=cache_dir,
+        ttl_hours=cfg.tools.search.reverse.cache_ttl_days * 24,  # Convert days to hours
+    )
+
+    # Create PageFetcher
+    fetcher = PageFetcher(cfg, show_status=verbose)
+
+    # Create ReverseSearcher
+    reverse_config = cfg.tools.search.reverse
+    searcher = ReverseSearcher(reverse_config, search_backend, cache, fetcher)
+
+    if dry_run:
+        # Preview mode: generate queries but don't execute
+        console.print("[yellow]Dry run mode: Previewing query generation[/yellow]")
+        try:
+            queries = await searcher.query_generator.generate_initial_queries(
+                target_resources
+            )
+            console.print(
+                f"\n[green]Would generate {len(queries)} initial queries:[/green]"
+            )
+            for i, query in enumerate(queries, start=1):
+                console.print(f"  {i}. {query}")
+            console.print(f"\n[blue]Dry run complete. No queries executed.[/blue]")
+        except Exception as e:
+            console.print(f"[red]Query generation failed: {e}[/red]")
+            raise typer.Exit(1)
+    else:
+        # Execute reverse search
+        async with search_backend:
+            try:
+                session = await searcher.search(target_resources, verbose=verbose)
+
+                # Write output
+                _write_reverse_search_output(session, output_path)
+                console.print(f"\n[green]Results written to:[/green] {output_path}")
+
+                # Print summary
+                console.print(f"\n[bold]Summary:[/bold]")
+                console.print(f"  Total queries: {session.total_queries}")
+                console.print(
+                    f"  Found: {session.found_count} / {len(target_resources)} ({session.coverage_pct:.1f}%)"
+                )
+                console.print(f"  Stopping reason: {session.stopping_reason}")
+                console.print(f"  Total time: {session.total_time:.1f}s")
+
+            except Exception as e:
+                console.print(f"[red]Reverse search failed: {e}[/red]")
+                if verbose:
+                    import traceback
+
+                    console.print(traceback.format_exc())
+                raise typer.Exit(1)
+
+
+@app.command()
+def reverse_search(
+    known: Path = typer.Option(
+        ...,
+        "--known",
+        "-k",
+        help="Path to JSONL file with known resources (required: url; optional: pmid, hint fields)",
+    ),
+    backend: Optional[str] = typer.Option(
+        None,
+        "--backend",
+        "-b",
+        help="Search backend to use (overrides config). Options: pubmed, perplexica, openai_search",
+    ),
+    output: Optional[Path] = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Output JSONL file path (default: <known_file>_results.jsonl)",
+    ),
+    config_path: Optional[str] = typer.Option(
+        None,
+        "--config",
+        "-c",
+        help="Path to config file",
+    ),
+    mode: Optional[str] = typer.Option(
+        None,
+        "--mode",
+        "-m",
+        help="Configuration mode to use",
+    ),
+    overrides: Optional[List[str]] = typer.Option(
+        None,
+        "-O",
+        help="Config overrides in key=value format (e.g., -O tools.search.reverse.coverage_target=0.90)",
+    ),
+    verbose: bool = typer.Option(
+        False,
+        "--verbose",
+        "-v",
+        help="Show detailed progress and execution information",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Preview query generation without executing searches",
+    ),
+):
+    """
+    Reverse search: Generate queries to find known resources.
+
+    Given a JSONL file of known resources (PMIDs/URLs), generates and executes
+    search queries to locate those resources in literature databases, tracking
+    coverage until 95% found or 3 consecutive queries yield no new discoveries.
+
+    Example JSONL format:
+        {"pmid": "12345678", "url": "https://pubmed.ncbi.nlm.nih.gov/12345678/"}
+        {"url": "https://example.com/paper", "celltype": "langerhans cell", "marker": "CD1A"}
+
+    Examples:
+        # Basic usage with default backend (PubMed)
+        interaction-finder reverse-search --known resources.jsonl
+
+        # Use Perplexica backend with verbose output
+        interaction-finder reverse-search -k resources.jsonl -b perplexica -v
+
+        # Override coverage target via config override
+        interaction-finder reverse-search -k resources.jsonl -O tools.search.reverse.coverage_target=0.90
+
+        # Dry run to preview query generation
+        interaction-finder reverse-search -k resources.jsonl --dry-run -v
+
+        # Custom output file
+        interaction-finder reverse-search -k resources.jsonl -o results.jsonl
+    """
+    # Get effective options with global fallback
+    effective_config, effective_verbose, effective_overrides = (
+        get_options_with_fallback(config_path, verbose, overrides)
+    )
+
+    try:
+        # Load config
+        cfg = load_config(effective_config, mode, effective_overrides)
+
+        # Parse known resources from JSONL
+        try:
+            target_resources = _parse_known_resources_jsonl(known)
+            console.print(
+                f"[green]Loaded {len(target_resources)} target resources[/green]"
+            )
+        except Exception as e:
+            console.print(f"[red]Error parsing JSONL: {e}[/red]")
+            raise typer.Exit(1)
+
+        # Determine backend
+        backend_name = backend or cfg.tools.search.reverse.search_backend
+        console.print(f"[blue]Using backend:[/blue] {backend_name}")
+
+        # Determine output path
+        output_path = output or known.with_stem(known.stem + "_results").with_suffix(
+            ".jsonl"
+        )
+
+        # Run async reverse search
+        asyncio.run(
+            _run_reverse_search_command(
+                target_resources=target_resources,
+                backend_name=backend_name,
+                cfg=cfg,
+                output_path=output_path,
+                verbose=effective_verbose,
+                dry_run=dry_run,
+                console=console,
+            )
+        )
+
+    except Exception as e:
+        console.print(f"[red]Error:[/red] {e}")
+        if effective_verbose:
+            import traceback
+
+            console.print(traceback.format_exc())
+        raise typer.Exit(1)
+
+
 @app.command()
 def extract(
     term: Optional[str] = typer.Option(
