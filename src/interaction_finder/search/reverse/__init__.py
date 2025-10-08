@@ -14,6 +14,7 @@ Main exports:
     ReverseSearchError: Base error class and subclasses
     KeywordExtractor: Abstract interface for keyword extraction algorithms
     normalize_url: URL normalization for consistent matching
+    ResourceMatcher: Multi-strategy resource matching
 """
 
 from interaction_finder.search.reverse.models import (
@@ -35,6 +36,7 @@ from interaction_finder.search.reverse.keyword_extractors import (
     create_extractor,
 )
 from interaction_finder.search.reverse.utils import normalize_url, TRACKING_PARAMS
+from interaction_finder.search.reverse.matchers import ResourceMatcher
 
 __all__ = [
     "KnownResource",
@@ -53,4 +55,5 @@ __all__ = [
     "create_extractor",
     "normalize_url",
     "TRACKING_PARAMS",
+    "ResourceMatcher",
 ]

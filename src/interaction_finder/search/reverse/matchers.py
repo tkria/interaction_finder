@@ -1,0 +1,223 @@
+"""
+Resource matching logic for reverse search.
+
+This module implements multi-strategy resource matching to identify when search
+results correspond to known target resources. Strategies are tried in priority
+order: PMID exact match → URL normalized match → title similarity fallback.
+"""
+
+from typing import List, Set, Optional, Tuple
+
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+
+from .models import KnownResource, ResourceMatch, ReverseSearchConfig
+from .utils import normalize_url
+from interaction_finder.search.base import SearchResult, SearchResults
+
+
+class ResourceMatcher:
+    """
+    Matches search results to known resources using multiple strategies.
+
+    Strategies tried in order:
+    1. PMID exact match (confidence 1.0)
+    2. URL normalized match (confidence 1.0)
+    3. Title similarity (confidence = similarity score)
+
+    First successful match is returned for each result.
+    """
+
+    def __init__(self, config: ReverseSearchConfig):
+        """
+        Initialize resource matcher.
+
+        Parameters:
+            config: ReverseSearchConfig - Configuration including title similarity threshold
+        """
+        self.config = config
+        self.title_threshold = config.title_similarity_threshold
+
+    def match_results(
+        self,
+        search_results: SearchResults,
+        target_resources: Set[KnownResource],
+        query_index: int,
+    ) -> List[ResourceMatch]:
+        """
+        Match search results against target resources.
+
+        Parameters:
+            search_results: SearchResults - Results from search backend
+            target_resources: Set[KnownResource] - Target resources to match against
+            query_index: int - Index of query that produced these results
+
+        Returns:
+            List[ResourceMatch] - Successfully matched resources with match metadata
+
+        Note:
+            Each search result matches at most one target resource (first match wins).
+            Strategies are tried in priority order: PMID → URL → title similarity.
+        """
+        matches = []
+
+        for result in search_results.results:
+            matched_resource = None
+            match_method = None
+            confidence = 0.0
+            # Strategy 1: PMID exact match
+            matched_resource, match_method, confidence = self._try_pmid_match(
+                result, target_resources
+            )
+            # Strategy 2: URL exact match (normalized)
+            if not matched_resource:
+                matched_resource, match_method, confidence = self._try_url_match(
+                    result, target_resources
+                )
+            # Strategy 3: Title similarity (fallback)
+            if not matched_resource:
+                matched_resource, match_method, confidence = self._try_title_match(
+                    result, target_resources
+                )
+            # Record match if found
+            if matched_resource:
+                matches.append(
+                    ResourceMatch(
+                        resource=matched_resource,
+                        search_result=result,
+                        match_method=match_method,
+                        confidence=confidence,
+                        query_index=query_index,
+                    )
+                )
+
+        return matches
+
+    def _try_pmid_match(
+        self,
+        result: SearchResult,
+        target_resources: Set[KnownResource],
+    ) -> Tuple[Optional[KnownResource], Optional[str], float]:
+        """
+        Try matching by PMID exact match.
+
+        Returns:
+            (matched_resource, match_method, confidence) or (None, None, 0.0)
+        """
+        # Extract PMID from result metadata
+        result_pmid = result.metadata.get("pmid")
+        if not result_pmid:
+            return None, None, 0.0
+        # Normalize to string and strip whitespace
+        result_pmid = str(result_pmid).strip()
+        # Search for matching resource
+        for resource in target_resources:
+            if resource.pmid and resource.pmid.strip() == result_pmid:
+                return resource, "pmid", 1.0
+
+        return None, None, 0.0
+
+    def _try_url_match(
+        self,
+        result: SearchResult,
+        target_resources: Set[KnownResource],
+    ) -> Tuple[Optional[KnownResource], Optional[str], float]:
+        """
+        Try matching by URL (normalized).
+
+        Returns:
+            (matched_resource, match_method, confidence) or (None, None, 0.0)
+        """
+        # Normalize search result URL
+        normalized_result_url = normalize_url(result.url)
+        if not normalized_result_url:
+            return None, None, 0.0
+        # Search for matching resource
+        for resource in target_resources:
+            if resource.canonical_url == normalized_result_url:
+                return resource, "url", 1.0
+
+        return None, None, 0.0
+
+    def _try_title_match(
+        self,
+        result: SearchResult,
+        target_resources: Set[KnownResource],
+    ) -> Tuple[Optional[KnownResource], Optional[str], float]:
+        """
+        Try matching by title similarity (fallback).
+
+        Uses TF-IDF vectorization and cosine similarity.
+        Returns match if similarity >= threshold.
+
+        Returns:
+            (matched_resource, match_method, confidence) or (None, None, 0.0)
+        """
+        if not result.title or not result.title.strip():
+            return None, None, 0.0
+
+        result_title = result.title.strip()
+        best_match = None
+        best_similarity = 0.0
+        # Try matching against each resource
+        for resource in target_resources:
+            # Extract title from resource
+            resource_title = self._get_resource_title(resource)
+            if not resource_title:
+                continue
+            # Compute similarity
+            similarity = self._compute_title_similarity(result_title, resource_title)
+            # Update best match if above threshold
+            if similarity >= self.title_threshold and similarity > best_similarity:
+                best_match = resource
+                best_similarity = similarity
+
+        if best_match:
+            return best_match, "title_similarity", best_similarity
+
+        return None, None, 0.0
+
+    def _get_resource_title(self, resource: KnownResource) -> Optional[str]:
+        """
+        Get title for resource from metadata or hint fields.
+
+        Parameters:
+            resource: KnownResource - Resource to get title for
+
+        Returns:
+            Optional[str] - Title if available, None otherwise
+
+        Note:
+            Currently checks hint_fields['title']. In future, may fetch
+            metadata from PMID or URL if title not present.
+        """
+        # Check hint fields for title
+        title = resource.hint_fields.get("title")
+        if title:
+            return str(title).strip()
+        # TODO: In future, could fetch title from PMID or URL
+        # For now, return None if not in hint fields
+        return None
+
+    def _compute_title_similarity(self, title1: str, title2: str) -> float:
+        """
+        Compute cosine similarity between two titles using TF-IDF.
+
+        Parameters:
+            title1: str - First title
+            title2: str - Second title
+
+        Returns:
+            float - Cosine similarity score [0.0, 1.0]
+
+        Note:
+            Returns 0.0 if vectorization fails (e.g., no common words).
+        """
+        try:
+            vectorizer = TfidfVectorizer()
+            tfidf_matrix = vectorizer.fit_transform([title1, title2])
+            similarity = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:2])[0][0]
+            return float(similarity)
+        except (ValueError, IndexError):
+            # Vectorization failed (no features extracted)
+            return 0.0
