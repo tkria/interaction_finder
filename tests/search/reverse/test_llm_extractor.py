@@ -20,7 +20,7 @@ from interaction_finder.search.reverse.llm_models import LLMQueryResponse
 def mock_agent_response():
     """Create mock Pydantic AI agent response."""
     response = MagicMock()
-    response.data = LLMQueryResponse(
+    response.output = LLMQueryResponse(
         queries=[
             '"BRCA1"[Title] AND "breast cancer"[MeSH]',
             '"hereditary breast cancer" AND "genetic susceptibility"',
@@ -167,7 +167,7 @@ class TestLLMExtractorBackendSpecific:
         """Test that backend_specific=True generates PubMed field tags."""
         # Create mock agent that returns PubMed-style queries
         response = MagicMock()
-        response.data = LLMQueryResponse(
+        response.output = LLMQueryResponse(
             queries=['"BRCA1"[Title] AND "breast cancer"[MeSH]'],
             reasoning="Using PubMed field tags",
             backend_specific=True,
@@ -189,7 +189,7 @@ class TestLLMExtractorBackendSpecific:
         """Test that backend_specific=False generates natural language queries."""
         # Create mock agent that returns natural language queries
         response = MagicMock()
-        response.data = LLMQueryResponse(
+        response.output = LLMQueryResponse(
             queries=["BRCA1 breast cancer genetic susceptibility"],
             reasoning="Natural language query without field tags",
             backend_specific=False,
