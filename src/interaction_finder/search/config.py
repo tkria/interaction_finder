@@ -5,11 +5,8 @@ This module defines Pydantic models for configuring different search backends
 and query expansion strategies.
 """
 
-from typing import List, Dict, Any, Optional, Literal, TYPE_CHECKING
+from typing import List, Dict, Any, Optional, Literal
 from pydantic import BaseModel, Field, model_validator
-
-if TYPE_CHECKING:
-    from interaction_finder.search.reverse.models import ReverseSearchConfig
 
 
 class PubMedConfig(BaseModel):
@@ -251,12 +248,6 @@ class SearchConfig(BaseModel):
     expansion: QueryExpansionConfig = Field(default_factory=QueryExpansionConfig)
     cache: SearchCacheConfig = Field(default_factory=SearchCacheConfig)
 
-    # Reverse search
-    reverse: Optional[Any] = Field(
-        default=None,
-        description="Reverse search configuration (query generation for known resources)",
-    )
-
     # Global settings
     concurrent_backends: int = Field(
         2, description="Maximum number of backends to query concurrently", ge=1, le=5
@@ -267,20 +258,6 @@ class SearchConfig(BaseModel):
         ge=30,
         le=600,
     )
-
-    @model_validator(mode="after")
-    def ensure_reverse_config(self) -> "SearchConfig":
-        """Ensure reverse config is initialized with defaults if None."""
-        if self.reverse is None:
-            # Import here to avoid circular import
-            try:
-                from interaction_finder.search.reverse.models import ReverseSearchConfig
-
-                self.reverse = ReverseSearchConfig()
-            except ImportError:
-                # Reverse search module not available, leave as None
-                pass
-        return self
 
     def get_backend_config(self, backend_name: str) -> Dict[str, Any]:
         """Get configuration dictionary for a specific backend."""

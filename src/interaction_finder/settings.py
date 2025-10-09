@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Optional
 import tomli
 import shlex
 import os
@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 if TYPE_CHECKING:
     from .search.config import SearchConfig
+    from .search.reverse.models import ReverseSearchConfig
 
 
 def configure_logfire(verbose: bool = False) -> None:
@@ -198,10 +199,29 @@ class IfetcherConfig(BaseModel):
             description="Configuration for document search functionality",
         )
 
+        reverse_search: Optional["ReverseSearchConfig"] = Field(
+            default=None,
+            description="Configuration for reverse search (query generation for known resources)",
+        )
+
     tools: "Tools" = Field(
         default_factory=Tools,
         description="Configuration for external tools and services",
     )
+
+    @model_validator(mode="after")
+    def ensure_reverse_search_config(self) -> "IfetcherConfig":
+        """Ensure reverse_search config is initialized with defaults if None."""
+        if self.tools.reverse_search is None:
+            # Import here to avoid circular import
+            try:
+                from .search.reverse.models import ReverseSearchConfig
+
+                self.tools.reverse_search = ReverseSearchConfig()
+            except ImportError:
+                # Reverse search module not available, leave as None
+                pass
+        return self
 
     class Task(BaseModel):
         """Configuration for extraction task definition and parameters."""
@@ -668,6 +688,7 @@ class IfetcherConfig(BaseModel):
 def _rebuild_config_models():
     """Rebuild models after imports are available."""
     from .search.config import SearchConfig
+    from .search.reverse.models import ReverseSearchConfig
 
     IfetcherConfig.model_rebuild()
 

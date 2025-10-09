@@ -1,0 +1,35 @@
+# Example configuration for reverse search
+# Place this in config.toml or interaction_finder.toml
+
+[tools.reverse_search]
+# Stopping criteria
+coverage_target = 0.95          # Stop when 95% of resources found
+consecutive_zero_limit = 3      # Stop after 3 queries with no new finds
+max_queries = 100               # Hard limit on total queries
+
+# Query generation
+keyword_extractor = "yake"      # Options: "yake", "rake", "tfidf"
+keywords_per_query = 7          # Number of keywords per query
+use_hint_fields = true          # Include hint_fields in query generation
+batch_pmid_fetch_size = 200     # Batch size for PMID metadata fetching
+
+# Clustering (groups similar resources for efficient querying)
+enable_clustering = true        # Enable resource clustering
+min_cluster_size = 3            # Minimum resources per cluster
+target_clusters = 4             # Target number of clusters
+
+# Matching
+title_similarity_threshold = 0.8  # Min similarity for title matching (0.0-1.0)
+
+# Performance
+cache_ttl_days = 7              # Cache TTL for search results
+pmid_metadata_cache_days = 30   # Cache TTL for PMID metadata
+
+# Backend
+search_backend = "pubmed"       # Options: "pubmed", "perplexica", "openai_search"
+max_results_per_query = 100     # Max results per query
+
+# Override examples from CLI:
+#   -O tools.reverse_search.coverage_target=0.90
+#   -O tools.reverse_search.keyword_extractor=rake
+#   -O tools.reverse_search.max_queries=50

@@ -2298,14 +2298,14 @@ async def _run_reverse_search_command(
     cache_dir = Path(cfg.output.cache) / "search"
     cache = SearchCache(
         cache_dir=cache_dir,
-        ttl_hours=cfg.tools.search.reverse.cache_ttl_days * 24,  # Convert days to hours
+        ttl_hours=cfg.tools.reverse_search.cache_ttl_days * 24,  # Convert days to hours
     )
 
     # Create PageFetcher
     fetcher = PageFetcher(cfg, show_status=verbose)
 
     # Create ReverseSearcher
-    reverse_config = cfg.tools.search.reverse
+    reverse_config = cfg.tools.reverse_search
     searcher = ReverseSearcher(reverse_config, search_backend, cache, fetcher)
 
     if dry_run:
@@ -2387,7 +2387,7 @@ def reverse_search(
     overrides: Optional[List[str]] = typer.Option(
         None,
         "-O",
-        help="Config overrides in key=value format (e.g., -O tools.search.reverse.coverage_target=0.90)",
+        help="Config overrides in key=value format (e.g., -O tools.reverse_search.coverage_target=0.90)",
     ),
     verbose: bool = typer.Option(
         False,
@@ -2420,7 +2420,7 @@ def reverse_search(
         interaction-finder reverse-search -k resources.jsonl -b perplexica -v
 
         # Override coverage target via config override
-        interaction-finder reverse-search -k resources.jsonl -O tools.search.reverse.coverage_target=0.90
+        interaction-finder reverse-search -k resources.jsonl -O tools.reverse_search.coverage_target=0.90
 
         # Dry run to preview query generation
         interaction-finder reverse-search -k resources.jsonl --dry-run -v
@@ -2458,7 +2458,7 @@ def reverse_search(
             raise typer.Exit(1)
 
         # Determine backend
-        backend_name = backend or cfg.tools.search.reverse.search_backend
+        backend_name = backend or cfg.tools.reverse_search.search_backend
         console.print(f"[blue]Using backend:[/blue] {backend_name}")
 
         # Determine output path
