@@ -237,7 +237,7 @@ class LLMExtractor(KeywordExtractor):
         # Create agent with structured output
         agent = Agent(
             model=self.model,
-            result_type=LLMQueryResponse,
+            output_type=LLMQueryResponse,
             system_prompt=system_prompt,
         )
 
@@ -302,7 +302,7 @@ class LLMExtractor(KeywordExtractor):
         # Attempt LLM query generation with fallback to YAKE on any error
         try:
             response = await self._agent.run(user_prompt)
-            queries = response.data.queries[:top_n]
+            queries = response.output.queries[:top_n]
 
             if self.console:
                 self.console.print(
