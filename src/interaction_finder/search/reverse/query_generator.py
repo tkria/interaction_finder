@@ -89,8 +89,18 @@ class QueryGenerator:
         self.fetcher = fetcher
         self.http_client = http_client
         self.console = console
-        # Create keyword extractor
-        self.extractor = create_extractor(config.keyword_extractor)
+        # Create keyword extractor with LLM-specific config if needed
+        if config.keyword_extractor == "llm":
+            llm_config = config.llm_query_config
+            self.extractor = create_extractor(
+                "llm",
+                model=llm_config.get("model", "openai:gpt-4o-mini"),
+                temperature=llm_config.get("temperature", 0.7),
+                backend_specific=llm_config.get("backend_specific_syntax", True),
+                console=console,
+            )
+        else:
+            self.extractor = create_extractor(config.keyword_extractor)
 
     async def generate_initial_queries(
         self,
@@ -142,17 +152,39 @@ class QueryGenerator:
         # Log content sources if verbose logging is available
         self._log_content_sources(contents)
 
-        queries = []
-        for content in contents:
-            # Extract keywords
-            keywords = self.extractor.extract(
-                content.text, self.config.keywords_per_query
+        # Log LLM query generation if console available
+        if self.console and self.config.keyword_extractor == "llm":
+            llm_config = self.config.llm_query_config
+            self.console.print(
+                f"  [dim]Generating LLM queries (model: {llm_config.get('model', 'openai:gpt-4o-mini')})[/dim]"
             )
 
-            # Add hint fields if enabled
-            if self.config.use_hint_fields:
-                hint_terms = self._extract_hint_terms([content.resource])
-                keywords = hint_terms + keywords
+        queries = []
+        for content in contents:
+            # Extract keywords/queries (use async for LLM, sync for others)
+            if self.config.keyword_extractor == "llm" and hasattr(
+                self.extractor, "extract_async"
+            ):
+                # LLM extraction with hint fields
+                hint_fields = (
+                    content.resource.hint_fields
+                    if self.config.use_hint_fields
+                    else None
+                )
+                keywords = await self.extractor.extract_async(
+                    content.text,
+                    self.config.keywords_per_query,
+                    hint_fields=hint_fields,
+                )
+            else:
+                # Statistical extractors (sync)
+                keywords = self.extractor.extract(
+                    content.text, self.config.keywords_per_query
+                )
+                # Add hint fields if enabled (for statistical extractors only)
+                if self.config.use_hint_fields:
+                    hint_terms = self._extract_hint_terms([content.resource])
+                    keywords = hint_terms + keywords
 
             # Construct query
             query = self._construct_query(keywords)
@@ -220,26 +252,54 @@ class QueryGenerator:
             representative_idx = cluster_indices[np.argmin(distances)]
             representative_content = contents[representative_idx]
 
-            # Extract keywords from representative
-            keywords = self.extractor.extract(
-                representative_content.text, self.config.keywords_per_query
-            )
+            # Extract keywords/queries from representative (use async for LLM, sync for others)
+            if self.config.keyword_extractor == "llm" and hasattr(
+                self.extractor, "extract_async"
+            ):
+                # LLM extraction with hint fields from entire cluster
+                hint_fields = None
+                if self.config.use_hint_fields:
+                    # Aggregate hint fields from all cluster resources
+                    hint_fields = {}
+                    for resource in cluster_resources:
+                        for key, value in resource.hint_fields.items():
+                            if key not in hint_fields:
+                                hint_fields[key] = []
+                            if value and value not in hint_fields[key]:
+                                hint_fields[key].append(value)
+                    # Flatten lists to strings (first value for simplicity)
+                    hint_fields = {k: v[0] if v else "" for k, v in hint_fields.items()}
 
-            # Add hint fields from cluster resources
-            hint_terms = []
-            if self.config.use_hint_fields:
-                hint_terms = self._extract_hint_terms(cluster_resources)
-                keywords = hint_terms + keywords
+                keywords = await self.extractor.extract_async(
+                    representative_content.text,
+                    self.config.keywords_per_query,
+                    hint_fields=hint_fields,
+                )
+            else:
+                # Statistical extractors (sync)
+                keywords = self.extractor.extract(
+                    representative_content.text, self.config.keywords_per_query
+                )
+                # Add hint fields from cluster resources
+                hint_terms = []
+                if self.config.use_hint_fields:
+                    hint_terms = self._extract_hint_terms(cluster_resources)
+                    keywords = hint_terms + keywords
 
             # Log cluster details if console available
             if self.console:
                 self.console.print(
                     f"  [dim]Cluster {cluster_id + 1}: {len(cluster_resources)} resources[/dim]"
                 )
-                if hint_terms:
-                    self.console.print(
-                        f"    [dim]Hint terms: {', '.join(hint_terms[:3])}{'...' if len(hint_terms) > 3 else ''}[/dim]"
-                    )
+                # Log hint information if using statistical extractors
+                if (
+                    self.config.keyword_extractor != "llm"
+                    and self.config.use_hint_fields
+                ):
+                    if hint_terms:
+                        self.console.print(
+                            f"    [dim]Hint terms: {', '.join(hint_terms[:3])}{'...' if len(hint_terms) > 3 else ''}[/dim]"
+                        )
                 self.console.print(
                     f"    [dim]Keywords: {', '.join(keywords[:5])}{'...' if len(keywords) > 5 else ''}[/dim]"
                 )
@@ -447,10 +507,12 @@ class QueryGenerator:
         """
         Construct boolean query from keywords.
 
-        Uses OR logic for broad coverage.
+        Uses OR logic for broad coverage. Handles both LLM complete queries
+        (with field tags or boolean operators) and keyword lists from
+        statistical extractors.
 
         Parameters:
-            keywords: List[str] - Keywords to include
+            keywords: List[str] - Keywords to include (or complete queries from LLM)
 
         Returns:
             str - Query string
@@ -458,7 +520,12 @@ class QueryGenerator:
         if not keywords:
             return ""
 
-        # Quote keywords to handle multi-word terms
+        # If keywords look like complete queries (contain field tags or boolean ops), use first one
+        # LLM may return queries like: '"BRCA1"[Title] AND "breast cancer"[Abstract]'
+        if any("[" in kw or " AND " in kw or " OR " in kw for kw in keywords):
+            return keywords[0]  # LLM-generated complete query
+
+        # Otherwise, construct boolean OR query from keywords (statistical extractors)
         quoted_keywords = [f'"{kw}"' for kw in keywords if kw]
         return " OR ".join(quoted_keywords)
 
