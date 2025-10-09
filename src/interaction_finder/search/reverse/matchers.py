@@ -8,7 +8,7 @@ title similarity fallback.
 """
 
 import logging
-from typing import Any, Dict, List, Set, Optional, Tuple
+from typing import Any, Dict, List, Set, Optional, Tuple, TYPE_CHECKING
 
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
@@ -16,6 +16,9 @@ from sklearn.metrics.pairwise import cosine_similarity
 from .models import KnownResource, ResourceMatch, ReverseSearchConfig
 from .utils import normalize_url
 from interaction_finder.search.base import SearchResult, SearchResults
+
+if TYPE_CHECKING:
+    from .investigation_logger import InvestigationLogger
 
 logger = logging.getLogger(__name__)
 
@@ -33,17 +36,25 @@ class ResourceMatcher:
     First successful match is returned for each result.
     """
 
-    def __init__(self, config: ReverseSearchConfig, fetcher: Any):
+    def __init__(
+        self,
+        config: ReverseSearchConfig,
+        fetcher: Any,
+        investigation_logger: Optional["InvestigationLogger"] = None,
+    ):
         """
         Initialize resource matcher.
 
         Parameters:
             config: ReverseSearchConfig - Configuration including title similarity threshold
             fetcher: PageFetcher - For fetching DOIs when needed
+            investigation_logger: Optional[InvestigationLogger] - Logger for investigation tracking
         """
         self.config = config
         self.fetcher = fetcher
         self.title_threshold = config.title_similarity_threshold
+        self.inv_logger = investigation_logger
+        self.last_matching_details: List[Dict[str, Any]] = []
 
     async def match_results(
         self,
@@ -66,32 +77,85 @@ class ResourceMatcher:
             Each search result matches at most one target resource (first match wins).
             Strategies are tried in priority order: PMID → URL → DOI (conditional) → title.
             DOI fetching only occurs when title similarity ≥ threshold.
+            Detailed matching information is stored in self.last_matching_details.
         """
         matches = []
+        # Reset matching details for this batch
+        self.last_matching_details = []
 
         for result in search_results.results:
+            # Initialize match detail for this result
+            match_detail: Dict[str, Any] = {
+                "result_url": result.url,
+                "result_title": result.title or "",
+                "strategies_attempted": {},
+                "final_match": {},
+            }
             matched_resource = None
             match_method = None
             confidence = 0.0
             # Strategy 1: PMID exact match
-            matched_resource, match_method, confidence = self._try_pmid_match(
-                result, target_resources
+            pmid_match, pmid_method, pmid_confidence, pmid_detail = (
+                self._try_pmid_match_with_details(result, target_resources)
             )
-            # Strategy 2: URL exact match (normalized)
-            if not matched_resource:
-                matched_resource, match_method, confidence = self._try_url_match(
-                    result, target_resources
+            match_detail["strategies_attempted"]["pmid"] = pmid_detail
+            if pmid_match:
+                matched_resource = pmid_match
+                match_method = pmid_method
+                confidence = pmid_confidence
+                # PMID match found - skip other strategies
+                match_detail["strategies_attempted"]["url"] = {"attempted": False}
+                match_detail["strategies_attempted"]["doi"] = {"attempted": False}
+                match_detail["strategies_attempted"]["title"] = {"attempted": False}
+            else:
+                # Strategy 2: URL exact match (normalized)
+                url_match, url_method, url_confidence, url_detail = (
+                    self._try_url_match_with_details(result, target_resources)
                 )
-            # Strategy 3: DOI match (conditional)
-            if not matched_resource:
-                matched_resource, match_method, confidence = await self._try_doi_match(
-                    result, target_resources
-                )
-            # Strategy 4: Title similarity (fallback)
-            if not matched_resource:
-                matched_resource, match_method, confidence = self._try_title_match(
-                    result, target_resources
-                )
+                match_detail["strategies_attempted"]["url"] = url_detail
+                if url_match:
+                    matched_resource = url_match
+                    match_method = url_method
+                    confidence = url_confidence
+                    # URL match found - skip remaining strategies
+                    match_detail["strategies_attempted"]["doi"] = {"attempted": False}
+                    match_detail["strategies_attempted"]["title"] = {"attempted": False}
+                else:
+                    # Strategy 3: DOI match (conditional)
+                    (
+                        doi_match,
+                        doi_method,
+                        doi_confidence,
+                        doi_detail,
+                    ) = await self._try_doi_match_with_details(result, target_resources)
+                    match_detail["strategies_attempted"]["doi"] = doi_detail
+                    if doi_match:
+                        matched_resource = doi_match
+                        match_method = doi_method
+                        confidence = doi_confidence
+                        # DOI match found - skip title strategy
+                        match_detail["strategies_attempted"]["title"] = {
+                            "attempted": False
+                        }
+                    else:
+                        # Strategy 4: Title similarity (fallback)
+                        title_match, title_method, title_confidence, title_detail = (
+                            self._try_title_match_with_details(result, target_resources)
+                        )
+                        match_detail["strategies_attempted"]["title"] = title_detail
+                        if title_match:
+                            matched_resource = title_match
+                            match_method = title_method
+                            confidence = title_confidence
+            # Record final match result
+            match_detail["final_match"] = {
+                "matched": matched_resource is not None,
+                "resource_url": matched_resource.url if matched_resource else None,
+                "method": match_method,
+                "confidence": confidence,
+            }
+            # Store match detail
+            self.last_matching_details.append(match_detail)
             # Record match if found
             if matched_resource:
                 matches.append(
@@ -184,6 +248,40 @@ class ResourceMatcher:
 
         return None, None, 0.0
 
+    def _try_pmid_match_with_details(
+        self,
+        result: SearchResult,
+        target_resources: Set[KnownResource],
+    ) -> Tuple[Optional[KnownResource], Optional[str], float, Dict[str, Any]]:
+        """
+        Try matching by PMID exact match with detailed tracking.
+
+        Returns:
+            (matched_resource, match_method, confidence, detail_dict)
+        """
+        # Extract PMID from result metadata
+        result_pmid = self._extract_pmid_from_metadata(result.metadata)
+        if not result_pmid:
+            return None, None, 0.0, {"attempted": False}
+        # Search for matching resource
+        for resource in target_resources:
+            if resource.pmid and resource.pmid.strip() == result_pmid:
+                detail = {
+                    "attempted": True,
+                    "result_pmid": result_pmid,
+                    "matched_resource": resource.url,
+                    "confidence": 1.0,
+                }
+                return resource, "pmid", 1.0, detail
+        # PMID present but no match
+        detail = {
+            "attempted": True,
+            "result_pmid": result_pmid,
+            "matched_resource": None,
+            "confidence": 0.0,
+        }
+        return None, None, 0.0, detail
+
     def _try_url_match(
         self,
         result: SearchResult,
@@ -205,6 +303,44 @@ class ResourceMatcher:
                 return resource, "url", 1.0
 
         return None, None, 0.0
+
+    def _try_url_match_with_details(
+        self,
+        result: SearchResult,
+        target_resources: Set[KnownResource],
+    ) -> Tuple[Optional[KnownResource], Optional[str], float, Dict[str, Any]]:
+        """
+        Try matching by URL (normalized) with detailed tracking.
+
+        Returns:
+            (matched_resource, match_method, confidence, detail_dict)
+        """
+        # Normalize search result URL
+        normalized_result_url = normalize_url(result.url)
+        if not normalized_result_url:
+            return None, None, 0.0, {"attempted": False}
+        # Get sample of normalized target URLs (limit to 10 for log size)
+        normalized_target_urls = [r.canonical_url for r in target_resources][:10]
+        # Search for matching resource
+        for resource in target_resources:
+            if resource.canonical_url == normalized_result_url:
+                detail = {
+                    "attempted": True,
+                    "normalized_result_url": normalized_result_url,
+                    "normalized_target_urls": normalized_target_urls,
+                    "matched_resource": resource.url,
+                    "confidence": 1.0,
+                }
+                return resource, "url", 1.0, detail
+        # URL present but no match
+        detail = {
+            "attempted": True,
+            "normalized_result_url": normalized_result_url,
+            "normalized_target_urls": normalized_target_urls,
+            "matched_resource": None,
+            "confidence": 0.0,
+        }
+        return None, None, 0.0, detail
 
     async def _try_doi_match(
         self,
@@ -270,6 +406,90 @@ class ResourceMatcher:
 
         return None, None, 0.0
 
+    async def _try_doi_match_with_details(
+        self,
+        result: SearchResult,
+        target_resources: Set[KnownResource],
+    ) -> Tuple[Optional[KnownResource], Optional[str], float, Dict[str, Any]]:
+        """
+        Try matching by DOI (conditional on title similarity) with detailed tracking.
+
+        Returns:
+            (matched_resource, match_method, confidence, detail_dict)
+        """
+        # Phase 1: Check title similarity threshold
+        if not result.title or not result.title.strip():
+            return None, None, 0.0, {"attempted": False}
+        best_similarity = 0.0
+        for resource in target_resources:
+            resource_title = self._get_resource_title(resource)
+            if resource_title:
+                similarity = self._compute_title_similarity(
+                    result.title, resource_title
+                )
+                best_similarity = max(best_similarity, similarity)
+        # Check if title similarity meets threshold
+        title_threshold_met = best_similarity >= self.title_threshold
+        if not title_threshold_met:
+            detail = {
+                "attempted": False,
+                "title_similarity_threshold_met": False,
+            }
+            return None, None, 0.0, detail
+        # Phase 2: Fetch DOI
+        try:
+            result_doi = await self.fetcher.get_doi(result.url)
+        except Exception as e:
+            logger.warning(
+                "DOI fetch failed for %s: %s (will try title similarity)",
+                result.url,
+                str(e),
+            )
+            detail = {
+                "attempted": True,
+                "fetched_doi": None,
+                "title_similarity_threshold_met": True,
+                "matched_resource": None,
+                "confidence": 0.0,
+            }
+            return None, None, 0.0, detail
+        # If no DOI available
+        if result_doi is None:
+            detail = {
+                "attempted": True,
+                "fetched_doi": None,
+                "title_similarity_threshold_met": True,
+                "matched_resource": None,
+                "confidence": 0.0,
+            }
+            return None, None, 0.0, detail
+        # Normalize fetched DOI
+        normalized_result_doi = self._normalize_doi(result_doi)
+        # Phase 3: Compare DOI with target resources
+        for resource in target_resources:
+            if resource.url.startswith("https://doi.org/") or resource.url.startswith(
+                "http://dx.doi.org/"
+            ):
+                resource_doi = self._normalize_doi(resource.url)
+                if resource_doi == normalized_result_doi:
+                    detail = {
+                        "attempted": True,
+                        "fetched_doi": result_doi,
+                        "title_similarity_threshold_met": True,
+                        "matched_resource": resource.url,
+                        "confidence": 1.0,
+                    }
+                    return resource, "doi", 1.0, detail
+        # DOI fetched but no match
+        detail = {
+            "attempted": True,
+            "fetched_doi": result_doi,
+            "title_similarity_threshold_met": True,
+            "matched_resource": None,
+            "confidence": 0.0,
+        }
+        return None, None, 0.0, detail
+
     def _try_title_match(
         self,
         result: SearchResult,
@@ -307,6 +527,52 @@ class ResourceMatcher:
             return best_match, "title_similarity", best_similarity
 
         return None, None, 0.0
+
+    def _try_title_match_with_details(
+        self,
+        result: SearchResult,
+        target_resources: Set[KnownResource],
+    ) -> Tuple[Optional[KnownResource], Optional[str], float, Dict[str, Any]]:
+        """
+        Try matching by title similarity (fallback) with detailed tracking.
+
+        Returns:
+            (matched_resource, match_method, confidence, detail_dict)
+        """
+        if not result.title or not result.title.strip():
+            return None, None, 0.0, {"attempted": False}
+
+        result_title = result.title.strip()
+        best_match = None
+        best_similarity = 0.0
+        # Compute similarities for all resources with titles
+        similarities = []
+        for resource in target_resources:
+            resource_title = self._get_resource_title(resource)
+            if not resource_title:
+                continue
+            similarity = self._compute_title_similarity(result_title, resource_title)
+            similarities.append({"resource_url": resource.url, "score": similarity})
+            # Update best match if above threshold
+            if similarity >= self.title_threshold and similarity > best_similarity:
+                best_match = resource
+                best_similarity = similarity
+        # Sort by score descending and take top 5
+        similarities.sort(key=lambda x: x["score"], reverse=True)
+        top_similarities = similarities[:5]
+        # Build detail
+        detail = {
+            "attempted": True,
+            "similarities": top_similarities,
+            "best_score": best_similarity,
+            "threshold": self.title_threshold,
+            "matched_resource": best_match.url if best_match else None,
+            "confidence": best_similarity,
+        }
+        if best_match:
+            return best_match, "title_similarity", best_similarity, detail
+
+        return None, None, 0.0, detail
 
     def _get_resource_title(self, resource: KnownResource) -> Optional[str]:
         """
