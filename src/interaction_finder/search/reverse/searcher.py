@@ -10,7 +10,7 @@ Order: imports → ReverseSearcher class → helper methods
 """
 
 import time
-from typing import List, Set, Any
+from typing import List, Set, Any, Optional, TYPE_CHECKING
 
 from rich.console import Console
 from rich.progress import (
@@ -32,6 +32,9 @@ from .query_generator import QueryGenerator
 from .matchers import ResourceMatcher
 from interaction_finder.search.base import SearchBackend, SearchQuery, SearchResults
 from interaction_finder.search.cache import SearchCache
+
+if TYPE_CHECKING:
+    from .investigation_logger import InvestigationLogger
 
 
 class ReverseSearcher:
@@ -65,6 +68,7 @@ class ReverseSearcher:
         search_backend: SearchBackend,
         cache: SearchCache,
         fetcher: Any,
+        investigation_logger: Optional["InvestigationLogger"] = None,
     ):
         """
         Initialize reverse searcher.
@@ -74,11 +78,13 @@ class ReverseSearcher:
             search_backend: SearchBackend - Search backend for query execution
             cache: SearchCache - Cache for search results
             fetcher: PageFetcher - For content fetching in query generation
+            investigation_logger: Optional[InvestigationLogger] - Logger for investigation tracking
         """
         self.config = config
         self.backend = search_backend
         self.cache = cache
         self.fetcher = fetcher
+        self.inv_logger = investigation_logger
         # Console for progress display
         self.console = Console()
         # Initialize components (pass console for verbose logging)
@@ -112,7 +118,13 @@ class ReverseSearcher:
         matches = []
         unfound = set(target_resources)
         consecutive_zero_finds = 0
-
+        # Log session start
+        if self.inv_logger:
+            await self.inv_logger.log_session_start(
+                target_resources,
+                self.config,
+                self.backend.backend_name,
+            )
         # Phase 1: Generate initial queries (with content fetching if verbose)
         if verbose:
             self.console.print(
@@ -124,6 +136,14 @@ class ReverseSearcher:
                 target_resources
             )
         except Exception as e:
+            # Log error if logger available
+            if self.inv_logger:
+                await self.inv_logger.log_error(
+                    "query_generation",
+                    e,
+                    target_resources,
+                    "abort",
+                )
             raise ReverseSearchError(
                 f"Failed to generate initial queries: {e}",
                 context={"resource_count": len(target_resources)},
@@ -263,7 +283,7 @@ class ReverseSearcher:
                     f"[yellow]{len(unfound)} resources not found[/yellow]"
                 )
         # Build session result
-        return ReverseSearchSession(
+        session = ReverseSearchSession(
             target_resources=target_resources,
             query_results=query_results,
             matches=matches,
@@ -274,6 +294,11 @@ class ReverseSearcher:
             total_time=time.time() - start_time,
             stopping_reason=stopping_reason,
         )
+        # Log session end
+        if self.inv_logger:
+            await self.inv_logger.log_session_end(session)
+
+        return session
 
     def _should_stop(
         self,
