@@ -2262,6 +2262,7 @@ async def _run_reverse_search_command(
     verbose: bool,
     dry_run: bool,
     console: Console,
+    investigation_log: Optional[Path] = None,
 ) -> None:
     """
     Execute reverse search command asynchronously.
@@ -2274,6 +2275,7 @@ async def _run_reverse_search_command(
         verbose: bool - Show progress
         dry_run: bool - Preview only, don't execute
         console: Console - Rich console for output
+        investigation_log: Optional[Path] - Path to write investigation log
     """
     from interaction_finder.search.reverse import ReverseSearcher
     from interaction_finder.search.cache import SearchCache
@@ -2304,9 +2306,20 @@ async def _run_reverse_search_command(
     # Create PageFetcher
     fetcher = PageFetcher(cfg, show_status=verbose)
 
+    # Create investigation logger if requested
+    inv_logger = None
+    if investigation_log:
+        from interaction_finder.search.reverse.investigation_logger import (
+            InvestigationLogger,
+        )
+
+        inv_logger = InvestigationLogger(investigation_log)
+
     # Create ReverseSearcher
     reverse_config = cfg.tools.reverse_search
-    searcher = ReverseSearcher(reverse_config, search_backend, cache, fetcher)
+    searcher = ReverseSearcher(
+        reverse_config, search_backend, cache, fetcher, investigation_logger=inv_logger
+    )
 
     if dry_run:
         # Preview mode: generate queries but don't execute
@@ -2328,7 +2341,36 @@ async def _run_reverse_search_command(
         # Execute reverse search
         async with search_backend:
             try:
-                session = await searcher.search(target_resources, verbose=verbose)
+                # Wrap search execution with investigation logger lifecycle if enabled
+                if inv_logger:
+                    async with inv_logger:
+                        # Log session start
+                        try:
+                            await inv_logger.log_session_start(
+                                target_resources, reverse_config, backend_name
+                            )
+                        except Exception as e:
+                            if verbose:
+                                console.print(
+                                    f"[yellow]Warning: Investigation logging failed at session start: {e}[/yellow]"
+                                )
+
+                        # Execute search
+                        session = await searcher.search(
+                            target_resources, verbose=verbose
+                        )
+
+                        # Log session end
+                        try:
+                            await inv_logger.log_session_end(session)
+                        except Exception as e:
+                            if verbose:
+                                console.print(
+                                    f"[yellow]Warning: Investigation logging failed at session end: {e}[/yellow]"
+                                )
+                else:
+                    # Execute search without logging
+                    session = await searcher.search(target_resources, verbose=verbose)
 
                 # Write output
                 _write_reverse_search_output(session, output_path)
@@ -2400,6 +2442,11 @@ def reverse_search(
         "--dry-run",
         help="Preview query generation without executing searches",
     ),
+    investigation_log: Optional[Path] = typer.Option(
+        None,
+        "--investigation-log",
+        help="Path to write detailed investigation log (JSON Lines format)",
+    ),
 ):
     """
     Reverse search: Generate queries to find known resources.
@@ -2427,6 +2474,9 @@ def reverse_search(
 
         # Custom output file
         interaction-finder reverse-search -k resources.jsonl -o results.jsonl
+
+        # Enable investigation logging for detailed analysis
+        interaction-finder reverse-search -k resources.jsonl --investigation-log investigation.jsonl
     """
     # Get effective options with global fallback
     effective_config, effective_verbose, effective_overrides = (
@@ -2476,6 +2526,7 @@ def reverse_search(
                 verbose=effective_verbose,
                 dry_run=dry_run,
                 console=console,
+                investigation_log=investigation_log,
             )
         )
 
