@@ -79,11 +79,11 @@ class ReverseSearcher:
         self.backend = search_backend
         self.cache = cache
         self.fetcher = fetcher
-        # Initialize components
-        self.query_generator = QueryGenerator(config, fetcher)
-        self.matcher = ResourceMatcher(config, fetcher)
         # Console for progress display
         self.console = Console()
+        # Initialize components (pass console for verbose logging)
+        self.query_generator = QueryGenerator(config, fetcher, console=self.console)
+        self.matcher = ResourceMatcher(config, fetcher)
 
     async def search(
         self,
@@ -112,7 +112,32 @@ class ReverseSearcher:
         matches = []
         unfound = set(target_resources)
         consecutive_zero_finds = 0
-        # Setup progress display
+
+        # Phase 1: Generate initial queries (with content fetching if verbose)
+        if verbose:
+            self.console.print(
+                f"[blue]Phase 1:[/blue] Fetching content for {len(target_resources)} resources..."
+            )
+
+        try:
+            initial_queries = await self.query_generator.generate_initial_queries(
+                target_resources
+            )
+        except Exception as e:
+            raise ReverseSearchError(
+                f"Failed to generate initial queries: {e}",
+                context={"resource_count": len(target_resources)},
+            )
+
+        if verbose:
+            self.console.print(
+                f"[green]✓[/green] Generated {len(initial_queries)} initial queries"
+            )
+            self.console.print(
+                f"\n[blue]Phase 2:[/blue] Executing queries to find resources..."
+            )
+
+        # Setup progress display for query execution phase
         progress = None
         progress_task = None
         if verbose:
@@ -125,20 +150,8 @@ class ReverseSearcher:
             )
             progress.start()
             progress_task = progress.add_task(
-                f"Finding {len(target_resources)} resources...",
+                f"Finding resources via queries...",
                 total=len(target_resources),
-            )
-        # Phase 1: Generate initial queries
-        try:
-            initial_queries = await self.query_generator.generate_initial_queries(
-                target_resources
-            )
-        except Exception as e:
-            if progress:
-                progress.stop()
-            raise ReverseSearchError(
-                f"Failed to generate initial queries: {e}",
-                context={"resource_count": len(target_resources)},
             )
 
         query_index = 0
@@ -189,13 +202,16 @@ class ReverseSearcher:
                 consecutive_zero_finds += 1
             else:
                 consecutive_zero_finds = 0
-            # Update progress display
+            # Update progress display and log query info
             if verbose and progress and progress_task is not None:
                 found_count = len(target_resources) - len(unfound)
+                num_results = (
+                    len(search_results.results) if search_results.results else 0
+                )
                 progress.update(
                     progress_task,
                     completed=found_count,
-                    description=f"Query {query_index + 1}: Found {len(newly_found)} new ({coverage:.1%} coverage)",
+                    description=f"Query {query_index + 1}: {num_results} results, {len(newly_found)} new ({coverage:.1%} coverage)",
                 )
 
             query_index += 1

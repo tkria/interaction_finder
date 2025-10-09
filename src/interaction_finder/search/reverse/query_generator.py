@@ -74,6 +74,7 @@ class QueryGenerator:
         config: ReverseSearchConfig,
         fetcher: Optional[Any] = None,
         http_client: Optional[httpx.AsyncClient] = None,
+        console: Optional[Any] = None,
     ):
         """
         Initialize query generator.
@@ -82,10 +83,12 @@ class QueryGenerator:
             config: ReverseSearchConfig - Configuration
             fetcher: Optional[PageFetcher] - For content fetching (created if None)
             http_client: Optional[httpx.AsyncClient] - For PubMed API (created if None)
+            console: Optional[Console] - Rich console for verbose output
         """
         self.config = config
         self.fetcher = fetcher
         self.http_client = http_client
+        self.console = console
         # Create keyword extractor
         self.extractor = create_extractor(config.keyword_extractor)
 
@@ -136,6 +139,9 @@ class QueryGenerator:
         # Fetch content for all resources
         contents = await self._fetch_resource_contents(resources)
 
+        # Log content sources if verbose logging is available
+        self._log_content_sources(contents)
+
         queries = []
         for content in contents:
             # Extract keywords
@@ -174,6 +180,9 @@ class QueryGenerator:
 
         # Fetch content for all resources
         contents = await self._fetch_resource_contents(resources)
+
+        # Log content sources if verbose logging is available
+        self._log_content_sources(contents)
 
         # Compute embeddings
         model = SentenceTransformer("all-MiniLM-L6-v2")  # Fast, general-purpose
@@ -217,9 +226,23 @@ class QueryGenerator:
             )
 
             # Add hint fields from cluster resources
+            hint_terms = []
             if self.config.use_hint_fields:
                 hint_terms = self._extract_hint_terms(cluster_resources)
                 keywords = hint_terms + keywords
+
+            # Log cluster details if console available
+            if self.console:
+                self.console.print(
+                    f"  [dim]Cluster {cluster_id + 1}: {len(cluster_resources)} resources[/dim]"
+                )
+                if hint_terms:
+                    self.console.print(
+                        f"    [dim]Hint terms: {', '.join(hint_terms[:3])}{'...' if len(hint_terms) > 3 else ''}[/dim]"
+                    )
+                self.console.print(
+                    f"    [dim]Keywords: {', '.join(keywords[:5])}{'...' if len(keywords) > 5 else ''}[/dim]"
+                )
 
             # Construct query
             query = self._construct_query(keywords)
@@ -313,7 +336,8 @@ class QueryGenerator:
                 self.fetcher = PageFetcher(cfg, show_status=False)
 
             urls = [r.url for r in url_only_resources]
-            documents = await self.fetcher.fetch_documents(urls)
+            # Enable progress if fetcher supports it (during query generation phase)
+            documents = await self.fetcher.fetch_documents(urls, progress=True)
 
             for resource in url_only_resources:
                 doc = documents.get(resource.url)
@@ -437,3 +461,30 @@ class QueryGenerator:
         # Quote keywords to handle multi-word terms
         quoted_keywords = [f'"{kw}"' for kw in keywords if kw]
         return " OR ".join(quoted_keywords)
+
+    def _log_content_sources(self, contents: List[ResourceContent]) -> None:
+        """
+        Log content source breakdown for debugging/transparency.
+
+        Parameters:
+            contents: List[ResourceContent] - Fetched contents with sources
+        """
+        if not self.console:
+            return
+
+        # Count sources
+        source_counts = {"metadata": 0, "content": 0, "hint_fields": 0}
+        for content in contents:
+            source_counts[content.source] = source_counts.get(content.source, 0) + 1
+
+        # Display summary
+        parts = []
+        if source_counts["metadata"] > 0:
+            parts.append(f"{source_counts['metadata']} from PMID metadata")
+        if source_counts["content"] > 0:
+            parts.append(f"{source_counts['content']} from URL content")
+        if source_counts["hint_fields"] > 0:
+            parts.append(f"{source_counts['hint_fields']} from hint fields")
+
+        if parts:
+            self.console.print(f"  [dim]Content sources: {', '.join(parts)}[/dim]")

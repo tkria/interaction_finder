@@ -273,13 +273,13 @@ class SearchConfig(BaseModel):
         """Ensure reverse config is initialized with defaults if None."""
         if self.reverse is None:
             # Import here to avoid circular import
-            # Only initialize if reverse module is available
-            import sys
-
-            if "interaction_finder.search.reverse.models" in sys.modules:
+            try:
                 from interaction_finder.search.reverse.models import ReverseSearchConfig
 
                 self.reverse = ReverseSearchConfig()
+            except ImportError:
+                # Reverse search module not available, leave as None
+                pass
         return self
 
     def get_backend_config(self, backend_name: str) -> Dict[str, Any]:

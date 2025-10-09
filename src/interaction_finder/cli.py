@@ -2223,9 +2223,15 @@ def _write_reverse_search_output(
     with open(output_path, "w", encoding="utf-8") as f:
         # Write per-query results
         for result in session.query_results:
+            num_results = (
+                len(result.search_results.results)
+                if result.search_results.results
+                else 0
+            )
             query_entry = {
                 "query": result.query,
                 "query_index": result.query_index,
+                "num_results": num_results,
                 "resources_found": [r.canonical_url for r in result.resources_found],
                 "new_finds": result.new_finds,
                 "cumulative_coverage": result.cumulative_coverage,
@@ -2433,9 +2439,19 @@ def reverse_search(
 
         # Parse known resources from JSONL
         try:
-            target_resources = _parse_known_resources_jsonl(known)
+            all_resources = _parse_known_resources_jsonl(known)
+            # Count duplicates before deduplication
+            original_count = len(all_resources)
+            target_resources = list(dict.fromkeys(all_resources))
+
+            if len(target_resources) < original_count:
+                duplicates = original_count - len(target_resources)
+                console.print(
+                    f"[yellow]Note: Removed {duplicates} duplicate resource(s)[/yellow]"
+                )
+
             console.print(
-                f"[green]Loaded {len(target_resources)} target resources[/green]"
+                f"[green]Loaded {len(target_resources)} unique target resources[/green]"
             )
         except Exception as e:
             console.print(f"[red]Error parsing JSONL: {e}[/red]")
