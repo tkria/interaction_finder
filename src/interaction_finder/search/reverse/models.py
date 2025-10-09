@@ -242,9 +242,11 @@ class ReverseSearchConfig(BaseModel):
         max_queries: int - Hard limit on total queries (5-200)
 
     Query generation:
-        keyword_extractor: Literal - Algorithm for keyword extraction (yake/rake/tfidf)
+        keyword_extractor: Literal - Algorithm for keyword extraction (yake/rake/tfidf/llm)
         keywords_per_query: int - Number of keywords per query (3-15)
         use_hint_fields: bool - Include hint_fields in query generation
+        sort_by: Literal - Sort order for search results (relevance/date/date_desc)
+        llm_query_config: Dict[str, Any] - Configuration for LLM-based query generation
 
     Clustering:
         enable_clustering: bool - Whether to cluster resources before query generation
@@ -271,6 +273,12 @@ class ReverseSearchConfig(BaseModel):
         ...     keyword_extractor="yake",
         ...     keywords_per_query=7
         ... )
+        >>> # LLM-based query generation
+        >>> config_llm = ReverseSearchConfig(
+        ...     keyword_extractor="llm",
+        ...     sort_by="date_desc",
+        ...     llm_query_config={"model": "anthropic:claude-3-sonnet", "temperature": 0.5}
+        ... )
     """
 
     # Stopping criteria
@@ -285,7 +293,7 @@ class ReverseSearchConfig(BaseModel):
     )
 
     # Query generation
-    keyword_extractor: Literal["yake", "rake", "tfidf"] = Field(
+    keyword_extractor: Literal["yake", "rake", "tfidf", "llm"] = Field(
         "yake", description="Algorithm for keyword extraction"
     )
     keywords_per_query: int = Field(
@@ -293,6 +301,19 @@ class ReverseSearchConfig(BaseModel):
     )
     use_hint_fields: bool = Field(
         True, description="Include hint_fields in query generation"
+    )
+    sort_by: Literal["relevance", "date", "date_desc"] = Field(
+        "relevance", description="Sort order for search results"
+    )
+    llm_query_config: Dict[str, Any] = Field(
+        default_factory=lambda: {
+            "model": "openai:gpt-4o-mini",
+            "temperature": 0.7,
+            "max_queries_per_resource": 1,
+            "max_queries_per_cluster": 1,
+            "backend_specific_syntax": True,
+        },
+        description="Configuration for LLM-based query generation",
     )
 
     # Clustering

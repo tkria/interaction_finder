@@ -690,6 +690,8 @@ def _rebuild_config_models():
     from .search.config import SearchConfig
     from .search.reverse.models import ReverseSearchConfig
 
+    # Rebuild nested Tools class first, then IfetcherConfig
+    IfetcherConfig.Tools.model_rebuild()
     IfetcherConfig.model_rebuild()
 
 

@@ -12,7 +12,6 @@ Tests cover all acceptance criteria:
 8. Hash/equality operations for KnownResource
 """
 
-
 import pytest
 from pydantic import ValidationError
 
@@ -391,6 +390,14 @@ def test_reverse_search_config_defaults():
     assert config.keyword_extractor == "yake"
     assert config.keywords_per_query == 7
     assert config.use_hint_fields is True
+    assert config.sort_by == "relevance"
+    assert config.llm_query_config == {
+        "model": "openai:gpt-4o-mini",
+        "temperature": 0.7,
+        "max_queries_per_resource": 1,
+        "max_queries_per_cluster": 1,
+        "backend_specific_syntax": True,
+    }
     assert config.enable_clustering is True
     assert config.min_cluster_size == 3
     assert config.target_clusters == 4
@@ -498,7 +505,7 @@ def test_reverse_search_config_max_queries_bounds():
 def test_reverse_search_config_keyword_extractor_literal():
     """Test ReverseSearchConfig validates keyword_extractor is one of allowed values."""
     # Valid extractors
-    for extractor in ["yake", "rake", "tfidf"]:
+    for extractor in ["yake", "rake", "tfidf", "llm"]:
         config = ReverseSearchConfig(keyword_extractor=extractor)
         assert config.keyword_extractor == extractor
 
@@ -506,6 +513,87 @@ def test_reverse_search_config_keyword_extractor_literal():
     with pytest.raises(ValidationError) as exc_info:
         ReverseSearchConfig(keyword_extractor="invalid")
     assert "keyword_extractor" in str(exc_info.value).lower()
+
+
+def test_reverse_search_config_sort_by_literal():
+    """Test ReverseSearchConfig validates sort_by is one of allowed values."""
+    # Valid sort orders
+    for sort_by in ["relevance", "date", "date_desc"]:
+        config = ReverseSearchConfig(sort_by=sort_by)
+        assert config.sort_by == sort_by
+
+    # Invalid sort order
+    with pytest.raises(ValidationError) as exc_info:
+        ReverseSearchConfig(sort_by="invalid_sort")
+    assert "sort_by" in str(exc_info.value).lower()
+
+
+def test_reverse_search_config_llm_query_config_defaults():
+    """Test ReverseSearchConfig provides sensible defaults for llm_query_config."""
+    config = ReverseSearchConfig()
+    assert config.llm_query_config["model"] == "openai:gpt-4o-mini"
+    assert config.llm_query_config["temperature"] == 0.7
+    assert config.llm_query_config["max_queries_per_resource"] == 1
+    assert config.llm_query_config["max_queries_per_cluster"] == 1
+    assert config.llm_query_config["backend_specific_syntax"] is True
+
+
+def test_reverse_search_config_llm_query_config_custom():
+    """Test ReverseSearchConfig accepts custom llm_query_config values."""
+    custom_config = {
+        "model": "anthropic:claude-3-sonnet",
+        "temperature": 0.5,
+        "max_queries_per_resource": 2,
+        "max_queries_per_cluster": 3,
+        "backend_specific_syntax": False,
+        "additional_field": "custom_value",
+    }
+    config = ReverseSearchConfig(llm_query_config=custom_config)
+    assert config.llm_query_config == custom_config
+
+
+def test_reverse_search_config_llm_query_config_partial_override():
+    """Test ReverseSearchConfig allows partial override of llm_query_config."""
+    # Override only some fields, rest should use defaults
+    custom_config = {"model": "anthropic:claude-3-opus", "temperature": 0.3}
+    config = ReverseSearchConfig(llm_query_config=custom_config)
+    assert config.llm_query_config["model"] == "anthropic:claude-3-opus"
+    assert config.llm_query_config["temperature"] == 0.3
+    # Note: With dict override, only the provided fields are present
+    assert "max_queries_per_resource" not in config.llm_query_config
+
+
+def test_reverse_search_config_backward_compatibility():
+    """Test ReverseSearchConfig maintains backward compatibility with old configs."""
+    # Old config without new fields should still work
+    config = ReverseSearchConfig(
+        coverage_target=0.90,
+        keyword_extractor="yake",
+        keywords_per_query=5,
+    )
+    # New fields should have defaults
+    assert config.sort_by == "relevance"
+    assert config.llm_query_config["model"] == "openai:gpt-4o-mini"
+    # Old fields should work as before
+    assert config.coverage_target == 0.90
+    assert config.keyword_extractor == "yake"
+    assert config.keywords_per_query == 5
+
+
+def test_reverse_search_config_llm_extractor_with_custom_config():
+    """Test ReverseSearchConfig with llm extractor and custom llm_query_config."""
+    config = ReverseSearchConfig(
+        keyword_extractor="llm",
+        sort_by="date_desc",
+        llm_query_config={
+            "model": "anthropic:claude-3-sonnet",
+            "temperature": 0.5,
+        },
+    )
+    assert config.keyword_extractor == "llm"
+    assert config.sort_by == "date_desc"
+    assert config.llm_query_config["model"] == "anthropic:claude-3-sonnet"
+    assert config.llm_query_config["temperature"] == 0.5
 
 
 def test_reverse_search_config_keywords_per_query_bounds():
