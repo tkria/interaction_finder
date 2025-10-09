@@ -330,6 +330,7 @@ class ReverseSearcher:
         search_query = SearchQuery(
             query=query_text,
             max_results=self.config.max_results_per_query,
+            filters={"sort_by": self.config.sort_by},
         )
         # Check cache first
         cache_context = {"reverse_search": True}

@@ -8,9 +8,7 @@ and result parsing.
 
 import asyncio
 import xml.etree.ElementTree as ET
-from datetime import datetime
 from typing import Dict, Any, List, Optional
-from urllib.parse import urlencode, quote
 
 import httpx
 
@@ -86,6 +84,20 @@ class PubMedBackend(SearchBackend):
             params["email"] = self.email
         if self.api_key:
             params["api_key"] = self.api_key
+
+        # Add sort parameter if specified
+        if query.filters and "sort_by" in query.filters:
+            sort_by = query.filters["sort_by"]
+            # Map sort_by values to PubMed API parameters
+            sort_map = {
+                "relevance": "relevance",
+                "date": "pub_date",
+                "date_desc": "pub_date",
+            }
+            params["sort"] = sort_map.get(sort_by, "relevance")
+            # Add descending order for date_desc
+            if sort_by == "date_desc":
+                params["sort_order"] = "desc"
 
         # Add filters
         if query.filters:
