@@ -75,6 +75,7 @@ class QueryGenerator:
         fetcher: Optional[Any] = None,
         http_client: Optional[httpx.AsyncClient] = None,
         console: Optional[Any] = None,
+        investigation_logger: Optional[Any] = None,
     ):
         """
         Initialize query generator.
@@ -84,11 +85,13 @@ class QueryGenerator:
             fetcher: Optional[PageFetcher] - For content fetching (created if None)
             http_client: Optional[httpx.AsyncClient] - For PubMed API (created if None)
             console: Optional[Console] - Rich console for verbose output
+            investigation_logger: Optional[InvestigationLogger] - For logging query generation stages
         """
         self.config = config
         self.fetcher = fetcher
         self.http_client = http_client
         self.console = console
+        self.inv_logger = investigation_logger
         # Create keyword extractor with LLM-specific config if needed
         if config.keyword_extractor == "llm":
             llm_config = config.llm_query_config
@@ -149,6 +152,28 @@ class QueryGenerator:
         # Fetch content for all resources
         contents = await self._fetch_resource_contents(resources)
 
+        # Log content fetch if investigation logger is available
+        if self.inv_logger:
+            contents_dict = {
+                content.resource.url: {
+                    "source_type": content.source,
+                    "failed": False,
+                }
+                for content in contents
+            }
+            await self.inv_logger.log_content_fetch(resources, contents_dict)
+
+        # Log clustering disabled (individual mode)
+        if self.inv_logger:
+            await self.inv_logger.log_clustering(
+                enabled=False,
+                resources=resources,
+                clusters=None,
+                representatives=None,
+                embeddings=None,
+                centroids=None,
+            )
+
         # Log content sources if verbose logging is available
         self._log_content_sources(contents)
 
@@ -160,8 +185,10 @@ class QueryGenerator:
             )
 
         queries = []
+        query_index = 0
         for content in contents:
             # Extract keywords/queries (use async for LLM, sync for others)
+            hint_terms = []
             if self.config.keyword_extractor == "llm" and hasattr(
                 self.extractor, "extract_async"
             ):
@@ -188,6 +215,24 @@ class QueryGenerator:
 
             # Construct query
             query = self._construct_query(keywords)
+
+            # Log query generation if investigation logger is available
+            if self.inv_logger and query:
+                # Convert keywords to list of strings (handle tuples with scores)
+                keyword_list = [
+                    kw[0] if isinstance(kw, tuple) else kw for kw in keywords
+                ]
+                await self.inv_logger.log_query_generation(
+                    query_index=query_index,
+                    query_type="initial",
+                    extractor_type=self.config.keyword_extractor,
+                    keywords=keyword_list,
+                    final_query=query,
+                    cluster_id=None,
+                    resource_count=1,
+                )
+                query_index += 1
+
             if query:  # Only add non-empty queries
                 queries.append(query)
 
@@ -213,6 +258,17 @@ class QueryGenerator:
         # Fetch content for all resources
         contents = await self._fetch_resource_contents(resources)
 
+        # Log content fetch if investigation logger is available
+        if self.inv_logger:
+            contents_dict = {
+                content.resource.url: {
+                    "source_type": content.source,
+                    "failed": False,
+                }
+                for content in contents
+            }
+            await self.inv_logger.log_content_fetch(resources, contents_dict)
+
         # Log content sources if verbose logging is available
         self._log_content_sources(contents)
 
@@ -230,8 +286,37 @@ class QueryGenerator:
         kmeans = KMeans(n_clusters=n_clusters, random_state=42)
         labels = kmeans.fit_predict(embeddings)
 
+        # Build cluster assignments for logging
+        clusters = [
+            [i for i, label in enumerate(labels) if label == cid]
+            for cid in range(n_clusters)
+        ]
+        # Find representative for each cluster
+        representatives = []
+        for cluster_id in range(n_clusters):
+            cluster_indices = clusters[cluster_id]
+            if cluster_indices:
+                cluster_embeddings = embeddings[labels == cluster_id]
+                centroid = kmeans.cluster_centers_[cluster_id]
+                distances = np.linalg.norm(cluster_embeddings - centroid, axis=1)
+                representatives.append(cluster_indices[np.argmin(distances)])
+            else:
+                representatives.append(None)
+
+        # Log clustering if investigation logger is available
+        if self.inv_logger:
+            await self.inv_logger.log_clustering(
+                enabled=True,
+                resources=resources,
+                clusters=clusters,
+                representatives=representatives,
+                embeddings=embeddings,
+                centroids=kmeans.cluster_centers_,
+            )
+
         # Generate query for each cluster
         queries = []
+        query_index = 0
         # Use actual number of unique clusters (may be less than n_clusters if data is identical)
         unique_labels = set(labels)
         for cluster_id in unique_labels:
@@ -306,6 +391,24 @@ class QueryGenerator:
 
             # Construct query
             query = self._construct_query(keywords)
+
+            # Log query generation if investigation logger is available
+            if self.inv_logger and query:
+                # Convert keywords to list of strings (handle tuples with scores)
+                keyword_list = [
+                    kw[0] if isinstance(kw, tuple) else kw for kw in keywords
+                ]
+                await self.inv_logger.log_query_generation(
+                    query_index=query_index,
+                    query_type="initial",
+                    extractor_type=self.config.keyword_extractor,
+                    keywords=keyword_list,
+                    final_query=query,
+                    cluster_id=cluster_id,
+                    resource_count=len(cluster_resources),
+                )
+                query_index += 1
+
             if query:  # Only add non-empty queries
                 queries.append(query)
 
