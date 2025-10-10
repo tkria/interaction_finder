@@ -25,11 +25,16 @@ from interaction_finder.search.reverse.investigation_logger import (
     ContentFetchEntry,
     ErrorEntry,
     InvestigationLogger,
+    KeywordDetail,
+    MatchDetail,
     MatchingEntry,
     QueryGenerationEntry,
+    ResourceFetchDetail,
     SearchExecutionEntry,
+    SearchResultDetail,
     SessionEndEntry,
     SessionStartEntry,
+    _format_resource_ref,
 )
 from interaction_finder.search.reverse.models import (
     KnownResource,
@@ -618,3 +623,180 @@ async def test_session_end_entry(
     assert progression["query"] == "test query"
     assert progression["new_finds"] == 1
     assert progression["cumulative_coverage"] == 0.33
+
+
+# Tests for new models and helper function
+
+
+def test_format_resource_ref_with_pmid():
+    """Test _format_resource_ref with PMID."""
+    resource = KnownResource(
+        pmid="12345678", url="https://pubmed.ncbi.nlm.nih.gov/12345678/"
+    )
+    result = _format_resource_ref(resource)
+    assert result == "PMID:12345678"
+
+
+def test_format_resource_ref_without_pmid():
+    """Test _format_resource_ref without PMID."""
+    resource = KnownResource(url="https://example.com/paper1")
+    result = _format_resource_ref(resource)
+    assert result == "https://example.com/paper1"
+
+
+def test_resource_fetch_detail_validation():
+    """Test ResourceFetchDetail model validation."""
+    # Valid detail with all fields
+    detail = ResourceFetchDetail(
+        resource_id="PMID:12345678",
+        source="content",
+        title="Test paper title",
+        content_length=1500,
+        success=True,
+        error=None,
+    )
+    assert detail.resource_id == "PMID:12345678"
+    assert detail.source == "content"
+    assert detail.title == "Test paper title"
+    assert detail.content_length == 1500
+    assert detail.success is True
+    assert detail.error is None
+
+    # Valid detail with error
+    detail_with_error = ResourceFetchDetail(
+        resource_id="https://example.com/paper",
+        source="hint_fields",
+        title="Failed fetch",
+        content_length=0,
+        success=False,
+        error="Network timeout",
+    )
+    assert detail_with_error.success is False
+    assert detail_with_error.error == "Network timeout"
+
+    # Invalid source type
+    with pytest.raises(ValidationError):
+        ResourceFetchDetail(
+            resource_id="PMID:12345678",
+            source="invalid_source",  # Not in Literal options
+            title="Test",
+            content_length=100,
+            success=True,
+        )
+
+
+def test_keyword_detail_validation():
+    """Test KeywordDetail model validation."""
+    # With score (YAKE/RAKE/TF-IDF)
+    keyword_with_score = KeywordDetail(keyword="CD8", score=0.85)
+    assert keyword_with_score.keyword == "CD8"
+    assert keyword_with_score.score == 0.85
+
+    # Without score (LLM)
+    keyword_without_score = KeywordDetail(keyword="T cell", score=None)
+    assert keyword_without_score.keyword == "T cell"
+    assert keyword_without_score.score is None
+
+    # Score is optional by default
+    keyword_default = KeywordDetail(keyword="marker")
+    assert keyword_default.keyword == "marker"
+    assert keyword_default.score is None
+
+
+def test_search_result_detail_validation():
+    """Test SearchResultDetail model validation."""
+    detail = SearchResultDetail(
+        result_index=0,
+        resource_id="PMID:12345678",
+        title="CD8+ T cell markers in immune response",
+        url="https://pubmed.ncbi.nlm.nih.gov/12345678/",
+    )
+    assert detail.result_index == 0
+    assert detail.resource_id == "PMID:12345678"
+    assert detail.title == "CD8+ T cell markers in immune response"
+    assert detail.url == "https://pubmed.ncbi.nlm.nih.gov/12345678/"
+
+    # Required fields must be present
+    with pytest.raises(ValidationError):
+        SearchResultDetail(
+            result_index=0,
+            resource_id="PMID:12345678",
+            # title missing
+            url="https://example.com",
+        )
+
+
+def test_match_detail_validation():
+    """Test MatchDetail model validation."""
+    # Matched result
+    matched = MatchDetail(
+        result_index=0,
+        result_id="PMID:12345678",
+        matched=True,
+        matched_resource="PMID:12345678",
+        match_method="pmid",
+        confidence=1.0,
+    )
+    assert matched.result_index == 0
+    assert matched.result_id == "PMID:12345678"
+    assert matched.matched is True
+    assert matched.matched_resource == "PMID:12345678"
+    assert matched.match_method == "pmid"
+    assert matched.confidence == 1.0
+
+    # Unmatched result
+    unmatched = MatchDetail(
+        result_index=1,
+        result_id="https://example.com/paper",
+        matched=False,
+        matched_resource=None,
+        match_method=None,
+        confidence=0.0,
+    )
+    assert unmatched.matched is False
+    assert unmatched.matched_resource is None
+    assert unmatched.match_method is None
+    assert unmatched.confidence == 0.0
+
+    # Invalid confidence (must be 0.0-1.0)
+    # Note: Pydantic doesn't enforce this without explicit constraints
+    # If we add ge=0.0, le=1.0 to the Field, this would raise ValidationError
+    valid_confidence = MatchDetail(
+        result_index=0,
+        result_id="PMID:12345678",
+        matched=True,
+        confidence=0.75,
+    )
+    assert valid_confidence.confidence == 0.75
+
+
+def test_resource_fetch_detail_optional_fields():
+    """Test that error field is optional."""
+    detail = ResourceFetchDetail(
+        resource_id="PMID:12345678",
+        source="metadata",
+        title="Test",
+        content_length=500,
+        success=True,
+        # error not provided
+    )
+    assert detail.error is None
+
+
+def test_keyword_detail_optional_score():
+    """Test that score field is optional."""
+    keyword = KeywordDetail(keyword="test")
+    assert keyword.score is None
+
+
+def test_match_detail_optional_fields():
+    """Test that optional fields work correctly."""
+    # All optional fields None
+    detail = MatchDetail(
+        result_index=0,
+        result_id="PMID:12345678",
+        matched=False,
+        confidence=0.0,
+    )
+    assert detail.matched_resource is None
+    assert detail.match_method is None

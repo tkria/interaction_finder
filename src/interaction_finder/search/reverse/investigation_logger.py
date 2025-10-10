@@ -19,7 +19,6 @@ management via async context manager protocol.
 """
 
 import asyncio
-import json
 import traceback as tb
 from datetime import datetime, timezone
 from pathlib import Path
@@ -36,6 +35,79 @@ from interaction_finder.search.reverse.models import (
     ReverseSearchConfig,
     ReverseSearchSession,
 )
+
+
+# Helper function for compact resource ID formatting
+
+
+def _format_resource_ref(resource: KnownResource) -> str:
+    """
+    Format resource as compact identifier.
+
+    Uses PMID:X format (with prefix) if PMID available, otherwise raw URL (no prefix).
+    This compact format improves log readability while maintaining sufficient information
+    for analysis and cross-referencing.
+
+    Args:
+        resource: KnownResource to format
+
+    Returns:
+        Compact identifier string (PMID:X or URL)
+    """
+    return f"PMID:{resource.pmid}" if resource.pmid else resource.url
+
+
+# Detail models for structured per-item logging
+
+
+class ResourceFetchDetail(BaseModel):
+    """Per-resource content fetch details."""
+
+    resource_id: str = Field(
+        description="Compact identifier: PMID:X (with prefix) or raw URL (no prefix)"
+    )
+    source: Literal["metadata", "content", "hint_fields"] = Field(
+        description="Content source type"
+    )
+    title: str = Field(description="Title excerpt (first 100 chars)")
+    content_length: int = Field(description="Content length in characters")
+    success: bool = Field(description="Whether fetch succeeded")
+    error: Optional[str] = Field(None, description="Error message if failed")
+
+
+class KeywordDetail(BaseModel):
+    """Keyword with score from extractor."""
+
+    keyword: str = Field(description="Keyword text")
+    score: Optional[float] = Field(
+        None, description="Score from extractor (null for LLM)"
+    )
+
+
+class SearchResultDetail(BaseModel):
+    """Search result with position tracking."""
+
+    result_index: int = Field(description="0-based position in result list")
+    resource_id: str = Field(
+        description="Compact identifier: PMID:X (with prefix) or raw URL (no prefix)"
+    )
+    title: str = Field(description="Result title")
+    url: str = Field(description="Result URL")
+
+
+class MatchDetail(BaseModel):
+    """Match attempt for a single search result."""
+
+    result_index: int = Field(description="0-based position in search results")
+    result_id: str = Field(description="Compact result identifier")
+    matched: bool = Field(description="Whether a match was found")
+    matched_resource: Optional[str] = Field(
+        None, description="Compact ID of matched target resource"
+    )
+    match_method: Optional[str] = Field(
+        None, description="Method used (pmid/url/doi/title)"
+    )
+    confidence: float = Field(description="Match confidence (0.0-1.0)")
 
 
 # Base log entry model
@@ -76,21 +148,21 @@ class SessionStartEntry(InvestigationLogEntry):
     """
     Logged at session initialization.
 
-    Captures target resources, configuration, and backend selection for the
-    entire reverse search session.
+    Captures target resources (as compact IDs), configuration, and backend selection
+    for the entire reverse search session.
 
     Fields:
         stage: Literal["session_start"] - Always "session_start"
         target_count: int - Number of target resources to find
-        target_resources: List[Dict[str, Any]] - Serialized target resources
+        target_resources: List[str] - Compact target resource IDs
         config: Dict[str, Any] - Serialized reverse search configuration
         backend: str - Search backend name (e.g., "pubmed")
     """
 
     stage: Literal["session_start"] = "session_start"
     target_count: int = Field(description="Number of target resources to find")
-    target_resources: List[Dict[str, Any]] = Field(
-        description="Serialized target resources"
+    target_resources: List[str] = Field(
+        description="Compact target resource IDs: PMID:X (with prefix) or raw URL (no prefix)"
     )
     config: Dict[str, Any] = Field(
         description="Serialized reverse search configuration"
@@ -102,19 +174,19 @@ class ContentFetchEntry(InvestigationLogEntry):
     """
     Logged after fetching content for target resources.
 
-    Captures which resources had content fetched, content type distribution,
-    and any failures during fetching.
+    Captures per-resource fetch details including source type, title, content length,
+    success status, and any errors. Source counts and failed count provide summary.
 
     Fields:
         stage: Literal["content_fetch"] - Always "content_fetch"
-        resources: List[Dict[str, Any]] - Serialized resources processed
+        resources: List[ResourceFetchDetail] - Per-resource fetch details
         source_counts: Dict[str, int] - Distribution of content types
         failed_count: int - Number of resources that failed to fetch
     """
 
     stage: Literal["content_fetch"] = "content_fetch"
-    resources: List[Dict[str, Any]] = Field(
-        description="Serialized resources processed"
+    resources: List[ResourceFetchDetail] = Field(
+        description="Per-resource fetch details"
     )
     source_counts: Dict[str, int] = Field(description="Distribution of content types")
     failed_count: int = Field(description="Number of resources that failed to fetch")
@@ -146,36 +218,46 @@ class QueryGenerationEntry(InvestigationLogEntry):
     """
     Logged for each generated query.
 
-    Captures the query generation process including extractor type, keywords
-    extracted, and final query text.
+    Captures query generation including input resources, keywords with scores from
+    extractor, hint field terms, and cumulative coverage after this query.
 
     Fields:
         stage: Literal["query_generation"] - Always "query_generation"
         query_index: int - Sequential index of this query
         query_type: str - Query generation strategy (e.g., "cluster", "resource")
         extractor_type: str - Keyword extractor used (yake/rake/tfidf/llm)
-        keywords: List[str] - Keywords extracted for query
+        input_resources: List[str] - Compact resource IDs contributing to query
+        keywords: List[KeywordDetail] - Keywords with scores from extractor
+        hint_terms: List[str] - Terms extracted from hint fields
         final_query: str - Final query text sent to backend
         cluster_id: Optional[int] - Cluster ID if applicable
-        resource_count: int - Number of resources contributing to query
+        cumulative_coverage: float - Coverage achieved after this query (0.0-1.0)
     """
 
     stage: Literal["query_generation"] = "query_generation"
     query_index: int = Field(description="Sequential index of this query")
     query_type: str = Field(description="Query generation strategy")
     extractor_type: str = Field(description="Keyword extractor used")
-    keywords: List[str] = Field(description="Keywords extracted for query")
+    input_resources: List[str] = Field(
+        description="Compact resource IDs: PMID:X (with prefix) or raw URL (no prefix)"
+    )
+    keywords: List[KeywordDetail] = Field(
+        description="Keywords with scores from extractor"
+    )
+    hint_terms: List[str] = Field(description="Terms extracted from hint fields")
     final_query: str = Field(description="Final query text sent to backend")
     cluster_id: Optional[int] = Field(None, description="Cluster ID if applicable")
-    resource_count: int = Field(description="Number of resources contributing to query")
+    cumulative_coverage: float = Field(
+        description="Cumulative coverage after this query (0.0-1.0)", ge=0.0, le=1.0
+    )
 
 
 class SearchExecutionEntry(InvestigationLogEntry):
     """
     Logged after executing a search query.
 
-    Captures the search execution including query text, backend, caching,
-    results retrieved, and timing.
+    Captures search results with 0-based position indices, enabling analysis of
+    where targets were found in result lists.
 
     Fields:
         stage: Literal["search_execution"] - Always "search_execution"
@@ -183,7 +265,7 @@ class SearchExecutionEntry(InvestigationLogEntry):
         query_text: str - The query string executed
         backend: str - Search backend used
         cache_hit: bool - Whether results came from cache
-        results: List[Dict[str, Any]] - Serialized search results
+        results: List[SearchResultDetail] - Search results with positions
         result_count: int - Number of results returned
         search_time: float - Time taken for search in seconds
     """
@@ -193,7 +275,9 @@ class SearchExecutionEntry(InvestigationLogEntry):
     query_text: str = Field(description="The query string executed")
     backend: str = Field(description="Search backend used")
     cache_hit: bool = Field(description="Whether results came from cache")
-    results: List[Dict[str, Any]] = Field(description="Serialized search results")
+    results: List[SearchResultDetail] = Field(
+        description="Search results with positions"
+    )
     result_count: int = Field(description="Number of results returned")
     search_time: float = Field(description="Time taken for search in seconds")
 
@@ -202,15 +286,15 @@ class MatchingEntry(InvestigationLogEntry):
     """
     Logged after matching search results to target resources.
 
-    Captures the matching process including strategies attempted, matches found,
-    and coverage achieved.
+    Captures per-result match attempts with 0-based position indices, enabling
+    analysis of which results matched which targets.
 
     Fields:
         stage: Literal["matching"] - Always "matching"
         query_index: int - Sequential index of this query
         result_count: int - Number of results processed
         matches_found: int - Number of new matches found
-        match_details: List[Dict[str, Any]] - Details of each match
+        match_details: List[MatchDetail] - Per-result match details with positions
         strategies_attempted: List[str] - Matching strategies tried
         cumulative_coverage: float - Coverage achieved after this query (0.0-1.0)
     """
@@ -219,7 +303,9 @@ class MatchingEntry(InvestigationLogEntry):
     query_index: int = Field(description="Sequential index of this query")
     result_count: int = Field(description="Number of results processed")
     matches_found: int = Field(description="Number of new matches found")
-    match_details: List[Dict[str, Any]] = Field(description="Details of each match")
+    match_details: List[MatchDetail] = Field(
+        description="Per-result match details with position tracking"
+    )
     strategies_attempted: List[str] = Field(description="Matching strategies tried")
     cumulative_coverage: float = Field(
         description="Coverage achieved after this query", ge=0.0, le=1.0
@@ -230,15 +316,16 @@ class SessionEndEntry(InvestigationLogEntry):
     """
     Logged at session completion.
 
-    Captures final session statistics including total queries, coverage achieved,
-    unfound resources, stopping reason, and query progression.
+    Captures final session statistics including unfound resources (as compact IDs),
+    coverage, stopping reason, and query progression.
 
     Fields:
         stage: Literal["session_end"] - Always "session_end"
         total_queries: int - Total number of queries executed
         final_coverage: float - Final coverage achieved (0.0-1.0)
         found_count: int - Number of resources successfully found
-        unfound_resources: List[Dict[str, Any]] - Resources not found
+        unfound_count: int - Number of resources not found
+        unfound_resources: List[str] - Compact IDs of unfound resources
         stopping_reason: Literal - Why the session ended
         query_progression: List[Dict[str, Any]] - Coverage progression per query
     """
@@ -247,7 +334,10 @@ class SessionEndEntry(InvestigationLogEntry):
     total_queries: int = Field(description="Total number of queries executed")
     final_coverage: float = Field(description="Final coverage achieved", ge=0.0, le=1.0)
     found_count: int = Field(description="Number of resources successfully found")
-    unfound_resources: List[Dict[str, Any]] = Field(description="Resources not found")
+    unfound_count: int = Field(description="Number of resources not found")
+    unfound_resources: List[str] = Field(
+        description="Compact IDs of resources not found: PMID:X (with prefix) or raw URL (no prefix)"
+    )
     stopping_reason: Literal[
         "coverage_achieved", "consecutive_zero_finds", "max_queries"
     ] = Field(description="Why the session ended")
