@@ -13,8 +13,9 @@ Tests cover:
 
 import asyncio
 import json
+import re
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, List
 
 import pytest
 from pydantic import ValidationError
@@ -43,6 +44,42 @@ from interaction_finder.search.reverse.models import (
     ReverseSearchResult,
     ReverseSearchSession,
 )
+
+
+def parse_pretty_json_entries(content: str) -> List[Dict[str, Any]]:
+    """
+    Parse pretty-printed JSON entries from log content.
+
+    Each entry starts with { at the beginning of a line and ends with } at
+    the beginning of a line, with proper brace matching for nested structures.
+    """
+    entries = []
+    lines = content.split("\n")
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if line.strip() == "{":
+            # Start of new object
+            obj_lines = [line]
+            brace_count = 1
+            i += 1
+            while i < len(lines) and brace_count > 0:
+                line = lines[i]
+                obj_lines.append(line)
+                # Count braces carefully
+                for char in line:
+                    if char == "{":
+                        brace_count += 1
+                    elif char == "}":
+                        brace_count -= 1
+                i += 1
+            # Parse complete object
+            obj_text = "\n".join(obj_lines)
+            entry = json.loads(obj_text)
+            entries.append(entry)
+        else:
+            i += 1
+    return entries
 
 
 @pytest.fixture
@@ -144,9 +181,25 @@ async def test_session_lifecycle_logging(
 
         # Log content fetch
         contents = {
-            sample_resources[0].url: {"source_type": "pubmed", "failed": False},
-            sample_resources[1].url: {"source_type": "pdf", "failed": False},
-            sample_resources[2].url: {"source_type": "html", "failed": True},
+            sample_resources[0].url: {
+                "source": "metadata",
+                "title": "CD8+ T cell markers study",
+                "content_length": 1500,
+                "failed": False,
+            },
+            sample_resources[1].url: {
+                "source": "content",
+                "title": "B cell paper",
+                "content_length": 2000,
+                "failed": False,
+            },
+            sample_resources[2].url: {
+                "source": "hint_fields",
+                "title": "",
+                "content_length": 0,
+                "failed": True,
+                "error": "Network timeout",
+            },
         }
         await logger.log_content_fetch(sample_resources, contents)
 
@@ -213,12 +266,10 @@ async def test_session_lifecycle_logging(
         )
         await logger.log_session_end(session)
 
-    # Verify all entries present
-    lines = temp_log_file.read_text().strip().split("\n")
-    assert len(lines) == 6
-
-    # Parse and verify each entry
-    entries = [json.loads(line) for line in lines]
+    # Parse pretty-printed JSON entries
+    content = temp_log_file.read_text()
+    entries = parse_pretty_json_entries(content)
+    assert len(entries) == 6
 
     # Verify stages in order
     expected_stages = [
@@ -243,7 +294,7 @@ async def test_json_lines_format(
     sample_resources: list[KnownResource],
     sample_config: ReverseSearchConfig,
 ):
-    """Test JSON Lines format compliance."""
+    """Test JSON Lines format with pretty-printing."""
     async with InvestigationLogger(temp_log_file) as logger:
         # Write multiple entries
         await logger.log_session_start(sample_resources, sample_config, "pubmed")
@@ -265,13 +316,16 @@ async def test_json_lines_format(
             resource_count=2,
         )
 
-    # Read file line by line
-    lines = temp_log_file.read_text().strip().split("\n")
-    assert len(lines) == 3
+    # Read and parse pretty-printed JSON objects
+    content = temp_log_file.read_text()
+    # Verify pretty-printing is enabled
+    assert '  "stage"' in content  # 2-space indentation present
 
-    # Verify each line is valid JSON
-    for line in lines:
-        entry = json.loads(line)
+    # Parse JSON entries
+    entries = parse_pretty_json_entries(content)
+    assert len(entries) == 3
+    # Verify each entry has required fields
+    for entry in entries:
         assert "timestamp" in entry
         assert "stage" in entry
         assert "session_id" in entry
@@ -300,15 +354,13 @@ async def test_concurrent_writes(
         # Execute all concurrently
         await asyncio.gather(*tasks)
 
-    # Verify all entries present
-    lines = temp_log_file.read_text().strip().split("\n")
-    assert len(lines) == 20
+    # Parse pretty-printed JSON entries
+    content = temp_log_file.read_text()
+    entries = parse_pretty_json_entries(content)
+    assert len(entries) == 20
 
-    # Verify all lines are valid JSON
-    entries = []
-    for line in lines:
-        entry = json.loads(line)
-        entries.append(entry)
+    # Verify all entries are query_generation
+    for entry in entries:
         assert entry["stage"] == "query_generation"
 
     # Verify all query indices present (order may vary due to concurrency)
@@ -324,12 +376,13 @@ async def test_entry_models_validation():
         timestamp="2025-10-09T12:00:00+00:00",
         session_id="test-session-id",
         target_count=3,
-        target_resources=[{"url": "https://example.com", "pmid": None}],
+        target_resources=["PMID:12345678", "https://example.com/paper"],
         config={"coverage_target": 0.95},
         backend="pubmed",
     )
     assert valid_start.stage == "session_start"
     assert valid_start.target_count == 3
+    assert valid_start.target_resources[0] == "PMID:12345678"
 
     # Invalid SessionStartEntry - wrong type for target_count
     with pytest.raises(ValidationError):
@@ -349,13 +402,20 @@ async def test_entry_models_validation():
         query_index=0,
         query_type="cluster",
         extractor_type="yake",
-        keywords=["keyword1", "keyword2"],
+        input_resources=["PMID:12345678", "https://example.com/paper"],
+        keywords=[
+            KeywordDetail(keyword="keyword1", score=0.85),
+            KeywordDetail(keyword="keyword2", score=0.72),
+        ],
+        hint_terms=["hint1", "hint2"],
         final_query="keyword1 keyword2",
         cluster_id=1,
-        resource_count=5,
+        cumulative_coverage=0.5,
     )
     assert valid_query.stage == "query_generation"
-    assert valid_query.keywords == ["keyword1", "keyword2"]
+    assert len(valid_query.keywords) == 2
+    assert valid_query.keywords[0].keyword == "keyword1"
+    assert valid_query.keywords[0].score == 0.85
 
     # Valid SearchExecutionEntry
     valid_search = SearchExecutionEntry(
@@ -547,9 +607,25 @@ async def test_content_fetch_entry(
     """Test content fetch entry logging."""
     async with InvestigationLogger(temp_log_file) as logger:
         contents: Dict[str, Any] = {
-            sample_resources[0].url: {"source_type": "pubmed", "failed": False},
-            sample_resources[1].url: {"source_type": "pdf", "failed": False},
-            sample_resources[2].url: {"source_type": "html", "failed": True},
+            sample_resources[0].url: {
+                "source": "metadata",
+                "title": "CD8+ T cell markers study",
+                "content_length": 1500,
+                "failed": False,
+            },
+            sample_resources[1].url: {
+                "source": "content",
+                "title": "B cell paper",
+                "content_length": 2000,
+                "failed": False,
+            },
+            sample_resources[2].url: {
+                "source": "hint_fields",
+                "title": "",
+                "content_length": 0,
+                "failed": True,
+                "error": "Network timeout",
+            },
         }
         await logger.log_content_fetch(sample_resources, contents)
 
@@ -559,8 +635,16 @@ async def test_content_fetch_entry(
 
     assert entry["stage"] == "content_fetch"
     assert len(entry["resources"]) == 3
-    assert entry["source_counts"] == {"pubmed": 1, "pdf": 1}
+    assert entry["source_counts"] == {"metadata": 1, "content": 1}
     assert entry["failed_count"] == 1
+    # Verify per-resource details
+    assert entry["resources"][0]["resource_id"] == "PMID:12345678"
+    assert entry["resources"][0]["source"] == "metadata"
+    assert entry["resources"][0]["title"] == "CD8+ T cell markers study"
+    assert entry["resources"][0]["content_length"] == 1500
+    assert entry["resources"][0]["success"] is True
+    assert entry["resources"][2]["success"] is False
+    assert entry["resources"][2]["error"] == "Network timeout"
 
 
 @pytest.mark.asyncio

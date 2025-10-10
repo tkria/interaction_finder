@@ -429,14 +429,16 @@ class InvestigationLogger:
         """
         Write log entry as JSON Line with thread-safe locking.
 
-        Serializes entry to JSON, writes as single line, and flushes immediately
-        for incremental processing.
+        Serializes entry to JSON with 2-space indentation for readability,
+        writes entry with newlines, and flushes immediately for incremental
+        processing.
 
         Args:
             entry: Log entry to write
         """
         async with self._lock:
-            line = entry.model_dump_json() + "\n"
+            # Pretty-print with 2-space indent for readability
+            line = entry.model_dump_json(indent=2) + "\n"
             await self._file.write(line)
             await self._file.flush()
 
@@ -468,7 +470,7 @@ class InvestigationLogger:
             timestamp=self._now(),
             session_id=self.session_id,
             target_count=len(resources),
-            target_resources=[r.model_dump() for r in resources],
+            target_resources=[_format_resource_ref(r) for r in resources],
             config=config.model_dump(),
             backend=backend,
         )
@@ -484,24 +486,42 @@ class InvestigationLogger:
 
         Args:
             resources: Resources processed
-            contents: Content fetching results with source types
+            contents: Content fetching results with per-resource details
+                      Format: {url: {source, title, content_length, success, error, ...}}
         """
-        # Compute source counts from contents
+        # Build per-resource details
+        resource_details = []
         source_counts: Dict[str, int] = {}
         failed_count = 0
 
-        # Contents is a dict mapping resource URL -> content info
-        for resource_url, content_info in contents.items():
-            if content_info.get("failed", False):
-                failed_count += 1
+        for resource in resources:
+            content_info = contents.get(resource.url, {})
+            # Extract details
+            source = content_info.get("source", "unknown")
+            title = content_info.get("title", "")[:100]  # First 100 chars
+            content_length = content_info.get("content_length", 0)
+            success = not content_info.get("failed", False)
+            error = content_info.get("error")
+            # Create detail entry
+            detail = ResourceFetchDetail(
+                resource_id=_format_resource_ref(resource),
+                source=source,
+                title=title,
+                content_length=content_length,
+                success=success,
+                error=str(error) if error else None,
+            )
+            resource_details.append(detail)
+            # Update counts
+            if success:
+                source_counts[source] = source_counts.get(source, 0) + 1
             else:
-                source_type = content_info.get("source_type", "unknown")
-                source_counts[source_type] = source_counts.get(source_type, 0) + 1
+                failed_count += 1
 
         entry = ContentFetchEntry(
             timestamp=self._now(),
             session_id=self.session_id,
-            resources=[r.model_dump() for r in resources],
+            resources=resource_details,
             source_counts=source_counts,
             failed_count=failed_count,
         )
@@ -565,10 +585,13 @@ class InvestigationLogger:
         query_index: int,
         query_type: str,
         extractor_type: str,
-        keywords: List[str],
+        keywords: List[Any],  # Can be List[str] (old) or List[dict] (new)
         final_query: str,
         cluster_id: Optional[int] = None,
         resource_count: int = 1,
+        input_resources: Optional[List[str]] = None,
+        hint_terms: Optional[List[str]] = None,
+        cumulative_coverage: float = 0.0,
     ) -> None:
         """
         Log query generation.
@@ -577,21 +600,45 @@ class InvestigationLogger:
             query_index: Sequential query index
             query_type: Query generation strategy (e.g., "cluster", "resource")
             extractor_type: Keyword extractor used
-            keywords: Keywords extracted
+            keywords: Keywords extracted (List[str] for backward compat, or List[dict] with score)
             final_query: Final query text
             cluster_id: Cluster ID if applicable
             resource_count: Number of resources contributing to query
+            input_resources: Compact resource IDs contributing to query
+            hint_terms: Terms extracted from hint fields
+            cumulative_coverage: Coverage achieved after this query (0.0-1.0)
         """
+        # Handle backward compatibility: keywords might be List[str] or List[dict]
+        keyword_details = []
+        if keywords:
+            for kw in keywords:
+                if isinstance(kw, str):
+                    # Old format: just string
+                    keyword_details.append(KeywordDetail(keyword=kw, score=None))
+                elif isinstance(kw, dict):
+                    # New format: dict with keyword and score
+                    keyword_details.append(
+                        KeywordDetail(
+                            keyword=kw.get("keyword", str(kw)),
+                            score=kw.get("score"),
+                        )
+                    )
+                else:
+                    # Unknown format: convert to string
+                    keyword_details.append(KeywordDetail(keyword=str(kw), score=None))
+
         entry = QueryGenerationEntry(
             timestamp=self._now(),
             session_id=self.session_id,
             query_index=query_index,
             query_type=query_type,
             extractor_type=extractor_type,
-            keywords=keywords,
+            input_resources=input_resources or [],
+            keywords=keyword_details,
+            hint_terms=hint_terms or [],
             final_query=final_query,
             cluster_id=cluster_id,
-            resource_count=resource_count,
+            cumulative_coverage=cumulative_coverage,
         )
         await self._write_entry(entry)
 
@@ -613,6 +660,21 @@ class InvestigationLogger:
             cache_hit: Whether results came from cache
             results: Search results from backend
         """
+        # Build result details with indices
+        result_details = []
+        for result_index, result in enumerate(results.results):
+            # Extract compact resource ID from result
+            result_pmid = result.metadata.get("pmid") if result.metadata else None
+            result_id = f"PMID:{result_pmid}" if result_pmid else result.url
+
+            detail = SearchResultDetail(
+                result_index=result_index,
+                resource_id=result_id,
+                title=result.title or "",
+                url=result.url,
+            )
+            result_details.append(detail)
+
         entry = SearchExecutionEntry(
             timestamp=self._now(),
             session_id=self.session_id,
@@ -620,8 +682,8 @@ class InvestigationLogger:
             query_text=query_text,
             backend=backend,
             cache_hit=cache_hit,
-            results=[r.model_dump() for r in results.results],
-            result_count=len(results.results),
+            results=result_details,
+            result_count=len(result_details),
             search_time=results.search_time or 0.0,
         )
         await self._write_entry(entry)
@@ -643,18 +705,38 @@ class InvestigationLogger:
             results: Search results that were matched
             targets: Target resources to match against
             matches: Matches found
-            details: Matching details with strategies attempted
+            details: Matching details with match_details list (if provided by matcher)
             coverage: Cumulative coverage after matching
         """
-        match_details = [
-            {
-                "resource_url": m.resource.url,
-                "result_url": m.search_result.url,
-                "method": m.match_method,
-                "confidence": m.confidence,
-            }
-            for m in matches
-        ]
+        # Check if enhanced match_details provided by matcher (Task 03)
+        # If not, build from matches (backward compatibility)
+        if "match_details" in details and details["match_details"]:
+            match_details_list = details["match_details"]
+        else:
+            # Backward compatibility: build from matches
+            match_details_list = []
+            for m in matches:
+                # Extract compact IDs
+                result_pmid = (
+                    m.search_result.metadata.get("pmid")
+                    if m.search_result.metadata
+                    else None
+                )
+                result_id = (
+                    f"PMID:{result_pmid}" if result_pmid else m.search_result.url
+                )
+                matched_resource_id = _format_resource_ref(m.resource)
+
+                match_details_list.append(
+                    {
+                        "result_index": 0,  # Unknown without matcher providing it
+                        "result_id": result_id,
+                        "matched": True,
+                        "matched_resource": matched_resource_id,
+                        "match_method": m.match_method,
+                        "confidence": m.confidence,
+                    }
+                )
 
         strategies_attempted = details.get("strategies_attempted", [])
 
@@ -664,7 +746,7 @@ class InvestigationLogger:
             query_index=query_index,
             result_count=len(results.results),
             matches_found=len(matches),
-            match_details=match_details,
+            match_details=match_details_list,
             strategies_attempted=strategies_attempted,
             cumulative_coverage=coverage,
         )
@@ -688,13 +770,17 @@ class InvestigationLogger:
             for r in session.query_results
         ]
 
+        # Format unfound resources as compact IDs
+        unfound_ids = [_format_resource_ref(r) for r in session.unfound_resources]
+
         entry = SessionEndEntry(
             timestamp=self._now(),
             session_id=self.session_id,
             total_queries=session.total_queries,
             final_coverage=session.final_coverage,
             found_count=session.found_count,
-            unfound_resources=[r.model_dump() for r in session.unfound_resources],
+            unfound_count=len(session.unfound_resources),
+            unfound_resources=unfound_ids,
             stopping_reason=session.stopping_reason,
             query_progression=query_progression,
         )
