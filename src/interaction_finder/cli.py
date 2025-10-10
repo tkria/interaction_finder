@@ -2440,11 +2440,6 @@ def reverse_search(
         "--log",
         help="Path to write detailed investigation log (JSON Lines format)",
     ),
-    investigation_log: Optional[Path] = typer.Option(
-        None,
-        "--investigation-log",
-        help="DEPRECATED: Use --log instead. Path to write investigation log.",
-    ),
 ):
     """
     Reverse search: Generate queries to find known resources.
@@ -2476,19 +2471,10 @@ def reverse_search(
         # Enable investigation logging for detailed analysis
         interaction-finder reverse-search -k resources.jsonl --log investigation.jsonl
     """
-    # Handle flag precedence and deprecation
-    log_path = log or investigation_log
-
     # Get effective options with global fallback
     effective_config, effective_verbose, effective_overrides = (
         get_options_with_fallback(config_path, verbose, overrides)
     )
-
-    # Show deprecation warning only in verbose mode
-    if investigation_log and effective_verbose:
-        console.print(
-            "[yellow]Warning: --investigation-log is deprecated, use --log instead[/yellow]"
-        )
 
     try:
         # Load config
@@ -2533,7 +2519,7 @@ def reverse_search(
                 verbose=effective_verbose,
                 dry_run=dry_run,
                 console=console,
-                investigation_log=log_path,
+                investigation_log=log,
             )
         )
 

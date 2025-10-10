@@ -1,8 +1,8 @@
 """
 Tests for CLI integration with investigation logging.
 
-Verifies that --investigation-log flag works correctly with reverse-search command,
-including logger lifecycle management, error handling, and backward compatibility.
+Verifies that --log flag works correctly with reverse-search command,
+including logger lifecycle management and error handling.
 """
 
 import json
@@ -116,7 +116,7 @@ def test_cli_with_investigation_log(
     tmp_path,
     sample_session,
 ):
-    """Test CLI with --investigation-log flag (log file created and populated)."""
+    """Test CLI with --log flag (log file created and populated)."""
     # Mock InvestigationLogger
     mock_inv_logger = Mock()
     mock_inv_logger.__aenter__ = AsyncMock(return_value=mock_inv_logger)
@@ -147,7 +147,7 @@ def test_cli_with_investigation_log(
             str(temp_resources_file),
             "--output",
             str(output_path),
-            "--investigation-log",
+            "--log",
             str(investigation_log_path),
         ],
     )
@@ -210,7 +210,7 @@ def test_investigation_log_path_resolution(
             str(temp_resources_file),
             "--output",
             str(output_path),
-            "--investigation-log",
+            "--log",
             "investigation.jsonl",  # Relative path
         ],
     )
@@ -267,7 +267,7 @@ def test_investigation_log_error_handling(
             str(temp_resources_file),
             "--output",
             str(output_path),
-            "--investigation-log",
+            "--log",
             str(investigation_log_path),
             "-v",  # Verbose to see warning
         ],
@@ -294,7 +294,7 @@ def test_dry_run_with_investigation_log(
     temp_resources_file,
     tmp_path,
 ):
-    """Test that --dry-run and --investigation-log can coexist (though logging may be minimal)."""
+    """Test that --dry-run and --log can coexist (though logging may be minimal)."""
     # Mock query generator
     mock_generator = Mock()
     mock_generator.generate_initial_queries = AsyncMock(
@@ -318,7 +318,7 @@ def test_dry_run_with_investigation_log(
             "--known",
             str(temp_resources_file),
             "--dry-run",
-            "--investigation-log",
+            "--log",
             str(investigation_log_path),
         ],
     )
