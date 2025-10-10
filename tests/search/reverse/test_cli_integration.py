@@ -411,7 +411,7 @@ def test_reverse_search_execution(
 
     # Note: This may fail if config loading fails, but the structure is correct
     if result.exit_code == 0:
-        assert "Loaded 3 target resources" in result.stdout
+        assert "Loaded 3 unique target resources" in result.stdout
         assert "Results written to:" in result.stdout
         assert "Summary:" in result.stdout
 

@@ -18,7 +18,6 @@ import typer
 import click
 from rich.console import Console
 from rich.traceback import Traceback
-from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
@@ -41,21 +40,21 @@ except ImportError:
             pass
 
     logfire = _NoOpLogfire()
-from rich.table import Table
-from rich.panel import Panel
 
 from .settings import IfetcherConfig, configure_logfire
 from .fetcher import PageFetcher
 from .search import SearchQuery, SearchCache
+from .search.base import SearchResults
 from .search.backends import PubMedBackend, PerplexicaBackend, OpenAISearchBackend
 from .search.expansion import create_llm_expander, create_advanced_expander
-from .search.diversification import create_diversified_queries, DiversifiedQuery
+from .search.diversification import create_diversified_queries
 from .search.evaluation import (
     EvaluationRunner,
     EvaluationConfig,
     DEFAULT_BIOMEDICAL_QUERIES,
     DEFAULT_GENERAL_QUERIES,
 )
+from .search.reverse.models import KnownResource, ReverseSearchSession
 
 app = typer.Typer(
     name="interaction-finder",
@@ -68,9 +67,8 @@ console = Console()
 
 # Initialize configuration models after all imports
 # Import SearchConfig and make it available for forward references
-from .search.config import SearchConfig
-from . import settings
-import sys
+from .search.config import SearchConfig  # noqa: E402
+from . import settings  # noqa: E402
 
 # Make SearchConfig available for forward references in settings
 setattr(settings, "SearchConfig", SearchConfig)
@@ -99,7 +97,7 @@ GLOBAL_OPTIONS = GlobalOptions()
 
 # Global options that apply to all subcommands
 @app.callback()
-def main(
+def global_options(
     config: Optional[str] = GLOBAL_OPTIONS.config,
     verbose: bool = GLOBAL_OPTIONS.verbose,
     overrides: List[str] = GLOBAL_OPTIONS.overrides,
@@ -859,8 +857,6 @@ async def _apply_query_expansion(
             "min_expansion_terms": cfg.tools.search.expansion.min_expansion_terms,
             "min_confidence": cfg.tools.search.expansion.min_confidence,
         }
-        # Add LLM-specific context
-        expansion_context.update(llm_config)
         expansion_result = await expander.expand_query(query, expansion_context)
         search_query.expanded_terms = [
             term.term for term in expansion_result.expanded_terms
@@ -1097,10 +1093,8 @@ async def _perform_multi_query_search(
     max_results_per_query: int = 20,
     verbose: bool = False,
     cache: Optional[SearchCache] = None,
-) -> "SearchResults":
+) -> SearchResults:
     """Perform multi-query deep search using advanced expansion."""
-    from .search.base import SearchResults, SearchResult
-
     # Step 1: Get advanced expansion
     if not cfg.tools.search.expansion.enabled:
         # Fallback to single query if expansion disabled
@@ -1256,7 +1250,7 @@ async def _perform_review_informed_search(
     max_results_per_query: int = 20,
     verbose: bool = False,
     cache: Optional[SearchCache] = None,
-) -> "SearchResults":
+) -> SearchResults:
     """Perform review-informed search using review papers to guide query generation."""
     from .search.review_informed import create_review_informed_search
     from .fetcher import PageFetcher
@@ -1384,7 +1378,7 @@ async def _perform_pubmed_mesh_strategy(
     max_results: int = 100,
     verbose: bool = False,
     cache: Optional[SearchCache] = None,
-) -> "SearchResults":
+) -> SearchResults:
     """
     Perform PubMed MeSH strategy: LLM decomposition + MeSH expansion per component.
 
@@ -1395,10 +1389,9 @@ async def _perform_pubmed_mesh_strategy(
     4. Merge results with frequency tracking
     """
     from .search.backends.pubmed import PubMedBackend
-    from .search.base import SearchQuery, SearchResults
+    from .search.base import SearchQuery
     from pydantic import BaseModel, Field
     from pydantic_ai import Agent
-    from collections import Counter
 
     class QueryComponent(BaseModel):
         """A focused component of the original query."""
@@ -1544,7 +1537,7 @@ async def _perform_single_search(
     cfg: IfetcherConfig,
     cache: Optional[SearchCache] = None,
     verbose: bool = False,
-) -> "SearchResults":
+) -> SearchResults:
     """Perform a single search query (original behavior)."""
     backend_config = cfg.tools.search.get_backend_config(backend)
 
@@ -1754,7 +1747,7 @@ def _display_results_table(results, verbose: bool = False) -> None:
 
     # Show URLs if verbose
     if verbose:
-        console.print(f"\n[dim]URLs:[/dim]")
+        console.print("\n[dim]URLs:[/dim]")
         for i, result in enumerate(results.results, 1):
             console.print(f"  {i:2d}. {result.url}")
 
@@ -2123,11 +2116,11 @@ def print_dry_run_summary(
     # Show verbose hint if not in verbose mode
     if not verbose and urls:
         console.print(
-            f"\n[dim]Use --verbose to see URL list inside Input Source panel[/dim]"
+            "\n[dim]Use --verbose to see URL list inside Input Source panel[/dim]"
         )
 
 
-def _parse_known_resources_jsonl(jsonl_path: Path) -> List["KnownResource"]:
+def _parse_known_resources_jsonl(jsonl_path: Path) -> List[KnownResource]:
     """
     Parse JSONL file containing known resources.
 
@@ -2204,7 +2197,7 @@ def _parse_known_resources_jsonl(jsonl_path: Path) -> List["KnownResource"]:
 
 
 def _write_reverse_search_output(
-    session: "ReverseSearchSession",
+    session: ReverseSearchSession,
     output_path: Path,
 ) -> None:
     """
@@ -2255,7 +2248,7 @@ def _write_reverse_search_output(
 
 
 async def _run_reverse_search_command(
-    target_resources: List["KnownResource"],
+    target_resources: List[KnownResource],
     backend_name: str,
     cfg: IfetcherConfig,
     output_path: Path,
@@ -2333,7 +2326,7 @@ async def _run_reverse_search_command(
             )
             for i, query in enumerate(queries, start=1):
                 console.print(f"  {i}. {query}")
-            console.print(f"\n[blue]Dry run complete. No queries executed.[/blue]")
+            console.print("\n[blue]Dry run complete. No queries executed.[/blue]")
         except Exception as e:
             console.print(f"[red]Query generation failed: {e}[/red]")
             raise typer.Exit(1)
@@ -2377,7 +2370,7 @@ async def _run_reverse_search_command(
                 console.print(f"\n[green]Results written to:[/green] {output_path}")
 
                 # Print summary
-                console.print(f"\n[bold]Summary:[/bold]")
+                console.print("\n[bold]Summary:[/bold]")
                 console.print(f"  Total queries: {session.total_queries}")
                 console.print(
                     f"  Found: {session.found_count} / {len(target_resources)} ({session.coverage_pct:.1f}%)"
@@ -2442,10 +2435,15 @@ def reverse_search(
         "--dry-run",
         help="Preview query generation without executing searches",
     ),
+    log: Optional[Path] = typer.Option(
+        None,
+        "--log",
+        help="Path to write detailed investigation log (JSON Lines format)",
+    ),
     investigation_log: Optional[Path] = typer.Option(
         None,
         "--investigation-log",
-        help="Path to write detailed investigation log (JSON Lines format)",
+        help="DEPRECATED: Use --log instead. Path to write investigation log.",
     ),
 ):
     """
@@ -2476,12 +2474,21 @@ def reverse_search(
         interaction-finder reverse-search -k resources.jsonl -o results.jsonl
 
         # Enable investigation logging for detailed analysis
-        interaction-finder reverse-search -k resources.jsonl --investigation-log investigation.jsonl
+        interaction-finder reverse-search -k resources.jsonl --log investigation.jsonl
     """
+    # Handle flag precedence and deprecation
+    log_path = log or investigation_log
+
     # Get effective options with global fallback
     effective_config, effective_verbose, effective_overrides = (
         get_options_with_fallback(config_path, verbose, overrides)
     )
+
+    # Show deprecation warning only in verbose mode
+    if investigation_log and effective_verbose:
+        console.print(
+            "[yellow]Warning: --investigation-log is deprecated, use --log instead[/yellow]"
+        )
 
     try:
         # Load config
@@ -2526,7 +2533,7 @@ def reverse_search(
                 verbose=effective_verbose,
                 dry_run=dry_run,
                 console=console,
-                investigation_log=investigation_log,
+                investigation_log=log_path,
             )
         )
 
@@ -2650,7 +2657,7 @@ def extract(
     # Validate checkpoint is only used with V3
     if checkpoint and ver != 3:
         console.print(
-            f"[bold red]Error:[/bold red] --checkpoint is only supported with --ver 3"
+            "[bold red]Error:[/bold red] --checkpoint is only supported with --ver 3"
         )
         raise typer.Exit(1)
 
@@ -3085,15 +3092,15 @@ def _display_extraction_summary(result: Any):
         ]:  # Show top 3 error types
             if count > 1:
                 error_table.add_row(
-                    f"[red]•[/red]", f"{error_msg} [dim]({count} occurrences)[/dim]"
+                    "[red]•[/red]", f"{error_msg} [dim]({count} occurrences)[/dim]"
                 )
             else:
-                error_table.add_row(f"[red]•[/red]", error_msg)
+                error_table.add_row("[red]•[/red]", error_msg)
 
         if len(error_groups) > 3:
             total_remaining = sum(list(error_groups.values())[3:])
             error_table.add_row(
-                f"[red]•[/red]",
+                "[red]•[/red]",
                 f"[dim]... and {len(error_groups) - 3} more error types ({total_remaining} total)[/dim]",
             )
 
@@ -3461,8 +3468,8 @@ def config_validate(
         get_options_with_fallback(config, verbose, overrides)
     )
     try:
-        cfg = load_config(effective_config, mode, effective_overrides)
-        console.print(f"[green]✓ Configuration is valid[/green]")
+        load_config(effective_config, mode, effective_overrides)
+        console.print("[green]✓ Configuration is valid[/green]")
 
         # Show some basic info
         config_path = Path(config) if config else Path("config.toml")
@@ -3470,13 +3477,13 @@ def config_validate(
             console.print(f"[dim]Config file: {config_path}[/dim]")
             console.print(f"[dim]File size: {config_path.stat().st_size} bytes[/dim]")
         else:
-            console.print(f"[dim]Using default configuration[/dim]")
+            console.print("[dim]Using default configuration[/dim]")
 
         if mode:
             console.print(f"[dim]Mode: {mode}[/dim]")
 
     except Exception as e:
-        console.print(f"[red]✗ Configuration validation failed:[/red]")
+        console.print("[red]✗ Configuration validation failed:[/red]")
         console.print(f"[red]  {e}[/red]")
         raise typer.Exit(1)
 
@@ -3750,10 +3757,9 @@ def show_completion(
     shell: str = typer.Option("bash", help="Shell type: bash, zsh, fish"),
 ):
     """Show shell completion script for the current shell."""
-    import os
 
     # Set the completion environment variable and call the app
-    env_var = f"_INTERACTION_FINDER_COMPLETE"
+    env_var = "_INTERACTION_FINDER_COMPLETE"
     shell_source = f"{shell}_source"
 
     console.print(f"# Completion script for {shell}")

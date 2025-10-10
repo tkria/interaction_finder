@@ -407,24 +407,8 @@ class QueryGenerator:
             # For LLM, keywords list already constructed
             if self.config.keyword_extractor == "llm":
                 keywords = [kw["keyword"] for kw in keywords_with_scores]
-            # Log cluster details if console available
-            if self.console:
-                self.console.print(
-                    f"  [dim]Cluster {cluster_id + 1}: {len(cluster_resources)} resources[/dim]"
-                )
-                # Log hint information if using statistical extractors
-                if (
-                    self.config.keyword_extractor != "llm"
-                    and self.config.use_hint_fields
-                ):
-                    if hint_terms:
-                        self.console.print(
-                            f"    [dim]Hint terms: {', '.join(hint_terms[:3])}{'...' if len(hint_terms) > 3 else ''}[/dim]"
-                        )
-                self.console.print(
-                    f"    [dim]Keywords: {', '.join(keywords[:5])}{'...' if len(keywords) > 5 else ''}[/dim]"
-                )
-
+            # Cluster information logged to investigation log only (not console)
+            # Console remains focused on progress and status
             # Construct query
             query = self._construct_query(keywords)
 
