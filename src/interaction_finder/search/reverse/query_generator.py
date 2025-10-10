@@ -16,6 +16,7 @@ from dataclasses import dataclass
 
 from .models import KnownResource, ReverseSearchConfig
 from .keyword_extractors import create_extractor
+from .investigation_logger import _format_resource_ref
 
 
 # ==============================================================================
@@ -149,18 +150,11 @@ class QueryGenerator:
         Returns:
             List[str] - One query per resource
         """
-        # Fetch content for all resources
-        contents = await self._fetch_resource_contents(resources)
+        # Fetch content for all resources with enhanced details
+        contents, contents_dict = await self._fetch_resource_contents(resources)
 
         # Log content fetch if investigation logger is available
         if self.inv_logger:
-            contents_dict = {
-                content.resource.url: {
-                    "source_type": content.source,
-                    "failed": False,
-                }
-                for content in contents
-            }
             await self.inv_logger.log_content_fetch(resources, contents_dict)
 
         # Log clustering disabled (individual mode)
@@ -187,8 +181,12 @@ class QueryGenerator:
         queries = []
         query_index = 0
         for content in contents:
-            # Extract keywords/queries (use async for LLM, sync for others)
+            # Extract hint terms separately first (for statistical extractors)
             hint_terms = []
+            if self.config.use_hint_fields and self.config.keyword_extractor != "llm":
+                hint_terms = self._extract_hint_terms([content.resource])
+            # Extract keywords/queries (use async for LLM, sync for others)
+            keywords_with_scores = []
             if self.config.keyword_extractor == "llm" and hasattr(
                 self.extractor, "extract_async"
             ):
@@ -203,33 +201,54 @@ class QueryGenerator:
                     self.config.keywords_per_query,
                     hint_fields=hint_fields,
                 )
+                # LLM extractor returns strings, wrap with None scores for logging
+                keywords_with_scores = [
+                    {"keyword": kw, "score": None} for kw in keywords
+                ]
             else:
-                # Statistical extractors (sync)
-                keywords = self.extractor.extract(
+                # Statistical extractors (sync) - returns list or tuples with scores
+                keywords_raw = self.extractor.extract(
                     content.text, self.config.keywords_per_query
                 )
-                # Add hint fields if enabled (for statistical extractors only)
-                if self.config.use_hint_fields:
-                    hint_terms = self._extract_hint_terms([content.resource])
-                    keywords = hint_terms + keywords
-
+                # Convert to keyword/score dicts
+                for kw in keywords_raw:
+                    if isinstance(kw, tuple):
+                        # (keyword, score) or (score, keyword) depending on extractor
+                        # YAKE: (keyword, score), RAKE: (score, keyword)
+                        if self.config.keyword_extractor == "rake":
+                            keywords_with_scores.append(
+                                {"keyword": kw[1], "score": kw[0]}
+                            )
+                        else:
+                            keywords_with_scores.append(
+                                {"keyword": kw[0], "score": kw[1]}
+                            )
+                    else:
+                        # Plain string
+                        keywords_with_scores.append({"keyword": kw, "score": None})
+                # Build final keywords list for query construction (just strings)
+                keywords = [kw["keyword"] for kw in keywords_with_scores] + hint_terms
+            # For LLM, keywords list already constructed
+            if self.config.keyword_extractor == "llm":
+                keywords = [kw["keyword"] for kw in keywords_with_scores]
             # Construct query
             query = self._construct_query(keywords)
 
             # Log query generation if investigation logger is available
             if self.inv_logger and query:
-                # Convert keywords to list of strings (handle tuples with scores)
-                keyword_list = [
-                    kw[0] if isinstance(kw, tuple) else kw for kw in keywords
-                ]
+                # Format input resource ID
+                input_resources = [_format_resource_ref(content.resource)]
                 await self.inv_logger.log_query_generation(
                     query_index=query_index,
                     query_type="initial",
                     extractor_type=self.config.keyword_extractor,
-                    keywords=keyword_list,
+                    keywords=keywords_with_scores,
                     final_query=query,
                     cluster_id=None,
                     resource_count=1,
+                    input_resources=input_resources,
+                    hint_terms=hint_terms,
+                    cumulative_coverage=0.0,  # Will be updated by searcher
                 )
                 query_index += 1
 
@@ -255,18 +274,11 @@ class QueryGenerator:
         from sentence_transformers import SentenceTransformer
         from sklearn.cluster import KMeans
 
-        # Fetch content for all resources
-        contents = await self._fetch_resource_contents(resources)
+        # Fetch content for all resources with enhanced details
+        contents, contents_dict = await self._fetch_resource_contents(resources)
 
         # Log content fetch if investigation logger is available
         if self.inv_logger:
-            contents_dict = {
-                content.resource.url: {
-                    "source_type": content.source,
-                    "failed": False,
-                }
-                for content in contents
-            }
             await self.inv_logger.log_content_fetch(resources, contents_dict)
 
         # Log content sources if verbose logging is available
@@ -337,7 +349,12 @@ class QueryGenerator:
             representative_idx = cluster_indices[np.argmin(distances)]
             representative_content = contents[representative_idx]
 
+            # Extract hint terms separately first (for statistical extractors)
+            hint_terms = []
+            if self.config.use_hint_fields and self.config.keyword_extractor != "llm":
+                hint_terms = self._extract_hint_terms(cluster_resources)
             # Extract keywords/queries from representative (use async for LLM, sync for others)
+            keywords_with_scores = []
             if self.config.keyword_extractor == "llm" and hasattr(
                 self.extractor, "extract_async"
             ):
@@ -360,17 +377,36 @@ class QueryGenerator:
                     self.config.keywords_per_query,
                     hint_fields=hint_fields,
                 )
+                # LLM extractor returns strings, wrap with None scores for logging
+                keywords_with_scores = [
+                    {"keyword": kw, "score": None} for kw in keywords
+                ]
             else:
-                # Statistical extractors (sync)
-                keywords = self.extractor.extract(
+                # Statistical extractors (sync) - returns list or tuples with scores
+                keywords_raw = self.extractor.extract(
                     representative_content.text, self.config.keywords_per_query
                 )
-                # Add hint fields from cluster resources
-                hint_terms = []
-                if self.config.use_hint_fields:
-                    hint_terms = self._extract_hint_terms(cluster_resources)
-                    keywords = hint_terms + keywords
-
+                # Convert to keyword/score dicts
+                for kw in keywords_raw:
+                    if isinstance(kw, tuple):
+                        # (keyword, score) or (score, keyword) depending on extractor
+                        # YAKE: (keyword, score), RAKE: (score, keyword)
+                        if self.config.keyword_extractor == "rake":
+                            keywords_with_scores.append(
+                                {"keyword": kw[1], "score": kw[0]}
+                            )
+                        else:
+                            keywords_with_scores.append(
+                                {"keyword": kw[0], "score": kw[1]}
+                            )
+                    else:
+                        # Plain string
+                        keywords_with_scores.append({"keyword": kw, "score": None})
+                # Build final keywords list for query construction (just strings)
+                keywords = [kw["keyword"] for kw in keywords_with_scores] + hint_terms
+            # For LLM, keywords list already constructed
+            if self.config.keyword_extractor == "llm":
+                keywords = [kw["keyword"] for kw in keywords_with_scores]
             # Log cluster details if console available
             if self.console:
                 self.console.print(
@@ -394,18 +430,19 @@ class QueryGenerator:
 
             # Log query generation if investigation logger is available
             if self.inv_logger and query:
-                # Convert keywords to list of strings (handle tuples with scores)
-                keyword_list = [
-                    kw[0] if isinstance(kw, tuple) else kw for kw in keywords
-                ]
+                # Format input resource IDs
+                input_resources = [_format_resource_ref(r) for r in cluster_resources]
                 await self.inv_logger.log_query_generation(
                     query_index=query_index,
                     query_type="initial",
                     extractor_type=self.config.keyword_extractor,
-                    keywords=keyword_list,
+                    keywords=keywords_with_scores,
                     final_query=query,
                     cluster_id=cluster_id,
                     resource_count=len(cluster_resources),
+                    input_resources=input_resources,
+                    hint_terms=hint_terms,
+                    cumulative_coverage=0.0,  # Will be updated by searcher
                 )
                 query_index += 1
 
@@ -448,7 +485,7 @@ class QueryGenerator:
     async def _fetch_resource_contents(
         self,
         resources: List[KnownResource],
-    ) -> List[ResourceContent]:
+    ) -> tuple[List[ResourceContent], Dict[str, Any]]:
         """
         Fetch content for resources (metadata-first with content fallback).
 
@@ -456,9 +493,12 @@ class QueryGenerator:
             resources: List[KnownResource] - Resources to fetch content for
 
         Returns:
-            List[ResourceContent] - Content for each resource
+            Tuple of (List[ResourceContent], Dict[url, details]) - Content for each resource
+            and detailed fetch information for logging
         """
         contents = []
+        # Track per-resource details for enhanced logging
+        contents_dict: Dict[str, Any] = {}
 
         # Separate resources by type
         pmid_resources = [r for r in resources if r.pmid]
@@ -477,6 +517,7 @@ class QueryGenerator:
                     text = (
                         f"{metadata.get('title', '')}. {metadata.get('abstract', '')}"
                     )
+                    title = metadata.get("title", "")[:100]
                     contents.append(
                         ResourceContent(
                             resource=resource,
@@ -484,6 +525,14 @@ class QueryGenerator:
                             source="metadata",
                         )
                     )
+                    # Log enhanced details
+                    contents_dict[resource.url] = {
+                        "source": "metadata",
+                        "title": title,
+                        "content_length": len(text),
+                        "success": True,
+                        "error": None,
+                    }
                 else:
                     # Metadata fetch failed, fall back to content
                     url_only_resources.append(resource)
@@ -505,6 +554,8 @@ class QueryGenerator:
             for resource in url_only_resources:
                 doc = documents.get(resource.url)
                 if doc and doc.content_markdown:
+                    # Extract first line as title approximation
+                    title = doc.content_markdown.split("\n")[0].strip()[:100]
                     contents.append(
                         ResourceContent(
                             resource=resource,
@@ -512,9 +563,23 @@ class QueryGenerator:
                             source="content",
                         )
                     )
+                    # Log enhanced details
+                    contents_dict[resource.url] = {
+                        "source": "content",
+                        "title": title,
+                        "content_length": len(doc.content_markdown),
+                        "success": True,
+                        "error": None,
+                    }
                 else:
                     # Content fetch also failed, use hint fields as last resort
                     text = " ".join(str(v) for v in resource.hint_fields.values())
+                    # Use first hint field value as title approximation
+                    title = (
+                        list(resource.hint_fields.values())[0]
+                        if resource.hint_fields
+                        else ""
+                    )[:100]
                     contents.append(
                         ResourceContent(
                             resource=resource,
@@ -522,8 +587,16 @@ class QueryGenerator:
                             source="hint_fields",
                         )
                     )
+                    # Log enhanced details
+                    contents_dict[resource.url] = {
+                        "source": "hint_fields",
+                        "title": title,
+                        "content_length": len(text or "unknown"),
+                        "success": bool(text),
+                        "error": "No content sources available" if not text else None,
+                    }
 
-        return contents
+        return contents, contents_dict
 
     async def _fetch_pmid_metadata_batch(
         self,

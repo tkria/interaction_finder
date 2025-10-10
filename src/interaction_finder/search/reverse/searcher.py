@@ -87,9 +87,16 @@ class ReverseSearcher:
         self.inv_logger = investigation_logger
         # Console for progress display
         self.console = Console()
-        # Initialize components (pass console for verbose logging)
-        self.query_generator = QueryGenerator(config, fetcher, console=self.console)
-        self.matcher = ResourceMatcher(config, fetcher)
+        # Initialize components (pass console and investigation logger)
+        self.query_generator = QueryGenerator(
+            config,
+            fetcher,
+            console=self.console,
+            investigation_logger=investigation_logger,
+        )
+        self.matcher = ResourceMatcher(
+            config, fetcher, investigation_logger=investigation_logger
+        )
 
     async def search(
         self,
@@ -154,7 +161,7 @@ class ReverseSearcher:
                 f"[green]✓[/green] Generated {len(initial_queries)} initial queries"
             )
             self.console.print(
-                f"\n[blue]Phase 2:[/blue] Executing queries to find resources..."
+                "\n[blue]Phase 2:[/blue] Executing queries to find resources..."
             )
 
         # Setup progress display for query execution phase
@@ -170,7 +177,7 @@ class ReverseSearcher:
             )
             progress.start()
             progress_task = progress.add_task(
-                f"Finding resources via queries...",
+                "Finding resources via queries...",
                 total=len(target_resources),
             )
 
@@ -196,6 +203,15 @@ class ReverseSearcher:
                     )
                 query_index += 1
                 continue
+            # Log search execution if investigation logger is available
+            if self.inv_logger:
+                await self.inv_logger.log_search_execution(
+                    query_index=query_index,
+                    query_text=query_text,
+                    backend=self.backend.backend_name,
+                    cache_hit=getattr(search_results, "from_cache", False),
+                    results=search_results,
+                )
             # Match results to target resources
             new_matches = await self.matcher.match_results(
                 search_results, unfound, query_index

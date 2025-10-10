@@ -98,7 +98,7 @@ async def test_matching_details_tracked(
 ):
     """Matching details are tracked when logger provided."""
     # Create matcher with logger (logger itself not used in matcher)
-    matcher = ResourceMatcher(config, mock_fetcher, investigation_logger=Mock())
+    matcher = ResourceMatcher(config, mock_fetcher, investigation_logger=AsyncMock())
     # Create search results with mix of matches
     results = SearchResults(
         query=test_query,
@@ -146,7 +146,7 @@ async def test_matching_details_tracked(
 @pytest.mark.asyncio
 async def test_pmid_strategy_logged(config, mock_fetcher, sample_resources, test_query):
     """PMID strategy details are properly logged."""
-    matcher = ResourceMatcher(config, mock_fetcher, investigation_logger=Mock())
+    matcher = ResourceMatcher(config, mock_fetcher, investigation_logger=AsyncMock())
     results = SearchResults(
         query=test_query,
         results=[
@@ -181,7 +181,7 @@ async def test_pmid_strategy_logged(config, mock_fetcher, sample_resources, test
 @pytest.mark.asyncio
 async def test_url_strategy_logged(config, mock_fetcher, sample_resources, test_query):
     """URL strategy details are properly logged."""
-    matcher = ResourceMatcher(config, mock_fetcher, investigation_logger=Mock())
+    matcher = ResourceMatcher(config, mock_fetcher, investigation_logger=AsyncMock())
     # Result without PMID but matching URL
     results = SearchResults(
         query=test_query,
@@ -220,7 +220,7 @@ async def test_doi_strategy_logged(config, mock_fetcher, sample_resources, test_
     """DOI strategy details are properly logged."""
     # Mock DOI fetch to return matching DOI
     mock_fetcher.get_doi = AsyncMock(return_value="10.1234/test")
-    matcher = ResourceMatcher(config, mock_fetcher, investigation_logger=Mock())
+    matcher = ResourceMatcher(config, mock_fetcher, investigation_logger=AsyncMock())
     # Result without PMID or matching URL but with DOI
     results = SearchResults(
         query=test_query,
@@ -253,7 +253,7 @@ async def test_title_strategy_logged(
     config, mock_fetcher, sample_resources, test_query
 ):
     """Title strategy details are properly logged."""
-    matcher = ResourceMatcher(config, mock_fetcher, investigation_logger=Mock())
+    matcher = ResourceMatcher(config, mock_fetcher, investigation_logger=AsyncMock())
     # Result with similar title but no PMID/URL/DOI match
     results = SearchResults(
         query=test_query,
@@ -293,7 +293,7 @@ async def test_no_match_all_strategies_tried(
     config, mock_fetcher, sample_resources, test_query
 ):
     """All strategies attempted when no match found."""
-    matcher = ResourceMatcher(config, mock_fetcher, investigation_logger=Mock())
+    matcher = ResourceMatcher(config, mock_fetcher, investigation_logger=AsyncMock())
     # Result that doesn't match anything
     results = SearchResults(
         query=test_query,
@@ -363,7 +363,7 @@ async def test_matching_logging_integration_placeholder(
 ):
     """Placeholder for full matching entry logging (handled by ReverseSearcher)."""
     # This test shows what data is available for logging
-    matcher = ResourceMatcher(config, mock_fetcher, investigation_logger=Mock())
+    matcher = ResourceMatcher(config, mock_fetcher, investigation_logger=AsyncMock())
     results = SearchResults(
         query=test_query,
         results=[

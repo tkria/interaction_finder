@@ -16,6 +16,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 from .models import KnownResource, ResourceMatch, ReverseSearchConfig
 from .utils import normalize_url
 from interaction_finder.search.base import SearchResult, SearchResults
+from .investigation_logger import _format_resource_ref
 
 if TYPE_CHECKING:
     from .investigation_logger import InvestigationLogger
@@ -82,9 +83,14 @@ class ResourceMatcher:
         matches = []
         # Reset matching details for this batch
         self.last_matching_details = []
+        # Build enhanced match_details for investigation logging
+        enhanced_match_details = []
 
-        for result in search_results.results:
-            # Initialize match detail for this result
+        for result_index, result in enumerate(search_results.results):
+            # Extract compact result ID
+            result_pmid = self._extract_pmid_from_metadata(result.metadata)
+            result_id = f"PMID:{result_pmid}" if result_pmid else result.url
+            # Initialize match detail for this result (existing detailed tracking)
             match_detail: Dict[str, Any] = {
                 "result_url": result.url,
                 "result_title": result.title or "",
@@ -154,8 +160,20 @@ class ResourceMatcher:
                 "method": match_method,
                 "confidence": confidence,
             }
-            # Store match detail
+            # Store match detail (existing detailed tracking)
             self.last_matching_details.append(match_detail)
+            # Build enhanced match detail for investigation logging
+            enhanced_match_detail = {
+                "result_index": result_index,
+                "result_id": result_id,
+                "matched": matched_resource is not None,
+                "matched_resource": (
+                    _format_resource_ref(matched_resource) if matched_resource else None
+                ),
+                "match_method": match_method,
+                "confidence": confidence,
+            }
+            enhanced_match_details.append(enhanced_match_detail)
             # Record match if found
             if matched_resource:
                 matches.append(
@@ -167,6 +185,20 @@ class ResourceMatcher:
                         query_index=query_index,
                     )
                 )
+        # Calculate cumulative coverage
+        cumulative_coverage = (
+            len(matches) / len(target_resources) if target_resources else 0.0
+        )
+        # Log matching with enhanced details
+        if self.inv_logger:
+            await self.inv_logger.log_matching(
+                query_index=query_index,
+                results=search_results,
+                targets=list(target_resources),
+                matches=matches,
+                details={"match_details": enhanced_match_details},
+                coverage=cumulative_coverage,
+            )
 
         return matches
 

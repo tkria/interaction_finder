@@ -82,11 +82,24 @@ def clustering_config() -> ReverseSearchConfig:
 
 
 def read_log_entries(log_file: Path) -> List[Dict[str, Any]]:
-    """Parse JSON Lines log file into list of entries."""
+    """Parse JSON log file into list of entries (handles pretty-printed JSON)."""
     entries = []
     with open(log_file, "r") as f:
-        for line in f:
-            entries.append(json.loads(line))
+        content = f.read()
+    # Split by lines starting with '{' (new entries in pretty-printed format)
+    # Handle pretty-printed JSON by accumulating lines until we have a complete entry
+    current_entry = []
+    brace_depth = 0
+    for line in content.splitlines():
+        if line.strip():
+            current_entry.append(line)
+            # Track brace depth to know when entry is complete
+            brace_depth += line.count("{") - line.count("}")
+            if brace_depth == 0 and current_entry:
+                # Complete entry - parse it
+                entry_str = "\n".join(current_entry)
+                entries.append(json.loads(entry_str))
+                current_entry = []
     return entries
 
 
@@ -111,6 +124,25 @@ async def test_query_generator_without_logger(
         config=basic_config,
         fetcher=mock_fetcher,
         investigation_logger=None,  # No logger
+    )
+
+    # Mock _fetch_resource_contents to return correct tuple format
+    contents = [
+        ResourceContent(resource=r, text=f"Content for {r.url}", source="content")
+        for r in sample_resources
+    ]
+    contents_dict = {
+        r.url: {
+            "source": "content",
+            "title": f"Content for {r.url}",
+            "content_length": len(f"Content for {r.url}"),
+            "success": True,
+            "error": None,
+        }
+        for r in sample_resources
+    }
+    generator._fetch_resource_contents = AsyncMock(
+        return_value=(contents, contents_dict)
     )
 
     # Generate queries
@@ -145,32 +177,59 @@ async def test_content_fetch_logging(
         }
     )
 
-    # Mock HTTP client for PMID metadata fetching
-    mock_http = AsyncMock()
-    mock_http.get = AsyncMock(
-        return_value=Mock(
-            raise_for_status=Mock(),
-            json=Mock(
-                return_value={
-                    "result": {
-                        "12345678": {
-                            "title": "CD8 T cell study",
-                            "abstracttext": "Abstract about CD8 cells",
-                        }
-                    }
-                }
-            ),
-        )
-    )
-
     # Create logger
     async with InvestigationLogger(temp_log_file) as logger:
         # Create generator with logger
         generator = QueryGenerator(
             config=basic_config,
             fetcher=mock_fetcher,
-            http_client=mock_http,
             investigation_logger=logger,
+        )
+
+        # Mock _fetch_resource_contents to return correct tuple format
+        # 1 metadata source, 2 content sources
+        contents = [
+            ResourceContent(
+                resource=sample_resources[0],
+                text="CD8 T cell study. Abstract about CD8 cells",
+                source="metadata",
+            ),
+            ResourceContent(
+                resource=sample_resources[1],
+                text="Content for example.com paper",
+                source="content",
+            ),
+            ResourceContent(
+                resource=sample_resources[2],
+                text="Content for PMID 87654321",
+                source="content",
+            ),
+        ]
+        contents_dict = {
+            sample_resources[0].url: {
+                "source": "metadata",
+                "title": "CD8 T cell study",
+                "content_length": 43,
+                "success": True,
+                "error": None,
+            },
+            sample_resources[1].url: {
+                "source": "content",
+                "title": "Content for example.com paper",
+                "content_length": 30,
+                "success": True,
+                "error": None,
+            },
+            sample_resources[2].url: {
+                "source": "content",
+                "title": "Content for PMID 87654321",
+                "content_length": 26,
+                "success": True,
+                "error": None,
+            },
+        }
+        generator._fetch_resource_contents = AsyncMock(
+            return_value=(contents, contents_dict)
         )
 
         # Generate queries
@@ -244,6 +303,63 @@ async def test_clustering_enabled_logging(
             investigation_logger=logger,
         )
 
+        # Mock _fetch_resource_contents to return correct tuple format
+        contents = [
+            ResourceContent(
+                resource=cluster_resources[0],
+                text="CD8 positive T cells are cytotoxic lymphocytes that kill infected cells",
+                source="content",
+            ),
+            ResourceContent(
+                resource=cluster_resources[1],
+                text="CD4 positive T helper cells coordinate immune responses through cytokines",
+                source="content",
+            ),
+            ResourceContent(
+                resource=cluster_resources[2],
+                text="B lymphocytes produce antibodies and present antigens to T cells",
+                source="content",
+            ),
+            ResourceContent(
+                resource=cluster_resources[3],
+                text="Natural killer cells provide innate immunity against tumors and viruses",
+                source="content",
+            ),
+        ]
+        contents_dict = {
+            cluster_resources[0].url: {
+                "source": "content",
+                "title": "CD8 positive T cells are cytotoxic lymphocytes that kill infected cells",
+                "content_length": 73,
+                "success": True,
+                "error": None,
+            },
+            cluster_resources[1].url: {
+                "source": "content",
+                "title": "CD4 positive T helper cells coordinate immune responses through cytokines",
+                "content_length": 76,
+                "success": True,
+                "error": None,
+            },
+            cluster_resources[2].url: {
+                "source": "content",
+                "title": "B lymphocytes produce antibodies and present antigens to T cells",
+                "content_length": 66,
+                "success": True,
+                "error": None,
+            },
+            cluster_resources[3].url: {
+                "source": "content",
+                "title": "Natural killer cells provide innate immunity against tumors and viruses",
+                "content_length": 73,
+                "success": True,
+                "error": None,
+            },
+        }
+        generator._fetch_resource_contents = AsyncMock(
+            return_value=(contents, contents_dict)
+        )
+
         # Generate queries (should trigger clustering with 4 resources)
         await generator.generate_initial_queries(cluster_resources)
 
@@ -293,6 +409,25 @@ async def test_clustering_disabled_logging(
             investigation_logger=logger,
         )
 
+        # Mock _fetch_resource_contents to return correct tuple format
+        contents = [
+            ResourceContent(resource=r, text=f"Content for {r.url}", source="content")
+            for r in sample_resources
+        ]
+        contents_dict = {
+            r.url: {
+                "source": "content",
+                "title": f"Content for {r.url}",
+                "content_length": len(f"Content for {r.url}"),
+                "success": True,
+                "error": None,
+            }
+            for r in sample_resources
+        }
+        generator._fetch_resource_contents = AsyncMock(
+            return_value=(contents, contents_dict)
+        )
+
         # Generate queries
         await generator.generate_initial_queries(sample_resources)
 
@@ -334,6 +469,29 @@ async def test_query_generation_logging_yake(
             investigation_logger=logger,
         )
 
+        # Mock _fetch_resource_contents to return correct tuple format
+        contents = [
+            ResourceContent(
+                resource=r,
+                text=f"Content about cells and markers for {r.url}",
+                source="content",
+            )
+            for r in sample_resources
+        ]
+        contents_dict = {
+            r.url: {
+                "source": "content",
+                "title": f"Content about cells and markers for {r.url}",
+                "content_length": len(f"Content about cells and markers for {r.url}"),
+                "success": True,
+                "error": None,
+            }
+            for r in sample_resources
+        }
+        generator._fetch_resource_contents = AsyncMock(
+            return_value=(contents, contents_dict)
+        )
+
         # Generate queries
         queries = await generator.generate_initial_queries(sample_resources)
 
@@ -358,7 +516,7 @@ async def test_query_generation_logging_yake(
         assert len(entry["final_query"]) > 0
         # Individual mode: no cluster_id
         assert entry["cluster_id"] is None
-        assert entry["resource_count"] == 1
+        assert len(entry["input_resources"]) == 1
 
 
 @pytest.mark.asyncio
@@ -396,6 +554,25 @@ async def test_query_generation_logging_llm(
             config=llm_config,
             fetcher=mock_fetcher,
             investigation_logger=logger,
+        )
+
+        # Mock _fetch_resource_contents to return correct tuple format
+        contents = [
+            ResourceContent(resource=r, text=f"Content for {r.url}", source="content")
+            for r in sample_resources
+        ]
+        contents_dict = {
+            r.url: {
+                "source": "content",
+                "title": f"Content for {r.url}",
+                "content_length": len(f"Content for {r.url}"),
+                "success": True,
+                "error": None,
+            }
+            for r in sample_resources
+        }
+        generator._fetch_resource_contents = AsyncMock(
+            return_value=(contents, contents_dict)
         )
 
         # Mock the LLM extractor to avoid API calls
@@ -444,6 +621,25 @@ async def test_query_index_increments(
             config=basic_config,
             fetcher=mock_fetcher,
             investigation_logger=logger,
+        )
+
+        # Mock _fetch_resource_contents to return correct tuple format
+        contents = [
+            ResourceContent(resource=r, text=f"Content for {r.url}", source="content")
+            for r in sample_resources
+        ]
+        contents_dict = {
+            r.url: {
+                "source": "content",
+                "title": f"Content for {r.url}",
+                "content_length": len(f"Content for {r.url}"),
+                "success": True,
+                "error": None,
+            }
+            for r in sample_resources
+        }
+        generator._fetch_resource_contents = AsyncMock(
+            return_value=(contents, contents_dict)
         )
 
         # Generate queries
@@ -514,6 +710,63 @@ async def test_clustered_query_logging(
             investigation_logger=logger,
         )
 
+        # Mock _fetch_resource_contents to return correct tuple format
+        contents = [
+            ResourceContent(
+                resource=cluster_resources[0],
+                text="CD8 positive T cells are cytotoxic lymphocytes that kill infected cells",
+                source="content",
+            ),
+            ResourceContent(
+                resource=cluster_resources[1],
+                text="CD4 positive T helper cells coordinate immune responses through cytokines",
+                source="content",
+            ),
+            ResourceContent(
+                resource=cluster_resources[2],
+                text="B lymphocytes produce antibodies and present antigens to T cells",
+                source="content",
+            ),
+            ResourceContent(
+                resource=cluster_resources[3],
+                text="Natural killer cells provide innate immunity against tumors and viruses",
+                source="content",
+            ),
+        ]
+        contents_dict = {
+            cluster_resources[0].url: {
+                "source": "content",
+                "title": "CD8 positive T cells are cytotoxic lymphocytes that kill infected cells",
+                "content_length": 73,
+                "success": True,
+                "error": None,
+            },
+            cluster_resources[1].url: {
+                "source": "content",
+                "title": "CD4 positive T helper cells coordinate immune responses through cytokines",
+                "content_length": 76,
+                "success": True,
+                "error": None,
+            },
+            cluster_resources[2].url: {
+                "source": "content",
+                "title": "B lymphocytes produce antibodies and present antigens to T cells",
+                "content_length": 66,
+                "success": True,
+                "error": None,
+            },
+            cluster_resources[3].url: {
+                "source": "content",
+                "title": "Natural killer cells provide innate immunity against tumors and viruses",
+                "content_length": 73,
+                "success": True,
+                "error": None,
+            },
+        }
+        generator._fetch_resource_contents = AsyncMock(
+            return_value=(contents, contents_dict)
+        )
+
         # Generate queries (should cluster 4 resources into 2 clusters)
         queries = await generator.generate_initial_queries(cluster_resources)
 
@@ -529,4 +782,4 @@ async def test_clustered_query_logging(
         assert entry["cluster_id"] is not None
         assert isinstance(entry["cluster_id"], int)
         # Resource count should be >= 1
-        assert entry["resource_count"] >= 1
+        assert len(entry["input_resources"]) >= 1
