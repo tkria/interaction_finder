@@ -329,9 +329,9 @@ class ResourceMatcher:
         normalized_result_url = normalize_url(result.url)
         if not normalized_result_url:
             return None, None, 0.0
-        # Search for matching resource
+        # Search for matching resource (case-insensitive comparison)
         for resource in target_resources:
-            if resource.canonical_url == normalized_result_url:
+            if resource.canonical_url.lower() == normalized_result_url.lower():
                 return resource, "url", 1.0
 
         return None, None, 0.0
@@ -353,9 +353,9 @@ class ResourceMatcher:
             return None, None, 0.0, {"attempted": False}
         # Get sample of normalized target URLs (limit to 10 for log size)
         normalized_target_urls = [r.canonical_url for r in target_resources][:10]
-        # Search for matching resource
+        # Search for matching resource (case-insensitive comparison)
         for resource in target_resources:
-            if resource.canonical_url == normalized_result_url:
+            if resource.canonical_url.lower() == normalized_result_url.lower():
                 detail = {
                     "attempted": True,
                     "normalized_result_url": normalized_result_url,
