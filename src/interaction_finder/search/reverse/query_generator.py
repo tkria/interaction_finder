@@ -12,14 +12,12 @@ Order: helper dataclasses → QueryGenerator class → helper methods
 from typing import Any, Dict, List, Optional
 import asyncio
 import httpx
-import time
 from dataclasses import dataclass
 
 from .models import (
     KnownResource,
     ReverseSearchConfig,
     QueryConstructionContext,
-    KeywordExtractionResult,
 )
 from .keyword_extractors import create_extractor
 from .query_constructors import create_constructor
@@ -69,7 +67,7 @@ class QueryGenerator:
         ...     keywords_per_query=7,
         ...     use_hint_fields=True
         ... )
-        >>> generator = QueryGenerator(config)
+        >>> generator = QueryGenerator(config, backend_name="pubmed")
         >>> resources = [
         ...     KnownResource(pmid="123", url="https://pubmed.ncbi.nlm.nih.gov/123/"),
         ...     KnownResource(pmid="456", url="https://pubmed.ncbi.nlm.nih.gov/456/"),
@@ -80,6 +78,7 @@ class QueryGenerator:
     def __init__(
         self,
         config: ReverseSearchConfig,
+        backend_name: str,
         fetcher: Optional[Any] = None,
         http_client: Optional[httpx.AsyncClient] = None,
         console: Optional[Any] = None,
@@ -90,12 +89,14 @@ class QueryGenerator:
 
         Parameters:
             config: ReverseSearchConfig - Configuration
+            backend_name: str - Search backend name for query adaptation
             fetcher: Optional[PageFetcher] - For content fetching (created if None)
             http_client: Optional[httpx.AsyncClient] - For PubMed API (created if None)
             console: Optional[Console] - Rich console for verbose output
             investigation_logger: Optional[InvestigationLogger] - For logging query generation stages
         """
         self.config = config
+        self.backend_name = backend_name
         self.fetcher = fetcher
         self.http_client = http_client
         self.console = console
@@ -212,7 +213,6 @@ class QueryGenerator:
         query_index = 0
         for content in contents:
             # Stage 1: Keyword Extraction
-            extraction_start = time.time()
             keywords_with_scores = []
             keywords = []
 
@@ -258,16 +258,12 @@ class QueryGenerator:
                 # Extract keywords list
                 keywords = [kw["keyword"] for kw in keywords_with_scores]
 
-            extraction_time = time.time() - extraction_start
-
             # Extract hint terms (passed separately to constructor)
             hint_terms = []
             if self.config.use_hint_fields:
                 hint_terms = self._extract_hint_terms([content.resource])
 
             # Stage 2: Query Construction
-            construction_start = time.time()
-
             # Build QueryConstructionContext with ALL available info
             keyword_scores = [kw["score"] for kw in keywords_with_scores]
             context = QueryConstructionContext(
@@ -276,15 +272,13 @@ class QueryGenerator:
                 if any(s is not None for s in keyword_scores)
                 else None,
                 hint_terms=hint_terms,
-                backend=self.config.search_backend,
+                backend=self.backend_name,
                 resource_content=content.text,  # FULL CONTENT for LLM constructors
                 extractor_used=self.config.keyword_extractor,
             )
 
             # Construct query using constructor
             query = await self.constructor.construct(context)
-
-            construction_time = time.time() - construction_start
 
             # Log query generation if investigation logger is available
             if self.inv_logger and query:
@@ -406,7 +400,6 @@ class QueryGenerator:
             representative_content = contents[representative_idx]
 
             # Stage 1: Keyword Extraction from representative
-            extraction_start = time.time()
             keywords_with_scores = []
             keywords = []
 
@@ -460,16 +453,12 @@ class QueryGenerator:
                 # Extract keywords list
                 keywords = [kw["keyword"] for kw in keywords_with_scores]
 
-            extraction_time = time.time() - extraction_start
-
             # Extract hint terms from entire cluster (passed separately to constructor)
             hint_terms = []
             if self.config.use_hint_fields:
                 hint_terms = self._extract_hint_terms(cluster_resources)
 
             # Stage 2: Query Construction
-            construction_start = time.time()
-
             # Build QueryConstructionContext with ALL available info
             keyword_scores = [kw["score"] for kw in keywords_with_scores]
             context = QueryConstructionContext(
@@ -478,15 +467,13 @@ class QueryGenerator:
                 if any(s is not None for s in keyword_scores)
                 else None,
                 hint_terms=hint_terms,
-                backend=self.config.search_backend,
+                backend=self.backend_name,
                 resource_content=representative_content.text,  # FULL CONTENT for LLM constructors
                 extractor_used=self.config.keyword_extractor,
             )
 
             # Construct query using constructor
             query = await self.constructor.construct(context)
-
-            construction_time = time.time() - construction_start
 
             # Log query generation if investigation logger is available
             if self.inv_logger and query:
