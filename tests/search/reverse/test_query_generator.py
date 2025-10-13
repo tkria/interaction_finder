@@ -140,7 +140,7 @@ async def test_clustering_reduces_query_count():
 
     # Mock content fetching to return similar text
     with patch.object(generator, "_fetch_resource_contents") as mock_fetch:
-        mock_fetch.return_value = [
+        contents = [
             ResourceContent(
                 resource=r,
                 text="Diabetes mellitus insulin resistance glucose metabolism homeostasis",
@@ -148,6 +148,17 @@ async def test_clustering_reduces_query_count():
             )
             for r in resources
         ]
+        contents_dict = {
+            r.url: {
+                "source": "metadata",
+                "title": "Test",
+                "content_length": 100,
+                "success": True,
+                "error": None,
+            }
+            for r in resources
+        }
+        mock_fetch.return_value = (contents, contents_dict)
 
         queries = await generator.generate_initial_queries_clustered(resources)
 
@@ -287,7 +298,7 @@ async def test_metadata_fetch_failure_falls_back_to_content():
             KnownResource(pmid="123", url="https://pubmed.ncbi.nlm.nih.gov/123/")
         ]
 
-        contents = await generator._fetch_resource_contents(resources)
+        contents, contents_dict = await generator._fetch_resource_contents(resources)
 
         # Should have fallen back to content
         assert len(contents) == 1
@@ -318,7 +329,7 @@ async def test_content_fetch_failure_uses_hint_fields():
         )
     ]
 
-    contents = await generator._fetch_resource_contents(resources)
+    contents, contents_dict = await generator._fetch_resource_contents(resources)
 
     # Should have used hint fields
     assert len(contents) == 1
@@ -352,13 +363,15 @@ async def test_hint_fields_included_when_enabled():
                 hint_fields={"celltype": "CD8+ T cell", "marker": "CD8A"},
             )
         ]
-        mock_fetch.return_value = [
+        contents = [
             ResourceContent(
                 resource=resources[0],
                 text="T cell biology and immunology research",
                 source="metadata",
             )
         ]
+        contents_dict = {}
+        mock_fetch.return_value = (contents, contents_dict)
 
         queries = await generator.generate_initial_queries_individual(resources)
 
@@ -387,13 +400,15 @@ async def test_hint_fields_excluded_when_disabled():
                 hint_fields={"celltype": "CD8+ T cell"},
             )
         ]
-        mock_fetch.return_value = [
+        contents = [
             ResourceContent(
                 resource=resources[0],
                 text="T cell biology and immunology research",
                 source="metadata",
             )
         ]
+        contents_dict = {}
+        mock_fetch.return_value = (contents, contents_dict)
 
         queries = await generator.generate_initial_queries_individual(resources)
 
@@ -407,23 +422,48 @@ async def test_hint_fields_excluded_when_disabled():
 # ==============================================================================
 
 
-def test_construct_query_with_or_logic():
-    """Test that queries are constructed with OR logic."""
-    config = ReverseSearchConfig()
-    generator = QueryGenerator(config)
+@pytest.mark.asyncio
+async def test_construct_query_with_or_logic():
+    """Test that DirectQueryConstructor uses OR logic."""
+    from interaction_finder.search.reverse.query_constructors import (
+        DirectQueryConstructor,
+    )
+    from interaction_finder.search.reverse.models import QueryConstructionContext
 
-    keywords = ["diabetes", "insulin resistance", "glucose"]
-    query = generator._construct_query(keywords)
+    constructor = DirectQueryConstructor()
+
+    context = QueryConstructionContext(
+        keywords=["diabetes", "insulin resistance", "glucose"],
+        keyword_scores=None,
+        hint_terms=[],
+        backend="pubmed",
+        resource_content=None,
+        extractor_used="yake",
+    )
+    query = await constructor.construct(context)
 
     assert query == '"diabetes" OR "insulin resistance" OR "glucose"'
 
 
-def test_construct_query_empty_keywords():
-    """Test that empty keywords list returns empty query."""
-    config = ReverseSearchConfig()
-    generator = QueryGenerator(config)
+@pytest.mark.asyncio
+async def test_construct_query_empty_keywords():
+    """Test that DirectQueryConstructor handles empty keywords."""
+    from interaction_finder.search.reverse.query_constructors import (
+        DirectQueryConstructor,
+    )
+    from interaction_finder.search.reverse.models import QueryConstructionContext
 
-    query = generator._construct_query([])
+    constructor = DirectQueryConstructor()
+
+    context = QueryConstructionContext(
+        keywords=[],
+        keyword_scores=None,
+        hint_terms=[],
+        backend="pubmed",
+        resource_content=None,
+        extractor_used="yake",
+    )
+    query = await constructor.construct(context)
     assert query == ""
 
 
@@ -474,7 +514,7 @@ async def test_refinement_queries_exclude_duplicates():
             KnownResource(pmid="123", url="https://pubmed.ncbi.nlm.nih.gov/123/"),
             KnownResource(pmid="456", url="https://pubmed.ncbi.nlm.nih.gov/456/"),
         ]
-        mock_fetch.return_value = [
+        contents = [
             ResourceContent(
                 resource=resources[0],
                 text="Diabetes mellitus and insulin resistance",
@@ -486,6 +526,8 @@ async def test_refinement_queries_exclude_duplicates():
                 source="metadata",
             ),
         ]
+        contents_dict = {}
+        mock_fetch.return_value = (contents, contents_dict)
 
         # Generate initial queries
         initial_queries = await generator.generate_initial_queries(resources)
@@ -520,23 +562,27 @@ async def test_refinement_queries_with_new_resources():
         ]
 
         # First call for old resources
-        mock_fetch.return_value = [
+        contents = [
             ResourceContent(
                 resource=old_resources[0],
                 text="Diabetes mellitus and insulin resistance",
                 source="metadata",
             )
         ]
+        contents_dict = {}
+        mock_fetch.return_value = (contents, contents_dict)
         initial_queries = await generator.generate_initial_queries(old_resources)
 
         # Second call for new resources
-        mock_fetch.return_value = [
+        contents = [
             ResourceContent(
                 resource=new_resources[0],
                 text="Cancer biology and tumor suppressor genes",
                 source="metadata",
             )
         ]
+        contents_dict = {}
+        mock_fetch.return_value = (contents, contents_dict)
         refinement_queries = await generator.generate_refinement_queries(
             new_resources, initial_queries
         )
@@ -577,13 +623,15 @@ async def test_single_resource_no_clustering():
         resources = [
             KnownResource(pmid="123", url="https://pubmed.ncbi.nlm.nih.gov/123/")
         ]
-        mock_fetch.return_value = [
+        contents = [
             ResourceContent(
                 resource=resources[0],
                 text="Machine learning in genomics",
                 source="metadata",
             )
         ]
+        contents_dict = {}
+        mock_fetch.return_value = (contents, contents_dict)
 
         queries = await generator.generate_initial_queries(resources)
 
@@ -607,13 +655,15 @@ async def test_resources_with_no_extractable_keywords():
         resources = [
             KnownResource(pmid="123", url="https://pubmed.ncbi.nlm.nih.gov/123/")
         ]
-        mock_fetch.return_value = [
+        contents = [
             ResourceContent(
                 resource=resources[0],
                 text="a b c",  # Very short, unlikely to extract meaningful keywords
                 source="metadata",
             )
         ]
+        contents_dict = {}
+        mock_fetch.return_value = (contents, contents_dict)
 
         queries = await generator.generate_initial_queries_individual(resources)
 

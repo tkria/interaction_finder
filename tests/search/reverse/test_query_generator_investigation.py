@@ -524,10 +524,10 @@ async def test_query_generation_logging_llm(
     sample_resources: List[KnownResource],
     temp_log_file: Path,
 ):
-    """Test query generation logging with LLM extractor."""
-    # Create config with LLM extractor
+    """Test query generation logging with LLM constructor (uses deprecated config that migrates)."""
+    # Create config with deprecated LLM extractor (auto-migrates to none+llm)
     llm_config = ReverseSearchConfig(
-        keyword_extractor="llm",
+        keyword_extractor="llm",  # Deprecated: migrates to none+llm
         keywords_per_query=5,
         use_hint_fields=True,
         enable_clustering=False,
@@ -591,11 +591,10 @@ async def test_query_generation_logging_llm(
     assert len(query_entries) > 0
 
     for entry in query_entries:
-        # Verify LLM extractor type
-        assert entry["extractor_type"] == "llm"
-        # LLM returns complete queries as single keyword
+        # Verify extractor type (migrated from "llm" to "none" + constructor="llm")
+        assert entry["extractor_type"] == "none"
+        # None extractor passes empty keywords list to LLM constructor
         assert isinstance(entry["keywords"], list)
-        assert len(entry["keywords"]) > 0
 
 
 @pytest.mark.asyncio

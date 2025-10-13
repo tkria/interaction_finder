@@ -12,10 +12,17 @@ Order: helper dataclasses → QueryGenerator class → helper methods
 from typing import Any, Dict, List, Optional
 import asyncio
 import httpx
+import time
 from dataclasses import dataclass
 
-from .models import KnownResource, ReverseSearchConfig
+from .models import (
+    KnownResource,
+    ReverseSearchConfig,
+    QueryConstructionContext,
+    KeywordExtractionResult,
+)
 from .keyword_extractors import create_extractor
+from .query_constructors import create_constructor
 from .investigation_logger import _format_resource_ref
 
 
@@ -106,6 +113,25 @@ class QueryGenerator:
         else:
             self.extractor = create_extractor(config.keyword_extractor)
 
+        # Create query constructor based on config.query_constructor
+        if config.query_constructor == "llm":
+            # LLM constructor with fallback to direct on errors
+            llm_config = config.llm_query_config
+            enable_fallback = config.query_construction_config.get(
+                "enable_fallback", True
+            )
+            self.constructor = create_constructor(
+                "llm",
+                model=llm_config.get("model", "openai:gpt-4o-mini"),
+                temperature=llm_config.get("temperature", 0.7),
+                backend_specific=llm_config.get("backend_specific_syntax", True),
+                enable_fallback=enable_fallback,
+                console=console,
+            )
+        else:
+            # Direct constructor (simple keyword concatenation)
+            self.constructor = create_constructor("direct")
+
     async def generate_initial_queries(
         self,
         resources: List[KnownResource],
@@ -142,7 +168,11 @@ class QueryGenerator:
         resources: List[KnownResource],
     ) -> List[str]:
         """
-        Generate one query per resource (no clustering).
+        Generate one query per resource using two-stage pipeline (no clustering).
+
+        Two-stage flow:
+            Stage 1: Keyword Extraction - Extract keywords from resource content
+            Stage 2: Query Construction - Build search queries from extracted keywords
 
         Parameters:
             resources: List[KnownResource] - Target resources
@@ -181,12 +211,11 @@ class QueryGenerator:
         queries = []
         query_index = 0
         for content in contents:
-            # Extract hint terms separately first (for statistical extractors)
-            hint_terms = []
-            if self.config.use_hint_fields and self.config.keyword_extractor != "llm":
-                hint_terms = self._extract_hint_terms([content.resource])
-            # Extract keywords/queries (use async for LLM, sync for others)
+            # Stage 1: Keyword Extraction
+            extraction_start = time.time()
             keywords_with_scores = []
+            keywords = []
+
             if self.config.keyword_extractor == "llm" and hasattr(
                 self.extractor, "extract_async"
             ):
@@ -226,13 +255,36 @@ class QueryGenerator:
                     else:
                         # Plain string
                         keywords_with_scores.append({"keyword": kw, "score": None})
-                # Build final keywords list for query construction (just strings)
-                keywords = [kw["keyword"] for kw in keywords_with_scores] + hint_terms
-            # For LLM, keywords list already constructed
-            if self.config.keyword_extractor == "llm":
+                # Extract keywords list
                 keywords = [kw["keyword"] for kw in keywords_with_scores]
-            # Construct query
-            query = self._construct_query(keywords)
+
+            extraction_time = time.time() - extraction_start
+
+            # Extract hint terms (passed separately to constructor)
+            hint_terms = []
+            if self.config.use_hint_fields:
+                hint_terms = self._extract_hint_terms([content.resource])
+
+            # Stage 2: Query Construction
+            construction_start = time.time()
+
+            # Build QueryConstructionContext with ALL available info
+            keyword_scores = [kw["score"] for kw in keywords_with_scores]
+            context = QueryConstructionContext(
+                keywords=keywords,
+                keyword_scores=keyword_scores
+                if any(s is not None for s in keyword_scores)
+                else None,
+                hint_terms=hint_terms,
+                backend=self.config.search_backend,
+                resource_content=content.text,  # FULL CONTENT for LLM constructors
+                extractor_used=self.config.keyword_extractor,
+            )
+
+            # Construct query using constructor
+            query = await self.constructor.construct(context)
+
+            construction_time = time.time() - construction_start
 
             # Log query generation if investigation logger is available
             if self.inv_logger and query:
@@ -262,7 +314,11 @@ class QueryGenerator:
         resources: List[KnownResource],
     ) -> List[str]:
         """
-        Generate queries by clustering resources (more efficient).
+        Generate queries by clustering resources using two-stage pipeline (more efficient).
+
+        Two-stage flow:
+            Stage 1: Keyword Extraction - Extract keywords from cluster representative
+            Stage 2: Query Construction - Build search queries from extracted keywords
 
         Parameters:
             resources: List[KnownResource] - Target resources
@@ -349,12 +405,11 @@ class QueryGenerator:
             representative_idx = cluster_indices[np.argmin(distances)]
             representative_content = contents[representative_idx]
 
-            # Extract hint terms separately first (for statistical extractors)
-            hint_terms = []
-            if self.config.use_hint_fields and self.config.keyword_extractor != "llm":
-                hint_terms = self._extract_hint_terms(cluster_resources)
-            # Extract keywords/queries from representative (use async for LLM, sync for others)
+            # Stage 1: Keyword Extraction from representative
+            extraction_start = time.time()
             keywords_with_scores = []
+            keywords = []
+
             if self.config.keyword_extractor == "llm" and hasattr(
                 self.extractor, "extract_async"
             ):
@@ -402,15 +457,36 @@ class QueryGenerator:
                     else:
                         # Plain string
                         keywords_with_scores.append({"keyword": kw, "score": None})
-                # Build final keywords list for query construction (just strings)
-                keywords = [kw["keyword"] for kw in keywords_with_scores] + hint_terms
-            # For LLM, keywords list already constructed
-            if self.config.keyword_extractor == "llm":
+                # Extract keywords list
                 keywords = [kw["keyword"] for kw in keywords_with_scores]
-            # Cluster information logged to investigation log only (not console)
-            # Console remains focused on progress and status
-            # Construct query
-            query = self._construct_query(keywords)
+
+            extraction_time = time.time() - extraction_start
+
+            # Extract hint terms from entire cluster (passed separately to constructor)
+            hint_terms = []
+            if self.config.use_hint_fields:
+                hint_terms = self._extract_hint_terms(cluster_resources)
+
+            # Stage 2: Query Construction
+            construction_start = time.time()
+
+            # Build QueryConstructionContext with ALL available info
+            keyword_scores = [kw["score"] for kw in keywords_with_scores]
+            context = QueryConstructionContext(
+                keywords=keywords,
+                keyword_scores=keyword_scores
+                if any(s is not None for s in keyword_scores)
+                else None,
+                hint_terms=hint_terms,
+                backend=self.config.search_backend,
+                resource_content=representative_content.text,  # FULL CONTENT for LLM constructors
+                extractor_used=self.config.keyword_extractor,
+            )
+
+            # Construct query using constructor
+            query = await self.constructor.construct(context)
+
+            construction_time = time.time() - construction_start
 
             # Log query generation if investigation logger is available
             if self.inv_logger and query:
@@ -662,32 +738,6 @@ class QueryGenerator:
                 if value:
                     hint_terms.add(str(value).strip())
         return list(hint_terms)
-
-    def _construct_query(self, keywords: List[str]) -> str:
-        """
-        Construct boolean query from keywords.
-
-        Uses OR logic for broad coverage. Handles both LLM complete queries
-        (with field tags or boolean operators) and keyword lists from
-        statistical extractors.
-
-        Parameters:
-            keywords: List[str] - Keywords to include (or complete queries from LLM)
-
-        Returns:
-            str - Query string
-        """
-        if not keywords:
-            return ""
-
-        # If keywords look like complete queries (contain field tags or boolean ops), use first one
-        # LLM may return queries like: '"BRCA1"[Title] AND "breast cancer"[Abstract]'
-        if any("[" in kw or " AND " in kw or " OR " in kw for kw in keywords):
-            return keywords[0]  # LLM-generated complete query
-
-        # Otherwise, construct boolean OR query from keywords (statistical extractors)
-        quoted_keywords = [f'"{kw}"' for kw in keywords if kw]
-        return " OR ".join(quoted_keywords)
 
     def _log_content_sources(self, contents: List[ResourceContent]) -> None:
         """
