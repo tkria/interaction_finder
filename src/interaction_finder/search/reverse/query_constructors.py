@@ -391,7 +391,7 @@ class LLMQueryConstructor(QueryConstructor):
         try:
             # Call LLM agent
             result = await self._agent.run(user_prompt)
-            response = result.data
+            response = result.output
 
             # Extract and return query
             return response.query.strip()

@@ -63,7 +63,7 @@ def mock_fast_llm_agent():
             reasoning="Constructed query from keywords",
         )
         mock_result = Mock(spec=AgentRunResult)
-        mock_result.data = mock_response
+        mock_result.output = mock_response
         return mock_result
 
     mock_agent = AsyncMock()
@@ -246,7 +246,7 @@ async def test_hybrid_faster_than_full_llm(sample_resources_10, sample_metadata_
                 reasoning="Generated",
             )
             mock_result = Mock(spec=AgentRunResult)
-            mock_result.data = mock_response
+            mock_result.output = mock_response
             return mock_result
 
         mock_agent.run = mock_run
@@ -380,7 +380,7 @@ async def test_construction_stage_performance(sample_resources_10, sample_metada
                 reasoning="Generated",
             )
             mock_result = Mock(spec=AgentRunResult)
-            mock_result.data = mock_response
+            mock_result.output = mock_response
             return mock_result
 
         mock_agent.run = mock_run

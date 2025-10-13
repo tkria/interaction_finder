@@ -112,7 +112,7 @@ async def test_empty_resource_content():
             query='"default query"', reasoning="No content available"
         )
         mock_result = Mock(spec=AgentRunResult)
-        mock_result.data = mock_response
+        mock_result.output = mock_response
         mock_agent = AsyncMock()
         mock_agent.run.return_value = mock_result
 
@@ -235,7 +235,7 @@ async def test_llm_malformed_response():
 
         # Mock LLM to return malformed data
         mock_result = Mock(spec=AgentRunResult)
-        mock_result.data = None  # Malformed
+        mock_result.output = None  # Malformed
         mock_agent = AsyncMock()
         mock_agent.run.return_value = mock_result
 
@@ -273,7 +273,7 @@ async def test_llm_empty_query_response():
             query="*", reasoning="Unable to construct meaningful query"
         )
         mock_result = Mock(spec=AgentRunResult)
-        mock_result.data = mock_response
+        mock_result.output = mock_response
         mock_agent = AsyncMock()
         mock_agent.run.return_value = mock_result
 
@@ -452,7 +452,7 @@ async def test_very_long_content():
             query='"BRCA1"', reasoning="Extracted from long content"
         )
         mock_result = Mock(spec=AgentRunResult)
-        mock_result.data = mock_response
+        mock_result.output = mock_response
         mock_agent = AsyncMock()
         mock_agent.run.return_value = mock_result
 

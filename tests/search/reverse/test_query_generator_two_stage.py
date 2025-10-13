@@ -78,7 +78,7 @@ def mock_llm_agent():
             reasoning="Constructed from keywords and content",
         )
         mock_result = Mock(spec=AgentRunResult)
-        mock_result.data = mock_response
+        mock_result.output = mock_response
         return mock_result
 
     mock_agent = AsyncMock()

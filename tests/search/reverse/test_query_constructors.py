@@ -178,7 +178,7 @@ async def test_llm_constructor_successful(basic_context):
         reasoning="Combined gene with disease term for precision",
     )
     mock_result = Mock(spec=AgentRunResult)
-    mock_result.data = mock_response
+    mock_result.output = mock_response
 
     # Create constructor
     constructor = LLMQueryConstructor(
@@ -209,7 +209,7 @@ async def test_llm_constructor_with_content(context_with_content):
         reasoning="Used keyword as anchor, content revealed vascular context",
     )
     mock_result = Mock(spec=AgentRunResult)
-    mock_result.data = mock_response
+    mock_result.output = mock_response
 
     constructor = LLMQueryConstructor(
         model="openai:gpt-4o-mini", temperature=0.3, enable_fallback=False
@@ -233,7 +233,7 @@ async def test_llm_constructor_minimal_context(minimal_context):
         query="gene AND disease", reasoning="Simple keyword combination"
     )
     mock_result = Mock(spec=AgentRunResult)
-    mock_result.data = mock_response
+    mock_result.output = mock_response
 
     constructor = LLMQueryConstructor(
         model="openai:gpt-4o-mini", temperature=0.3, enable_fallback=False
@@ -324,7 +324,7 @@ async def test_llm_constructor_agent_created_on_first_use(basic_context):
     """Test LLMQueryConstructor creates agent on first construct() call."""
     mock_response = LLMQueryConstructionResponse(query="test query", reasoning="test")
     mock_result = Mock(spec=AgentRunResult)
-    mock_result.data = mock_response
+    mock_result.output = mock_response
 
     constructor = LLMQueryConstructor(
         model="openai:gpt-4o-mini", temperature=0.3, enable_fallback=False
@@ -550,7 +550,7 @@ async def test_integration_llm_constructor_with_mock(basic_context):
         reasoning="Combined all keywords with PubMed field tags",
     )
     mock_result = Mock(spec=AgentRunResult)
-    mock_result.data = mock_response
+    mock_result.output = mock_response
 
     constructor = create_constructor(
         "llm", model="openai:gpt-4o-mini", temperature=0.3, enable_fallback=False
