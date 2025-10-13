@@ -4,8 +4,13 @@ Core data models and types for reverse search functionality.
 This module defines Pydantic models for reverse search, including resource
 representations, matching results, session tracking, configuration, and errors.
 All models provide comprehensive validation and type safety.
+
+Additionally, this module defines lightweight dataclasses for the two-stage
+query generation pipeline (keyword extraction → query construction), enabling
+clear separation of concerns and comprehensive investigation logging.
 """
 
+from dataclasses import dataclass
 from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field, model_validator
 
@@ -241,12 +246,14 @@ class ReverseSearchConfig(BaseModel):
         consecutive_zero_limit: int - Stop after this many queries with no finds (1-10)
         max_queries: int - Hard limit on total queries (5-200)
 
-    Query generation:
-        keyword_extractor: Literal - Algorithm for keyword extraction (yake/rake/tfidf/llm)
+    Query generation (two-stage):
+        keyword_extractor: Literal - Stage 1: Keyword extraction (yake/rake/tfidf/none)
+        query_constructor: Literal - Stage 2: Query construction (direct/llm)
         keywords_per_query: int - Number of keywords per query (3-15)
         use_hint_fields: bool - Include hint_fields in query generation
         sort_by: Literal - Sort order for search results (relevance/date/date_desc)
-        llm_query_config: Dict[str, Any] - Configuration for LLM-based query generation
+        query_construction_config: Dict[str, Any] - Configuration for query construction stage
+        llm_query_config: Dict[str, Any] - Configuration for LLM constructor (when query_constructor="llm")
 
     Clustering:
         enable_clustering: bool - Whether to cluster resources before query generation
@@ -266,18 +273,27 @@ class ReverseSearchConfig(BaseModel):
         max_results_per_query: int - Max results per query (10-500)
 
     Example:
+        >>> # Statistical extraction + direct construction (default)
         >>> config = ReverseSearchConfig(
         ...     coverage_target=0.95,
         ...     consecutive_zero_limit=3,
         ...     max_queries=50,
         ...     keyword_extractor="yake",
+        ...     query_constructor="direct",
         ...     keywords_per_query=7
         ... )
-        >>> # LLM-based query generation
+        >>> # Full-content LLM construction (replaces legacy keyword_extractor="llm")
         >>> config_llm = ReverseSearchConfig(
-        ...     keyword_extractor="llm",
+        ...     keyword_extractor="none",
+        ...     query_constructor="llm",
         ...     sort_by="date_desc",
         ...     llm_query_config={"model": "anthropic:claude-3-sonnet", "temperature": 0.5}
+        ... )
+        >>> # Hybrid: statistical extraction + LLM construction
+        >>> config_hybrid = ReverseSearchConfig(
+        ...     keyword_extractor="yake",
+        ...     query_constructor="llm",
+        ...     keywords_per_query=10
         ... )
     """
 
@@ -292,18 +308,49 @@ class ReverseSearchConfig(BaseModel):
         100, ge=5, le=200, description="Hard limit on total queries"
     )
 
-    # Query generation
-    keyword_extractor: Literal["yake", "rake", "tfidf", "llm"] = Field(
-        "yake", description="Algorithm for keyword extraction"
+    # Query generation (Stage 1: Keyword Extraction)
+    keyword_extractor: Literal["yake", "rake", "tfidf", "none", "llm"] = Field(
+        "yake",
+        description=(
+            "Stage 1: Algorithm for keyword extraction from resource content. "
+            "Statistical extractors (yake/rake/tfidf) extract keywords that are then "
+            "passed to Stage 2 (query_constructor). Use 'none' to skip keyword extraction "
+            "and pass full content directly to Stage 2 LLM constructor. "
+            "Note: 'llm' is deprecated and migrated to 'none' + query_constructor='llm'."
+        ),
     )
     keywords_per_query: int = Field(
-        7, ge=3, le=15, description="Number of keywords per query"
+        7, ge=3, le=15, description="Number of keywords per query (Stage 1)"
     )
     use_hint_fields: bool = Field(
-        True, description="Include hint_fields in query generation"
+        True, description="Include hint_fields in query generation (both stages)"
     )
     sort_by: Literal["relevance", "date", "date_desc"] = Field(
         "relevance", description="Sort order for search results"
+    )
+
+    # Query generation (Stage 2: Query Construction)
+    query_constructor: Literal["direct", "llm"] = Field(
+        "direct",
+        description=(
+            "Stage 2: Method for constructing final query string from keywords. "
+            "'direct' joins keywords with boolean OR (fast, deterministic). "
+            "'llm' uses LLM to craft optimized query with field tags and operators "
+            "(slower, adaptive, requires llm_query_config)."
+        ),
+    )
+    query_construction_config: Dict[str, Any] = Field(
+        default_factory=lambda: {
+            "enable_fallback": True,
+            "include_scores_in_prompt": True,
+            "max_keywords_for_llm": 10,
+        },
+        description=(
+            "Configuration for query construction stage. "
+            "enable_fallback: Fall back to direct construction if LLM constructor fails. "
+            "include_scores_in_prompt: Pass keyword scores to LLM constructor. "
+            "max_keywords_for_llm: Limit keywords sent to LLM constructor."
+        ),
     )
     llm_query_config: Dict[str, Any] = Field(
         default_factory=lambda: {
@@ -313,7 +360,12 @@ class ReverseSearchConfig(BaseModel):
             "max_queries_per_cluster": 1,
             "backend_specific_syntax": True,
         },
-        description="Configuration for LLM-based query generation",
+        description=(
+            "Configuration for LLM query constructor (query_constructor='llm' only). "
+            "Required when using LLM constructor. This config was previously used for "
+            "legacy keyword_extractor='llm', which has been migrated to "
+            "keyword_extractor='none' + query_constructor='llm'."
+        ),
     )
 
     # Clustering
@@ -346,6 +398,71 @@ class ReverseSearchConfig(BaseModel):
     max_results_per_query: int = Field(
         100, ge=10, le=500, description="Max results per query"
     )
+
+    @model_validator(mode="after")
+    def migrate_and_validate_query_config(self) -> "ReverseSearchConfig":
+        """
+        Migrate legacy configurations and validate query generation setup.
+
+        Migration rules:
+        1. keyword_extractor="llm" → keyword_extractor="none" + query_constructor="llm"
+        2. Missing query_constructor → infer "direct" (backward compatibility)
+
+        Validation rules:
+        1. keyword_extractor="none" requires query_constructor="llm"
+        2. query_constructor="llm" requires non-empty llm_query_config
+
+        Returns:
+            Self with migrated and validated configuration
+
+        Raises:
+            ConfigurationError: Invalid configuration combination with remediation
+        """
+        import warnings
+
+        # Migration: keyword_extractor="llm" → keyword_extractor="none" + query_constructor="llm"
+        if self.keyword_extractor == "llm":
+            warnings.warn(
+                "keyword_extractor='llm' is deprecated. "
+                "Migrating to keyword_extractor='none' + query_constructor='llm'. "
+                "Please update your configuration.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            self.keyword_extractor = "none"
+            self.query_constructor = "llm"
+
+        # Validation: keyword_extractor="none" requires query_constructor="llm"
+        if self.keyword_extractor == "none" and self.query_constructor != "llm":
+            raise ConfigurationError(
+                "Invalid query generation configuration",
+                context={
+                    "keyword_extractor": self.keyword_extractor,
+                    "query_constructor": self.query_constructor,
+                    "issue": "keyword_extractor='none' requires query_constructor='llm'",
+                    "suggestion": (
+                        "Set query_constructor='llm' to use full-content LLM construction, "
+                        "or use a statistical extractor (yake/rake/tfidf) with query_constructor='direct'"
+                    ),
+                },
+            )
+
+        # Validation: query_constructor="llm" requires llm_query_config
+        if self.query_constructor == "llm" and not self.llm_query_config:
+            raise ConfigurationError(
+                "LLM query constructor requires llm_query_config",
+                context={
+                    "query_constructor": self.query_constructor,
+                    "llm_query_config": self.llm_query_config,
+                    "issue": "llm_query_config is empty but required for LLM constructor",
+                    "suggestion": (
+                        "Provide llm_query_config with at least 'model' field, "
+                        "e.g., {'model': 'openai:gpt-4o-mini', 'temperature': 0.7}"
+                    ),
+                },
+            )
+
+        return self
 
 
 # Error hierarchy
@@ -428,6 +545,136 @@ class MatchingError(ReverseSearchError):
         >>> raise MatchingError(
         ...     "PMID extraction failed",
         ...     context={"result_url": "https://...", "backend": "pubmed"}
+        ... )
+    """
+
+    pass
+
+
+# Two-stage pipeline models
+
+
+@dataclass
+class KeywordExtractionResult:
+    """
+    Result from Stage 1: Keyword Extraction.
+
+    Captures the output of keyword extraction from resource content,
+    providing keywords and optional scores that Stage 2 can use for
+    query construction.
+
+    Fields:
+        keywords: List[str] - Extracted keywords from resource content.
+            Must be non-empty for successful extraction.
+
+        scores: Optional[List[float]] - Optional relevance/importance scores
+            for each keyword. Length must match keywords if provided.
+            Some extractors (YAKE, TF-IDF) provide scores, others (RAKE) do not.
+            Higher scores indicate more important keywords.
+
+        extractor: str - Name of the extraction algorithm used.
+            Examples: "yake", "rake", "tfidf", "llm"
+
+        extraction_time: float - Time taken for extraction in seconds.
+            Used for performance monitoring and investigation logging.
+
+    Example:
+        >>> result = KeywordExtractionResult(
+        ...     keywords=["BRCA1", "breast cancer", "mutation"],
+        ...     scores=[0.95, 0.87, 0.82],
+        ...     extractor="yake",
+        ...     extraction_time=0.15
+        ... )
+        >>> # Some extractors don't provide scores
+        >>> result_no_scores = KeywordExtractionResult(
+        ...     keywords=["gene", "protein", "pathway"],
+        ...     scores=None,
+        ...     extractor="rake",
+        ...     extraction_time=0.08
+        ... )
+    """
+
+    keywords: List[str]
+    scores: Optional[List[float]]
+    extractor: str
+    extraction_time: float
+
+
+@dataclass
+class QueryConstructionContext:
+    """
+    Context for Stage 2: Query Construction.
+
+    Provides all available information to query constructors for building
+    search queries. This maximizes the information available to constructors
+    while maintaining clean separation from Stage 1.
+
+    Fields:
+        keywords: List[str] - Keywords from Stage 1 extraction.
+            Primary input for query construction.
+
+        keyword_scores: Optional[List[float]] - Keyword relevance scores from Stage 1.
+            Can be used for keyword selection/weighting if available.
+            Length must match keywords if provided.
+
+        hint_terms: List[str] - Domain-specific hint terms from resource metadata.
+            Examples: cell types ("CD8+ T cell"), markers ("CD8A"),
+            disease names ("breast cancer"). May be empty.
+
+        backend: str - Target search backend (e.g., "pubmed", "perplexica").
+            Allows constructors to use backend-specific syntax/operators.
+
+        resource_content: Optional[str] - Full resource content if available.
+            Enables LLM-based constructors to read full context.
+            May be None if content unavailable or not needed.
+
+        extractor_used: str - Name of the extractor from Stage 1.
+            Provides provenance for investigation logging.
+
+    Example:
+        >>> context = QueryConstructionContext(
+        ...     keywords=["BRCA1", "breast cancer", "mutation"],
+        ...     keyword_scores=[0.95, 0.87, 0.82],
+        ...     hint_terms=["mammary epithelial cell", "TP53"],
+        ...     backend="pubmed",
+        ...     resource_content="Full paper text...",
+        ...     extractor_used="yake"
+        ... )
+        >>> # Minimal context without optional fields
+        >>> minimal_context = QueryConstructionContext(
+        ...     keywords=["gene", "disease"],
+        ...     keyword_scores=None,
+        ...     hint_terms=[],
+        ...     backend="pubmed",
+        ...     resource_content=None,
+        ...     extractor_used="rake"
+        ... )
+    """
+
+    keywords: List[str]
+    keyword_scores: Optional[List[float]]
+    hint_terms: List[str]
+    backend: str
+    resource_content: Optional[str]
+    extractor_used: str
+
+
+class ConfigurationError(ReverseSearchError):
+    """
+    Invalid configuration combination.
+
+    Raised when configuration validation detects invalid combinations
+    of settings, typically during model validation. Includes specific
+    remediation suggestions.
+
+    Example:
+        >>> raise ConfigurationError(
+        ...     "Invalid query generation config",
+        ...     context={
+        ...         "keyword_extractor": "none",
+        ...         "query_constructor": "direct",
+        ...         "suggestion": "Use query_constructor='llm' with keyword_extractor='none'"
+        ...     }
         ... )
     """
 

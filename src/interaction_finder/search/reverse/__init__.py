@@ -17,11 +17,16 @@ Main exports:
     normalize_url: URL normalization for consistent matching
     ResourceMatcher: Multi-strategy resource matching
     QueryGenerator: Query generation from target resources
+    KeywordExtractionResult: Stage 1 output (keyword extraction)
+    QueryConstructionContext: Stage 2 input (query construction)
 """
 
 from interaction_finder.search.reverse.models import (
+    ConfigurationError,
+    KeywordExtractionResult,
     KnownResource,
     MatchingError,
+    QueryConstructionContext,
     QueryGenerationError,
     ResourceMatch,
     ResourceParseError,
@@ -53,6 +58,7 @@ __all__ = [
     "ResourceParseError",
     "QueryGenerationError",
     "MatchingError",
+    "ConfigurationError",
     "KeywordExtractor",
     "YAKEExtractor",
     "RAKEExtractor",
@@ -62,4 +68,6 @@ __all__ = [
     "TRACKING_PARAMS",
     "ResourceMatcher",
     "QueryGenerator",
+    "KeywordExtractionResult",
+    "QueryConstructionContext",
 ]
