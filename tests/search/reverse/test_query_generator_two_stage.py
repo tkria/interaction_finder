@@ -105,7 +105,7 @@ async def test_yake_direct_individual(sample_resources, sample_metadata):
         use_hint_fields=False,
         enable_clustering=False,
     )
-    generator = QueryGenerator(config)
+    generator = QueryGenerator(config, backend_name="pubmed")
 
     with patch.object(generator, "_fetch_pmid_metadata_batch") as mock_fetch:
         mock_fetch.return_value = sample_metadata
@@ -133,7 +133,7 @@ async def test_yake_direct_clustered(sample_resources, sample_metadata):
         use_hint_fields=False,
         enable_clustering=True,
     )
-    generator = QueryGenerator(config)
+    generator = QueryGenerator(config, backend_name="pubmed")
 
     with patch.object(generator, "_fetch_pmid_metadata_batch") as mock_fetch:
         mock_fetch.return_value = sample_metadata
@@ -160,7 +160,7 @@ async def test_yake_llm_individual(sample_resources, sample_metadata, mock_llm_a
         use_hint_fields=False,
         enable_clustering=False,
     )
-    generator = QueryGenerator(config)
+    generator = QueryGenerator(config, backend_name="pubmed")
 
     with patch.object(generator, "_fetch_pmid_metadata_batch") as mock_fetch:
         mock_fetch.return_value = sample_metadata
@@ -194,7 +194,7 @@ async def test_yake_llm_context_validation(sample_resources, sample_metadata):
         use_hint_fields=False,
         enable_clustering=False,
     )
-    generator = QueryGenerator(config)
+    generator = QueryGenerator(config, backend_name="pubmed")
 
     captured_contexts = []
 
@@ -240,7 +240,7 @@ async def test_rake_direct_individual(sample_resources, sample_metadata):
         use_hint_fields=False,
         enable_clustering=False,
     )
-    generator = QueryGenerator(config)
+    generator = QueryGenerator(config, backend_name="pubmed")
 
     with patch.object(generator, "_fetch_pmid_metadata_batch") as mock_fetch:
         mock_fetch.return_value = sample_metadata
@@ -267,7 +267,7 @@ async def test_rake_llm_individual(sample_resources, sample_metadata, mock_llm_a
         use_hint_fields=False,
         enable_clustering=False,
     )
-    generator = QueryGenerator(config)
+    generator = QueryGenerator(config, backend_name="pubmed")
 
     with patch.object(generator, "_fetch_pmid_metadata_batch") as mock_fetch:
         mock_fetch.return_value = sample_metadata
@@ -298,7 +298,7 @@ async def test_tfidf_direct_individual(sample_resources, sample_metadata):
         use_hint_fields=False,
         enable_clustering=False,
     )
-    generator = QueryGenerator(config)
+    generator = QueryGenerator(config, backend_name="pubmed")
 
     with patch.object(generator, "_fetch_pmid_metadata_batch") as mock_fetch:
         mock_fetch.return_value = sample_metadata
@@ -324,7 +324,7 @@ async def test_tfidf_llm_individual(sample_resources, sample_metadata, mock_llm_
         use_hint_fields=False,
         enable_clustering=False,
     )
-    generator = QueryGenerator(config)
+    generator = QueryGenerator(config, backend_name="pubmed")
 
     with patch.object(generator, "_fetch_pmid_metadata_batch") as mock_fetch:
         mock_fetch.return_value = sample_metadata
@@ -355,7 +355,7 @@ async def test_none_llm_individual(sample_resources, sample_metadata, mock_llm_a
         use_hint_fields=False,
         enable_clustering=False,
     )
-    generator = QueryGenerator(config)
+    generator = QueryGenerator(config, backend_name="pubmed")
 
     with patch.object(generator, "_fetch_pmid_metadata_batch") as mock_fetch:
         mock_fetch.return_value = sample_metadata
@@ -380,7 +380,7 @@ async def test_none_llm_context_has_full_content(sample_resources, sample_metada
         use_hint_fields=False,
         enable_clustering=False,
     )
-    generator = QueryGenerator(config)
+    generator = QueryGenerator(config, backend_name="pubmed")
 
     captured_contexts = []
 
@@ -428,7 +428,9 @@ async def test_investigation_logging_two_stage(
         enable_clustering=False,
     )
     async with InvestigationLogger(log_file) as logger:
-        generator = QueryGenerator(config, investigation_logger=logger)
+        generator = QueryGenerator(
+            config, backend_name="pubmed", investigation_logger=logger
+        )
 
         with patch.object(generator, "_fetch_pmid_metadata_batch") as mock_fetch:
             mock_fetch.return_value = sample_metadata
@@ -470,7 +472,7 @@ async def test_empty_keywords_with_direct_constructor(sample_resources):
         use_hint_fields=False,
         enable_clustering=False,
     )
-    generator = QueryGenerator(config)
+    generator = QueryGenerator(config, backend_name="pubmed")
 
     # Mock metadata that produces no keywords
     with patch.object(generator, "_fetch_pmid_metadata_batch") as mock_fetch:
@@ -498,7 +500,7 @@ async def test_llm_failure_with_fallback_enabled(sample_resources, sample_metada
             "enable_fallback": True,
         },
     )
-    generator = QueryGenerator(config)
+    generator = QueryGenerator(config, backend_name="pubmed")
 
     with patch.object(generator, "_fetch_pmid_metadata_batch") as mock_fetch:
         mock_fetch.return_value = sample_metadata
@@ -530,7 +532,7 @@ async def test_metadata_fetch_failure_fallback_to_content(sample_resources):
         use_hint_fields=False,
         enable_clustering=False,
     )
-    generator = QueryGenerator(config)
+    generator = QueryGenerator(config, backend_name="pubmed")
 
     # Mock PageFetcher for content fallback
     mock_fetcher = AsyncMock()
@@ -585,7 +587,7 @@ async def test_hint_terms_included_in_context(sample_resources, sample_metadata)
         use_hint_fields=True,  # Enable hint fields
         enable_clustering=False,
     )
-    generator = QueryGenerator(config)
+    generator = QueryGenerator(config, backend_name="pubmed")
 
     captured_contexts = []
 
@@ -641,7 +643,7 @@ async def test_context_backend_matches_config(sample_resources, sample_metadata)
             use_hint_fields=False,
             enable_clustering=False,
         )
-        generator = QueryGenerator(config)
+        generator = QueryGenerator(config, backend_name=backend)
 
         captured_contexts = []
 

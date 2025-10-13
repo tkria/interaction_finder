@@ -23,7 +23,6 @@ from interaction_finder.search.reverse.models import (
     ConfigurationError,
 )
 from interaction_finder.search.reverse.llm_models import LLMQueryConstructionResponse
-from interaction_finder.search.reverse.query_constructors import LLMQueryConstructor
 
 
 # ==============================================================================
@@ -41,7 +40,7 @@ async def test_empty_keywords_list():
         use_hint_fields=False,
         enable_clustering=False,
     )
-    generator = QueryGenerator(config)
+    generator = QueryGenerator(config, backend_name="pubmed")
 
     resources = [
         KnownResource(pmid="12345678", url="https://pubmed.ncbi.nlm.nih.gov/12345678/")
@@ -67,7 +66,7 @@ async def test_empty_hint_terms():
         use_hint_fields=True,
         enable_clustering=False,
     )
-    generator = QueryGenerator(config)
+    generator = QueryGenerator(config, backend_name="pubmed")
 
     resources = [
         KnownResource(
@@ -97,7 +96,7 @@ async def test_empty_resource_content():
         use_hint_fields=False,
         enable_clustering=False,
     )
-    generator = QueryGenerator(config)
+    generator = QueryGenerator(config, backend_name="pubmed")
 
     resources = [
         KnownResource(pmid="12345678", url="https://pubmed.ncbi.nlm.nih.gov/12345678/")
@@ -133,7 +132,7 @@ async def test_empty_resources_list():
         query_constructor="direct",
         enable_clustering=False,
     )
-    generator = QueryGenerator(config)
+    generator = QueryGenerator(config, backend_name="pubmed")
 
     queries = await generator.generate_initial_queries_individual([])
 
@@ -155,7 +154,7 @@ async def test_llm_api_timeout():
         enable_clustering=False,
         query_construction_config={"enable_fallback": True},
     )
-    generator = QueryGenerator(config)
+    generator = QueryGenerator(config, backend_name="pubmed")
 
     resources = [
         KnownResource(pmid="12345678", url="https://pubmed.ncbi.nlm.nih.gov/12345678/")
@@ -190,7 +189,7 @@ async def test_llm_api_error_no_fallback():
         enable_clustering=False,
         query_construction_config={"enable_fallback": False},
     )
-    generator = QueryGenerator(config)
+    generator = QueryGenerator(config, backend_name="pubmed")
 
     resources = [
         KnownResource(pmid="12345678", url="https://pubmed.ncbi.nlm.nih.gov/12345678/")
@@ -222,7 +221,7 @@ async def test_llm_malformed_response():
         enable_clustering=False,
         query_construction_config={"enable_fallback": True},
     )
-    generator = QueryGenerator(config)
+    generator = QueryGenerator(config, backend_name="pubmed")
 
     resources = [
         KnownResource(pmid="12345678", url="https://pubmed.ncbi.nlm.nih.gov/12345678/")
@@ -257,7 +256,7 @@ async def test_llm_empty_query_response():
         enable_clustering=False,
         query_construction_config={"enable_fallback": True},
     )
-    generator = QueryGenerator(config)
+    generator = QueryGenerator(config, backend_name="pubmed")
 
     resources = [
         KnownResource(pmid="12345678", url="https://pubmed.ncbi.nlm.nih.gov/12345678/")
@@ -302,7 +301,7 @@ async def test_yake_scores_lower_is_better():
         enable_clustering=False,
         query_construction_config={"include_scores_in_prompt": True},
     )
-    generator = QueryGenerator(config)
+    generator = QueryGenerator(config, backend_name="pubmed")
 
     resources = [
         KnownResource(pmid="12345678", url="https://pubmed.ncbi.nlm.nih.gov/12345678/")
@@ -345,7 +344,7 @@ async def test_rake_scores_higher_is_better():
         keywords_per_query=5,
         enable_clustering=False,
     )
-    generator = QueryGenerator(config)
+    generator = QueryGenerator(config, backend_name="pubmed")
 
     resources = [
         KnownResource(pmid="12345678", url="https://pubmed.ncbi.nlm.nih.gov/12345678/")
@@ -388,7 +387,7 @@ async def test_tfidf_no_scores():
         keywords_per_query=5,
         enable_clustering=False,
     )
-    generator = QueryGenerator(config)
+    generator = QueryGenerator(config, backend_name="pubmed")
 
     resources = [
         KnownResource(pmid="12345678", url="https://pubmed.ncbi.nlm.nih.gov/12345678/")
@@ -434,7 +433,7 @@ async def test_very_long_content():
         keywords_per_query=5,
         enable_clustering=False,
     )
-    generator = QueryGenerator(config)
+    generator = QueryGenerator(config, backend_name="pubmed")
 
     resources = [
         KnownResource(pmid="12345678", url="https://pubmed.ncbi.nlm.nih.gov/12345678/")
@@ -474,7 +473,7 @@ async def test_unicode_content():
         keywords_per_query=5,
         enable_clustering=False,
     )
-    generator = QueryGenerator(config)
+    generator = QueryGenerator(config, backend_name="pubmed")
 
     resources = [
         KnownResource(pmid="12345678", url="https://pubmed.ncbi.nlm.nih.gov/12345678/")
@@ -503,7 +502,7 @@ async def test_missing_pmid_metadata():
         keywords_per_query=5,
         enable_clustering=False,
     )
-    generator = QueryGenerator(config)
+    generator = QueryGenerator(config, backend_name="pubmed")
 
     resources = [
         KnownResource(pmid="12345678", url="https://pubmed.ncbi.nlm.nih.gov/12345678/")
@@ -537,7 +536,7 @@ async def test_failed_url_fetch():
         use_hint_fields=True,  # Will use hint fields as last resort
         enable_clustering=False,
     )
-    generator = QueryGenerator(config)
+    generator = QueryGenerator(config, backend_name="pubmed")
 
     resources = [
         KnownResource(
@@ -604,7 +603,7 @@ async def test_single_resource():
         keywords_per_query=5,
         enable_clustering=False,
     )
-    generator = QueryGenerator(config)
+    generator = QueryGenerator(config, backend_name="pubmed")
 
     resources = [
         KnownResource(pmid="12345678", url="https://pubmed.ncbi.nlm.nih.gov/12345678/")
@@ -629,7 +628,7 @@ async def test_many_resources():
         keywords_per_query=3,
         enable_clustering=False,
     )
-    generator = QueryGenerator(config)
+    generator = QueryGenerator(config, backend_name="pubmed")
 
     # Create 50 resources
     resources = [
@@ -679,7 +678,7 @@ async def test_special_characters_in_keywords():
         keywords_per_query=5,
         enable_clustering=False,
     )
-    generator = QueryGenerator(config)
+    generator = QueryGenerator(config, backend_name="pubmed")
 
     resources = [
         KnownResource(pmid="12345678", url="https://pubmed.ncbi.nlm.nih.gov/12345678/")
@@ -714,7 +713,7 @@ async def test_concurrent_query_generation():
         keywords_per_query=5,
         enable_clustering=False,
     )
-    generator = QueryGenerator(config)
+    generator = QueryGenerator(config, backend_name="pubmed")
 
     resources = [
         KnownResource(pmid=f"{i:08d}", url=f"https://pubmed.ncbi.nlm.nih.gov/{i:08d}/")

@@ -95,7 +95,7 @@ async def test_baseline_yake_direct_10_resources(
         use_hint_fields=False,
         enable_clustering=False,
     )
-    generator = QueryGenerator(config)
+    generator = QueryGenerator(config, backend_name="pubmed")
 
     with patch.object(generator, "_fetch_pmid_metadata_batch") as mock_fetch:
         mock_fetch.return_value = sample_metadata_10
@@ -128,7 +128,7 @@ async def test_baseline_yake_direct_scaling(sample_metadata_10):
         use_hint_fields=False,
         enable_clustering=False,
     )
-    generator = QueryGenerator(config)
+    generator = QueryGenerator(config, backend_name="pubmed")
 
     timings = []
 
@@ -184,7 +184,7 @@ async def test_two_stage_overhead_is_minimal(sample_resources_10, sample_metadat
         use_hint_fields=False,
         enable_clustering=False,
     )
-    generator = QueryGenerator(config)
+    generator = QueryGenerator(config, backend_name="pubmed")
 
     with patch.object(generator, "_fetch_pmid_metadata_batch") as mock_fetch:
         mock_fetch.return_value = sample_metadata_10
@@ -224,7 +224,7 @@ async def test_hybrid_faster_than_full_llm(sample_resources_10, sample_metadata_
         use_hint_fields=False,
         enable_clustering=False,
     )
-    generator_hybrid = QueryGenerator(config_hybrid)
+    generator_hybrid = QueryGenerator(config_hybrid, backend_name="pubmed")
 
     # Full-LLM: none + llm
     config_full = ReverseSearchConfig(
@@ -233,7 +233,7 @@ async def test_hybrid_faster_than_full_llm(sample_resources_10, sample_metadata_
         use_hint_fields=False,
         enable_clustering=False,
     )
-    generator_full = QueryGenerator(config_full)
+    generator_full = QueryGenerator(config_full, backend_name="pubmed")
 
     # Mock LLM agent with realistic timing
     def create_mock_agent():
@@ -301,7 +301,6 @@ async def test_hybrid_faster_than_full_llm(sample_resources_10, sample_metadata_
 @pytest.mark.asyncio
 async def test_extraction_stage_performance(sample_resources_10, sample_metadata_10):
     """Test keyword extraction stage performance for different extractors."""
-    import asyncio
 
     extractors = ["yake", "rake", "tfidf"]
     timings = {}
@@ -314,7 +313,7 @@ async def test_extraction_stage_performance(sample_resources_10, sample_metadata
             use_hint_fields=False,
             enable_clustering=False,
         )
-        generator = QueryGenerator(config)
+        generator = QueryGenerator(config, backend_name="pubmed")
 
         with patch.object(generator, "_fetch_pmid_metadata_batch") as mock_fetch:
             mock_fetch.return_value = sample_metadata_10
@@ -352,7 +351,7 @@ async def test_construction_stage_performance(sample_resources_10, sample_metada
         keywords_per_query=5,
         enable_clustering=False,
     )
-    generator_direct = QueryGenerator(config_direct)
+    generator_direct = QueryGenerator(config_direct, backend_name="pubmed")
 
     with patch.object(generator_direct, "_fetch_pmid_metadata_batch") as mock_fetch:
         mock_fetch.return_value = sample_metadata_10
@@ -368,7 +367,7 @@ async def test_construction_stage_performance(sample_resources_10, sample_metada
         keywords_per_query=5,
         enable_clustering=False,
     )
-    generator_llm = QueryGenerator(config_llm)
+    generator_llm = QueryGenerator(config_llm, backend_name="pubmed")
 
     def create_mock_agent():
         mock_agent = AsyncMock()
@@ -396,7 +395,7 @@ async def test_construction_stage_performance(sample_resources_10, sample_metada
             await generator_llm.generate_initial_queries_individual(sample_resources_10)
             time_llm = time.perf_counter() - start_llm
 
-    print(f"\nConstruction stage performance:")
+    print("\nConstruction stage performance:")
     print(f"  direct: {time_direct:.3f}s ({time_direct / 10 * 1000:.1f}ms per query)")
     print(
         f"  llm (mocked 50ms): {time_llm:.3f}s ({time_llm / 10 * 1000:.1f}ms per query)"
@@ -431,7 +430,7 @@ async def test_memory_usage_reasonable(sample_resources_10, sample_metadata_10):
         keywords_per_query=5,
         enable_clustering=False,
     )
-    generator = QueryGenerator(config)
+    generator = QueryGenerator(config, backend_name="pubmed")
 
     # Force garbage collection before measuring
     # gc.collect()
@@ -463,7 +462,7 @@ async def test_batch_metadata_fetch_performance():
         keywords_per_query=5,
         enable_clustering=False,
     )
-    generator = QueryGenerator(config)
+    generator = QueryGenerator(config, backend_name="pubmed")
 
     # Test with 100 resources (should batch fetch)
     resources_100 = [
@@ -514,7 +513,7 @@ async def test_no_performance_regression(sample_resources_10, sample_metadata_10
         use_hint_fields=False,
         enable_clustering=False,
     )
-    generator = QueryGenerator(config)
+    generator = QueryGenerator(config, backend_name="pubmed")
 
     # Run multiple times and check consistency
     timings = []
@@ -532,7 +531,7 @@ async def test_no_performance_regression(sample_resources_10, sample_metadata_10
     max_time = max(timings)
     min_time = min(timings)
 
-    print(f"\nRegression test (3 runs):")
+    print("\nRegression test (3 runs):")
     print(f"  Mean: {mean_time:.3f}s")
     print(f"  Min:  {min_time:.3f}s")
     print(f"  Max:  {max_time:.3f}s")

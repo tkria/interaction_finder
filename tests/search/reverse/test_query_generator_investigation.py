@@ -122,6 +122,7 @@ async def test_query_generator_without_logger(
     # Create generator without logger
     generator = QueryGenerator(
         config=basic_config,
+        backend_name="pubmed",
         fetcher=mock_fetcher,
         investigation_logger=None,  # No logger
     )
@@ -182,6 +183,7 @@ async def test_content_fetch_logging(
         # Create generator with logger
         generator = QueryGenerator(
             config=basic_config,
+            backend_name="pubmed",
             fetcher=mock_fetcher,
             investigation_logger=logger,
         )
@@ -299,6 +301,7 @@ async def test_clustering_enabled_logging(
         # Create generator with clustering enabled
         generator = QueryGenerator(
             config=clustering_config,
+            backend_name="pubmed",
             fetcher=mock_fetcher,
             investigation_logger=logger,
         )
@@ -405,6 +408,7 @@ async def test_clustering_disabled_logging(
         # Create generator without clustering
         generator = QueryGenerator(
             config=basic_config,
+            backend_name="pubmed",
             fetcher=mock_fetcher,
             investigation_logger=logger,
         )
@@ -465,6 +469,7 @@ async def test_query_generation_logging_yake(
         # Create generator with YAKE
         generator = QueryGenerator(
             config=basic_config,
+            backend_name="pubmed",
             fetcher=mock_fetcher,
             investigation_logger=logger,
         )
@@ -552,6 +557,7 @@ async def test_query_generation_logging_llm(
         # Create generator with LLM
         generator = QueryGenerator(
             config=llm_config,
+            backend_name="pubmed",
             fetcher=mock_fetcher,
             investigation_logger=logger,
         )
@@ -618,6 +624,7 @@ async def test_query_index_increments(
         # Create generator
         generator = QueryGenerator(
             config=basic_config,
+            backend_name="pubmed",
             fetcher=mock_fetcher,
             investigation_logger=logger,
         )
@@ -705,6 +712,7 @@ async def test_clustered_query_logging(
         # Create generator with clustering
         generator = QueryGenerator(
             config=clustering_config,
+            backend_name="pubmed",
             fetcher=mock_fetcher,
             investigation_logger=logger,
         )

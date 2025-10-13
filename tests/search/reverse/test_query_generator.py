@@ -37,7 +37,7 @@ async def test_generate_queries_from_pmids():
         use_hint_fields=False,
         enable_clustering=False,  # Force individual query generation
     )
-    generator = QueryGenerator(config)
+    generator = QueryGenerator(config, backend_name="pubmed")
 
     # Mock PMID metadata fetching
     with patch.object(generator, "_fetch_pmid_metadata_batch") as mock_fetch:
@@ -76,7 +76,7 @@ async def test_generate_queries_from_urls():
         use_hint_fields=False,
         enable_clustering=False,
     )
-    generator = QueryGenerator(config)
+    generator = QueryGenerator(config, backend_name="pubmed")
 
     # Mock PageFetcher
     mock_fetcher = AsyncMock()
@@ -131,7 +131,7 @@ async def test_clustering_reduces_query_count():
         keywords_per_query=5,
         use_hint_fields=False,
     )
-    generator = QueryGenerator(config)
+    generator = QueryGenerator(config, backend_name="pubmed")
 
     # Create 6 resources with similar content (should cluster into 2 groups)
     resources = [
@@ -178,7 +178,7 @@ async def test_clustering_fallback_for_small_batch():
         keywords_per_query=5,
         use_hint_fields=False,
     )
-    generator = QueryGenerator(config)
+    generator = QueryGenerator(config, backend_name="pubmed")
 
     # Only 2 resources - below min_cluster_size
     resources = [
@@ -211,7 +211,7 @@ async def test_batch_pmid_fetching():
         batch_pmid_fetch_size=200,
         keyword_extractor="yake",
     )
-    generator = QueryGenerator(config)
+    generator = QueryGenerator(config, backend_name="pubmed")
 
     # Mock HTTP client
     mock_client = AsyncMock()
@@ -251,7 +251,7 @@ async def test_batch_pmid_fetching_handles_errors():
         batch_pmid_fetch_size=200,
         keyword_extractor="yake",
     )
-    generator = QueryGenerator(config)
+    generator = QueryGenerator(config, backend_name="pubmed")
 
     # Mock HTTP client to raise error
     mock_client = AsyncMock()
@@ -279,7 +279,7 @@ async def test_metadata_fetch_failure_falls_back_to_content():
         use_hint_fields=False,
         enable_clustering=False,
     )
-    generator = QueryGenerator(config)
+    generator = QueryGenerator(config, backend_name="pubmed")
 
     # Mock PMID fetch to return empty (simulating failure)
     with patch.object(generator, "_fetch_pmid_metadata_batch") as mock_pmid:
@@ -315,7 +315,7 @@ async def test_content_fetch_failure_uses_hint_fields():
         use_hint_fields=True,
         enable_clustering=False,
     )
-    generator = QueryGenerator(config)
+    generator = QueryGenerator(config, backend_name="pubmed")
 
     # Mock PageFetcher to return no document
     mock_fetcher = AsyncMock()
@@ -352,7 +352,7 @@ async def test_hint_fields_included_when_enabled():
         use_hint_fields=True,
         enable_clustering=False,
     )
-    generator = QueryGenerator(config)
+    generator = QueryGenerator(config, backend_name="pubmed")
 
     # Mock content fetching
     with patch.object(generator, "_fetch_resource_contents") as mock_fetch:
@@ -389,7 +389,7 @@ async def test_hint_fields_excluded_when_disabled():
         use_hint_fields=False,
         enable_clustering=False,
     )
-    generator = QueryGenerator(config)
+    generator = QueryGenerator(config, backend_name="pubmed")
 
     # Mock content fetching
     with patch.object(generator, "_fetch_resource_contents") as mock_fetch:
@@ -470,7 +470,7 @@ async def test_construct_query_empty_keywords():
 def test_extract_hint_terms():
     """Test extraction of unique hint terms from resources."""
     config = ReverseSearchConfig()
-    generator = QueryGenerator(config)
+    generator = QueryGenerator(config, backend_name="pubmed")
 
     resources = [
         KnownResource(
@@ -506,7 +506,7 @@ async def test_refinement_queries_exclude_duplicates():
         use_hint_fields=False,
         enable_clustering=False,
     )
-    generator = QueryGenerator(config)
+    generator = QueryGenerator(config, backend_name="pubmed")
 
     # Mock content fetching to return predictable keywords
     with patch.object(generator, "_fetch_resource_contents") as mock_fetch:
@@ -550,7 +550,7 @@ async def test_refinement_queries_with_new_resources():
         use_hint_fields=False,
         enable_clustering=False,
     )
-    generator = QueryGenerator(config)
+    generator = QueryGenerator(config, backend_name="pubmed")
 
     # Mock content fetching
     with patch.object(generator, "_fetch_resource_contents") as mock_fetch:
@@ -600,7 +600,7 @@ async def test_refinement_queries_with_new_resources():
 async def test_empty_resources_list():
     """Test that empty resources list returns empty queries."""
     config = ReverseSearchConfig()
-    generator = QueryGenerator(config)
+    generator = QueryGenerator(config, backend_name="pubmed")
 
     queries = await generator.generate_initial_queries([])
     assert queries == []
@@ -616,7 +616,7 @@ async def test_single_resource_no_clustering():
         keywords_per_query=3,
         use_hint_fields=False,
     )
-    generator = QueryGenerator(config)
+    generator = QueryGenerator(config, backend_name="pubmed")
 
     # Mock content fetching
     with patch.object(generator, "_fetch_resource_contents") as mock_fetch:
@@ -648,7 +648,7 @@ async def test_resources_with_no_extractable_keywords():
         use_hint_fields=False,
         enable_clustering=False,
     )
-    generator = QueryGenerator(config)
+    generator = QueryGenerator(config, backend_name="pubmed")
 
     # Mock content fetching with minimal text
     with patch.object(generator, "_fetch_resource_contents") as mock_fetch:
