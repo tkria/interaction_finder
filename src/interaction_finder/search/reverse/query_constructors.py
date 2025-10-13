@@ -199,12 +199,12 @@ BACKEND_SYNTAX_GUIDANCE = {
         "example": 'Example: BRCA1[Gene] AND "breast cancer"[MeSH]',
     },
     "perplexica": {
-        "instructions": "Use natural language queries ONLY. Do NOT use PubMed field tags like [Title], [Abstract], [Gene], or [MeSH].",
-        "example": "Example: BRCA1 breast cancer hereditary mutations",
+        "instructions": "Use natural, conversational language. Express queries as phrases or questions. Do NOT use Boolean operators (AND, OR, NOT) or PubMed field tags like [Title], [Abstract], [Gene].",
+        "example": "Example: BRCA1 mutations in hereditary breast cancer",
     },
     "openai": {
-        "instructions": "Use natural language queries with optional Boolean operators (AND, OR, NOT). Do NOT use field tags like [Title] or [Abstract].",
-        "example": "Example: BRCA1 AND breast cancer molecular mechanisms",
+        "instructions": "Use natural, conversational language. Express queries as phrases or questions. Do NOT use Boolean operators (AND, OR, NOT) or field tags like [Title] or [Abstract].",
+        "example": "Example: BRCA1 role in breast cancer molecular mechanisms",
     },
     "pmc": {
         "instructions": "Use natural language queries with optional Boolean operators (AND, OR, NOT). Do NOT use PubMed field tags.",

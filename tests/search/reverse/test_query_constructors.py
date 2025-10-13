@@ -573,10 +573,13 @@ def test_llm_prompt_perplexica_syntax():
 
     # Should contain Perplexica backend name
     assert "perplexica" in prompt.lower()
-    # Should contain negative instructions about PubMed tags
-    assert "Do NOT use PubMed field tags" in prompt or "Do NOT use field tags" in prompt
-    # Should recommend natural language
-    assert "natural language" in prompt.lower()
+    # Should contain negative instructions about PubMed tags and Boolean operators
+    assert (
+        "Do NOT use Boolean operators" in prompt
+        or "Do NOT use PubMed field tags" in prompt
+    )
+    # Should recommend natural/conversational language
+    assert "natural" in prompt.lower() or "conversational" in prompt.lower()
 
 
 def test_llm_prompt_openai_syntax():
@@ -598,10 +601,10 @@ def test_llm_prompt_openai_syntax():
 
     # Should contain OpenAI backend name
     assert "openai" in prompt.lower()
-    # Should contain negative instructions about field tags
-    assert "Do NOT use field tags" in prompt
-    # Should allow Boolean operators
-    assert "Boolean operators" in prompt or "AND" in prompt or "OR" in prompt
+    # Should contain negative instructions about field tags or Boolean operators
+    assert "Do NOT use" in prompt
+    # Should recommend natural/conversational language
+    assert "natural" in prompt.lower() or "conversational" in prompt.lower()
 
 
 def test_llm_prompt_pmc_syntax():
@@ -883,6 +886,7 @@ async def test_integration_perplexica_backend_avoids_pubmed_syntax():
         call_args = mock_agent.run.call_args
         prompt_arg = call_args[0][0]  # First positional argument
         assert (
-            "Do NOT use PubMed field tags" in prompt_arg
+            "Do NOT use Boolean operators" in prompt_arg
+            or "Do NOT use PubMed field tags" in prompt_arg
             or "Do NOT use field tags" in prompt_arg
         )

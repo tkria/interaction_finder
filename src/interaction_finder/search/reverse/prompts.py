@@ -48,15 +48,41 @@ CONSTRUCTION STRATEGY:
    • Discover DOMAIN SPECIFICITY (gene function? disease mechanism? therapeutic context?)
    • But DON'T abandon the keywords - use content to enhance them
 
-3. INTEGRATE HINT TERMS
-   • Hint terms are domain-specific metadata (cell types, markers, diseases)
+3. INTEGRATE HINT TERMS STRATEGICALLY
+   • Hint terms are domain-specific metadata providing valuable context
    • ASSESS RELEVANCE: Only use if they strengthen the query
-   • COMBINE with keywords when they provide additional specificity
+   • UNDERSTAND CARDINALITY: When combining multiple hint terms, consider their nature:
+
+     **Entity Terms** (specific identifiers, proper nouns):
+     → Multiple entities typically indicate ALTERNATIVES, not requirements
+     → Papers usually focus on ONE entity at a time, not all simultaneously
+     → Combine with OR logic: (EntityA OR EntityB OR EntityC)
+     → Examples: gene names, protein IDs, cell line names, drug names
+
+     **Descriptive Terms** (concepts, processes, phenotypes):
+     → These are qualifying attributes that can co-occur
+     → Combine with AND logic to increase specificity
+     → Examples: disease names, biological processes, phenotypes, methods
+
+   • BALANCE SPECIFICITY: A good query needs enough specificity to be useful,
+     but not so much that it requires ALL entities to be present
+   • EXAMPLE: Hints {"gene": "BMPR2 TBX5 MYBPC3", "disease": "pulmonary arterial hypertension"}
+     → PubMed: (BMPR2 OR TBX5 OR MYBPC3) AND "pulmonary arterial hypertension"
+     → Natural language: "pulmonary arterial hypertension genetics" or "BMPR2 pulmonary hypertension"
+       (pick one representative gene rather than listing all)
+     → Bad: BMPR2 AND TBX5 AND MYBPC3 AND "pulmonary arterial hypertension"
+       (too specific - most papers only discuss one gene)
 
 4. APPLY BACKEND-SPECIFIC SYNTAX (if configured)
-   • Use field tags to target specific metadata: [Title], [Abstract], [MeSH], [Author]
-   • Combine terms with AND/OR operators for precision
-   • Use quotes for exact phrases when appropriate
+   • For PubMed/structured backends:
+     - Use field tags: [Title], [Abstract], [MeSH], [Author]
+     - Combine terms with AND/OR operators for precision
+     - Use quotes for exact phrases when appropriate
+   • For natural language backends (perplexica, openai):
+     - Use conversational phrases or questions
+     - Do NOT use Boolean operators (AND, OR, NOT) or field tags
+     - When multiple entities present, pick ONE representative + context
+     - Express relationships naturally: "X in Y", "X role in Y", "X effects on Y"
 
 5. KEYWORD SCORES INTERPRETATION
    • Extractor name tells you HOW keywords were scored:
@@ -97,6 +123,16 @@ GOOD CONSTRUCTION EXAMPLES:
    → Query: BRCA1[Title/Abstract] AND "breast cancer" AND (epithelial OR carcinoma)
    → Combined keywords with hint-derived cell type context
 
+✅ No keywords, Hints: {"gene": "BMPR2 TBX5 MYBPC3", "disease": "pulmonary arterial hypertension"}, Backend: pubmed
+   → Query: (BMPR2 OR TBX5 OR MYBPC3) AND "pulmonary arterial hypertension"
+   → Multiple entity terms (genes) combined with OR, descriptive term (disease) with AND
+   → Avoids over-constraining by requiring all genes simultaneously
+
+✅ No keywords, Hints: {"gene": "BMPR2 TBX5 MYBPC3", "disease": "pulmonary arterial hypertension"}, Backend: perplexica
+   → Query: BMPR2 genetic basis of pulmonary arterial hypertension
+   → Natural language: picked one representative gene + disease context
+   → Avoided listing all genes or using Boolean operators
+
 BAD CONSTRUCTION EXAMPLES:
 
 ❌ Keywords: ["BRCA1", "mutation"], Content available → Query: "BRCA1"
@@ -107,6 +143,14 @@ BAD CONSTRUCTION EXAMPLES:
 
 ❌ Keywords: ["FBLN4"], Content: "...arterial stiffness, vascular aging, calcification..." → Query: "FBLN4 arterial stiffness vascular aging calcification elastin degradation smooth muscle"
    → Added too many terms from content, losing focus
+
+❌ No keywords, Hints: {"gene": "BMPR2 TBX5 MYBPC3", "disease": "pulmonary arterial hypertension"}, Backend: pubmed → Query: "BMPR2 TBX5 MYBPC3 pulmonary arterial hypertension"
+   → Combined all gene names with AND (space-separated), over-constraining the query
+   → Papers typically discuss one gene at a time, this would match almost nothing
+
+❌ No keywords, Hints: {"gene": "BMPR2", "disease": "pulmonary arterial hypertension"}, Backend: perplexica → Query: "BMPR2 AND pulmonary arterial hypertension"
+   → Used Boolean operator AND on natural language backend
+   → Should use natural phrasing like "BMPR2 in pulmonary arterial hypertension"
 
 YOUR OUTPUT:
 Generate ONE query that balances:
