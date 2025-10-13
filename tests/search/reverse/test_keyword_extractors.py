@@ -1,7 +1,7 @@
 """
 Comprehensive tests for keyword extraction algorithms.
 
-Tests cover all three extractors (YAKE, RAKE, TF-IDF) with:
+Tests cover all four extractors (YAKE, RAKE, TF-IDF, None) with:
 - Sample text extraction (biomedical domain)
 - Empty text handling
 - Single-word text handling
@@ -14,6 +14,7 @@ import pytest
 
 from interaction_finder.search.reverse.keyword_extractors import (
     KeywordExtractor,
+    NoneExtractor,
     RAKEExtractor,
     TFIDFExtractor,
     YAKEExtractor,
@@ -271,6 +272,52 @@ class TestTFIDFExtractor:
 
 
 # ==============================================================================
+# NoneExtractor Tests
+# ==============================================================================
+
+
+class TestNoneExtractor:
+    """Test None extractor (null-object pattern)."""
+
+    def test_none_returns_empty_list(self):
+        """NoneExtractor always returns empty list."""
+        extractor = NoneExtractor()
+        assert extractor.extract(SAMPLE_TEXT, top_n=5) == []
+
+    def test_none_with_empty_text(self):
+        """NoneExtractor returns empty list for empty text."""
+        extractor = NoneExtractor()
+        assert extractor.extract(EMPTY_TEXT, top_n=5) == []
+
+    def test_none_ignores_top_n(self):
+        """NoneExtractor ignores top_n parameter."""
+        extractor = NoneExtractor()
+        # Different top_n values should all return empty list
+        assert extractor.extract(SAMPLE_TEXT, top_n=1) == []
+        assert extractor.extract(SAMPLE_TEXT, top_n=10) == []
+        assert extractor.extract(SAMPLE_TEXT, top_n=100) == []
+
+    def test_none_ignores_text_content(self):
+        """NoneExtractor ignores text content."""
+        extractor = NoneExtractor()
+        # All texts should return empty list
+        assert extractor.extract("Short text", top_n=5) == []
+        assert extractor.extract("A" * 10000, top_n=5) == []
+        assert extractor.extract("Special chars !@#$%", top_n=5) == []
+
+    def test_none_name_property(self):
+        """NoneExtractor has correct name."""
+        extractor = NoneExtractor()
+        assert extractor.name == "none"
+
+    def test_none_docstring_describes_purpose(self):
+        """NoneExtractor docstring explains null-object pattern."""
+        # Verify class has descriptive docstring
+        assert NoneExtractor.__doc__ is not None
+        assert "null" in NoneExtractor.__doc__.lower()
+
+
+# ==============================================================================
 # Factory Function Tests
 # ==============================================================================
 
@@ -296,11 +343,18 @@ class TestCreateExtractor:
         assert isinstance(extractor, TFIDFExtractor)
         assert extractor.name == "tfidf"
 
+    def test_create_none(self):
+        """Factory creates None extractor."""
+        extractor = create_extractor("none")
+        assert isinstance(extractor, NoneExtractor)
+        assert extractor.name == "none"
+
     def test_create_case_insensitive(self):
         """Factory handles case-insensitive names."""
         assert isinstance(create_extractor("YAKE"), YAKEExtractor)
         assert isinstance(create_extractor("Rake"), RAKEExtractor)
         assert isinstance(create_extractor("TfIdf"), TFIDFExtractor)
+        assert isinstance(create_extractor("NONE"), NoneExtractor)
 
     def test_create_unknown_raises(self):
         """Factory raises ValueError for unknown extractor name."""
@@ -323,7 +377,7 @@ class TestKeywordExtractorInterface:
 
     @pytest.mark.parametrize(
         "extractor_class",
-        [YAKEExtractor, RAKEExtractor, TFIDFExtractor],
+        [YAKEExtractor, RAKEExtractor, TFIDFExtractor, NoneExtractor],
     )
     def test_implements_interface(self, extractor_class):
         """All extractors implement KeywordExtractor interface."""
@@ -332,7 +386,7 @@ class TestKeywordExtractorInterface:
 
     @pytest.mark.parametrize(
         "extractor_class",
-        [YAKEExtractor, RAKEExtractor, TFIDFExtractor],
+        [YAKEExtractor, RAKEExtractor, TFIDFExtractor, NoneExtractor],
     )
     def test_has_extract_method(self, extractor_class):
         """All extractors have extract method."""
@@ -342,7 +396,7 @@ class TestKeywordExtractorInterface:
 
     @pytest.mark.parametrize(
         "extractor_class",
-        [YAKEExtractor, RAKEExtractor, TFIDFExtractor],
+        [YAKEExtractor, RAKEExtractor, TFIDFExtractor, NoneExtractor],
     )
     def test_has_name_property(self, extractor_class):
         """All extractors have name property."""
@@ -365,14 +419,18 @@ class TestExtractorIntegration:
             YAKEExtractor(),
             RAKEExtractor(),
             TFIDFExtractor(),
+            NoneExtractor(),
         ]
 
         for extractor in extractors:
             keywords = extractor.extract(SAMPLE_TEXT, top_n=5)
             assert isinstance(keywords, list)
             assert len(keywords) <= 5
-            # Should extract at least some keywords from non-empty text
-            assert len(keywords) > 0, f"{extractor.name} extracted no keywords"
+            # NoneExtractor should return empty, others should extract keywords
+            if extractor.name == "none":
+                assert len(keywords) == 0, "NoneExtractor should return empty list"
+            else:
+                assert len(keywords) > 0, f"{extractor.name} extracted no keywords"
 
     def test_extractors_produce_different_results(self):
         """Different extractors may produce different keywords."""
@@ -380,9 +438,11 @@ class TestExtractorIntegration:
         yake_kw = set(YAKEExtractor().extract(SAMPLE_TEXT, top_n=5))
         rake_kw = set(RAKEExtractor().extract(SAMPLE_TEXT, top_n=5))
         tfidf_kw = set(TFIDFExtractor().extract(SAMPLE_TEXT, top_n=5))
+        none_kw = set(NoneExtractor().extract(SAMPLE_TEXT, top_n=5))
 
         # Results don't need to be identical (different algorithms)
-        # Just verify they all produce results
+        # Just verify they all produce results (except None which should be empty)
         assert len(yake_kw) > 0
         assert len(rake_kw) > 0
         assert len(tfidf_kw) > 0
+        assert len(none_kw) == 0  # None always returns empty
