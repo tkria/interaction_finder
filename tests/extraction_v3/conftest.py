@@ -140,6 +140,23 @@ def test_config(tmp_path) -> IfetcherConfig:
     config.workflow = config_dict["workflow"]
     config.paths = config_dict["paths"]
 
+    # Add output.cache for PageFetcher/URLCache
+    config.output = MagicMock()
+    config.output.cache = config_dict["paths"]["cache_dir"]
+
+    # Add abspath() method for path resolution
+    def abspath(path, **kwargs):
+        """Mock abspath that returns absolute path from tmp_path."""
+        from pathlib import Path
+
+        path_str = str(path).format(**kwargs)
+        path_obj = Path(path_str)
+        if path_obj.is_absolute():
+            return path_obj
+        return tmp_path / path_obj
+
+    config.abspath = abspath
+
     return config
 
 

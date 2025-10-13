@@ -22,10 +22,10 @@ import uuid
 project_root = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from src.interaction_finder.fetcher import URLCache, PreviousFailure
-from src.interaction_finder.fetcher.batch_operations import BatchOperations
-from src.interaction_finder.fetcher.web_client import WebClient
-from src.interaction_finder.settings import IfetcherConfig
+from interaction_finder.fetcher import URLCache, PreviousFailure
+from interaction_finder.fetcher.batch_operations import BatchOperations
+from interaction_finder.fetcher.web_client import WebClient
+from interaction_finder.settings import IfetcherConfig
 
 
 def unique_url(base="http://test-site.com"):

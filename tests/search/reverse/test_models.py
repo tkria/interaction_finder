@@ -504,10 +504,23 @@ def test_reverse_search_config_max_queries_bounds():
 
 def test_reverse_search_config_keyword_extractor_literal():
     """Test ReverseSearchConfig validates keyword_extractor is one of allowed values."""
-    # Valid extractors
-    for extractor in ["yake", "rake", "tfidf", "llm"]:
+    import warnings
+
+    # Valid extractors (statistical)
+    for extractor in ["yake", "rake", "tfidf"]:
         config = ReverseSearchConfig(keyword_extractor=extractor)
         assert config.keyword_extractor == extractor
+
+    # Valid extractor (none for full-content LLM)
+    config = ReverseSearchConfig(keyword_extractor="none", query_constructor="llm")
+    assert config.keyword_extractor == "none"
+
+    # Legacy extractor (llm) - migrated to none + llm constructor
+    with warnings.catch_warnings(record=True):
+        warnings.simplefilter("always")
+        config = ReverseSearchConfig(keyword_extractor="llm")
+        assert config.keyword_extractor == "none"
+        assert config.query_constructor == "llm"
 
     # Invalid extractor
     with pytest.raises(ValidationError) as exc_info:
@@ -582,18 +595,25 @@ def test_reverse_search_config_backward_compatibility():
 
 def test_reverse_search_config_llm_extractor_with_custom_config():
     """Test ReverseSearchConfig with llm extractor and custom llm_query_config."""
-    config = ReverseSearchConfig(
-        keyword_extractor="llm",
-        sort_by="date_desc",
-        llm_query_config={
-            "model": "anthropic:claude-3-sonnet",
-            "temperature": 0.5,
-        },
-    )
-    assert config.keyword_extractor == "llm"
-    assert config.sort_by == "date_desc"
-    assert config.llm_query_config["model"] == "anthropic:claude-3-sonnet"
-    assert config.llm_query_config["temperature"] == 0.5
+    import warnings
+
+    # Legacy llm extractor is migrated to none + llm constructor
+    with warnings.catch_warnings(record=True):
+        warnings.simplefilter("always")
+        config = ReverseSearchConfig(
+            keyword_extractor="llm",
+            sort_by="date_desc",
+            llm_query_config={
+                "model": "anthropic:claude-3-sonnet",
+                "temperature": 0.5,
+            },
+        )
+        # Check migration occurred
+        assert config.keyword_extractor == "none"
+        assert config.query_constructor == "llm"
+        assert config.sort_by == "date_desc"
+        assert config.llm_query_config["model"] == "anthropic:claude-3-sonnet"
+        assert config.llm_query_config["temperature"] == 0.5
 
 
 def test_reverse_search_config_keywords_per_query_bounds():
