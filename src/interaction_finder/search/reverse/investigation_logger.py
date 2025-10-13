@@ -132,7 +132,9 @@ class InvestigationLogEntry(BaseModel):
         "session_start",
         "content_fetch",
         "clustering",
-        "query_generation",
+        "keyword_extraction",
+        "query_construction",
+        "query_generation",  # Deprecated: legacy stage for backward compatibility
         "search_execution",
         "matching",
         "session_end",
@@ -211,6 +213,78 @@ class ClusteringEntry(InvestigationLogEntry):
     resource_count: int = Field(description="Total number of resources processed")
     clusters: List[Dict[str, Any]] = Field(
         description="Cluster details with statistics"
+    )
+
+
+class KeywordExtractionEntry(InvestigationLogEntry):
+    """
+    Logged after keyword extraction stage.
+
+    Captures extraction details including extractor type, configuration, extracted
+    keywords with scores, extraction timing, and input resources.
+
+    Fields:
+        stage: Literal["keyword_extraction"] - Always "keyword_extraction"
+        query_index: int - Sequential index of this query
+        extractor_type: str - Keyword extractor used (yake/rake/tfidf/llm)
+        extractor_config: Dict[str, Any] - Extractor configuration
+        keywords: List[KeywordDetail] - Extracted keywords with scores
+        extraction_time: float - Time taken for extraction in seconds
+        input_resources: List[str] - Compact resource IDs contributing to extraction
+        content_source: str - Content source type ("metadata", "content", "hint_fields")
+    """
+
+    stage: Literal["keyword_extraction"] = "keyword_extraction"
+    query_index: int = Field(description="Sequential index of this query")
+    extractor_type: str = Field(description="Keyword extractor used")
+    extractor_config: Dict[str, Any] = Field(description="Extractor configuration")
+    keywords: List[KeywordDetail] = Field(description="Extracted keywords with scores")
+    extraction_time: float = Field(description="Time taken for extraction in seconds")
+    input_resources: List[str] = Field(
+        description="Compact resource IDs: PMID:X (with prefix) or raw URL (no prefix)"
+    )
+    content_source: str = Field(description="Content source type")
+
+
+class QueryConstructionEntry(InvestigationLogEntry):
+    """
+    Logged after query construction stage.
+
+    Captures construction details including constructor type, configuration, input
+    keywords, hint terms, final query, and whether fallback was used.
+
+    Fields:
+        stage: Literal["query_construction"] - Always "query_construction"
+        query_index: int - Sequential index of this query
+        constructor_type: str - Query constructor used (direct/llm)
+        constructor_config: Dict[str, Any] - Constructor configuration
+        input_keywords: List[str] - Keywords used for construction
+        keyword_scores: List[Optional[float]] - Scores for corresponding keywords
+        hint_terms: List[str] - Terms extracted from hint fields
+        final_query: str - Final query text sent to backend
+        construction_time: float - Time taken for construction in seconds
+        fallback_used: bool - Whether fallback constructor was used
+        backend: str - Target search backend
+        cumulative_coverage: float - Coverage achieved after this query (0.0-1.0)
+    """
+
+    stage: Literal["query_construction"] = "query_construction"
+    query_index: int = Field(description="Sequential index of this query")
+    constructor_type: str = Field(description="Query constructor used")
+    constructor_config: Dict[str, Any] = Field(description="Constructor configuration")
+    input_keywords: List[str] = Field(description="Keywords used for construction")
+    keyword_scores: List[Optional[float]] = Field(
+        description="Scores for corresponding keywords"
+    )
+    hint_terms: List[str] = Field(description="Terms extracted from hint fields")
+    final_query: str = Field(description="Final query text sent to backend")
+    construction_time: float = Field(
+        description="Time taken for construction in seconds"
+    )
+    fallback_used: bool = Field(description="Whether fallback constructor was used")
+    backend: str = Field(description="Target search backend")
+    cumulative_coverage: float = Field(
+        description="Cumulative coverage after this query (0.0-1.0)", ge=0.0, le=1.0
     )
 
 
@@ -580,6 +654,102 @@ class InvestigationLogger:
         )
         await self._write_entry(entry)
 
+    async def log_keyword_extraction(
+        self,
+        query_index: int,
+        extractor_type: str,
+        extractor_config: Dict[str, Any],
+        keywords: List[Dict[str, Any]],
+        extraction_time: float,
+        input_resources: List[str],
+        content_source: str,
+    ) -> None:
+        """
+        Log keyword extraction stage.
+
+        Args:
+            query_index: Sequential query index
+            extractor_type: Keyword extractor used (yake/rake/tfidf/llm)
+            extractor_config: Extractor configuration
+            keywords: Extracted keywords with scores (list of dicts with keyword/score)
+            extraction_time: Time taken for extraction in seconds
+            input_resources: Compact resource IDs contributing to extraction
+            content_source: Content source type ("metadata", "content", "hint_fields")
+        """
+        # Convert keywords to KeywordDetail objects
+        keyword_details = []
+        for kw in keywords:
+            if isinstance(kw, dict):
+                keyword_details.append(
+                    KeywordDetail(
+                        keyword=kw.get("keyword", str(kw)),
+                        score=kw.get("score"),
+                    )
+                )
+            else:
+                # Fallback for unexpected format
+                keyword_details.append(KeywordDetail(keyword=str(kw), score=None))
+
+        entry = KeywordExtractionEntry(
+            timestamp=self._now(),
+            session_id=self.session_id,
+            query_index=query_index,
+            extractor_type=extractor_type,
+            extractor_config=extractor_config,
+            keywords=keyword_details,
+            extraction_time=extraction_time,
+            input_resources=input_resources,
+            content_source=content_source,
+        )
+        await self._write_entry(entry)
+
+    async def log_query_construction(
+        self,
+        query_index: int,
+        constructor_type: str,
+        constructor_config: Dict[str, Any],
+        input_keywords: List[str],
+        keyword_scores: List[Optional[float]],
+        hint_terms: List[str],
+        final_query: str,
+        construction_time: float,
+        fallback_used: bool,
+        backend: str,
+        cumulative_coverage: float,
+    ) -> None:
+        """
+        Log query construction stage.
+
+        Args:
+            query_index: Sequential query index
+            constructor_type: Query constructor used (direct/llm)
+            constructor_config: Constructor configuration
+            input_keywords: Keywords used for construction
+            keyword_scores: Scores for corresponding keywords
+            hint_terms: Terms extracted from hint fields
+            final_query: Final query text sent to backend
+            construction_time: Time taken for construction in seconds
+            fallback_used: Whether fallback constructor was used
+            backend: Target search backend
+            cumulative_coverage: Coverage achieved after this query (0.0-1.0)
+        """
+        entry = QueryConstructionEntry(
+            timestamp=self._now(),
+            session_id=self.session_id,
+            query_index=query_index,
+            constructor_type=constructor_type,
+            constructor_config=constructor_config,
+            input_keywords=input_keywords,
+            keyword_scores=keyword_scores,
+            hint_terms=hint_terms,
+            final_query=final_query,
+            construction_time=construction_time,
+            fallback_used=fallback_used,
+            backend=backend,
+            cumulative_coverage=cumulative_coverage,
+        )
+        await self._write_entry(entry)
+
     async def log_query_generation(
         self,
         query_index: int,
@@ -594,7 +764,12 @@ class InvestigationLogger:
         cumulative_coverage: float = 0.0,
     ) -> None:
         """
-        Log query generation.
+        Log query generation (legacy single-stage format).
+
+        DEPRECATED: This method logs the old single-stage query_generation format.
+        New code should use log_keyword_extraction() and log_query_construction()
+        for the two-stage format, which provides better traceability and enables
+        reusability analysis.
 
         Args:
             query_index: Sequential query index
