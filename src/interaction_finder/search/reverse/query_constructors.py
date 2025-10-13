@@ -186,6 +186,52 @@ class DirectQueryConstructor(QueryConstructor):
         return "direct"
 
 
+# ==============================================================================
+# Backend Syntax Guidance Mapping
+# ==============================================================================
+
+# Backend-specific syntax guidance for LLM query construction
+# Provides both positive instructions (what to use) and negative constraints
+# (what NOT to use) to counter LLM training bias toward PubMed syntax
+BACKEND_SYNTAX_GUIDANCE = {
+    "pubmed": {
+        "instructions": "Use PubMed field tags to target specific metadata fields: [Title], [Abstract], [Gene], [MeSH], [Author], [Journal].",
+        "example": 'Example: BRCA1[Gene] AND "breast cancer"[MeSH]',
+    },
+    "perplexica": {
+        "instructions": "Use natural language queries ONLY. Do NOT use PubMed field tags like [Title], [Abstract], [Gene], or [MeSH].",
+        "example": "Example: BRCA1 breast cancer hereditary mutations",
+    },
+    "openai": {
+        "instructions": "Use natural language queries with optional Boolean operators (AND, OR, NOT). Do NOT use field tags like [Title] or [Abstract].",
+        "example": "Example: BRCA1 AND breast cancer molecular mechanisms",
+    },
+    "pmc": {
+        "instructions": "Use natural language queries with optional Boolean operators (AND, OR, NOT). Do NOT use PubMed field tags.",
+        "example": "Example: FBLN4 AND vascular calcification",
+    },
+    "google": {
+        "instructions": "Use natural language queries with optional Boolean operators. Do NOT use PubMed field tags.",
+        "example": "Example: hereditary pulmonary hypertension BMPR2",
+    },
+    "semantic_scholar": {
+        "instructions": "Use natural language queries with optional Boolean operators. Do NOT use field tags.",
+        "example": "Example: Marfan syndrome fibrillin molecular mechanism",
+    },
+}
+
+# Fallback for unknown backends
+DEFAULT_SYNTAX_GUIDANCE = {
+    "instructions": "Use natural language queries with Boolean operators (AND, OR, NOT). Do NOT use PubMed field tags like [Title], [Abstract], [Gene].",
+    "example": "Example: gene name AND disease term",
+}
+
+
+# ==============================================================================
+# LLM-Based Query Constructor
+# ==============================================================================
+
+
 class LLMQueryConstructor(QueryConstructor):
     """
     LLM-based query constructor with maximum-context prompting.
@@ -347,9 +393,15 @@ class LLMQueryConstructor(QueryConstructor):
 
         # Section 4: Backend-specific instructions
         if self._backend_specific:
-            backend_section = f"\nTARGET BACKEND: {context.backend}\n"
-            if context.backend.lower() == "pubmed":
-                backend_section += "Use PubMed field tags: [Title], [Abstract], [MeSH], [Author], etc.\n"
+            backend_name_normalized = context.backend.lower()
+            guidance = BACKEND_SYNTAX_GUIDANCE.get(
+                backend_name_normalized, DEFAULT_SYNTAX_GUIDANCE
+            )
+            backend_section = (
+                f"\nTARGET BACKEND: {context.backend}\n"
+                f"{guidance['instructions']}\n"
+                f"{guidance['example']}\n"
+            )
             sections.append(backend_section)
         else:
             sections.append(

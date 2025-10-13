@@ -236,7 +236,7 @@ async def test_pubmed_specific_query_syntax():
         },
     )
 
-    generator = QueryGenerator(config, console=None)
+    generator = QueryGenerator(config, backend_name="pubmed", console=None)
 
     # Mock LLM to return PubMed-specific query
     from unittest.mock import patch
@@ -291,7 +291,7 @@ async def test_generic_query_syntax_for_other_backends():
         },
     )
 
-    generator = QueryGenerator(config, console=None)
+    generator = QueryGenerator(config, backend_name="perplexica", console=None)
 
     from unittest.mock import patch
 

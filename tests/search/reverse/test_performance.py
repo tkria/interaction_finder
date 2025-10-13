@@ -11,6 +11,7 @@ Note: These are not strict performance tests but regression checks to catch
 significant performance degradations. Mark as slow/optional for CI.
 """
 
+import asyncio
 import pytest
 import time
 from unittest.mock import AsyncMock, Mock, patch

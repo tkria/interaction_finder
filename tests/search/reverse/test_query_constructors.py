@@ -525,6 +525,247 @@ def test_query_constructor_incomplete_subclass():
 
 
 # ==============================================================================
+# Backend Syntax Guidance Tests
+# ==============================================================================
+
+
+def test_llm_prompt_pubmed_syntax():
+    """Test LLMQueryConstructor prompt contains PubMed field tag instructions."""
+    context = QueryConstructionContext(
+        keywords=["BRCA1", "breast cancer"],
+        keyword_scores=[0.05, 0.12],
+        hint_terms=["hereditary"],
+        backend="pubmed",
+        resource_content=None,
+        extractor_used="yake",
+    )
+
+    constructor = LLMQueryConstructor(
+        model="openai:gpt-4o-mini", temperature=0.3, backend_specific=True
+    )
+
+    prompt = constructor._build_prompt(context)
+
+    # Should contain PubMed-specific instructions
+    assert "pubmed" in prompt.lower()
+    assert "[Title]" in prompt or "[Abstract]" in prompt or "[Gene]" in prompt
+    assert "field tags" in prompt.lower()
+    # Should NOT contain negative instructions about PubMed tags
+    assert "Do NOT use PubMed" not in prompt
+
+
+def test_llm_prompt_perplexica_syntax():
+    """Test LLMQueryConstructor prompt contains negative instructions for Perplexica."""
+    context = QueryConstructionContext(
+        keywords=["FBLN4", "calcification"],
+        keyword_scores=[0.03, 0.15],
+        hint_terms=["arterial stiffness"],
+        backend="perplexica",
+        resource_content=None,
+        extractor_used="yake",
+    )
+
+    constructor = LLMQueryConstructor(
+        model="openai:gpt-4o-mini", temperature=0.3, backend_specific=True
+    )
+
+    prompt = constructor._build_prompt(context)
+
+    # Should contain Perplexica backend name
+    assert "perplexica" in prompt.lower()
+    # Should contain negative instructions about PubMed tags
+    assert "Do NOT use PubMed field tags" in prompt or "Do NOT use field tags" in prompt
+    # Should recommend natural language
+    assert "natural language" in prompt.lower()
+
+
+def test_llm_prompt_openai_syntax():
+    """Test LLMQueryConstructor prompt contains negative instructions for OpenAI."""
+    context = QueryConstructionContext(
+        keywords=["TP53", "tumor suppressor"],
+        keyword_scores=[0.08, 0.14],
+        hint_terms=["p53 pathway"],
+        backend="openai",
+        resource_content=None,
+        extractor_used="yake",
+    )
+
+    constructor = LLMQueryConstructor(
+        model="openai:gpt-4o-mini", temperature=0.3, backend_specific=True
+    )
+
+    prompt = constructor._build_prompt(context)
+
+    # Should contain OpenAI backend name
+    assert "openai" in prompt.lower()
+    # Should contain negative instructions about field tags
+    assert "Do NOT use field tags" in prompt
+    # Should allow Boolean operators
+    assert "Boolean operators" in prompt or "AND" in prompt or "OR" in prompt
+
+
+def test_llm_prompt_pmc_syntax():
+    """Test LLMQueryConstructor prompt contains negative instructions for PMC."""
+    context = QueryConstructionContext(
+        keywords=["collagen", "fibrosis"],
+        keyword_scores=[0.07, 0.11],
+        hint_terms=["extracellular matrix"],
+        backend="pmc",
+        resource_content=None,
+        extractor_used="yake",
+    )
+
+    constructor = LLMQueryConstructor(
+        model="openai:gpt-4o-mini", temperature=0.3, backend_specific=True
+    )
+
+    prompt = constructor._build_prompt(context)
+
+    # Should contain PMC backend name
+    assert "pmc" in prompt.lower()
+    # Should contain negative instructions about PubMed tags
+    assert "Do NOT use PubMed field tags" in prompt
+    # Should allow natural language and Boolean operators
+    assert "natural language" in prompt.lower() or "Boolean" in prompt
+
+
+def test_llm_prompt_google_syntax():
+    """Test LLMQueryConstructor prompt contains negative instructions for Google."""
+    context = QueryConstructionContext(
+        keywords=["hypertension", "BMPR2"],
+        keyword_scores=[0.09, 0.16],
+        hint_terms=["pulmonary arterial"],
+        backend="google",
+        resource_content=None,
+        extractor_used="yake",
+    )
+
+    constructor = LLMQueryConstructor(
+        model="openai:gpt-4o-mini", temperature=0.3, backend_specific=True
+    )
+
+    prompt = constructor._build_prompt(context)
+
+    # Should contain Google backend name
+    assert "google" in prompt.lower()
+    # Should contain negative instructions about PubMed tags
+    assert "Do NOT use PubMed field tags" in prompt or "Do NOT use field tags" in prompt
+    # Should allow Boolean operators
+    assert "Boolean" in prompt or "natural language" in prompt.lower()
+
+
+def test_llm_prompt_semantic_scholar_syntax():
+    """Test LLMQueryConstructor prompt contains negative instructions for Semantic Scholar."""
+    context = QueryConstructionContext(
+        keywords=["Marfan", "fibrillin"],
+        keyword_scores=[0.06, 0.13],
+        hint_terms=["connective tissue"],
+        backend="semantic_scholar",
+        resource_content=None,
+        extractor_used="yake",
+    )
+
+    constructor = LLMQueryConstructor(
+        model="openai:gpt-4o-mini", temperature=0.3, backend_specific=True
+    )
+
+    prompt = constructor._build_prompt(context)
+
+    # Should contain Semantic Scholar backend name
+    assert "semantic_scholar" in prompt.lower()
+    # Should contain negative instructions about field tags
+    assert "Do NOT use field tags" in prompt
+    # Should allow natural language and Boolean operators
+    assert "natural language" in prompt.lower() or "Boolean" in prompt
+
+
+def test_llm_prompt_unknown_backend_fallback():
+    """Test LLMQueryConstructor uses DEFAULT_SYNTAX_GUIDANCE for unknown backends."""
+    context = QueryConstructionContext(
+        keywords=["gene", "disease"],
+        keyword_scores=[0.10, 0.20],
+        hint_terms=["phenotype"],
+        backend="unknown_backend",
+        resource_content=None,
+        extractor_used="yake",
+    )
+
+    constructor = LLMQueryConstructor(
+        model="openai:gpt-4o-mini", temperature=0.3, backend_specific=True
+    )
+
+    prompt = constructor._build_prompt(context)
+
+    # Should contain the unknown backend name
+    assert "unknown_backend" in prompt.lower()
+    # Should contain default negative instructions about PubMed tags
+    assert "Do NOT use PubMed field tags" in prompt
+    # Should recommend natural language with Boolean operators
+    assert "natural language" in prompt.lower()
+    assert "Boolean" in prompt or "AND" in prompt
+
+
+def test_llm_prompt_backend_specific_false():
+    """Test LLMQueryConstructor with backend_specific=False uses natural language mode."""
+    context = QueryConstructionContext(
+        keywords=["BRCA1", "cancer"],
+        keyword_scores=[0.05, 0.15],
+        hint_terms=["mutation"],
+        backend="pubmed",
+        resource_content=None,
+        extractor_used="yake",
+    )
+
+    constructor = LLMQueryConstructor(
+        model="openai:gpt-4o-mini", temperature=0.3, backend_specific=False
+    )
+
+    prompt = constructor._build_prompt(context)
+
+    # Should indicate natural language syntax
+    assert "natural language syntax" in prompt.lower()
+    # Should NOT contain backend-specific field tag instructions
+    assert "[Title]" not in prompt
+    assert "[Abstract]" not in prompt
+    assert "[Gene]" not in prompt
+    assert "field tags" not in prompt.lower()
+
+
+def test_llm_prompt_case_insensitive_backend():
+    """Test LLMQueryConstructor handles case-insensitive backend names."""
+    # Test with uppercase backend name
+    context_upper = QueryConstructionContext(
+        keywords=["test"],
+        keyword_scores=[0.10],
+        hint_terms=[],
+        backend="PUBMED",
+        resource_content=None,
+        extractor_used="yake",
+    )
+
+    # Test with mixed case backend name
+    context_mixed = QueryConstructionContext(
+        keywords=["test"],
+        keyword_scores=[0.10],
+        hint_terms=[],
+        backend="PubMed",
+        resource_content=None,
+        extractor_used="yake",
+    )
+
+    constructor = LLMQueryConstructor(
+        model="openai:gpt-4o-mini", temperature=0.3, backend_specific=True
+    )
+
+    prompt_upper = constructor._build_prompt(context_upper)
+    prompt_mixed = constructor._build_prompt(context_mixed)
+
+    # Both should contain PubMed field tag instructions (case-insensitive lookup)
+    assert "[Title]" in prompt_upper or "[Abstract]" in prompt_upper
+    assert "[Title]" in prompt_mixed or "[Abstract]" in prompt_mixed
+
+
+# ==============================================================================
 # Integration Tests
 # ==============================================================================
 
@@ -565,3 +806,83 @@ async def test_integration_llm_constructor_with_mock(basic_context):
 
         assert query == 'BRCA1[Title] AND "breast cancer" AND mutation'
         assert constructor.name == "llm"
+
+
+@pytest.mark.asyncio
+async def test_integration_pubmed_backend_maintains_compatibility(basic_context):
+    """Test PubMed backend query generation maintains backward compatibility."""
+    # Mock agent to return PubMed-style query with field tags
+    mock_response = LLMQueryConstructionResponse(
+        query='BRCA1[Gene] AND "breast cancer"[MeSH]',
+        reasoning="Used PubMed field tags for precision",
+    )
+    mock_result = Mock(spec=AgentRunResult)
+    mock_result.output = mock_response
+
+    constructor = LLMQueryConstructor(
+        model="openai:gpt-4o-mini", temperature=0.3, backend_specific=True
+    )
+
+    with patch.object(constructor, "_create_agent") as mock_create_agent:
+        mock_agent = AsyncMock()
+        mock_agent.run.return_value = mock_result
+        mock_create_agent.return_value = mock_agent
+
+        query = await constructor.construct(basic_context)
+
+        # Should successfully construct PubMed query with field tags
+        assert "[Gene]" in query
+        assert "[MeSH]" in query
+        assert "BRCA1" in query
+
+        # Verify prompt passed to agent contains PubMed instructions
+        call_args = mock_agent.run.call_args
+        prompt_arg = call_args[0][0]  # First positional argument
+        assert "[Title]" in prompt_arg or "[Abstract]" in prompt_arg
+
+
+@pytest.mark.asyncio
+async def test_integration_perplexica_backend_avoids_pubmed_syntax():
+    """Test Perplexica backend receives negative instructions about PubMed syntax."""
+    context = QueryConstructionContext(
+        keywords=["FBLN4", "calcification"],
+        keyword_scores=[0.03, 0.15],
+        hint_terms=["arterial stiffness"],
+        backend="perplexica",
+        resource_content=None,
+        extractor_used="yake",
+    )
+
+    # Mock agent to return natural language query (no field tags)
+    mock_response = LLMQueryConstructionResponse(
+        query="FBLN4 vascular calcification arterial stiffness",
+        reasoning="Used natural language for Perplexica compatibility",
+    )
+    mock_result = Mock(spec=AgentRunResult)
+    mock_result.output = mock_response
+
+    constructor = LLMQueryConstructor(
+        model="openai:gpt-4o-mini", temperature=0.3, backend_specific=True
+    )
+
+    with patch.object(constructor, "_create_agent") as mock_create_agent:
+        mock_agent = AsyncMock()
+        mock_agent.run.return_value = mock_result
+        mock_create_agent.return_value = mock_agent
+
+        query = await constructor.construct(context)
+
+        # Should successfully construct natural language query
+        assert "FBLN4" in query
+        assert "calcification" in query
+        # Should NOT contain PubMed field tags
+        assert "[" not in query
+        assert "]" not in query
+
+        # Verify prompt passed to agent contains negative instructions
+        call_args = mock_agent.run.call_args
+        prompt_arg = call_args[0][0]  # First positional argument
+        assert (
+            "Do NOT use PubMed field tags" in prompt_arg
+            or "Do NOT use field tags" in prompt_arg
+        )

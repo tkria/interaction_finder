@@ -87,7 +87,7 @@ def test_extractor_unchanged(extractor_name):
     """
     # Create extractor
     config = ReverseSearchConfig(keyword_extractor=extractor_name, keywords_per_query=7)
-    generator = QueryGenerator(config, console=None)
+    generator = QueryGenerator(config, backend_name="pubmed", console=None)
     extractor = generator.extractor
 
     # Extract keywords from fixed text
@@ -133,7 +133,7 @@ async def test_query_generation_unchanged(extractor_name, fixed_resources):
         use_hint_fields=False,  # Disable hints for deterministic testing
     )
 
-    generator = QueryGenerator(config, console=None)
+    generator = QueryGenerator(config, backend_name="pubmed", console=None)
 
     # Mock metadata fetch to return fixed content
     with patch.object(
@@ -174,7 +174,7 @@ async def test_query_generation_unchanged(extractor_name, fixed_resources):
 def test_yake_parameters_unchanged():
     """Test that YAKE extractor uses correct default parameters."""
     config = ReverseSearchConfig(keyword_extractor="yake", keywords_per_query=7)
-    generator = QueryGenerator(config, console=None)
+    generator = QueryGenerator(config, backend_name="pubmed", console=None)
     extractor = generator.extractor
 
     assert isinstance(extractor, YAKEExtractor)
@@ -187,7 +187,7 @@ def test_yake_parameters_unchanged():
 def test_rake_parameters_unchanged():
     """Test that RAKE extractor uses correct default parameters."""
     config = ReverseSearchConfig(keyword_extractor="rake", keywords_per_query=7)
-    generator = QueryGenerator(config, console=None)
+    generator = QueryGenerator(config, backend_name="pubmed", console=None)
     extractor = generator.extractor
 
     assert isinstance(extractor, RAKEExtractor)
@@ -198,7 +198,7 @@ def test_rake_parameters_unchanged():
 def test_tfidf_parameters_unchanged():
     """Test that TF-IDF extractor uses correct default parameters."""
     config = ReverseSearchConfig(keyword_extractor="tfidf", keywords_per_query=7)
-    generator = QueryGenerator(config, console=None)
+    generator = QueryGenerator(config, backend_name="pubmed", console=None)
     extractor = generator.extractor
 
     assert isinstance(extractor, TFIDFExtractor)
@@ -221,7 +221,7 @@ async def test_hint_fields_still_work_for_existing_extractors(fixed_resources):
         use_hint_fields=True,  # Enabled
     )
 
-    generator = QueryGenerator(config, console=None)
+    generator = QueryGenerator(config, backend_name="pubmed", console=None)
 
     with patch.object(
         generator,
@@ -262,7 +262,7 @@ async def test_no_llm_calls_for_existing_extractors(fixed_resources):
             keywords_per_query=7,
         )
 
-        generator = QueryGenerator(config, console=None)
+        generator = QueryGenerator(config, backend_name="pubmed", console=None)
 
         # Patch LLM classes to detect any calls
         with patch(
@@ -302,7 +302,7 @@ async def test_clustering_still_works_for_existing_extractors(fixed_resources):
         keywords_per_query=7,
     )
 
-    generator = QueryGenerator(config, console=None)
+    generator = QueryGenerator(config, backend_name="pubmed", console=None)
 
     # Mock metadata fetch
     with patch.object(
@@ -356,7 +356,7 @@ def test_query_construction_format_unchanged():
         config = ReverseSearchConfig(
             keyword_extractor=extractor_name, keywords_per_query=5
         )
-        generator = QueryGenerator(config, console=None)
+        generator = QueryGenerator(config, backend_name="pubmed", console=None)
         extractor = generator.extractor
 
         keywords = ["keyword1", "phrase two", "term3"]

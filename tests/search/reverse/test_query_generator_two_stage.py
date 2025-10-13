@@ -448,7 +448,7 @@ async def test_investigation_logging_two_stage(
             try:
                 # Collect multi-line JSON objects
                 pass
-            except:
+            except Exception:
                 pass
 
     # Note: Investigation logging may use pretty-printed JSON
