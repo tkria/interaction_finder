@@ -90,7 +90,8 @@ class ReverseSearcher:
         # Initialize components (pass console and investigation logger)
         self.query_generator = QueryGenerator(
             config,
-            fetcher,
+            backend_name=self.backend.backend_name,
+            fetcher=fetcher,
             console=self.console,
             investigation_logger=investigation_logger,
         )
