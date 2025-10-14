@@ -149,6 +149,7 @@ async def test_llm_extractor_works_across_backends(
         },
         sort_by="relevance",
         max_queries=5,  # Minimum allowed value
+        search_backend=backend_name,
     )
 
     backend = create_mock_backend(backend_name)
@@ -192,8 +193,8 @@ async def test_relevance_sort_across_backends(
         keyword_extractor="yake",  # Use YAKE for simpler testing
         sort_by="relevance",
         max_queries=5,  # Minimum allowed value
+        search_backend=backend_name,
     )
-
     backend = create_mock_backend(backend_name)
     searcher = ReverseSearcher(config, backend, mock_cache, mock_fetcher)
 
@@ -234,8 +235,8 @@ async def test_pubmed_specific_query_syntax():
             "model": "openai:gpt-4o-mini",
             "backend_specific_syntax": True,  # Enable PubMed syntax
         },
+        search_backend="pubmed",
     )
-
     generator = QueryGenerator(config, backend_name="pubmed", console=None)
 
     # Mock LLM to return PubMed-specific query
@@ -289,8 +290,8 @@ async def test_generic_query_syntax_for_other_backends():
             "model": "openai:gpt-4o-mini",
             "backend_specific_syntax": False,  # Generic syntax
         },
+        search_backend="perplexica",
     )
-
     generator = QueryGenerator(config, backend_name="perplexica", console=None)
 
     from unittest.mock import patch
@@ -340,12 +341,12 @@ async def test_pmid_matching_works_across_backends(
     PubMed always has PMIDs, Perplexica may extract them from URLs,
     OpenAI Search typically doesn't have them.
     """
-    config = ReverseSearchConfig(
-        keyword_extractor="yake",
-        max_queries=5,  # Minimum allowed value
-    )
-
     for backend_name in ["pubmed", "perplexica", "openai_search"]:
+        config = ReverseSearchConfig(
+            keyword_extractor="yake",
+            max_queries=5,  # Minimum allowed value
+            search_backend=backend_name,
+        )
         backend = create_mock_backend(backend_name)
         searcher = ReverseSearcher(config, backend, mock_cache, mock_fetcher)
 
@@ -386,8 +387,8 @@ async def test_url_matching_fallback_across_backends(mock_cache, mock_fetcher):
     config = ReverseSearchConfig(
         keyword_extractor="yake",
         max_queries=5,  # Minimum allowed value
+        search_backend="perplexica",
     )
-
     # Test with Perplexica (returns web URLs)
     backend = create_mock_backend("perplexica")
     searcher = ReverseSearcher(config, backend, mock_cache, mock_fetcher)
@@ -412,14 +413,14 @@ async def test_config_backward_compatible_across_backends(
     default/old settings should work unchanged.
     """
     # Old-style config (YAKE, no LLM, default sort)
-    config = ReverseSearchConfig(
-        keyword_extractor="yake",
-        keywords_per_query=7,
-        # No sort_by specified, uses default
-        # No llm_query_config needed
-    )
-
     for backend_name in ["pubmed", "perplexica", "openai_search"]:
+        config = ReverseSearchConfig(
+            keyword_extractor="yake",
+            keywords_per_query=7,
+            # No sort_by specified, uses default
+            # No llm_query_config needed
+            search_backend=backend_name,
+        )
         backend = create_mock_backend(backend_name)
         searcher = ReverseSearcher(config, backend, mock_cache, mock_fetcher)
 
@@ -453,8 +454,8 @@ async def test_hint_fields_across_backends(
         llm_query_config={"model": "openai:gpt-4o-mini"},
         use_hint_fields=True,
         max_queries=5,  # Minimum allowed value
+        search_backend=backend_name,
     )
-
     backend = create_mock_backend(backend_name)
     searcher = ReverseSearcher(config, backend, mock_cache, mock_fetcher)
 
@@ -508,8 +509,8 @@ async def test_error_handling_across_backends(
     config = ReverseSearchConfig(
         keyword_extractor="yake",
         max_queries=5,  # Minimum allowed value
+        search_backend="failing_backend",
     )
-
     # Create backend that fails on some queries
     backend = Mock(spec=SearchBackend)
     backend.backend_name = "failing_backend"

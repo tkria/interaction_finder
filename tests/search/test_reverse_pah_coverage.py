@@ -205,7 +205,7 @@ async def test_pah_coverage_target_with_llm(
         max_queries=10,
         use_hint_fields=True,  # Use gene/disease hints from dataset
         enable_clustering=False,  # Disable for simpler initial test
-    )
+        search_backend="test_backend")
 
     # Create searcher
     searcher = ReverseSearcher(config, mock_pubmed_backend, mock_cache, mock_fetcher)
@@ -279,6 +279,7 @@ async def test_pah_yake_baseline(
         keyword_extractor="yake",
         keywords_per_query=7,
         sort_by="date_desc",  # Date-based sorting (temporal bias)
+        search_backend="test_backend",
         coverage_target=0.90,
         max_queries=10,
         use_hint_fields=True,
@@ -340,7 +341,7 @@ async def test_pah_llm_performance(
         sort_by="relevance",
         coverage_target=0.90,
         max_queries=10,
-    )
+        search_backend="test_backend")
 
     searcher = ReverseSearcher(config, mock_pubmed_backend, mock_cache, mock_fetcher)
 
@@ -455,7 +456,7 @@ async def test_pah_unfound_analysis(
         coverage_target=0.90,
         max_queries=10,
         use_hint_fields=True,
-    )
+        search_backend="test_backend")
 
     searcher = ReverseSearcher(config, mock_pubmed_backend, mock_cache, mock_fetcher)
     session = await searcher.search(pah_resources, verbose=False)

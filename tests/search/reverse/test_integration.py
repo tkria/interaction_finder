@@ -217,7 +217,10 @@ async def test_full_reverse_search_workflow(
 
     mock_backend.search = AsyncMock(side_effect=mock_search)
     # Create searcher
-    config = ReverseSearchConfig(coverage_target=0.5)  # Minimum allowed
+    config = ReverseSearchConfig(
+        coverage_target=0.5,  # Minimum allowed
+        search_backend="test_backend",  # Match mock backend
+    )
     searcher = ReverseSearcher(config, mock_backend, mock_cache, mock_fetcher)
     # Mock query generator
     with patch.object(searcher.query_generator, "generate_initial_queries") as mock_gen:
@@ -304,7 +307,7 @@ async def test_stopping_coverage_achieved(
 
     mock_backend.search = AsyncMock(side_effect=mock_search)
 
-    config = ReverseSearchConfig(coverage_target=0.95)
+    config = ReverseSearchConfig(coverage_target=0.95, search_backend="test_backend")
     searcher = ReverseSearcher(config, mock_backend, mock_cache, mock_fetcher)
 
     with patch.object(searcher.query_generator, "generate_initial_queries") as mock_gen:
@@ -332,7 +335,9 @@ async def test_stopping_consecutive_zeros(
 
     mock_backend.search = AsyncMock(side_effect=mock_search)
 
-    config = ReverseSearchConfig(consecutive_zero_limit=3)
+    config = ReverseSearchConfig(
+        consecutive_zero_limit=3, search_backend="test_backend"
+    )
     searcher = ReverseSearcher(config, mock_backend, mock_cache, mock_fetcher)
 
     with patch.object(searcher.query_generator, "generate_initial_queries") as mock_gen:
@@ -374,7 +379,10 @@ async def test_stopping_max_queries(
     mock_backend.search = AsyncMock(side_effect=mock_search)
 
     config = ReverseSearchConfig(
-        max_queries=5, coverage_target=1.0, consecutive_zero_limit=10
+        max_queries=5,
+        coverage_target=1.0,
+        consecutive_zero_limit=10,
+        search_backend="test_backend",
     )
     searcher = ReverseSearcher(config, mock_backend, mock_cache, mock_fetcher)
 
@@ -448,7 +456,7 @@ async def test_all_resources_found_first_query(
 
     mock_backend.search = AsyncMock(side_effect=mock_search)
 
-    config = ReverseSearchConfig()
+    config = ReverseSearchConfig(search_backend="test_backend")
     searcher = ReverseSearcher(config, mock_backend, mock_cache, mock_fetcher)
 
     with patch.object(searcher.query_generator, "generate_initial_queries") as mock_gen:
@@ -488,7 +496,9 @@ async def test_no_resources_found(
 
     mock_backend.search = AsyncMock(side_effect=mock_search)
 
-    config = ReverseSearchConfig(consecutive_zero_limit=3)
+    config = ReverseSearchConfig(
+        consecutive_zero_limit=3, search_backend="test_backend"
+    )
     searcher = ReverseSearcher(config, mock_backend, mock_cache, mock_fetcher)
 
     with patch.object(searcher.query_generator, "generate_initial_queries") as mock_gen:
@@ -552,7 +562,7 @@ async def test_multi_domain_resources(tmp_path, mock_backend, mock_cache, mock_f
 
     mock_backend.search = AsyncMock(side_effect=mock_search)
 
-    config = ReverseSearchConfig(coverage_target=0.6)
+    config = ReverseSearchConfig(coverage_target=0.6, search_backend="test_backend")
     searcher = ReverseSearcher(config, mock_backend, mock_cache, mock_fetcher)
 
     with patch.object(searcher.query_generator, "generate_initial_queries") as mock_gen:
@@ -610,7 +620,7 @@ async def test_performance_with_caching(tmp_path, mock_backend, mock_fetcher):
     # Use real cache
     cache = SearchCache(cache_dir=tmp_path / "cache", ttl_hours=24)
 
-    config = ReverseSearchConfig(coverage_target=0.95)
+    config = ReverseSearchConfig(coverage_target=0.95, search_backend="test_backend")
     searcher = ReverseSearcher(config, mock_backend, cache, mock_fetcher)
 
     with patch.object(searcher.query_generator, "generate_initial_queries") as mock_gen:
@@ -631,7 +641,7 @@ async def test_performance_with_caching(tmp_path, mock_backend, mock_fetcher):
 @pytest.mark.asyncio
 async def test_empty_target_resources(mock_backend, mock_cache, mock_fetcher):
     """Test handling of empty target resource list."""
-    config = ReverseSearchConfig()
+    config = ReverseSearchConfig(search_backend="test_backend")
     searcher = ReverseSearcher(config, mock_backend, mock_cache, mock_fetcher)
 
     with pytest.raises(ValueError, match="target_resources cannot be empty"):
@@ -646,7 +656,7 @@ async def test_query_generation_failure(
     mock_fetcher,
 ):
     """Test handling of query generation failure."""
-    config = ReverseSearchConfig()
+    config = ReverseSearchConfig(search_backend="test_backend")
     searcher = ReverseSearcher(config, mock_backend, mock_cache, mock_fetcher)
     # Mock query generator to raise error
     with patch.object(searcher.query_generator, "generate_initial_queries") as mock_gen:
@@ -687,7 +697,10 @@ async def test_backend_failure_recovery(
 
     mock_backend.search = AsyncMock(side_effect=mock_search)
 
-    config = ReverseSearchConfig(coverage_target=0.5)  # Minimum allowed
+    config = ReverseSearchConfig(
+        coverage_target=0.5,  # Minimum allowed
+        search_backend="test_backend",
+    )
     searcher = ReverseSearcher(config, mock_backend, mock_cache, mock_fetcher)
 
     with patch.object(searcher.query_generator, "generate_initial_queries") as mock_gen:
@@ -800,6 +813,7 @@ async def test_backend_syntax_pubmed_generates_field_tags(
         query_constructor="direct",  # Use direct constructor to avoid LLM calls
         keyword_extractor="yake",  # Use YAKE extractor (direct requires non-none extractor)
         consecutive_zero_limit=1,  # Stop after first query
+        search_backend="pubmed",  # Match pubmed backend
     )
     searcher = ReverseSearcher(config, pubmed_backend, mock_cache, mock_fetcher)
 
@@ -863,6 +877,7 @@ async def test_backend_syntax_perplexica_generates_natural_language(
         query_constructor="direct",  # Use direct constructor to avoid LLM calls
         keyword_extractor="yake",  # Use YAKE extractor (direct requires non-none extractor)
         consecutive_zero_limit=1,  # Stop after first query
+        search_backend="perplexica",  # Match perplexica backend
     )
     searcher = ReverseSearcher(config, perplexica_backend, mock_cache, mock_fetcher)
 
@@ -939,6 +954,7 @@ async def test_backend_name_propagation_end_to_end(
         query_constructor="direct",
         keyword_extractor="yake",  # Use YAKE extractor (direct requires non-none extractor)
         consecutive_zero_limit=1,
+        search_backend="test_backend_name",  # Match test backend
     )
 
     # Use InvestigationLogger as async context manager

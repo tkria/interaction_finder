@@ -28,7 +28,9 @@ from interaction_finder.search.base import (
 @pytest.mark.asyncio
 async def test_reverse_search_full_workflow():
     """Test complete reverse search workflow with mock backend."""
-    config = ReverseSearchConfig(coverage_target=0.5)  # Lower for test
+    config = ReverseSearchConfig(
+        coverage_target=0.5, search_backend="test_backend"
+    )  # Lower for test
     mock_backend = Mock()
     mock_backend.backend_name = "test_backend"
 
@@ -80,7 +82,7 @@ async def test_reverse_search_full_workflow():
 @pytest.mark.asyncio
 async def test_stopping_criterion_coverage_achieved():
     """Test that search stops when coverage target reached."""
-    config = ReverseSearchConfig(coverage_target=0.5)
+    config = ReverseSearchConfig(coverage_target=0.5, search_backend="test_backend")
     mock_backend = Mock()
     mock_backend.backend_name = "test_backend"
 
@@ -131,7 +133,9 @@ async def test_stopping_criterion_coverage_achieved():
 @pytest.mark.asyncio
 async def test_stopping_criterion_consecutive_zero_finds():
     """Test that search stops after N consecutive queries with no finds."""
-    config = ReverseSearchConfig(consecutive_zero_limit=3, max_queries=100)
+    config = ReverseSearchConfig(
+        consecutive_zero_limit=3, max_queries=100, search_backend="test_backend"
+    )
     mock_backend = Mock()
     mock_backend.backend_name = "test_backend"
 
@@ -169,7 +173,9 @@ async def test_stopping_criterion_consecutive_zero_finds():
 @pytest.mark.asyncio
 async def test_stopping_criterion_max_queries():
     """Test that search stops when max queries reached."""
-    config = ReverseSearchConfig(max_queries=5, consecutive_zero_limit=10)
+    config = ReverseSearchConfig(
+        max_queries=5, consecutive_zero_limit=10, search_backend="test_backend"
+    )
     mock_backend = Mock()
     mock_backend.backend_name = "test_backend"
     # Mock to return one match per query (never reach coverage target)
@@ -219,8 +225,9 @@ async def test_stopping_criterion_max_queries():
 @pytest.mark.asyncio
 async def test_empty_target_resources():
     """Test that empty target_resources raises ValueError."""
-    config = ReverseSearchConfig()
+    config = ReverseSearchConfig(search_backend="test_backend")
     mock_backend = Mock()
+    mock_backend.backend_name = "test_backend"
     mock_cache = AsyncMock()
     mock_fetcher = Mock()
 
@@ -233,7 +240,7 @@ async def test_empty_target_resources():
 @pytest.mark.asyncio
 async def test_query_generation_failure():
     """Test that query generation failure raises ReverseSearchError."""
-    config = ReverseSearchConfig()
+    config = ReverseSearchConfig(search_backend="test_backend")
     mock_backend = Mock()
     mock_backend.backend_name = "test_backend"
     mock_cache = AsyncMock()
@@ -257,7 +264,9 @@ async def test_query_generation_failure():
 @pytest.mark.asyncio
 async def test_backend_execution_failure_continues():
     """Test that backend execution failure continues with next query."""
-    config = ReverseSearchConfig(consecutive_zero_limit=3, max_queries=10)
+    config = ReverseSearchConfig(
+        consecutive_zero_limit=3, max_queries=10, search_backend="test_backend"
+    )
     mock_backend = Mock()
     mock_backend.backend_name = "test_backend"
     # First query fails, second succeeds
@@ -305,7 +314,7 @@ async def test_backend_execution_failure_continues():
 @pytest.mark.asyncio
 async def test_cache_hit():
     """Test that cache hit returns cached results."""
-    config = ReverseSearchConfig()
+    config = ReverseSearchConfig(search_backend="test_backend")
     mock_backend = Mock()
     mock_backend.backend_name = "test_backend"
     # Cached results
@@ -350,7 +359,7 @@ async def test_cache_hit():
 @pytest.mark.asyncio
 async def test_cache_miss_stores_results():
     """Test that cache miss executes query and stores results."""
-    config = ReverseSearchConfig()
+    config = ReverseSearchConfig(search_backend="test_backend")
     mock_backend = Mock()
     mock_backend.backend_name = "test_backend"
 
@@ -399,7 +408,9 @@ async def test_cache_miss_stores_results():
 @pytest.mark.asyncio
 async def test_coverage_calculation():
     """Test that coverage is correctly calculated."""
-    config = ReverseSearchConfig(max_queries=10, consecutive_zero_limit=5)
+    config = ReverseSearchConfig(
+        max_queries=10, consecutive_zero_limit=5, search_backend="test_backend"
+    )
     mock_backend = Mock()
     mock_backend.backend_name = "test_backend"
     # Return different resources per query
@@ -457,6 +468,7 @@ async def test_refinement_query_generation():
         coverage_target=1.0,  # Need 100% to stop
         consecutive_zero_limit=5,
         max_queries=10,
+        search_backend="test_backend",
     )
     mock_backend = Mock()
     mock_backend.backend_name = "test_backend"
@@ -520,6 +532,7 @@ async def test_no_refinement_queries_stops():
         coverage_target=1.0,
         consecutive_zero_limit=5,
         max_queries=10,
+        search_backend="test_backend",
     )
     mock_backend = Mock()
     mock_backend.backend_name = "test_backend"
@@ -565,7 +578,9 @@ async def test_no_refinement_queries_stops():
 @pytest.mark.asyncio
 async def test_consecutive_zero_resets_on_find():
     """Test that consecutive zero finds counter resets when resources found."""
-    config = ReverseSearchConfig(consecutive_zero_limit=2, max_queries=10)
+    config = ReverseSearchConfig(
+        consecutive_zero_limit=2, max_queries=10, search_backend="test_backend"
+    )
     mock_backend = Mock()
     mock_backend.backend_name = "test_backend"
     # Alternate between empty and found results
@@ -622,7 +637,9 @@ async def test_consecutive_zero_resets_on_find():
 @pytest.mark.asyncio
 async def test_unfound_resources_tracked():
     """Test that unfound resources are correctly tracked."""
-    config = ReverseSearchConfig(consecutive_zero_limit=2, max_queries=5)
+    config = ReverseSearchConfig(
+        consecutive_zero_limit=2, max_queries=5, search_backend="test_backend"
+    )
     mock_backend = Mock()
     mock_backend.backend_name = "test_backend"
 

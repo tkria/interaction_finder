@@ -86,7 +86,11 @@ def test_extractor_unchanged(extractor_name):
     deterministic keyword extraction.
     """
     # Create extractor
-    config = ReverseSearchConfig(keyword_extractor=extractor_name, keywords_per_query=7)
+    config = ReverseSearchConfig(
+        keyword_extractor=extractor_name,
+        keywords_per_query=7,
+        search_backend="test_backend",
+    )
     generator = QueryGenerator(config, backend_name="pubmed", console=None)
     extractor = generator.extractor
 
@@ -131,6 +135,7 @@ async def test_query_generation_unchanged(extractor_name, fixed_resources):
         keyword_extractor=extractor_name,
         keywords_per_query=7,
         use_hint_fields=False,  # Disable hints for deterministic testing
+        search_backend="test_backend",
     )
 
     generator = QueryGenerator(config, backend_name="pubmed", console=None)
@@ -173,7 +178,9 @@ async def test_query_generation_unchanged(extractor_name, fixed_resources):
 
 def test_yake_parameters_unchanged():
     """Test that YAKE extractor uses correct default parameters."""
-    config = ReverseSearchConfig(keyword_extractor="yake", keywords_per_query=7)
+    config = ReverseSearchConfig(
+        keyword_extractor="yake", keywords_per_query=7, search_backend="test_backend"
+    )
     generator = QueryGenerator(config, backend_name="pubmed", console=None)
     extractor = generator.extractor
 
@@ -186,7 +193,9 @@ def test_yake_parameters_unchanged():
 
 def test_rake_parameters_unchanged():
     """Test that RAKE extractor uses correct default parameters."""
-    config = ReverseSearchConfig(keyword_extractor="rake", keywords_per_query=7)
+    config = ReverseSearchConfig(
+        keyword_extractor="rake", keywords_per_query=7, search_backend="test_backend"
+    )
     generator = QueryGenerator(config, backend_name="pubmed", console=None)
     extractor = generator.extractor
 
@@ -197,7 +206,9 @@ def test_rake_parameters_unchanged():
 
 def test_tfidf_parameters_unchanged():
     """Test that TF-IDF extractor uses correct default parameters."""
-    config = ReverseSearchConfig(keyword_extractor="tfidf", keywords_per_query=7)
+    config = ReverseSearchConfig(
+        keyword_extractor="tfidf", keywords_per_query=7, search_backend="test_backend"
+    )
     generator = QueryGenerator(config, backend_name="pubmed", console=None)
     extractor = generator.extractor
 
@@ -219,6 +230,7 @@ async def test_hint_fields_still_work_for_existing_extractors(fixed_resources):
         keyword_extractor="yake",
         keywords_per_query=7,
         use_hint_fields=True,  # Enabled
+        search_backend="test_backend",
     )
 
     generator = QueryGenerator(config, backend_name="pubmed", console=None)
@@ -260,6 +272,7 @@ async def test_no_llm_calls_for_existing_extractors(fixed_resources):
         config = ReverseSearchConfig(
             keyword_extractor=extractor_name,
             keywords_per_query=7,
+            search_backend="test_backend",
         )
 
         generator = QueryGenerator(config, backend_name="pubmed", console=None)
@@ -300,6 +313,7 @@ async def test_clustering_still_works_for_existing_extractors(fixed_resources):
         min_cluster_size=2,
         target_clusters=2,
         keywords_per_query=7,
+        search_backend="test_backend",
     )
 
     generator = QueryGenerator(config, backend_name="pubmed", console=None)
@@ -328,7 +342,7 @@ def test_configuration_defaults_unchanged():
 
     This ensures existing code using default configuration continues to work.
     """
-    config = ReverseSearchConfig()  # All defaults
+    config = ReverseSearchConfig(search_backend="test_backend")  # All defaults
 
     # Critical defaults that must not change
     assert config.keyword_extractor == "yake", "Default extractor should remain YAKE"
@@ -354,7 +368,9 @@ def test_query_construction_format_unchanged():
     # Test each extractor's query format
     for extractor_name in ["yake", "rake", "tfidf"]:
         config = ReverseSearchConfig(
-            keyword_extractor=extractor_name, keywords_per_query=5
+            keyword_extractor=extractor_name,
+            keywords_per_query=5,
+            search_backend="test_backend",
         )
         generator = QueryGenerator(config, backend_name="pubmed", console=None)
         extractor = generator.extractor

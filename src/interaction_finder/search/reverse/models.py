@@ -679,3 +679,34 @@ class ConfigurationError(ReverseSearchError):
     """
 
     pass
+
+
+class BackendMismatchError(ReverseSearchError):
+    """
+    Backend mismatch between config and actual backend.
+
+    Raised during ReverseSearcher initialization when the configured backend
+    (config.search_backend) doesn't match the actual backend instance's name
+    (backend.backend_name). This prevents silent failures and provides clear
+    guidance for fixing the mismatch.
+
+    Context fields:
+        expected_backend: str - Backend name from config.search_backend
+        actual_backend: str - Backend name from backend.backend_name
+        suggestion: str - Remediation steps (update config or use CLI flag)
+
+    Example:
+        >>> raise BackendMismatchError(
+        ...     "Backend mismatch detected",
+        ...     context={
+        ...         "expected_backend": "pubmed",
+        ...         "actual_backend": "perplexica",
+        ...         "suggestion": (
+        ...             "Update config.search_backend to 'perplexica' "
+        ...             "or use --backend pubmed flag"
+        ...         )
+        ...     }
+        ... )
+    """
+
+    pass
