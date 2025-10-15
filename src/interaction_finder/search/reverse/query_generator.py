@@ -101,18 +101,8 @@ class QueryGenerator:
         self.http_client = http_client
         self.console = console
         self.inv_logger = investigation_logger
-        # Create keyword extractor with LLM-specific config if needed
-        if config.keyword_extractor == "llm":
-            llm_config = config.llm_query_config
-            self.extractor = create_extractor(
-                "llm",
-                model=llm_config.get("model", "openai:gpt-4o-mini"),
-                temperature=llm_config.get("temperature", 0.7),
-                backend_specific=llm_config.get("backend_specific_syntax", True),
-                console=console,
-            )
-        else:
-            self.extractor = create_extractor(config.keyword_extractor)
+        # Create keyword extractor
+        self.extractor = create_extractor(config.keyword_extractor)
 
         # Create query constructor based on config.query_constructor
         if config.query_constructor == "llm":
@@ -202,13 +192,6 @@ class QueryGenerator:
         # Log content sources if verbose logging is available
         self._log_content_sources(contents)
 
-        # Log LLM query generation if console available
-        if self.console and self.config.keyword_extractor == "llm":
-            llm_config = self.config.llm_query_config
-            self.console.print(
-                f"  [dim]Generating LLM queries (model: {llm_config.get('model', 'openai:gpt-4o-mini')})[/dim]"
-            )
-
         queries = []
         query_index = 0
         for content in contents:
@@ -216,47 +199,24 @@ class QueryGenerator:
             keywords_with_scores = []
             keywords = []
 
-            if self.config.keyword_extractor == "llm" and hasattr(
-                self.extractor, "extract_async"
-            ):
-                # LLM extraction with hint fields
-                hint_fields = (
-                    content.resource.hint_fields
-                    if self.config.use_hint_fields
-                    else None
-                )
-                keywords = await self.extractor.extract_async(
-                    content.text,
-                    self.config.keywords_per_query,
-                    hint_fields=hint_fields,
-                )
-                # LLM extractor returns strings, wrap with None scores for logging
-                keywords_with_scores = [
-                    {"keyword": kw, "score": None} for kw in keywords
-                ]
-            else:
-                # Statistical extractors (sync) - returns list or tuples with scores
-                keywords_raw = self.extractor.extract(
-                    content.text, self.config.keywords_per_query
-                )
-                # Convert to keyword/score dicts
-                for kw in keywords_raw:
-                    if isinstance(kw, tuple):
-                        # (keyword, score) or (score, keyword) depending on extractor
-                        # YAKE: (keyword, score), RAKE: (score, keyword)
-                        if self.config.keyword_extractor == "rake":
-                            keywords_with_scores.append(
-                                {"keyword": kw[1], "score": kw[0]}
-                            )
-                        else:
-                            keywords_with_scores.append(
-                                {"keyword": kw[0], "score": kw[1]}
-                            )
+            # Statistical extractors (sync) - returns list or tuples with scores
+            keywords_raw = self.extractor.extract(
+                content.text, self.config.keywords_per_query
+            )
+            # Convert to keyword/score dicts
+            for kw in keywords_raw:
+                if isinstance(kw, tuple):
+                    # (keyword, score) or (score, keyword) depending on extractor
+                    # YAKE: (keyword, score), RAKE: (score, keyword)
+                    if self.config.keyword_extractor == "rake":
+                        keywords_with_scores.append({"keyword": kw[1], "score": kw[0]})
                     else:
-                        # Plain string
-                        keywords_with_scores.append({"keyword": kw, "score": None})
-                # Extract keywords list
-                keywords = [kw["keyword"] for kw in keywords_with_scores]
+                        keywords_with_scores.append({"keyword": kw[0], "score": kw[1]})
+                else:
+                    # Plain string
+                    keywords_with_scores.append({"keyword": kw, "score": None})
+            # Extract keywords list
+            keywords = [kw["keyword"] for kw in keywords_with_scores]
 
             # Extract hint terms (passed separately to constructor)
             hint_terms = []
@@ -403,55 +363,24 @@ class QueryGenerator:
             keywords_with_scores = []
             keywords = []
 
-            if self.config.keyword_extractor == "llm" and hasattr(
-                self.extractor, "extract_async"
-            ):
-                # LLM extraction with hint fields from entire cluster
-                hint_fields = None
-                if self.config.use_hint_fields:
-                    # Aggregate hint fields from all cluster resources
-                    hint_fields = {}
-                    for resource in cluster_resources:
-                        for key, value in resource.hint_fields.items():
-                            if key not in hint_fields:
-                                hint_fields[key] = []
-                            if value and value not in hint_fields[key]:
-                                hint_fields[key].append(value)
-                    # Flatten lists to strings (first value for simplicity)
-                    hint_fields = {k: v[0] if v else "" for k, v in hint_fields.items()}
-
-                keywords = await self.extractor.extract_async(
-                    representative_content.text,
-                    self.config.keywords_per_query,
-                    hint_fields=hint_fields,
-                )
-                # LLM extractor returns strings, wrap with None scores for logging
-                keywords_with_scores = [
-                    {"keyword": kw, "score": None} for kw in keywords
-                ]
-            else:
-                # Statistical extractors (sync) - returns list or tuples with scores
-                keywords_raw = self.extractor.extract(
-                    representative_content.text, self.config.keywords_per_query
-                )
-                # Convert to keyword/score dicts
-                for kw in keywords_raw:
-                    if isinstance(kw, tuple):
-                        # (keyword, score) or (score, keyword) depending on extractor
-                        # YAKE: (keyword, score), RAKE: (score, keyword)
-                        if self.config.keyword_extractor == "rake":
-                            keywords_with_scores.append(
-                                {"keyword": kw[1], "score": kw[0]}
-                            )
-                        else:
-                            keywords_with_scores.append(
-                                {"keyword": kw[0], "score": kw[1]}
-                            )
+            # Statistical extractors (sync) - returns list or tuples with scores
+            keywords_raw = self.extractor.extract(
+                representative_content.text, self.config.keywords_per_query
+            )
+            # Convert to keyword/score dicts
+            for kw in keywords_raw:
+                if isinstance(kw, tuple):
+                    # (keyword, score) or (score, keyword) depending on extractor
+                    # YAKE: (keyword, score), RAKE: (score, keyword)
+                    if self.config.keyword_extractor == "rake":
+                        keywords_with_scores.append({"keyword": kw[1], "score": kw[0]})
                     else:
-                        # Plain string
-                        keywords_with_scores.append({"keyword": kw, "score": None})
-                # Extract keywords list
-                keywords = [kw["keyword"] for kw in keywords_with_scores]
+                        keywords_with_scores.append({"keyword": kw[0], "score": kw[1]})
+                else:
+                    # Plain string
+                    keywords_with_scores.append({"keyword": kw, "score": None})
+            # Extract keywords list
+            keywords = [kw["keyword"] for kw in keywords_with_scores]
 
             # Extract hint terms from entire cluster (passed separately to constructor)
             hint_terms = []

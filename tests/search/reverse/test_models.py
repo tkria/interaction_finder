@@ -515,13 +515,6 @@ def test_reverse_search_config_keyword_extractor_literal():
     config = ReverseSearchConfig(keyword_extractor="none", query_constructor="llm")
     assert config.keyword_extractor == "none"
 
-    # Legacy extractor (llm) - migrated to none + llm constructor
-    with warnings.catch_warnings(record=True):
-        warnings.simplefilter("always")
-        config = ReverseSearchConfig(keyword_extractor="llm")
-        assert config.keyword_extractor == "none"
-        assert config.query_constructor == "llm"
-
     # Invalid extractor
     with pytest.raises(ValidationError) as exc_info:
         ReverseSearchConfig(keyword_extractor="invalid")
@@ -593,27 +586,22 @@ def test_reverse_search_config_backward_compatibility():
     assert config.keywords_per_query == 5
 
 
-def test_reverse_search_config_llm_extractor_with_custom_config():
-    """Test ReverseSearchConfig with llm extractor and custom llm_query_config."""
-    import warnings
-
-    # Legacy llm extractor is migrated to none + llm constructor
-    with warnings.catch_warnings(record=True):
-        warnings.simplefilter("always")
-        config = ReverseSearchConfig(
-            keyword_extractor="llm",
-            sort_by="date_desc",
-            llm_query_config={
-                "model": "anthropic:claude-3-sonnet",
-                "temperature": 0.5,
-            },
-        )
-        # Check migration occurred
-        assert config.keyword_extractor == "none"
-        assert config.query_constructor == "llm"
-        assert config.sort_by == "date_desc"
-        assert config.llm_query_config["model"] == "anthropic:claude-3-sonnet"
-        assert config.llm_query_config["temperature"] == 0.5
+def test_reverse_search_config_none_extractor_with_llm_constructor():
+    """Test ReverseSearchConfig with none extractor and llm query constructor."""
+    config = ReverseSearchConfig(
+        keyword_extractor="none",
+        query_constructor="llm",
+        sort_by="date_desc",
+        llm_query_config={
+            "model": "anthropic:claude-3-sonnet",
+            "temperature": 0.5,
+        },
+    )
+    assert config.keyword_extractor == "none"
+    assert config.query_constructor == "llm"
+    assert config.sort_by == "date_desc"
+    assert config.llm_query_config["model"] == "anthropic:claude-3-sonnet"
+    assert config.llm_query_config["temperature"] == 0.5
 
 
 def test_reverse_search_config_keywords_per_query_bounds():

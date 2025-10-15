@@ -141,7 +141,8 @@ async def test_llm_extractor_works_across_backends(
     search backends, and that backend-specific query syntax is handled correctly.
     """
     config = ReverseSearchConfig(
-        keyword_extractor="llm",
+        keyword_extractor="none",
+        query_constructor="llm",
         llm_query_config={
             "model": "openai:gpt-4o-mini",
             "temperature": 0.7,
@@ -230,7 +231,8 @@ async def test_pubmed_specific_query_syntax():
     LLM should generate these when backend_specific_syntax=True.
     """
     config = ReverseSearchConfig(
-        keyword_extractor="llm",
+        keyword_extractor="none",
+        query_constructor="llm",
         llm_query_config={
             "model": "openai:gpt-4o-mini",
             "backend_specific_syntax": True,  # Enable PubMed syntax
@@ -285,7 +287,8 @@ async def test_generic_query_syntax_for_other_backends():
     Queries should be plain boolean queries without field tags.
     """
     config = ReverseSearchConfig(
-        keyword_extractor="llm",
+        keyword_extractor="none",
+        query_constructor="llm",
         llm_query_config={
             "model": "openai:gpt-4o-mini",
             "backend_specific_syntax": False,  # Generic syntax
@@ -450,7 +453,8 @@ async def test_hint_fields_across_backends(
     LLM should incorporate hint fields into queries regardless of backend.
     """
     config = ReverseSearchConfig(
-        keyword_extractor="llm",
+        keyword_extractor="none",
+        query_constructor="llm",
         llm_query_config={"model": "openai:gpt-4o-mini"},
         use_hint_fields=True,
         max_queries=5,  # Minimum allowed value

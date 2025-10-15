@@ -146,9 +146,6 @@ def test_config_defaults_optimal(
     )
 
     # Verify no legacy overrides that caused 0% coverage
-    assert default_config.keyword_extractor != "llm", (
-        "Should not use deprecated 'llm' keyword extractor"
-    )
     assert default_config.keyword_extractor != "none", (
         "Should not skip keyword extraction with default config"
     )

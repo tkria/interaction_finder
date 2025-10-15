@@ -282,7 +282,7 @@ class ReverseSearchConfig(BaseModel):
         ...     query_constructor="direct",
         ...     keywords_per_query=7
         ... )
-        >>> # Full-content LLM construction (replaces legacy keyword_extractor="llm")
+        >>> # Full-content LLM construction
         >>> config_llm = ReverseSearchConfig(
         ...     keyword_extractor="none",
         ...     query_constructor="llm",
@@ -309,14 +309,13 @@ class ReverseSearchConfig(BaseModel):
     )
 
     # Query generation (Stage 1: Keyword Extraction)
-    keyword_extractor: Literal["yake", "rake", "tfidf", "none", "llm"] = Field(
+    keyword_extractor: Literal["yake", "rake", "tfidf", "none"] = Field(
         "yake",
         description=(
             "Stage 1: Algorithm for keyword extraction from resource content. "
             "Statistical extractors (yake/rake/tfidf) extract keywords that are then "
             "passed to Stage 2 (query_constructor). Use 'none' to skip keyword extraction "
-            "and pass full content directly to Stage 2 LLM constructor. "
-            "Note: 'llm' is deprecated and migrated to 'none' + query_constructor='llm'."
+            "and pass full content directly to Stage 2 LLM constructor."
         ),
     )
     keywords_per_query: int = Field(
@@ -362,9 +361,7 @@ class ReverseSearchConfig(BaseModel):
         },
         description=(
             "Configuration for LLM query constructor (query_constructor='llm' only). "
-            "Required when using LLM constructor. This config was previously used for "
-            "legacy keyword_extractor='llm', which has been migrated to "
-            "keyword_extractor='none' + query_constructor='llm'."
+            "Required when using LLM constructor."
         ),
     )
 
@@ -400,38 +397,20 @@ class ReverseSearchConfig(BaseModel):
     )
 
     @model_validator(mode="after")
-    def migrate_and_validate_query_config(self) -> "ReverseSearchConfig":
+    def validate_query_config(self) -> "ReverseSearchConfig":
         """
-        Migrate legacy configurations and validate query generation setup.
-
-        Migration rules:
-        1. keyword_extractor="llm" → keyword_extractor="none" + query_constructor="llm"
-        2. Missing query_constructor → infer "direct" (backward compatibility)
+        Validate query generation configuration.
 
         Validation rules:
         1. keyword_extractor="none" requires query_constructor="llm"
         2. query_constructor="llm" requires non-empty llm_query_config
 
         Returns:
-            Self with migrated and validated configuration
+            Self with validated configuration
 
         Raises:
             ConfigurationError: Invalid configuration combination with remediation
         """
-        import warnings
-
-        # Migration: keyword_extractor="llm" → keyword_extractor="none" + query_constructor="llm"
-        if self.keyword_extractor == "llm":
-            warnings.warn(
-                "keyword_extractor='llm' is deprecated. "
-                "Migrating to keyword_extractor='none' + query_constructor='llm'. "
-                "Please update your configuration.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            self.keyword_extractor = "none"
-            self.query_constructor = "llm"
-
         # Validation: keyword_extractor="none" requires query_constructor="llm"
         if self.keyword_extractor == "none" and self.query_constructor != "llm":
             raise ConfigurationError(

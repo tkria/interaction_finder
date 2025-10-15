@@ -529,10 +529,11 @@ async def test_query_generation_logging_llm(
     sample_resources: List[KnownResource],
     temp_log_file: Path,
 ):
-    """Test query generation logging with LLM constructor (uses deprecated config that migrates)."""
-    # Create config with deprecated LLM extractor (auto-migrates to none+llm)
+    """Test query generation logging with LLM constructor."""
+    # Create config with none extractor and LLM constructor
     llm_config = ReverseSearchConfig(
-        keyword_extractor="llm",  # Deprecated: migrates to none+llm
+        keyword_extractor="none",
+        query_constructor="llm",
         keywords_per_query=5,
         use_hint_fields=True,
         enable_clustering=False,
