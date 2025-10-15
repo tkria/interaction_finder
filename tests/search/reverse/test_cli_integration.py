@@ -465,6 +465,43 @@ def test_reverse_search_backend_option(temp_jsonl_file):
         assert "perplexica" in result.stdout
 
 
+def test_cli_backend_overrides_config_value(temp_jsonl_file):
+    """
+    CLI --backend flag should override config.search_backend value.
+
+    Regression test: Previously, ReverseSearcher validation would reject
+    mismatches between config.search_backend and actual backend instance.
+    This blocked legitimate CLI overrides like:
+        --backend perplexica  (when config has search_backend = "pubmed")
+
+    This test verifies that ReverseSearcher accepts the backend instance
+    passed by CLI, regardless of what config.search_backend specifies.
+    The fix removed the overly strict validation that enforced config.search_backend
+    must match backend.backend_name.
+    """
+    # CLI specifies --backend perplexica
+    # Config may have search_backend = "pubmed" (this override should work)
+    result = runner.invoke(
+        app,
+        [
+            "reverse-search",
+            "--known",
+            str(temp_jsonl_file),
+            "--backend",
+            "perplexica",
+            "--dry-run",
+        ],
+    )
+
+    # Should not fail with BackendMismatchError
+    assert "BackendMismatchError" not in result.stdout
+    # May fail for other reasons (config loading, etc.) but not due to validation
+    if result.exit_code != 0:
+        # Ensure failure isn't due to backend validation
+        assert "Backend mismatch" not in result.stdout
+        assert "config specifies" not in result.stdout
+
+
 def test_reverse_search_default_output_path(temp_jsonl_file):
     """Test default output path generation."""
     # This is tested implicitly - default should be <known_file>_results.jsonl

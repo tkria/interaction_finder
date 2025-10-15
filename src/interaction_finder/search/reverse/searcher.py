@@ -27,7 +27,6 @@ from .models import (
     ReverseSearchSession,
     ReverseSearchConfig,
     ReverseSearchError,
-    BackendMismatchError,
 )
 from .query_generator import QueryGenerator
 from .matchers import ResourceMatcher
@@ -80,13 +79,7 @@ class ReverseSearcher:
             cache: SearchCache - Cache for search results
             fetcher: PageFetcher - For content fetching in query generation
             investigation_logger: Optional[InvestigationLogger] - Logger for investigation tracking
-
-        Raises:
-            BackendMismatchError: If config.search_backend ≠ backend.backend_name
         """
-        # Validate backend match before expensive operations (fail-fast)
-        self._validate_backend_match(config, search_backend)
-
         self.config = config
         self.backend = search_backend
         self.cache = cache
@@ -105,48 +98,6 @@ class ReverseSearcher:
         self.matcher = ResourceMatcher(
             config, fetcher, investigation_logger=investigation_logger
         )
-
-    @staticmethod
-    def _validate_backend_match(
-        config: ReverseSearchConfig, backend: SearchBackend
-    ) -> None:
-        """
-        Validate that configured backend matches actual backend instance.
-
-        Compares config.search_backend with backend.backend_name to detect
-        mismatches that would cause queries to be generated for the wrong
-        backend. This validation happens before any expensive operations
-        to provide fail-fast error reporting.
-
-        Parameters:
-            config: ReverseSearchConfig - Configuration with search_backend field
-            backend: SearchBackend - Backend instance with backend_name attribute
-
-        Raises:
-            BackendMismatchError: If config.search_backend ≠ backend.backend_name
-                Contains expected/actual backend names and remediation suggestion
-
-        Example:
-            >>> config = ReverseSearchConfig(search_backend="pubmed")
-            >>> backend = PerplexicaBackend()  # backend_name = "perplexica"
-            >>> ReverseSearcher._validate_backend_match(config, backend)
-            BackendMismatchError: Backend mismatch...
-        """
-        expected = config.search_backend
-        actual = backend.backend_name
-
-        if expected != actual:
-            raise BackendMismatchError(
-                f"Backend mismatch: config specifies '{expected}' but got '{actual}'",
-                context={
-                    "expected_backend": expected,
-                    "actual_backend": actual,
-                    "suggestion": (
-                        f"Update config.search_backend to '{actual}' "
-                        f"or use --backend {expected} flag to match configuration"
-                    ),
-                },
-            )
 
     async def search(
         self,

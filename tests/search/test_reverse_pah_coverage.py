@@ -1,13 +1,12 @@
 """
 End-to-end validation test for reverse search coverage improvement.
 
-This test validates that the fixes in tasks 02-04 achieve ≥80% coverage
+This test validates that the fixes in tasks 02 and 04 achieve ≥80% coverage
 on the PAH papers dataset, demonstrating the 0% → ≥80% improvement.
 
 **Prior Tasks:**
 - Task 01: Investigation identified backend mismatch + query quality issues
 - Task 02: Fixed backend selection to respect config values
-- Task 03: Added validation to catch backend mismatches early
 - Task 04: Updated config defaults to optimal settings (yake + direct)
 
 **This Test:**
@@ -79,48 +78,10 @@ def test_default_config_coverage_placeholder() -> None:
 
     The standalone script validates:
     - Default config achieves ≥80% coverage (baseline was 0%)
-    - No BackendMismatchError (Task 03 validation working)
     - Backend matches config (Task 02 fix working)
     - Optimal defaults used (Task 04)
     """
     pass
-
-
-@pytest.mark.integration
-def test_backend_validation_working() -> None:
-    """
-    Test that backend validation catches mismatches (Task 03).
-
-    Should raise BackendMismatchError when backend doesn't match config.
-    """
-    from unittest.mock import Mock
-    from interaction_finder.search.reverse.models import BackendMismatchError
-
-    # Config says "pubmed" but providing perplexica backend
-    config = ReverseSearchConfig(search_backend="pubmed")
-
-    # Mock backend with wrong name
-    mock_perplexica = Mock()
-    mock_perplexica.backend_name = "perplexica"
-
-    # Mock cache and fetcher (required by ReverseSearcher)
-    mock_cache = Mock()
-    mock_fetcher = Mock()
-
-    # Should raise BackendMismatchError during initialization
-    with pytest.raises(BackendMismatchError) as exc_info:
-        ReverseSearcher(
-            config=config,
-            search_backend=mock_perplexica,
-            cache=mock_cache,
-            fetcher=mock_fetcher,
-        )
-
-    # Validate error message is informative
-    error_msg = str(exc_info.value)
-    assert "pubmed" in error_msg.lower()
-    assert "perplexica" in error_msg.lower()
-    assert "mismatch" in error_msg.lower()
 
 
 @pytest.mark.integration
