@@ -19,6 +19,7 @@ management via async context manager protocol.
 """
 
 import asyncio
+import logging
 import traceback as tb
 from datetime import datetime, timezone
 from pathlib import Path
@@ -44,9 +45,9 @@ def _format_resource_ref(resource: KnownResource) -> str:
     """
     Format resource as compact identifier.
 
-    Uses PMID:X format (with prefix) if PMID available, otherwise raw URL (no prefix).
-    This compact format improves log readability while maintaining sufficient information
-    for analysis and cross-referencing.
+    Uses PMID:X format (with prefix) if PMID available, otherwise raw URL
+    (no prefix). This compact format improves log readability while
+    maintaining sufficient information for analysis and cross-referencing.
 
     Args:
         resource: KnownResource to format
@@ -121,15 +122,23 @@ class QueryResultsSummary(BaseModel):
     with SearchResultDetail and MatchDetail.
 
     Fields:
-        results: List[str] - Compact identifiers for all search results (PMID:X or URL)
-        found_resources: List[Dict[str, Any]] - Matched resources with indices and methods
+        results: List[str] - Compact identifiers for all search results
+                              (PMID:X or URL)
+        found_resources: List[Dict[str, Any]] - Matched resources with
+                                                 indices and methods
     """
 
     results: List[str] = Field(
-        description="Compact identifiers: PMID:X (with prefix) or raw URL (no prefix) in 0-based order"
+        description=(
+            "Compact identifiers: PMID:X (with prefix) or raw URL "
+            "(no prefix) in 0-based order"
+        )
     )
     found_resources: List[Dict[str, Any]] = Field(
-        description="Matched resources: {resource: str, index: int, method: str, confidence: float}"
+        description=(
+            "Matched resources: {resource: str, index: int, method: str, "
+            "confidence: float}"
+        )
     )
 
 
@@ -187,7 +196,9 @@ class SessionStartEntry(InvestigationLogEntry):
     stage: Literal["session_start"] = "session_start"
     target_count: int = Field(description="Number of target resources to find")
     target_resources: List[str] = Field(
-        description="Compact target resource IDs: PMID:X (with prefix) or raw URL (no prefix)"
+        description=(
+            "Compact target resource IDs: PMID:X (with prefix) or raw URL (no prefix)"
+        )
     )
     config: Dict[str, Any] = Field(
         description="Serialized reverse search configuration"
@@ -287,8 +298,10 @@ class QueryConstructionEntry(InvestigationLogEntry):
         construction_time: float - Time taken for construction in seconds
         fallback_used: bool - Whether fallback constructor was used
         backend: str - Target search backend
-        cumulative_coverage: float - Coverage achieved after this query (0.0-1.0)
-        query_results: Optional[QueryResultsSummary] - Search results and matches (populated after matching)
+        cumulative_coverage: float - Coverage achieved after this query
+                                      (0.0-1.0)
+        query_results: Optional[QueryResultsSummary] - Search results and
+                       matches (populated after matching)
     """
 
     stage: Literal["query_construction"] = "query_construction"
@@ -434,7 +447,10 @@ class SessionEndEntry(InvestigationLogEntry):
     found_count: int = Field(description="Number of resources successfully found")
     unfound_count: int = Field(description="Number of resources not found")
     unfound_resources: List[str] = Field(
-        description="Compact IDs of resources not found: PMID:X (with prefix) or raw URL (no prefix)"
+        description=(
+            "Compact IDs of resources not found: PMID:X (with prefix) or "
+            "raw URL (no prefix)"
+        )
     )
     stopping_reason: Literal[
         "coverage_achieved", "consecutive_zero_finds", "max_queries"
@@ -584,8 +600,9 @@ class InvestigationLogger:
 
         Args:
             resources: Resources processed
-            contents: Content fetching results with per-resource details
-                      Format: {url: {source, title, content_length, success, error, ...}}
+            contents: Content fetching results with per-resource details.
+                      Format: {url: {source, title, content_length, success,
+                      error, ...}}
         """
         # Build per-resource details
         resource_details = []
@@ -741,6 +758,8 @@ class InvestigationLogger:
         fallback_used: bool,
         backend: str,
         cumulative_coverage: float,
+        search_results: Optional[SearchResults] = None,
+        matches: Optional[List[ResourceMatch]] = None,
     ) -> None:
         """
         Log query construction stage.
@@ -756,7 +775,57 @@ class InvestigationLogger:
             fallback_used: Whether fallback constructor was used
             backend: Target search backend
             cumulative_coverage: Coverage achieved after this query (0.0-1.0)
+            search_results: Optional search results for populating query_results field
+            matches: Optional resource matches for populating query_results field
         """
+        # Build query_results summary if both search_results and matches are provided
+        query_results: Optional[QueryResultsSummary] = None
+        if search_results is not None and matches is not None:
+            # Build compact results list (PMID:X for PMID results, raw URL otherwise)
+            results_list = []
+            for result in search_results.results:
+                # Extract PMID using same logic as log_search_execution()
+                result_pmid = result.metadata.get("pmid") if result.metadata else None
+                result_id = f"PMID:{result_pmid}" if result_pmid else result.url
+                results_list.append(result_id)
+
+            # Build found_resources list with 0-based position indices
+            # Create URL-to-index mapping for lookup
+            result_url_to_index = {
+                result.url: idx for idx, result in enumerate(search_results.results)
+            }
+
+            found_resources_list = []
+            for match in matches:
+                # Format resource using existing helper
+                resource_id = _format_resource_ref(match.resource)
+
+                # Look up result index
+                result_index = result_url_to_index.get(match.search_result.url)
+                if result_index is None:
+                    # Match without corresponding result indicates matcher bug
+                    # Log warning but continue (non-blocking)
+                    logging.warning(
+                        f"Match for resource {resource_id} references "
+                        f"search result URL {match.search_result.url} which "
+                        f"is not in results list. This indicates a matcher "
+                        f"bug. Skipping this match."
+                    )
+                    continue
+
+                found_resources_list.append(
+                    {
+                        "resource": resource_id,
+                        "index": result_index,
+                    }
+                )
+
+            # Create QueryResultsSummary
+            query_results = QueryResultsSummary(
+                results=results_list,
+                found_resources=found_resources_list,
+            )
+
         entry = QueryConstructionEntry(
             timestamp=self._now(),
             session_id=self.session_id,
@@ -770,6 +839,7 @@ class InvestigationLogger:
             fallback_used=fallback_used,
             backend=backend,
             cumulative_coverage=cumulative_coverage,
+            query_results=query_results,
         )
         await self._write_entry(entry)
 
@@ -797,7 +867,8 @@ class InvestigationLogger:
             query_index: Sequential query index
             query_type: Query generation strategy (e.g., "cluster", "resource")
             extractor_type: Keyword extractor used
-            keywords: Keywords extracted (List[str] for backward compat, or List[dict] with score)
+            keywords: Keywords extracted (List[str] for backward compat, or
+                      List[dict] with score)
             final_query: Final query text
             cluster_id: Cluster ID if applicable
             resource_count: Number of resources contributing to query
