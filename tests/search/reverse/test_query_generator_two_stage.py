@@ -109,10 +109,14 @@ async def test_yake_direct_individual(sample_resources, sample_metadata):
     with patch.object(generator, "_fetch_pmid_metadata_batch") as mock_fetch:
         mock_fetch.return_value = sample_metadata
 
-        queries = await generator.generate_initial_queries_individual(sample_resources)
+        query_tuples = await generator.generate_initial_queries_individual(
+            sample_resources
+        )
 
         # Should generate 2 queries
-        assert len(queries) == 2
+        assert len(query_tuples) == 2
+        # Unpack tuples
+        queries = [q for q, _ in query_tuples]
 
         # Queries should contain keywords from content
         assert any("BRCA1" in q or "breast" in q or "cancer" in q for q in queries)
@@ -166,12 +170,14 @@ async def test_yake_llm_individual(sample_resources, sample_metadata, mock_llm_a
         with patch.object(
             generator.constructor, "_create_agent", return_value=mock_llm_agent
         ):
-            queries = await generator.generate_initial_queries_individual(
+            query_tuples = await generator.generate_initial_queries_individual(
                 sample_resources
             )
 
             # Should generate 2 queries from LLM
-            assert len(queries) == 2
+            assert len(query_tuples) == 2
+            # Unpack tuples
+            queries = [q for q, _ in query_tuples]
 
             # LLM should have been called twice (once per resource)
             assert mock_llm_agent.run.call_count == 2
@@ -240,9 +246,13 @@ async def test_rake_direct_individual(sample_resources, sample_metadata):
     with patch.object(generator, "_fetch_pmid_metadata_batch") as mock_fetch:
         mock_fetch.return_value = sample_metadata
 
-        queries = await generator.generate_initial_queries_individual(sample_resources)
+        query_tuples = await generator.generate_initial_queries_individual(
+            sample_resources
+        )
 
-        assert len(queries) == 2
+        assert len(query_tuples) == 2
+        # Unpack tuples
+        queries = [q for q, _ in query_tuples]
         # RAKE should extract different keywords than YAKE
         assert all(isinstance(q, str) and len(q) > 0 for q in queries)
 
@@ -269,11 +279,11 @@ async def test_rake_llm_individual(sample_resources, sample_metadata, mock_llm_a
         with patch.object(
             generator.constructor, "_create_agent", return_value=mock_llm_agent
         ):
-            queries = await generator.generate_initial_queries_individual(
+            query_tuples = await generator.generate_initial_queries_individual(
                 sample_resources
             )
 
-            assert len(queries) == 2
+            assert len(query_tuples) == 2
             assert mock_llm_agent.run.call_count == 2
 
 
@@ -296,9 +306,13 @@ async def test_tfidf_direct_individual(sample_resources, sample_metadata):
     with patch.object(generator, "_fetch_pmid_metadata_batch") as mock_fetch:
         mock_fetch.return_value = sample_metadata
 
-        queries = await generator.generate_initial_queries_individual(sample_resources)
+        query_tuples = await generator.generate_initial_queries_individual(
+            sample_resources
+        )
 
-        assert len(queries) == 2
+        assert len(query_tuples) == 2
+        # Unpack tuples
+        queries = [q for q, _ in query_tuples]
         assert all(isinstance(q, str) and len(q) > 0 for q in queries)
 
 
@@ -324,11 +338,11 @@ async def test_tfidf_llm_individual(sample_resources, sample_metadata, mock_llm_
         with patch.object(
             generator.constructor, "_create_agent", return_value=mock_llm_agent
         ):
-            queries = await generator.generate_initial_queries_individual(
+            query_tuples = await generator.generate_initial_queries_individual(
                 sample_resources
             )
 
-            assert len(queries) == 2
+            assert len(query_tuples) == 2
             assert mock_llm_agent.run.call_count == 2
 
 
@@ -354,11 +368,11 @@ async def test_none_llm_individual(sample_resources, sample_metadata, mock_llm_a
         with patch.object(
             generator.constructor, "_create_agent", return_value=mock_llm_agent
         ):
-            queries = await generator.generate_initial_queries_individual(
+            query_tuples = await generator.generate_initial_queries_individual(
                 sample_resources
             )
 
-            assert len(queries) == 2
+            assert len(query_tuples) == 2
             assert mock_llm_agent.run.call_count == 2
 
 
@@ -469,10 +483,12 @@ async def test_empty_keywords_with_direct_constructor(sample_resources):
             "87654321": {"title": "", "abstract": ""},
         }
 
-        queries = await generator.generate_initial_queries_individual(sample_resources)
+        query_tuples = await generator.generate_initial_queries_individual(
+            sample_resources
+        )
 
-        # Should handle gracefully, may return empty queries
-        assert isinstance(queries, list)
+        # Should handle gracefully, may return empty queries (list of tuples)
+        assert isinstance(query_tuples, list)
 
 
 @pytest.mark.asyncio
@@ -499,12 +515,14 @@ async def test_llm_failure_with_fallback_enabled(sample_resources, sample_metada
         with patch.object(
             generator.constructor, "_create_agent", return_value=mock_agent
         ):
-            queries = await generator.generate_initial_queries_individual(
+            query_tuples = await generator.generate_initial_queries_individual(
                 sample_resources
             )
 
             # Should fall back to direct constructor
-            assert len(queries) == 2
+            assert len(query_tuples) == 2
+            # Unpack tuples
+            queries = [q for q, _ in query_tuples]
             # Fallback should produce some query (even if simple)
             assert all(len(q) > 0 for q in queries)
 
@@ -538,10 +556,12 @@ async def test_metadata_fetch_failure_fallback_to_content(sample_resources):
     with patch.object(generator, "_fetch_pmid_metadata_batch") as mock_fetch:
         mock_fetch.return_value = {}  # No metadata
 
-        queries = await generator.generate_initial_queries_individual(sample_resources)
+        query_tuples = await generator.generate_initial_queries_individual(
+            sample_resources
+        )
 
         # Should fall back to content and still generate queries
-        assert len(queries) == 2
+        assert len(query_tuples) == 2
 
 
 # ==============================================================================

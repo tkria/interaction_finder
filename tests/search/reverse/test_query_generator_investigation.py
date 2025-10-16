@@ -13,7 +13,7 @@ import asyncio
 import json
 from pathlib import Path
 from typing import Any, Dict, List
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
@@ -495,31 +495,30 @@ async def test_query_generation_logging_yake(
             return_value=(contents, contents_dict)
         )
 
-        # Generate queries
-        queries = await generator.generate_initial_queries(sample_resources)
+        # Generate queries - now returns tuples
+        query_tuples = await generator.generate_initial_queries(sample_resources)
 
     # Parse log file
     entries = read_log_entries(temp_log_file)
 
-    # Find query generation entries
-    query_entries = [e for e in entries if e["stage"] == "query_generation"]
-    # Should have one entry per generated query
-    assert len(query_entries) == len(queries)
+    # QueryGenerator no longer logs query_generation entries (now done by ReverseSearcher)
+    # It should only log content_fetch
+    content_fetch_entries = [e for e in entries if e["stage"] == "content_fetch"]
+    assert len(content_fetch_entries) == 1
 
-    for i, entry in enumerate(query_entries):
-        # Verify basic fields
-        assert entry["query_index"] == i
-        assert entry["query_type"] == "initial"
-        assert entry["extractor_type"] == "yake"
-        # Verify keywords present
-        assert isinstance(entry["keywords"], list)
-        assert len(entry["keywords"]) > 0
-        # Verify final query
-        assert isinstance(entry["final_query"], str)
-        assert len(entry["final_query"]) > 0
-        # Individual mode: no cluster_id
-        assert entry["cluster_id"] is None
-        assert len(entry["input_resources"]) == 1
+    # Verify no query_generation entries from QueryGenerator
+    query_entries = [e for e in entries if e["stage"] == "query_generation"]
+    assert len(query_entries) == 0
+
+    # Verify queries were generated correctly (tuples format)
+    assert len(query_tuples) == len(sample_resources)
+    for query, details in query_tuples:
+        # Verify query string
+        assert isinstance(query, str)
+        assert len(query) > 0
+        # Verify construction details
+        assert details.extractor_type == "yake"
+        assert len(details.keywords) > 0
 
 
 @pytest.mark.asyncio
@@ -579,26 +578,39 @@ async def test_query_generation_logging_llm(
             return_value=(contents, contents_dict)
         )
 
-        # Mock the LLM extractor to avoid API calls
-        generator.extractor.extract_async = AsyncMock(
-            return_value=['"CD8+ T cell"[Title] AND "marker"[Abstract]']
+        # Mock the LLM to return queries
+        from interaction_finder.search.reverse.llm_models import (
+            LLMQueryConstructionResponse,
         )
+        from pydantic_ai.result import AgentRunResult
 
-        # Generate queries
-        queries = await generator.generate_initial_queries(sample_resources)
+        mock_response = LLMQueryConstructionResponse(
+            query='"CD8+ T cell"[Title] AND "marker"[Abstract]', reasoning="Test query"
+        )
+        mock_result = Mock(spec=AgentRunResult)
+        mock_result.output = mock_response
+        mock_agent = AsyncMock()
+        mock_agent.run.return_value = mock_result
+
+        with patch.object(
+            generator.constructor, "_create_agent", return_value=mock_agent
+        ):
+            # Generate queries - now returns tuples
+            query_tuples = await generator.generate_initial_queries(sample_resources)
 
     # Parse log file
     entries = read_log_entries(temp_log_file)
 
-    # Find query generation entries
+    # QueryGenerator no longer logs query_generation entries (now done by ReverseSearcher)
     query_entries = [e for e in entries if e["stage"] == "query_generation"]
-    assert len(query_entries) > 0
+    assert len(query_entries) == 0
 
-    for entry in query_entries:
-        # Verify extractor type (migrated from "llm" to "none" + constructor="llm")
-        assert entry["extractor_type"] == "none"
-        # None extractor passes empty keywords list to LLM constructor
-        assert isinstance(entry["keywords"], list)
+    # Verify queries were generated with correct format
+    assert len(query_tuples) > 0
+    for query, details in query_tuples:
+        assert isinstance(query, str)
+        assert details.extractor_type == "none"
+        assert details.constructor_type == "llm"
 
 
 @pytest.mark.asyncio
@@ -646,18 +658,19 @@ async def test_query_index_increments(
             return_value=(contents, contents_dict)
         )
 
-        # Generate queries
-        await generator.generate_initial_queries(sample_resources)
+        # Generate queries - now returns tuples
+        query_tuples = await generator.generate_initial_queries(sample_resources)
 
     # Parse log file
     entries = read_log_entries(temp_log_file)
 
-    # Find query generation entries
+    # QueryGenerator no longer logs query_generation entries
+    # Query indexing is now done by ReverseSearcher
     query_entries = [e for e in entries if e["stage"] == "query_generation"]
+    assert len(query_entries) == 0
 
-    # Verify indices are sequential
-    for i, entry in enumerate(query_entries):
-        assert entry["query_index"] == i
+    # Verify queries were generated
+    assert len(query_tuples) == len(sample_resources)
 
 
 @pytest.mark.asyncio
@@ -772,19 +785,23 @@ async def test_clustered_query_logging(
             return_value=(contents, contents_dict)
         )
 
-        # Generate queries (should cluster 4 resources into 2 clusters)
-        queries = await generator.generate_initial_queries(cluster_resources)
+        # Generate queries (should cluster 4 resources into 2 clusters) - returns tuples
+        query_tuples = await generator.generate_initial_queries(cluster_resources)
 
     # Parse log file
     entries = read_log_entries(temp_log_file)
 
-    # Find query generation entries
-    query_entries = [e for e in entries if e["stage"] == "query_generation"]
+    # QueryGenerator should log clustering but not query_generation
+    clustering_entries = [e for e in entries if e["stage"] == "clustering"]
+    assert len(clustering_entries) == 1
 
-    # Verify queries have cluster IDs and resource counts
-    for entry in query_entries:
-        # Clustered mode: should have cluster_id
-        assert entry["cluster_id"] is not None
-        assert isinstance(entry["cluster_id"], int)
-        # Resource count should be >= 1
-        assert len(entry["input_resources"]) >= 1
+    query_entries = [e for e in entries if e["stage"] == "query_generation"]
+    assert len(query_entries) == 0
+
+    # Verify cluster IDs in QueryConstructionDetails
+    for query, details in query_tuples:
+        assert isinstance(query, str)
+        # Clustered mode: should have cluster_id in details
+        assert details.cluster_id is not None
+        # cluster_id can be int or np.int32
+        assert isinstance(details.cluster_id, (int, type(details.cluster_id)))

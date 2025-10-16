@@ -79,10 +79,12 @@ async def test_empty_hint_terms():
             "12345678": {"title": "BRCA1 mutations", "abstract": "Gene analysis"}
         }
 
-        queries = await generator.generate_initial_queries_individual(resources)
+        query_tuples = await generator.generate_initial_queries_individual(resources)
 
-        assert len(queries) == 1
-        assert isinstance(queries[0], str)
+        assert len(query_tuples) == 1
+        # Now returns tuples of (query, details)
+        assert isinstance(query_tuples[0], tuple)
+        assert isinstance(query_tuples[0][0], str)
 
 
 @pytest.mark.asyncio
@@ -169,11 +171,14 @@ async def test_llm_api_timeout():
         with patch.object(
             generator.constructor, "_create_agent", return_value=mock_agent
         ):
-            queries = await generator.generate_initial_queries_individual(resources)
+            query_tuples = await generator.generate_initial_queries_individual(
+                resources
+            )
 
             # Should fall back to direct constructor
-            assert len(queries) == 1
-            assert isinstance(queries[0], str)
+            assert len(query_tuples) == 1
+            assert isinstance(query_tuples[0], tuple)
+            assert isinstance(query_tuples[0][0], str)
 
 
 @pytest.mark.asyncio
@@ -276,11 +281,13 @@ async def test_llm_empty_query_response():
         with patch.object(
             generator.constructor, "_create_agent", return_value=mock_agent
         ):
-            queries = await generator.generate_initial_queries_individual(resources)
+            query_tuples = await generator.generate_initial_queries_individual(
+                resources
+            )
 
             # Should return the minimal query
-            assert len(queries) == 1
-            assert queries[0] == "*"
+            assert len(query_tuples) == 1
+            assert query_tuples[0][0] == "*"
 
 
 # ==============================================================================
@@ -688,11 +695,12 @@ async def test_special_characters_in_keywords():
             }
         }
 
-        queries = await generator.generate_initial_queries_individual(resources)
+        query_tuples = await generator.generate_initial_queries_individual(resources)
 
         # Should handle special characters (may quote or escape)
-        assert len(queries) == 1
-        assert isinstance(queries[0], str)
+        assert len(query_tuples) == 1
+        assert isinstance(query_tuples[0], tuple)
+        assert isinstance(query_tuples[0][0], str)
 
 
 # ==============================================================================
@@ -725,8 +733,11 @@ async def test_concurrent_query_generation():
         mock_fetch.return_value = metadata
 
         # Generate queries (internally may use concurrency)
-        queries = await generator.generate_initial_queries_individual(resources)
+        query_tuples = await generator.generate_initial_queries_individual(resources)
 
-        assert len(queries) == 10
-        # All queries should be valid
+        assert len(query_tuples) == 10
+        # All queries should be valid tuples
+        assert all(isinstance(qt, tuple) for qt in query_tuples)
+        # Extract query strings
+        queries = [q for q, _ in query_tuples]
         assert all(isinstance(q, str) for q in queries)

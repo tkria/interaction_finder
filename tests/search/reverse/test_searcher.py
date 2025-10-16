@@ -60,7 +60,7 @@ async def test_reverse_search_full_workflow():
     searcher = ReverseSearcher(config, mock_backend, mock_cache, mock_fetcher)
     # Mock query generator to return one query
     with patch.object(searcher.query_generator, "generate_initial_queries") as mock_gen:
-        mock_gen.return_value = ["test query"]
+        mock_gen.return_value = [("test query", Mock())]
 
         target_resources = [
             KnownResource(pmid="123", url="https://example.com/paper1"),
@@ -116,7 +116,7 @@ async def test_stopping_criterion_coverage_achieved():
     searcher = ReverseSearcher(config, mock_backend, mock_cache, mock_fetcher)
 
     with patch.object(searcher.query_generator, "generate_initial_queries") as mock_gen:
-        mock_gen.return_value = ["test query"]
+        mock_gen.return_value = [("test query", Mock())]
 
         target_resources = [
             KnownResource(pmid="123", url="https://example.com/paper1"),
@@ -156,7 +156,13 @@ async def test_stopping_criterion_consecutive_zero_finds():
     searcher = ReverseSearcher(config, mock_backend, mock_cache, mock_fetcher)
     # Generate 5 queries initially (more than consecutive zero limit)
     with patch.object(searcher.query_generator, "generate_initial_queries") as mock_gen:
-        mock_gen.return_value = ["query1", "query2", "query3", "query4", "query5"]
+        mock_gen.return_value = [
+            ("query1", Mock()),
+            ("query2", Mock()),
+            ("query3", Mock()),
+            ("query4", Mock()),
+            ("query5", Mock()),
+        ]
 
         target_resources = [
             KnownResource(pmid=str(i), url=f"https://example.com/paper{i}")
@@ -207,7 +213,7 @@ async def test_stopping_criterion_max_queries():
     searcher = ReverseSearcher(config, mock_backend, mock_cache, mock_fetcher)
     # Generate many queries initially
     with patch.object(searcher.query_generator, "generate_initial_queries") as mock_gen:
-        mock_gen.return_value = [f"query{i}" for i in range(10)]
+        mock_gen.return_value = [(f"query{i}", Mock()) for i in range(10)]
 
         target_resources = [
             KnownResource(pmid=str(i), url=f"https://example.com/paper{i}")
@@ -299,7 +305,7 @@ async def test_backend_execution_failure_continues():
     searcher = ReverseSearcher(config, mock_backend, mock_cache, mock_fetcher)
 
     with patch.object(searcher.query_generator, "generate_initial_queries") as mock_gen:
-        mock_gen.return_value = ["query1", "query2"]
+        mock_gen.return_value = [("query1", Mock()), ("query2", Mock())]
 
         target_resources = [
             KnownResource(pmid="123", url="https://example.com/paper1"),
@@ -341,7 +347,7 @@ async def test_cache_hit():
     searcher = ReverseSearcher(config, mock_backend, mock_cache, mock_fetcher)
 
     with patch.object(searcher.query_generator, "generate_initial_queries") as mock_gen:
-        mock_gen.return_value = ["test query"]
+        mock_gen.return_value = [("test query", Mock())]
 
         target_resources = [
             KnownResource(pmid="123", url="https://example.com/paper1"),
@@ -388,7 +394,7 @@ async def test_cache_miss_stores_results():
     searcher = ReverseSearcher(config, mock_backend, mock_cache, mock_fetcher)
 
     with patch.object(searcher.query_generator, "generate_initial_queries") as mock_gen:
-        mock_gen.return_value = ["test query"]
+        mock_gen.return_value = [("test query", Mock())]
 
         target_resources = [
             KnownResource(pmid="123", url="https://example.com/paper1"),
@@ -443,7 +449,7 @@ async def test_coverage_calculation():
     searcher = ReverseSearcher(config, mock_backend, mock_cache, mock_fetcher)
 
     with patch.object(searcher.query_generator, "generate_initial_queries") as mock_gen:
-        mock_gen.return_value = ["query1", "query2"]
+        mock_gen.return_value = [("query1", Mock()), ("query2", Mock())]
 
         target_resources = [
             KnownResource(pmid="1", url="https://example.com/paper1"),
@@ -508,8 +514,8 @@ async def test_refinement_query_generation():
             searcher.query_generator, "generate_refinement_queries"
         ) as mock_refine,
     ):
-        mock_initial.return_value = ["initial_query"]
-        mock_refine.return_value = ["refinement_query"]
+        mock_initial.return_value = [("initial_query", Mock())]
+        mock_refine.return_value = [("refinement_query", Mock())]
 
         target_resources = [
             KnownResource(pmid="1", url="https://example.com/paper1"),
@@ -561,7 +567,7 @@ async def test_no_refinement_queries_stops():
             searcher.query_generator, "generate_refinement_queries"
         ) as mock_refine,
     ):
-        mock_initial.return_value = ["initial_query"]
+        mock_initial.return_value = [("initial_query", Mock())]
         mock_refine.return_value = []  # No refinement queries
 
         target_resources = [
@@ -616,7 +622,7 @@ async def test_consecutive_zero_resets_on_find():
     searcher = ReverseSearcher(config, mock_backend, mock_cache, mock_fetcher)
 
     with patch.object(searcher.query_generator, "generate_initial_queries") as mock_gen:
-        mock_gen.return_value = [f"query{i}" for i in range(1, 6)]
+        mock_gen.return_value = [(f"query{i}", Mock()) for i in range(1, 6)]
 
         target_resources = [
             KnownResource(pmid=str(i), url=f"https://example.com/paper{i}")
@@ -667,7 +673,7 @@ async def test_unfound_resources_tracked():
     searcher = ReverseSearcher(config, mock_backend, mock_cache, mock_fetcher)
 
     with patch.object(searcher.query_generator, "generate_initial_queries") as mock_gen:
-        mock_gen.return_value = ["query"]
+        mock_gen.return_value = [("query", Mock())]
 
         resource1 = KnownResource(pmid="1", url="https://example.com/paper1")
         resource2 = KnownResource(pmid="2", url="https://example.com/paper2")

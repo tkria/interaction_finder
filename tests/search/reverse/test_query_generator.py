@@ -56,9 +56,11 @@ async def test_generate_queries_from_pmids():
             KnownResource(pmid="456", url="https://pubmed.ncbi.nlm.nih.gov/456/"),
         ]
 
-        queries = await generator.generate_initial_queries_individual(resources)
+        query_tuples = await generator.generate_initial_queries_individual(resources)
 
-        assert len(queries) == 2
+        assert len(query_tuples) == 2
+        # Unpack tuples to get query strings
+        queries = [q for q, _ in query_tuples]
         # Verify queries contain relevant keywords
         assert any("diabetes" in q.lower() or "insulin" in q.lower() for q in queries)
         assert any("brca1" in q.lower() or "breast" in q.lower() for q in queries)
@@ -101,9 +103,11 @@ async def test_generate_queries_from_urls():
         KnownResource(url="https://example.com/paper2"),
     ]
 
-    queries = await generator.generate_initial_queries_individual(resources)
+    query_tuples = await generator.generate_initial_queries_individual(resources)
 
-    assert len(queries) == 2
+    assert len(query_tuples) == 2
+    # Unpack tuples to get query strings
+    queries = [q for q, _ in query_tuples]
     # Verify PageFetcher was called
     mock_fetcher.fetch_documents.assert_called_once()
     # Verify queries contain relevant keywords
@@ -186,7 +190,8 @@ async def test_clustering_fallback_for_small_batch():
     with patch.object(
         generator, "generate_initial_queries_individual"
     ) as mock_individual:
-        mock_individual.return_value = ["query1", "query2"]
+        # Return tuples now
+        mock_individual.return_value = [("query1", None), ("query2", None)]
 
         queries = await generator.generate_initial_queries(resources)
 
@@ -370,12 +375,14 @@ async def test_hint_fields_not_used_in_query_generation():
         contents_dict = {}
         mock_fetch.return_value = (contents, contents_dict)
 
-        queries = await generator.generate_initial_queries_individual(resources)
+        query_tuples = await generator.generate_initial_queries_individual(resources)
 
-        assert len(queries) == 1
+        assert len(query_tuples) == 1
+        # Unpack tuple
+        query = query_tuples[0][0]
         # Hint fields should NOT be in the query (only content-based keywords)
         # Query is based purely on content: "T cell biology and immunology research"
-        assert "CD8+ T cell" not in queries[0] and "CD8A" not in queries[0]
+        assert "CD8+ T cell" not in query and "CD8A" not in query
 
 
 @pytest.mark.asyncio
@@ -407,11 +414,13 @@ async def test_query_generation_without_hint_fields():
         contents_dict = {}
         mock_fetch.return_value = (contents, contents_dict)
 
-        queries = await generator.generate_initial_queries_individual(resources)
+        query_tuples = await generator.generate_initial_queries_individual(resources)
 
-        assert len(queries) == 1
+        assert len(query_tuples) == 1
+        # Unpack tuple
+        query = query_tuples[0][0]
         # Hint fields should NOT be in the query
-        assert "CD8+ T cell" not in queries[0]
+        assert "CD8+ T cell" not in query
 
 
 # ==============================================================================
@@ -499,15 +508,17 @@ async def test_refinement_queries_exclude_duplicates():
         mock_fetch.return_value = (contents, contents_dict)
 
         # Generate initial queries
-        initial_queries = await generator.generate_initial_queries(resources)
+        initial_query_tuples = await generator.generate_initial_queries(resources)
+        # Extract just the query strings for passing to refinement
+        initial_queries = [q for q, _ in initial_query_tuples]
 
         # Now generate refinement queries with same resources
-        refinement_queries = await generator.generate_refinement_queries(
+        refinement_query_tuples = await generator.generate_refinement_queries(
             resources, initial_queries
         )
 
         # Should have filtered out duplicates
-        assert len(refinement_queries) == 0  # All queries were duplicates
+        assert len(refinement_query_tuples) == 0  # All queries were duplicates
 
 
 @pytest.mark.asyncio
@@ -539,7 +550,9 @@ async def test_refinement_queries_with_new_resources():
         ]
         contents_dict = {}
         mock_fetch.return_value = (contents, contents_dict)
-        initial_queries = await generator.generate_initial_queries(old_resources)
+        initial_query_tuples = await generator.generate_initial_queries(old_resources)
+        # Extract query strings
+        initial_queries = [q for q, _ in initial_query_tuples]
 
         # Second call for new resources
         contents = [
@@ -551,12 +564,12 @@ async def test_refinement_queries_with_new_resources():
         ]
         contents_dict = {}
         mock_fetch.return_value = (contents, contents_dict)
-        refinement_queries = await generator.generate_refinement_queries(
+        refinement_query_tuples = await generator.generate_refinement_queries(
             new_resources, initial_queries
         )
 
         # Should have generated new queries (different content)
-        assert len(refinement_queries) > 0
+        assert len(refinement_query_tuples) > 0
 
 
 # ==============================================================================

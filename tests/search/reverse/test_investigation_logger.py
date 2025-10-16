@@ -1510,7 +1510,7 @@ async def test_log_query_keyword_extraction_fields(
     from interaction_finder.search.reverse.investigation_logger import (
         QueryConstructionDetails,
     )
-    from interaction_finder.search.base import SearchQuery, SearchResult, SearchResults
+    from interaction_finder.search.base import SearchQuery, SearchResults
 
     async with InvestigationLogger(temp_log_file) as logger:
         construction_details = QueryConstructionDetails(
@@ -1573,7 +1573,7 @@ async def test_log_query_construction_fields(
     from interaction_finder.search.reverse.investigation_logger import (
         QueryConstructionDetails,
     )
-    from interaction_finder.search.base import SearchQuery, SearchResult, SearchResults
+    from interaction_finder.search.base import SearchQuery, SearchResults
 
     async with InvestigationLogger(temp_log_file) as logger:
         construction_details = QueryConstructionDetails(
@@ -1798,7 +1798,7 @@ async def test_log_query_timing_calculation(
     from interaction_finder.search.reverse.investigation_logger import (
         QueryConstructionDetails,
     )
-    from interaction_finder.search.base import SearchQuery, SearchResult, SearchResults
+    from interaction_finder.search.base import SearchQuery, SearchResults
 
     async with InvestigationLogger(temp_log_file) as logger:
         construction_details = QueryConstructionDetails(
@@ -1991,3 +1991,314 @@ async def test_rewrite_performance_100_entries(temp_log_file: Path):
     content = temp_log_file.read_text()
     entries = parse_pretty_json_entries(content)
     assert len(entries) == 100
+
+
+# Atomic file write tests
+
+
+@pytest.mark.asyncio
+async def test_atomic_file_writes(temp_log_file: Path):
+    """
+    Verify atomic rewrite pattern ensures readers never see partial writes.
+
+    Tests that:
+    - Temp file is created during write
+    - Temp file is atomically renamed to final path
+    - Final file is never in partial/corrupt state
+    """
+
+    async with InvestigationLogger(temp_log_file) as logger:
+        # Add first entry
+        await logger.log_session_start(
+            [
+                KnownResource(
+                    pmid="12345678",
+                    url="https://pubmed.ncbi.nlm.nih.gov/12345678/",
+                    hint_fields={},
+                )
+            ],
+            ReverseSearchConfig(),
+            "pubmed",
+        )
+
+        # Verify log file exists and is valid JSON
+        assert temp_log_file.exists()
+        content1 = temp_log_file.read_text()
+        entries1 = parse_pretty_json_entries(content1)
+        assert len(entries1) == 1
+        assert entries1[0]["stage"] == "session_start"
+
+        # Add second entry and check atomicity
+        test_resource = KnownResource(
+            url="https://example.com/paper1",
+            hint_fields={},
+        )
+        contents = {
+            test_resource.url: {
+                "source": "content",
+                "title": "Test paper",
+                "content_length": 1500,
+                "failed": False,
+            }
+        }
+        await logger.log_content_fetch([test_resource], contents)
+
+        # Verify no temp files remain after write completes
+        temp_files = list(temp_log_file.parent.glob(f"{temp_log_file.name}.tmp.*"))
+        assert len(temp_files) == 0, f"Temp files should be cleaned up: {temp_files}"
+
+        # Verify final file is valid and contains both entries
+        content2 = temp_log_file.read_text()
+        entries2 = parse_pretty_json_entries(content2)
+        assert len(entries2) == 2
+        assert entries2[0]["stage"] == "session_start"
+        assert entries2[1]["stage"] == "content_fetch"
+
+        # Verify each entry is complete (no partial JSON)
+        for entry in entries2:
+            assert "session_id" in entry
+            assert "timestamp" in entry
+            assert "stage" in entry
+
+
+@pytest.mark.asyncio
+async def test_atomic_writes_concurrent_readers(temp_log_file: Path):
+    """
+    Verify concurrent readers always see complete log state.
+
+    Simulates a reader that checks the log file while writes are happening.
+    Every read should see a valid, complete JSON Lines file.
+    """
+    async with InvestigationLogger(temp_log_file) as logger:
+        # Add initial entry
+        await logger.log_session_start(
+            [
+                KnownResource(
+                    pmid="11111111",
+                    url="https://pubmed.ncbi.nlm.nih.gov/11111111/",
+                    hint_fields={},
+                )
+            ],
+            ReverseSearchConfig(),
+            "pubmed",
+        )
+
+        # Add multiple entries and verify file is always valid
+        for i in range(5):
+            # Read current state
+            content = temp_log_file.read_text()
+            entries = parse_pretty_json_entries(content)
+            # Verify we can parse (no partial writes)
+            assert len(entries) >= 1
+            assert all("session_id" in e for e in entries)
+
+            # Add another entry
+            test_resource = KnownResource(
+                url=f"https://example.com/paper{i}",
+                hint_fields={},
+            )
+            contents = {
+                test_resource.url: {
+                    "source": "content",
+                    "title": f"Paper {i}",
+                    "content_length": 1000 + i,
+                    "failed": False,
+                }
+            }
+            await logger.log_content_fetch([test_resource], contents)
+
+        # Final read should have all entries
+        content = temp_log_file.read_text()
+        entries = parse_pretty_json_entries(content)
+        assert len(entries) == 6  # 1 session_start + 5 content_fetch
+
+
+# Non-fatal error handling tests
+
+
+@pytest.mark.asyncio
+async def test_logging_failures_non_fatal(temp_log_file: Path, monkeypatch):
+    """
+    Verify logging errors produce warnings but don't block execution.
+
+    Tests that file write failures:
+    - Log warning messages
+    - Don't raise exceptions
+    - Allow search pipeline to continue
+    """
+    import logging
+    from unittest.mock import patch
+
+    # Capture warnings
+    warnings: list[str] = []
+    original_warning = logging.warning
+
+    def capture_warning(msg, *args, **kwargs):
+        warnings.append(msg)
+        original_warning(msg, *args, **kwargs)
+
+    monkeypatch.setattr(logging, "warning", capture_warning)
+
+    # Create logger successfully
+    async with InvestigationLogger(temp_log_file) as logger:
+        # First entry should succeed
+        await logger.log_session_start(
+            [
+                KnownResource(
+                    pmid="12345678",
+                    url="https://pubmed.ncbi.nlm.nih.gov/12345678/",
+                    hint_fields={},
+                )
+            ],
+            ReverseSearchConfig(),
+            "pubmed",
+        )
+
+        # Verify first entry written
+        assert temp_log_file.exists()
+
+        # Mock _rewrite_log to raise PermissionError on next call
+        async def failing_rewrite():
+            raise PermissionError("Disk full or permissions denied")
+
+        with patch.object(logger, "_rewrite_log", side_effect=failing_rewrite):
+            # Attempt to log another entry (should fail gracefully)
+            test_resource = KnownResource(
+                url="https://example.com/paper1",
+                hint_fields={},
+            )
+            contents = {
+                test_resource.url: {
+                    "source": "content",
+                    "title": "Test paper",
+                    "content_length": 1500,
+                    "failed": False,
+                }
+            }
+            await logger.log_content_fetch([test_resource], contents)
+
+        # Verify warning was logged
+        assert len(warnings) > 0
+        assert any("Failed to append entry" in w for w in warnings)
+
+        # Verify no exception was raised (we're still in the context manager)
+        # This implicitly tests non-fatal behavior
+
+
+@pytest.mark.asyncio
+async def test_append_entry_error_handling(temp_log_file: Path, monkeypatch):
+    """
+    Verify _append_entry catches exceptions and logs warnings.
+
+    Tests error handling in the _append_entry method specifically.
+    """
+    import logging
+    from unittest.mock import patch
+
+    warnings: list[str] = []
+
+    def capture_warning(msg, *args, **kwargs):
+        warnings.append(msg)
+
+    monkeypatch.setattr(logging, "warning", capture_warning)
+
+    async with InvestigationLogger(temp_log_file) as logger:
+        # Mock _rewrite_log to raise exception
+        async def failing_rewrite():
+            raise OSError("Simulated I/O error")
+
+        with patch.object(logger, "_rewrite_log", side_effect=failing_rewrite):
+            # Attempt to log entry (should catch exception)
+            await logger.log_session_start(
+                [
+                    KnownResource(
+                        pmid="12345678",
+                        url="https://pubmed.ncbi.nlm.nih.gov/12345678/",
+                        hint_fields={},
+                    )
+                ],
+                ReverseSearchConfig(),
+                "pubmed",
+            )
+
+        # Verify warning was logged
+        assert len(warnings) > 0
+        assert any("Failed to append entry" in w for w in warnings)
+
+
+@pytest.mark.asyncio
+async def test_error_handling_preserves_in_memory_state(
+    temp_log_file: Path, monkeypatch
+):
+    """
+    Verify in-memory entry list is updated even when file write fails.
+
+    This ensures partial progress is maintained in memory, allowing
+    successful writes to include previously failed entries.
+    """
+    from unittest.mock import patch
+
+    async with InvestigationLogger(temp_log_file) as logger:
+        # Add first entry successfully
+        await logger.log_session_start(
+            [
+                KnownResource(
+                    pmid="11111111",
+                    url="https://pubmed.ncbi.nlm.nih.gov/11111111/",
+                    hint_fields={},
+                )
+            ],
+            ReverseSearchConfig(),
+            "pubmed",
+        )
+
+        # Verify in-memory state
+        assert len(logger._entries) == 1
+
+        # Mock _rewrite_log to fail on next call
+        call_count = [0]
+        original_rewrite = logger._rewrite_log
+
+        async def failing_once_rewrite():
+            call_count[0] += 1
+            if call_count[0] == 1:
+                raise OSError("Simulated write failure")
+            await original_rewrite()
+
+        with patch.object(logger, "_rewrite_log", side_effect=failing_once_rewrite):
+            # Attempt to add entry (write will fail)
+            test_resource = KnownResource(
+                url="https://example.com/paper1",
+                hint_fields={},
+            )
+            contents = {
+                test_resource.url: {
+                    "source": "content",
+                    "title": "Test paper",
+                    "content_length": 1500,
+                    "failed": False,
+                }
+            }
+            await logger.log_content_fetch([test_resource], contents)
+
+        # Verify in-memory state includes failed entry
+        assert len(logger._entries) == 2, (
+            "Entry should be added to memory even if write fails"
+        )
+
+        # Successful write should include all entries
+        await logger.log_clustering(
+            enabled=False,
+            resources=[
+                KnownResource(
+                    pmid="11111111",
+                    url="https://pubmed.ncbi.nlm.nih.gov/11111111/",
+                    hint_fields={},
+                )
+            ],
+        )
+
+        # Verify file now has all entries
+        content = temp_log_file.read_text()
+        entries = parse_pretty_json_entries(content)
+        assert len(entries) == 3

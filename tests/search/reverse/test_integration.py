@@ -224,7 +224,7 @@ async def test_full_reverse_search_workflow(
     searcher = ReverseSearcher(config, mock_backend, mock_cache, mock_fetcher)
     # Mock query generator
     with patch.object(searcher.query_generator, "generate_initial_queries") as mock_gen:
-        mock_gen.return_value = ["test query"]
+        mock_gen.return_value = [("test query", Mock())]
         # Execute search
         session = await searcher.search(sample_resources, verbose=False)
         # Validate session
@@ -311,7 +311,7 @@ async def test_stopping_coverage_achieved(
     searcher = ReverseSearcher(config, mock_backend, mock_cache, mock_fetcher)
 
     with patch.object(searcher.query_generator, "generate_initial_queries") as mock_gen:
-        mock_gen.return_value = ["comprehensive query"]
+        mock_gen.return_value = [("comprehensive query", Mock())]
 
         session = await searcher.search(sample_resources, verbose=False)
 
@@ -341,7 +341,13 @@ async def test_stopping_consecutive_zeros(
     searcher = ReverseSearcher(config, mock_backend, mock_cache, mock_fetcher)
 
     with patch.object(searcher.query_generator, "generate_initial_queries") as mock_gen:
-        mock_gen.return_value = ["q1", "q2", "q3", "q4", "q5"]
+        mock_gen.return_value = [
+            ("q1", Mock()),
+            ("q2", Mock()),
+            ("q3", Mock()),
+            ("q4", Mock()),
+            ("q5", Mock()),
+        ]
 
         session = await searcher.search(sample_resources, verbose=False)
 
@@ -388,7 +394,7 @@ async def test_stopping_max_queries(
 
     with patch.object(searcher.query_generator, "generate_initial_queries") as mock_gen:
         # Generate many queries
-        mock_gen.return_value = [f"query{i}" for i in range(10)]
+        mock_gen.return_value = [(f"query{i}", Mock()) for i in range(10)]
 
         session = await searcher.search(sample_resources, verbose=False)
 
@@ -460,7 +466,7 @@ async def test_all_resources_found_first_query(
     searcher = ReverseSearcher(config, mock_backend, mock_cache, mock_fetcher)
 
     with patch.object(searcher.query_generator, "generate_initial_queries") as mock_gen:
-        mock_gen.return_value = ["perfect query"]
+        mock_gen.return_value = [("perfect query", Mock())]
 
         session = await searcher.search(sample_resources, verbose=False)
 
@@ -502,7 +508,7 @@ async def test_no_resources_found(
     searcher = ReverseSearcher(config, mock_backend, mock_cache, mock_fetcher)
 
     with patch.object(searcher.query_generator, "generate_initial_queries") as mock_gen:
-        mock_gen.return_value = ["q1", "q2", "q3"]
+        mock_gen.return_value = [("q1", Mock()), ("q2", Mock()), ("q3", Mock())]
 
         session = await searcher.search(sample_resources, verbose=False)
 
@@ -566,7 +572,7 @@ async def test_multi_domain_resources(tmp_path, mock_backend, mock_cache, mock_f
     searcher = ReverseSearcher(config, mock_backend, mock_cache, mock_fetcher)
 
     with patch.object(searcher.query_generator, "generate_initial_queries") as mock_gen:
-        mock_gen.return_value = ["multi-domain query"]
+        mock_gen.return_value = [("multi-domain query", Mock())]
 
         session = await searcher.search(resources, verbose=False)
         # Should work regardless of domain
@@ -625,7 +631,7 @@ async def test_performance_with_caching(tmp_path, mock_backend, mock_fetcher):
 
     with patch.object(searcher.query_generator, "generate_initial_queries") as mock_gen:
         # Generate 20 queries (should hit coverage with caching)
-        mock_gen.return_value = [f"query{i}" for i in range(20)]
+        mock_gen.return_value = [(f"query{i}", Mock()) for i in range(20)]
 
         start_time = time.time()
         session = await searcher.search(resources, verbose=False)
@@ -704,7 +710,7 @@ async def test_backend_failure_recovery(
     searcher = ReverseSearcher(config, mock_backend, mock_cache, mock_fetcher)
 
     with patch.object(searcher.query_generator, "generate_initial_queries") as mock_gen:
-        mock_gen.return_value = ["q1", "q2", "q3"]
+        mock_gen.return_value = [("q1", Mock()), ("q2", Mock()), ("q3", Mock())]
 
         session = await searcher.search(sample_resources, verbose=False)
         # Should have found something despite failures
@@ -832,7 +838,7 @@ async def test_backend_syntax_pubmed_generates_field_tags(
         # Use the actual query constructor to generate the query
         query = await searcher.query_generator.constructor.construct(context)
         captured_queries.append(query)
-        return [query]
+        return [(query, Mock())]
 
     with patch.object(
         searcher.query_generator,
@@ -895,7 +901,7 @@ async def test_backend_syntax_perplexica_generates_natural_language(
         # Use the actual query constructor to generate the query
         query = await searcher.query_generator.constructor.construct(context)
         captured_queries.append(query)
-        return [query]
+        return [(query, Mock())]
 
     with patch.object(
         searcher.query_generator,
@@ -971,7 +977,7 @@ async def test_backend_name_propagation_end_to_end(
         with patch.object(
             searcher.query_generator, "generate_initial_queries"
         ) as mock_gen:
-            mock_gen.return_value = ["test query"]
+            mock_gen.return_value = [("test query", Mock())]
 
             session = await searcher.search(sample_resources, verbose=False)
 
