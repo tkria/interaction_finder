@@ -20,6 +20,8 @@ management via async context manager protocol.
 
 import asyncio
 import logging
+import os
+import secrets
 import traceback as tb
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -730,34 +732,72 @@ class InvestigationLogger:
         self.output_path = output_path
         self.session_id = session_id or self._generate_session_id()
         self._lock = asyncio.Lock()
-        self._file = None
+        self._entries: List[InvestigationLogEntry] = []
 
     async def __aenter__(self) -> "InvestigationLogger":
-        """Open log file for writing."""
-        self._file = await aiofiles.open(self.output_path, mode="w")
+        """Initialize log file by creating empty file to claim path."""
+        # Create empty file to claim path, but don't keep file handle open
+        # This allows external tools to read the file during execution
+        async with aiofiles.open(self.output_path, mode="w") as _:
+            pass  # Just create the file
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
-        """Close log file."""
-        if self._file:
-            await self._file.close()
+        """Context manager exit (no cleanup needed with rewrite strategy)."""
+        pass  # No file handle to close with atomic rewrite strategy
 
-    async def _write_entry(self, entry: InvestigationLogEntry) -> None:
+    async def _rewrite_log(self) -> None:
         """
-        Write log entry as JSON Line with thread-safe locking.
+        Atomically rewrite entire log file with all entries.
 
-        Serializes entry to JSON with 2-space indentation for readability,
-        writes entry with newlines, and flushes immediately for incremental
-        processing.
+        Uses temp file + os.replace() for atomic writes. This ensures readers
+        see either the complete old file or the complete new file, never partial
+        writes. Errors during rewrite are non-fatal: caught, logged as warnings,
+        but do not raise exceptions.
+
+        The temp file uses a random suffix to handle concurrent writes safely.
+        """
+        try:
+            # Generate temp file path with random suffix
+            suffix = secrets.token_hex(8)
+            temp_path = Path(f"{self.output_path}.tmp.{suffix}")
+            # Write all entries to temp file
+            async with aiofiles.open(temp_path, mode="w") as f:
+                for entry in self._entries:
+                    # Pretty-print with 2-space indent for readability
+                    line = entry.model_dump_json(indent=2) + "\n"
+                    await f.write(line)
+                # Explicit flush before closing
+                await f.flush()
+            # Atomically replace original file (works on both Windows and POSIX)
+            os.replace(str(temp_path), str(self.output_path))
+        except Exception as e:
+            # Non-fatal error: log warning but don't raise
+            logging.warning(
+                f"Failed to rewrite investigation log at {self.output_path}: "
+                f"{type(e).__name__}: {e}"
+            )
+
+    async def _append_entry(self, entry: InvestigationLogEntry) -> None:
+        """
+        Append entry to in-memory list and trigger atomic file rewrite.
+
+        This method is the primary interface for adding log entries. It appends
+        to the in-memory entry list and then rewrites the entire file atomically.
+        Errors are non-fatal and logged as warnings.
 
         Args:
-            entry: Log entry to write
+            entry: Log entry to append
         """
-        async with self._lock:
-            # Pretty-print with 2-space indent for readability
-            line = entry.model_dump_json(indent=2) + "\n"
-            await self._file.write(line)
-            await self._file.flush()
+        try:
+            async with self._lock:
+                self._entries.append(entry)
+                await self._rewrite_log()
+        except Exception as e:
+            # Non-fatal error: log warning but don't raise
+            logging.warning(
+                f"Failed to append entry to investigation log: {type(e).__name__}: {e}"
+            )
 
     @staticmethod
     def _now() -> str:
@@ -783,15 +823,18 @@ class InvestigationLogger:
             config: Reverse search configuration
             backend: Search backend name
         """
-        entry = SessionStartEntry(
-            timestamp=self._now(),
-            session_id=self.session_id,
-            target_count=len(resources),
-            target_resources=[_format_resource_ref(r) for r in resources],
-            config=config.model_dump(),
-            backend=backend,
-        )
-        await self._write_entry(entry)
+        try:
+            entry = SessionStartEntry(
+                timestamp=self._now(),
+                session_id=self.session_id,
+                target_count=len(resources),
+                target_resources=[_format_resource_ref(r) for r in resources],
+                config=config.model_dump(),
+                backend=backend,
+            )
+            await self._append_entry(entry)
+        except Exception as e:
+            logging.warning(f"Failed to log session start: {type(e).__name__}: {e}")
 
     async def log_content_fetch(
         self,
@@ -838,14 +881,17 @@ class InvestigationLogger:
             else:
                 failed_count += 1
 
-        entry = ContentFetchEntry(
-            timestamp=self._now(),
-            session_id=self.session_id,
-            resources=resource_details,
-            source_counts=source_counts,
-            failed_count=failed_count,
-        )
-        await self._write_entry(entry)
+        try:
+            entry = ContentFetchEntry(
+                timestamp=self._now(),
+                session_id=self.session_id,
+                resources=resource_details,
+                source_counts=source_counts,
+                failed_count=failed_count,
+            )
+            await self._append_entry(entry)
+        except Exception as e:
+            logging.warning(f"Failed to log content fetch: {type(e).__name__}: {e}")
 
     async def log_clustering(
         self,
@@ -891,14 +937,17 @@ class InvestigationLogger:
                 }
             )
 
-        entry = ClusteringEntry(
-            timestamp=self._now(),
-            session_id=self.session_id,
-            enabled=enabled,
-            resource_count=len(resources),
-            clusters=cluster_details,
-        )
-        await self._write_entry(entry)
+        try:
+            entry = ClusteringEntry(
+                timestamp=self._now(),
+                session_id=self.session_id,
+                enabled=enabled,
+                resource_count=len(resources),
+                clusters=cluster_details,
+            )
+            await self._append_entry(entry)
+        except Exception as e:
+            logging.warning(f"Failed to log clustering: {type(e).__name__}: {e}")
 
     async def log_keyword_extraction(
         self,
@@ -913,6 +962,9 @@ class InvestigationLogger:
         """
         Log keyword extraction stage.
 
+        DEPRECATED: Use log_query() for new code. This method is kept for
+        backward compatibility but logs to the legacy keyword_extraction stage.
+
         Args:
             query_index: Sequential query index
             extractor_type: Keyword extractor used (yake/rake/tfidf/llm)
@@ -922,32 +974,37 @@ class InvestigationLogger:
             input_resources: Compact resource IDs contributing to extraction
             content_source: Content source type ("metadata", "content")
         """
-        # Convert keywords to KeywordDetail objects
-        keyword_details = []
-        for kw in keywords:
-            if isinstance(kw, dict):
-                keyword_details.append(
-                    KeywordDetail(
-                        keyword=kw.get("keyword", str(kw)),
-                        score=kw.get("score"),
+        try:
+            # Convert keywords to KeywordDetail objects
+            keyword_details = []
+            for kw in keywords:
+                if isinstance(kw, dict):
+                    keyword_details.append(
+                        KeywordDetail(
+                            keyword=kw.get("keyword", str(kw)),
+                            score=kw.get("score"),
+                        )
                     )
-                )
-            else:
-                # Fallback for unexpected format
-                keyword_details.append(KeywordDetail(keyword=str(kw), score=None))
+                else:
+                    # Fallback for unexpected format
+                    keyword_details.append(KeywordDetail(keyword=str(kw), score=None))
 
-        entry = KeywordExtractionEntry(
-            timestamp=self._now(),
-            session_id=self.session_id,
-            query_index=query_index,
-            extractor_type=extractor_type,
-            extractor_config=extractor_config,
-            keywords=keyword_details,
-            extraction_time=extraction_time,
-            input_resources=input_resources,
-            content_source=content_source,
-        )
-        await self._write_entry(entry)
+            entry = KeywordExtractionEntry(
+                timestamp=self._now(),
+                session_id=self.session_id,
+                query_index=query_index,
+                extractor_type=extractor_type,
+                extractor_config=extractor_config,
+                keywords=keyword_details,
+                extraction_time=extraction_time,
+                input_resources=input_resources,
+                content_source=content_source,
+            )
+            await self._append_entry(entry)
+        except Exception as e:
+            logging.warning(
+                f"Failed to log keyword extraction: {type(e).__name__}: {e}"
+            )
 
     async def log_query_construction(
         self,
@@ -967,6 +1024,9 @@ class InvestigationLogger:
         """
         Log query construction stage.
 
+        DEPRECATED: Use log_query() for new code. This method is kept for
+        backward compatibility but logs to the legacy query_construction stage.
+
         Args:
             query_index: Sequential query index
             constructor_type: Query constructor used (direct/llm)
@@ -981,70 +1041,77 @@ class InvestigationLogger:
             search_results: Optional search results for populating query_results field
             matches: Optional resource matches for populating query_results field
         """
-        # Build query_results summary if both search_results and matches are provided
-        query_results: Optional[QueryResultsSummary] = None
-        if search_results is not None and matches is not None:
-            # Build compact results list (PMID:X for PMID results, raw URL otherwise)
-            results_list = []
-            for result in search_results.results:
-                # Extract PMID using same logic as log_search_execution()
-                result_pmid = result.metadata.get("pmid") if result.metadata else None
-                result_id = f"PMID:{result_pmid}" if result_pmid else result.url
-                results_list.append(result_id)
-
-            # Build found_resources list with 0-based position indices
-            # Create URL-to-index mapping for lookup
-            result_url_to_index = {
-                result.url: idx for idx, result in enumerate(search_results.results)
-            }
-
-            found_resources_list = []
-            for match in matches:
-                # Format resource using existing helper
-                resource_id = _format_resource_ref(match.resource)
-
-                # Look up result index
-                result_index = result_url_to_index.get(match.search_result.url)
-                if result_index is None:
-                    # Match without corresponding result indicates matcher bug
-                    # Log warning but continue (non-blocking)
-                    logging.warning(
-                        f"Match for resource {resource_id} references "
-                        f"search result URL {match.search_result.url} which "
-                        f"is not in results list. This indicates a matcher "
-                        f"bug. Skipping this match."
+        try:
+            # Build query_results summary if both search_results and matches are provided
+            query_results: Optional[QueryResultsSummary] = None
+            if search_results is not None and matches is not None:
+                # Build compact results list (PMID:X for PMID results, raw URL otherwise)
+                results_list = []
+                for result in search_results.results:
+                    # Extract PMID using same logic as log_search_execution()
+                    result_pmid = (
+                        result.metadata.get("pmid") if result.metadata else None
                     )
-                    continue
+                    result_id = f"PMID:{result_pmid}" if result_pmid else result.url
+                    results_list.append(result_id)
 
-                found_resources_list.append(
-                    {
-                        "resource": resource_id,
-                        "index": result_index,
-                    }
+                # Build found_resources list with 0-based position indices
+                # Create URL-to-index mapping for lookup
+                result_url_to_index = {
+                    result.url: idx for idx, result in enumerate(search_results.results)
+                }
+
+                found_resources_list = []
+                for match in matches:
+                    # Format resource using existing helper
+                    resource_id = _format_resource_ref(match.resource)
+
+                    # Look up result index
+                    result_index = result_url_to_index.get(match.search_result.url)
+                    if result_index is None:
+                        # Match without corresponding result indicates matcher bug
+                        # Log warning but continue (non-blocking)
+                        logging.warning(
+                            f"Match for resource {resource_id} references "
+                            f"search result URL {match.search_result.url} which "
+                            f"is not in results list. This indicates a matcher "
+                            f"bug. Skipping this match."
+                        )
+                        continue
+
+                    found_resources_list.append(
+                        {
+                            "resource": resource_id,
+                            "index": result_index,
+                        }
+                    )
+
+                # Create QueryResultsSummary
+                query_results = QueryResultsSummary(
+                    results=results_list,
+                    found_resources=found_resources_list,
                 )
 
-            # Create QueryResultsSummary
-            query_results = QueryResultsSummary(
-                results=results_list,
-                found_resources=found_resources_list,
+            entry = QueryConstructionEntry(
+                timestamp=self._now(),
+                session_id=self.session_id,
+                query_index=query_index,
+                constructor_type=constructor_type,
+                constructor_config=constructor_config,
+                input_keywords=input_keywords,
+                keyword_scores=keyword_scores,
+                final_query=final_query,
+                construction_time=construction_time,
+                fallback_used=fallback_used,
+                backend=backend,
+                cumulative_coverage=cumulative_coverage,
+                query_results=query_results,
             )
-
-        entry = QueryConstructionEntry(
-            timestamp=self._now(),
-            session_id=self.session_id,
-            query_index=query_index,
-            constructor_type=constructor_type,
-            constructor_config=constructor_config,
-            input_keywords=input_keywords,
-            keyword_scores=keyword_scores,
-            final_query=final_query,
-            construction_time=construction_time,
-            fallback_used=fallback_used,
-            backend=backend,
-            cumulative_coverage=cumulative_coverage,
-            query_results=query_results,
-        )
-        await self._write_entry(entry)
+            await self._append_entry(entry)
+        except Exception as e:
+            logging.warning(
+                f"Failed to log query construction: {type(e).__name__}: {e}"
+            )
 
     async def log_query_generation(
         self,
@@ -1078,38 +1145,43 @@ class InvestigationLogger:
             input_resources: Compact resource IDs contributing to query
             cumulative_coverage: Coverage achieved after this query (0.0-1.0)
         """
-        # Handle backward compatibility: keywords might be List[str] or List[dict]
-        keyword_details = []
-        if keywords:
-            for kw in keywords:
-                if isinstance(kw, str):
-                    # Old format: just string
-                    keyword_details.append(KeywordDetail(keyword=kw, score=None))
-                elif isinstance(kw, dict):
-                    # New format: dict with keyword and score
-                    keyword_details.append(
-                        KeywordDetail(
-                            keyword=kw.get("keyword", str(kw)),
-                            score=kw.get("score"),
+        try:
+            # Handle backward compatibility: keywords might be List[str] or List[dict]
+            keyword_details = []
+            if keywords:
+                for kw in keywords:
+                    if isinstance(kw, str):
+                        # Old format: just string
+                        keyword_details.append(KeywordDetail(keyword=kw, score=None))
+                    elif isinstance(kw, dict):
+                        # New format: dict with keyword and score
+                        keyword_details.append(
+                            KeywordDetail(
+                                keyword=kw.get("keyword", str(kw)),
+                                score=kw.get("score"),
+                            )
                         )
-                    )
-                else:
-                    # Unknown format: convert to string
-                    keyword_details.append(KeywordDetail(keyword=str(kw), score=None))
+                    else:
+                        # Unknown format: convert to string
+                        keyword_details.append(
+                            KeywordDetail(keyword=str(kw), score=None)
+                        )
 
-        entry = QueryGenerationEntry(
-            timestamp=self._now(),
-            session_id=self.session_id,
-            query_index=query_index,
-            query_type=query_type,
-            extractor_type=extractor_type,
-            input_resources=input_resources or [],
-            keywords=keyword_details,
-            final_query=final_query,
-            cluster_id=cluster_id,
-            cumulative_coverage=cumulative_coverage,
-        )
-        await self._write_entry(entry)
+            entry = QueryGenerationEntry(
+                timestamp=self._now(),
+                session_id=self.session_id,
+                query_index=query_index,
+                query_type=query_type,
+                extractor_type=extractor_type,
+                input_resources=input_resources or [],
+                keywords=keyword_details,
+                final_query=final_query,
+                cluster_id=cluster_id,
+                cumulative_coverage=cumulative_coverage,
+            )
+            await self._append_entry(entry)
+        except Exception as e:
+            logging.warning(f"Failed to log query generation: {type(e).__name__}: {e}")
 
     async def log_search_execution(
         self,
@@ -1122,6 +1194,9 @@ class InvestigationLogger:
         """
         Log search execution.
 
+        DEPRECATED: Use log_query() for new code. This method is kept for
+        backward compatibility but logs to the legacy search_execution stage.
+
         Args:
             query_index: Sequential query index
             query_text: Query string executed
@@ -1129,33 +1204,36 @@ class InvestigationLogger:
             cache_hit: Whether results came from cache
             results: Search results from backend
         """
-        # Build result details with indices
-        result_details = []
-        for result_index, result in enumerate(results.results):
-            # Extract compact resource ID from result
-            result_pmid = result.metadata.get("pmid") if result.metadata else None
-            result_id = f"PMID:{result_pmid}" if result_pmid else result.url
+        try:
+            # Build result details with indices
+            result_details = []
+            for result_index, result in enumerate(results.results):
+                # Extract compact resource ID from result
+                result_pmid = result.metadata.get("pmid") if result.metadata else None
+                result_id = f"PMID:{result_pmid}" if result_pmid else result.url
 
-            detail = SearchResultDetail(
-                result_index=result_index,
-                resource_id=result_id,
-                title=result.title or "",
-                url=result.url,
+                detail = SearchResultDetail(
+                    result_index=result_index,
+                    resource_id=result_id,
+                    title=result.title or "",
+                    url=result.url,
+                )
+                result_details.append(detail)
+
+            entry = SearchExecutionEntry(
+                timestamp=self._now(),
+                session_id=self.session_id,
+                query_index=query_index,
+                query_text=query_text,
+                backend=backend,
+                cache_hit=cache_hit,
+                results=result_details,
+                result_count=len(result_details),
+                search_time=results.search_time or 0.0,
             )
-            result_details.append(detail)
-
-        entry = SearchExecutionEntry(
-            timestamp=self._now(),
-            session_id=self.session_id,
-            query_index=query_index,
-            query_text=query_text,
-            backend=backend,
-            cache_hit=cache_hit,
-            results=result_details,
-            result_count=len(result_details),
-            search_time=results.search_time or 0.0,
-        )
-        await self._write_entry(entry)
+            await self._append_entry(entry)
+        except Exception as e:
+            logging.warning(f"Failed to log search execution: {type(e).__name__}: {e}")
 
     async def log_matching(
         self,
@@ -1169,6 +1247,9 @@ class InvestigationLogger:
         """
         Log matching results.
 
+        DEPRECATED: Use log_query() for new code. This method is kept for
+        backward compatibility but logs to the legacy matching stage.
+
         Args:
             query_index: Sequential query index
             results: Search results that were matched
@@ -1177,49 +1258,52 @@ class InvestigationLogger:
             details: Matching details with match_details list (if provided by matcher)
             coverage: Cumulative coverage after matching
         """
-        # Check if enhanced match_details provided by matcher (Task 03)
-        # If not, build from matches (backward compatibility)
-        if "match_details" in details and details["match_details"]:
-            match_details_list = details["match_details"]
-        else:
-            # Backward compatibility: build from matches
-            match_details_list = []
-            for m in matches:
-                # Extract compact IDs
-                result_pmid = (
-                    m.search_result.metadata.get("pmid")
-                    if m.search_result.metadata
-                    else None
-                )
-                result_id = (
-                    f"PMID:{result_pmid}" if result_pmid else m.search_result.url
-                )
-                matched_resource_id = _format_resource_ref(m.resource)
+        try:
+            # Check if enhanced match_details provided by matcher (Task 03)
+            # If not, build from matches (backward compatibility)
+            if "match_details" in details and details["match_details"]:
+                match_details_list = details["match_details"]
+            else:
+                # Backward compatibility: build from matches
+                match_details_list = []
+                for m in matches:
+                    # Extract compact IDs
+                    result_pmid = (
+                        m.search_result.metadata.get("pmid")
+                        if m.search_result.metadata
+                        else None
+                    )
+                    result_id = (
+                        f"PMID:{result_pmid}" if result_pmid else m.search_result.url
+                    )
+                    matched_resource_id = _format_resource_ref(m.resource)
 
-                match_details_list.append(
-                    {
-                        "result_index": 0,  # Unknown without matcher providing it
-                        "result_id": result_id,
-                        "matched": True,
-                        "matched_resource": matched_resource_id,
-                        "match_method": m.match_method,
-                        "confidence": m.confidence,
-                    }
-                )
+                    match_details_list.append(
+                        {
+                            "result_index": 0,  # Unknown without matcher providing it
+                            "result_id": result_id,
+                            "matched": True,
+                            "matched_resource": matched_resource_id,
+                            "match_method": m.match_method,
+                            "confidence": m.confidence,
+                        }
+                    )
 
-        strategies_attempted = details.get("strategies_attempted", [])
+            strategies_attempted = details.get("strategies_attempted", [])
 
-        entry = MatchingEntry(
-            timestamp=self._now(),
-            session_id=self.session_id,
-            query_index=query_index,
-            result_count=len(results.results),
-            matches_found=len(matches),
-            match_details=match_details_list,
-            strategies_attempted=strategies_attempted,
-            cumulative_coverage=coverage,
-        )
-        await self._write_entry(entry)
+            entry = MatchingEntry(
+                timestamp=self._now(),
+                session_id=self.session_id,
+                query_index=query_index,
+                result_count=len(results.results),
+                matches_found=len(matches),
+                match_details=match_details_list,
+                strategies_attempted=strategies_attempted,
+                cumulative_coverage=coverage,
+            )
+            await self._append_entry(entry)
+        except Exception as e:
+            logging.warning(f"Failed to log matching: {type(e).__name__}: {e}")
 
     async def log_session_end(self, session: ReverseSearchSession) -> None:
         """
@@ -1228,32 +1312,35 @@ class InvestigationLogger:
         Args:
             session: Complete reverse search session
         """
-        # Build query progression
-        query_progression = [
-            {
-                "query_index": r.query_index,
-                "query": r.query,
-                "new_finds": r.new_finds,
-                "cumulative_coverage": r.cumulative_coverage,
-            }
-            for r in session.query_results
-        ]
+        try:
+            # Build query progression
+            query_progression = [
+                {
+                    "query_index": r.query_index,
+                    "query": r.query,
+                    "new_finds": r.new_finds,
+                    "cumulative_coverage": r.cumulative_coverage,
+                }
+                for r in session.query_results
+            ]
 
-        # Format unfound resources as compact IDs
-        unfound_ids = [_format_resource_ref(r) for r in session.unfound_resources]
+            # Format unfound resources as compact IDs
+            unfound_ids = [_format_resource_ref(r) for r in session.unfound_resources]
 
-        entry = SessionEndEntry(
-            timestamp=self._now(),
-            session_id=self.session_id,
-            total_queries=session.total_queries,
-            final_coverage=session.final_coverage,
-            found_count=session.found_count,
-            unfound_count=len(session.unfound_resources),
-            unfound_resources=unfound_ids,
-            stopping_reason=session.stopping_reason,
-            query_progression=query_progression,
-        )
-        await self._write_entry(entry)
+            entry = SessionEndEntry(
+                timestamp=self._now(),
+                session_id=self.session_id,
+                total_queries=session.total_queries,
+                final_coverage=session.final_coverage,
+                found_count=session.found_count,
+                unfound_count=len(session.unfound_resources),
+                unfound_resources=unfound_ids,
+                stopping_reason=session.stopping_reason,
+                query_progression=query_progression,
+            )
+            await self._append_entry(entry)
+        except Exception as e:
+            logging.warning(f"Failed to log session end: {type(e).__name__}: {e}")
 
     async def log_error(
         self,
@@ -1271,14 +1358,116 @@ class InvestigationLogger:
             affected_resources: Resources affected by the error
             recovery_action: What action was taken to recover
         """
-        entry = ErrorEntry(
-            timestamp=self._now(),
-            session_id=self.session_id,
-            error_stage=error_stage,
-            error_type=type(error).__name__,
-            error_message=str(error),
-            affected_resources=[r.url for r in affected_resources],
-            recovery_action=recovery_action,
-            traceback=tb.format_exc() if error.__traceback__ else None,
-        )
-        await self._write_entry(entry)
+        try:
+            entry = ErrorEntry(
+                timestamp=self._now(),
+                session_id=self.session_id,
+                error_stage=error_stage,
+                error_type=type(error).__name__,
+                error_message=str(error),
+                affected_resources=[r.url for r in affected_resources],
+                recovery_action=recovery_action,
+                traceback=tb.format_exc() if error.__traceback__ else None,
+            )
+            await self._append_entry(entry)
+        except Exception as e:
+            logging.warning(f"Failed to log error: {type(e).__name__}: {e}")
+
+    async def log_query(
+        self,
+        query_index: int,
+        construction_details: QueryConstructionDetails,
+        query_text: str,
+        backend: str,
+        cache_hit: bool,
+        search_time: float,
+        results: SearchResults,
+        matches: List[ResourceMatch],
+        cumulative_coverage: float,
+    ) -> None:
+        """
+        Log consolidated query entry combining extraction, construction, search, and matching.
+
+        This is the primary method for logging queries in the new consolidated format.
+        It combines all query lifecycle information into a single atomic entry.
+
+        Args:
+            query_index: Sequential query index
+            construction_details: Query construction details from QueryGenerator
+            query_text: Final query text sent to backend
+            backend: Search backend used
+            cache_hit: Whether results came from cache
+            search_time: Search execution time in seconds
+            results: Search results from backend
+            matches: Resource matches found
+            cumulative_coverage: Coverage achieved after this query (0.0-1.0)
+        """
+        try:
+            # Build results array with embedded match info
+            results_with_matches = []
+            # Create URL-to-match mapping for efficient lookup
+            match_by_url = {match.search_result.url: match for match in matches}
+
+            for result_index, result in enumerate(results.results):
+                # Extract compact resource ID (PMID:X or URL)
+                result_pmid = result.metadata.get("pmid") if result.metadata else None
+                resource_id = f"PMID:{result_pmid}" if result_pmid else result.url
+
+                # Look up match for this result
+                match = match_by_url.get(result.url)
+                match_str = None
+                if match:
+                    match_str = _format_match_string(
+                        match.match_method, match.confidence
+                    )
+
+                results_with_matches.append(
+                    QueryResultWithMatch(
+                        resource=resource_id,
+                        index=result_index,
+                        match=match_str,
+                    )
+                )
+
+            # Calculate total time (extraction + construction + search)
+            total_time = (
+                construction_details.extraction_time
+                + construction_details.construction_time
+                + search_time
+            )
+
+            # Create consolidated query entry
+            entry = QueryEntry(
+                timestamp=self._now(),
+                session_id=self.session_id,
+                query_index=query_index,
+                # Keyword extraction fields
+                keywords=construction_details.keywords,
+                keyword_extractor=construction_details.extractor_type,
+                extractor_config=construction_details.extractor_config,
+                extraction_time=construction_details.extraction_time,
+                # Query construction fields
+                query_constructor=construction_details.constructor_type,
+                constructor_config=construction_details.constructor_config,
+                fallback_used=construction_details.fallback_used,
+                input_resources=construction_details.input_resources,
+                cluster_id=construction_details.cluster_id,
+                query_text=query_text,
+                construction_time=construction_details.construction_time,
+                # Search execution fields
+                backend=backend,
+                cache_hit=cache_hit,
+                search_time=search_time,
+                # Results and matching fields
+                results=results_with_matches,
+                result_count=len(results.results),
+                new_finds=len(matches),
+                cumulative_coverage=cumulative_coverage,
+                # Timing
+                total_time=total_time,
+            )
+            await self._append_entry(entry)
+        except Exception as e:
+            logging.warning(
+                f"Failed to log consolidated query: {type(e).__name__}: {e}"
+            )

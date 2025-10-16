@@ -1418,3 +1418,576 @@ async def test_query_results_missing_metadata(
     assert (
         query_results["found_resources"][0]["resource"] == "https://example.com/paper1"
     )
+
+
+# Tests for log_query() method (consolidated query logging)
+
+
+@pytest.mark.asyncio
+async def test_log_query_basic_structure(
+    temp_log_file: Path,
+    sample_resources: list[KnownResource],
+):
+    """Test log_query() creates consolidated entry with correct structure."""
+    from interaction_finder.search.reverse.investigation_logger import (
+        QueryConstructionDetails,
+    )
+    from interaction_finder.search.base import SearchQuery, SearchResult, SearchResults
+
+    async with InvestigationLogger(temp_log_file) as logger:
+        construction_details = QueryConstructionDetails(
+            keywords=[{"keyword": "CD8", "score": 0.9}],
+            keyword_scores=[0.9],
+            extractor_type="yake",
+            extractor_config={"max_keywords": 10},
+            constructor_type="direct",
+            constructor_config={},
+            fallback_used=False,
+            input_resources=["PMID:12345678"],
+            cluster_id=None,
+            construction_time=0.1,
+            extraction_time=0.2,
+        )
+
+        results = SearchResults(
+            query=SearchQuery(query="CD8 T cell marker", max_results=10),
+            results=[
+                SearchResult(
+                    url="https://pubmed.ncbi.nlm.nih.gov/12345678/",
+                    title="Test Article",
+                    snippet="Test abstract text",
+                    relevance_score=0.95,
+                    backend="pubmed",
+                    metadata={"pmid": "12345678"},
+                )
+            ],
+            total_found=1,
+            search_time=0.5,
+            backend="pubmed",
+        )
+
+        matches = [
+            ResourceMatch(
+                resource=sample_resources[0],
+                search_result=results.results[0],
+                match_method="pmid",
+                confidence=1.0,
+                query_index=0,
+            )
+        ]
+
+        await logger.log_query(
+            query_index=0,
+            construction_details=construction_details,
+            query_text="CD8 T cell marker",
+            backend="pubmed",
+            cache_hit=False,
+            search_time=0.5,
+            results=results,
+            matches=matches,
+            cumulative_coverage=0.33,
+        )
+
+    # Verify entry structure
+    content = temp_log_file.read_text()
+    entries = parse_pretty_json_entries(content)
+    assert len(entries) == 1
+    entry = entries[0]
+
+    # Verify basic fields
+    assert entry["stage"] == "query"
+    assert entry["query_index"] == 0
+    assert "session_id" in entry
+    assert "timestamp" in entry
+
+
+@pytest.mark.asyncio
+async def test_log_query_keyword_extraction_fields(
+    temp_log_file: Path,
+    sample_resources: list[KnownResource],
+):
+    """Test log_query() correctly populates keyword extraction fields."""
+    from interaction_finder.search.reverse.investigation_logger import (
+        QueryConstructionDetails,
+    )
+    from interaction_finder.search.base import SearchQuery, SearchResult, SearchResults
+
+    async with InvestigationLogger(temp_log_file) as logger:
+        construction_details = QueryConstructionDetails(
+            keywords=[
+                {"keyword": "CD8", "score": 0.9},
+                {"keyword": "T cell", "score": 0.8},
+            ],
+            keyword_scores=[0.9, 0.8],
+            extractor_type="yake",
+            extractor_config={"max_keywords": 10, "n_gram": 2},
+            constructor_type="direct",
+            constructor_config={},
+            fallback_used=False,
+            input_resources=["PMID:12345678"],
+            cluster_id=None,
+            construction_time=0.1,
+            extraction_time=0.2,
+        )
+
+        results = SearchResults(
+            query=SearchQuery(query="CD8 T cell", max_results=10),
+            results=[],
+            total_found=0,
+            search_time=0.5,
+            backend="pubmed",
+        )
+
+        await logger.log_query(
+            query_index=0,
+            construction_details=construction_details,
+            query_text="CD8 T cell",
+            backend="pubmed",
+            cache_hit=False,
+            search_time=0.5,
+            results=results,
+            matches=[],
+            cumulative_coverage=0.0,
+        )
+
+    # Verify keyword extraction fields
+    content = temp_log_file.read_text()
+    entries = parse_pretty_json_entries(content)
+    entry = entries[0]
+
+    assert entry["keywords"] == [
+        {"keyword": "CD8", "score": 0.9},
+        {"keyword": "T cell", "score": 0.8},
+    ]
+    assert entry["keyword_extractor"] == "yake"
+    assert entry["extractor_config"] == {"max_keywords": 10, "n_gram": 2}
+    assert entry["extraction_time"] == 0.2
+
+
+@pytest.mark.asyncio
+async def test_log_query_construction_fields(
+    temp_log_file: Path,
+    sample_resources: list[KnownResource],
+):
+    """Test log_query() correctly populates query construction fields."""
+    from interaction_finder.search.reverse.investigation_logger import (
+        QueryConstructionDetails,
+    )
+    from interaction_finder.search.base import SearchQuery, SearchResult, SearchResults
+
+    async with InvestigationLogger(temp_log_file) as logger:
+        construction_details = QueryConstructionDetails(
+            keywords=[{"keyword": "CD8", "score": 0.9}],
+            keyword_scores=[0.9],
+            extractor_type="yake",
+            extractor_config={},
+            constructor_type="boolean",
+            constructor_config={"operator": "AND"},
+            fallback_used=True,
+            input_resources=["PMID:12345678", "PMID:87654321"],
+            cluster_id=1,
+            construction_time=0.15,
+            extraction_time=0.2,
+        )
+
+        results = SearchResults(
+            query=SearchQuery(query="CD8 AND T cell", max_results=10),
+            results=[],
+            total_found=0,
+            search_time=0.5,
+            backend="pubmed",
+        )
+
+        await logger.log_query(
+            query_index=0,
+            construction_details=construction_details,
+            query_text="CD8 AND T cell",
+            backend="pubmed",
+            cache_hit=False,
+            search_time=0.5,
+            results=results,
+            matches=[],
+            cumulative_coverage=0.0,
+        )
+
+    # Verify query construction fields
+    content = temp_log_file.read_text()
+    entries = parse_pretty_json_entries(content)
+    entry = entries[0]
+
+    assert entry["query_constructor"] == "boolean"
+    assert entry["constructor_config"] == {"operator": "AND"}
+    assert entry["query_text"] == "CD8 AND T cell"
+    assert entry["construction_time"] == 0.15
+    assert entry["fallback_used"] is True
+    assert entry["input_resources"] == ["PMID:12345678", "PMID:87654321"]
+    assert entry["cluster_id"] == 1
+
+
+@pytest.mark.asyncio
+async def test_log_query_search_execution_fields(
+    temp_log_file: Path,
+    sample_resources: list[KnownResource],
+):
+    """Test log_query() correctly populates search execution fields."""
+    from interaction_finder.search.reverse.investigation_logger import (
+        QueryConstructionDetails,
+    )
+    from interaction_finder.search.base import SearchQuery, SearchResult, SearchResults
+
+    async with InvestigationLogger(temp_log_file) as logger:
+        construction_details = QueryConstructionDetails(
+            keywords=[{"keyword": "CD8", "score": 0.9}],
+            keyword_scores=[0.9],
+            extractor_type="yake",
+            extractor_config={},
+            constructor_type="direct",
+            constructor_config={},
+            fallback_used=False,
+            input_resources=["PMID:12345678"],
+            cluster_id=None,
+            construction_time=0.1,
+            extraction_time=0.2,
+        )
+
+        results = SearchResults(
+            query=SearchQuery(query="CD8", max_results=10),
+            results=[
+                SearchResult(
+                    url="https://example.com/paper1",
+                    title="Paper 1",
+                    snippet="",
+                    relevance_score=0.9,
+                    backend="pubmed",
+                ),
+                SearchResult(
+                    url="https://example.com/paper2",
+                    title="Paper 2",
+                    snippet="",
+                    relevance_score=0.8,
+                    backend="pubmed",
+                ),
+            ],
+            total_found=2,
+            search_time=1.25,
+            backend="pubmed",
+        )
+
+        await logger.log_query(
+            query_index=5,
+            construction_details=construction_details,
+            query_text="CD8",
+            backend="pubmed",
+            cache_hit=True,
+            search_time=1.25,
+            results=results,
+            matches=[],
+            cumulative_coverage=0.6,
+        )
+
+    # Verify search execution fields
+    content = temp_log_file.read_text()
+    entries = parse_pretty_json_entries(content)
+    entry = entries[0]
+
+    assert entry["backend"] == "pubmed"
+    assert entry["cache_hit"] is True
+    assert entry["search_time"] == 1.25
+    assert entry["result_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_log_query_results_and_matching(
+    temp_log_file: Path,
+    sample_resources: list[KnownResource],
+):
+    """Test log_query() correctly populates results and matching fields."""
+    from interaction_finder.search.reverse.investigation_logger import (
+        QueryConstructionDetails,
+    )
+    from interaction_finder.search.base import SearchQuery, SearchResult, SearchResults
+
+    async with InvestigationLogger(temp_log_file) as logger:
+        construction_details = QueryConstructionDetails(
+            keywords=[{"keyword": "CD8", "score": 0.9}],
+            keyword_scores=[0.9],
+            extractor_type="yake",
+            extractor_config={},
+            constructor_type="direct",
+            constructor_config={},
+            fallback_used=False,
+            input_resources=["PMID:12345678"],
+            cluster_id=None,
+            construction_time=0.1,
+            extraction_time=0.2,
+        )
+
+        results = SearchResults(
+            query=SearchQuery(query="CD8", max_results=10),
+            results=[
+                SearchResult(
+                    url="https://pubmed.ncbi.nlm.nih.gov/12345678/",
+                    title="Matched Paper",
+                    snippet="",
+                    relevance_score=0.95,
+                    backend="pubmed",
+                    metadata={"pmid": "12345678"},
+                ),
+                SearchResult(
+                    url="https://example.com/unmatched",
+                    title="Unmatched Paper",
+                    snippet="",
+                    relevance_score=0.7,
+                    backend="pubmed",
+                ),
+            ],
+            total_found=2,
+            search_time=0.5,
+            backend="pubmed",
+        )
+
+        matches = [
+            ResourceMatch(
+                resource=sample_resources[0],
+                search_result=results.results[0],
+                match_method="pmid",
+                confidence=1.0,
+                query_index=0,
+            )
+        ]
+
+        await logger.log_query(
+            query_index=0,
+            construction_details=construction_details,
+            query_text="CD8",
+            backend="pubmed",
+            cache_hit=False,
+            search_time=0.5,
+            results=results,
+            matches=matches,
+            cumulative_coverage=0.33,
+        )
+
+    # Verify results and matching fields
+    content = temp_log_file.read_text()
+    entries = parse_pretty_json_entries(content)
+    entry = entries[0]
+
+    assert entry["result_count"] == 2
+    assert entry["new_finds"] == 1
+    assert entry["cumulative_coverage"] == 0.33
+    assert len(entry["results"]) == 2
+
+    # First result should have match info
+    assert entry["results"][0]["resource"] == "PMID:12345678"
+    assert entry["results"][0]["index"] == 0
+    assert entry["results"][0]["match"] == "exact"  # pmid match with confidence 1.0
+
+    # Second result should not have match
+    assert entry["results"][1]["resource"] == "https://example.com/unmatched"
+    assert entry["results"][1]["index"] == 1
+    assert entry["results"][1]["match"] is None
+
+
+@pytest.mark.asyncio
+async def test_log_query_timing_calculation(
+    temp_log_file: Path,
+    sample_resources: list[KnownResource],
+):
+    """Test log_query() correctly calculates total_time."""
+    from interaction_finder.search.reverse.investigation_logger import (
+        QueryConstructionDetails,
+    )
+    from interaction_finder.search.base import SearchQuery, SearchResult, SearchResults
+
+    async with InvestigationLogger(temp_log_file) as logger:
+        construction_details = QueryConstructionDetails(
+            keywords=[{"keyword": "CD8", "score": 0.9}],
+            keyword_scores=[0.9],
+            extractor_type="yake",
+            extractor_config={},
+            constructor_type="direct",
+            constructor_config={},
+            fallback_used=False,
+            input_resources=["PMID:12345678"],
+            cluster_id=None,
+            construction_time=0.1,
+            extraction_time=0.2,
+        )
+
+        results = SearchResults(
+            query=SearchQuery(query="CD8", max_results=10),
+            results=[],
+            total_found=0,
+            search_time=0.5,
+            backend="pubmed",
+        )
+
+        await logger.log_query(
+            query_index=0,
+            construction_details=construction_details,
+            query_text="CD8",
+            backend="pubmed",
+            cache_hit=False,
+            search_time=0.5,
+            results=results,
+            matches=[],
+            cumulative_coverage=0.0,
+        )
+
+    # Verify timing calculation
+    content = temp_log_file.read_text()
+    entries = parse_pretty_json_entries(content)
+    entry = entries[0]
+
+    # Total time = extraction + construction + search
+    assert entry["total_time"] == 0.8  # 0.2 + 0.1 + 0.5
+
+
+@pytest.mark.asyncio
+async def test_log_query_match_confidence_formatting(
+    temp_log_file: Path,
+    sample_resources: list[KnownResource],
+):
+    """Test log_query() formats match strings with different match methods."""
+    from interaction_finder.search.reverse.investigation_logger import (
+        QueryConstructionDetails,
+    )
+    from interaction_finder.search.base import SearchQuery, SearchResult, SearchResults
+
+    async with InvestigationLogger(temp_log_file) as logger:
+        construction_details = QueryConstructionDetails(
+            keywords=[{"keyword": "CD8", "score": 0.9}],
+            keyword_scores=[0.9],
+            extractor_type="yake",
+            extractor_config={},
+            constructor_type="direct",
+            constructor_config={},
+            fallback_used=False,
+            input_resources=["PMID:12345678"],
+            cluster_id=None,
+            construction_time=0.1,
+            extraction_time=0.2,
+        )
+
+        results = SearchResults(
+            query=SearchQuery(query="CD8", max_results=10),
+            results=[
+                SearchResult(
+                    url="https://pubmed.ncbi.nlm.nih.gov/12345678/",
+                    title="Paper 1",
+                    snippet="",
+                    relevance_score=0.95,
+                    backend="pubmed",
+                    metadata={"pmid": "12345678"},
+                ),
+                SearchResult(
+                    url="https://example.com/paper2",
+                    title="Paper 2",
+                    snippet="",
+                    relevance_score=0.8,
+                    backend="pubmed",
+                ),
+                SearchResult(
+                    url="https://doi.org/10.1234/test",
+                    title="Paper 3",
+                    snippet="",
+                    relevance_score=0.75,
+                    backend="pubmed",
+                ),
+            ],
+            total_found=3,
+            search_time=0.5,
+            backend="pubmed",
+        )
+
+        matches = [
+            ResourceMatch(
+                resource=sample_resources[0],
+                search_result=results.results[0],
+                match_method="pmid",
+                confidence=1.0,
+                query_index=0,
+            ),
+            ResourceMatch(
+                resource=sample_resources[1],
+                search_result=results.results[1],
+                match_method="url",
+                confidence=0.85,
+                query_index=0,
+            ),
+            ResourceMatch(
+                resource=sample_resources[2],
+                search_result=results.results[2],
+                match_method="title_similarity",
+                confidence=0.78,
+                query_index=0,
+            ),
+        ]
+
+        await logger.log_query(
+            query_index=0,
+            construction_details=construction_details,
+            query_text="CD8",
+            backend="pubmed",
+            cache_hit=False,
+            search_time=0.5,
+            results=results,
+            matches=matches,
+            cumulative_coverage=1.0,
+        )
+
+    # Verify match string formatting
+    content = temp_log_file.read_text()
+    entries = parse_pretty_json_entries(content)
+    entry = entries[0]
+
+    # PMID match should show "exact"
+    assert entry["results"][0]["match"] == "exact"
+
+    # URL match should also show "exact" (regardless of confidence)
+    assert entry["results"][1]["match"] == "exact"
+
+    # Title similarity match should show "title:0.78"
+    assert entry["results"][2]["match"] == "title:0.78"
+
+
+# Performance test for rewrite requirement
+
+
+@pytest.mark.asyncio
+async def test_rewrite_performance_100_entries(temp_log_file: Path):
+    """Verify rewrite performance meets <50ms requirement for 100 entries."""
+    import time
+
+    async with InvestigationLogger(temp_log_file) as logger:
+        # Pre-populate with 99 entries
+        for i in range(99):
+            await logger.log_query_generation(
+                query_index=i,
+                query_type="resource",
+                extractor_type="yake",
+                keywords=[f"keyword{i}"],
+                final_query=f"query text {i}",
+                resource_count=1,
+            )
+
+        # Measure 100th entry write time (includes full rewrite)
+        start = time.perf_counter()
+        await logger.log_query_generation(
+            query_index=99,
+            query_type="resource",
+            extractor_type="yake",
+            keywords=["final_keyword"],
+            final_query="final query",
+            resource_count=1,
+        )
+        elapsed_ms = (time.perf_counter() - start) * 1000
+
+        # Verify meets performance requirement
+        assert elapsed_ms < 50, f"Rewrite took {elapsed_ms:.2f}ms, exceeds 50ms limit"
+
+    # Verify all entries written
+    content = temp_log_file.read_text()
+    entries = parse_pretty_json_entries(content)
+    assert len(entries) == 100
