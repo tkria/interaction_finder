@@ -627,6 +627,81 @@ async def test_title_similarity_selects_best_match(mock_fetcher):
     assert matches[0].match_method == "title_similarity"
 
 
+# URL normalization regression tests
+@pytest.mark.asyncio
+async def test_url_match_with_trailing_slash_differences(mock_fetcher):
+    """URL matching should succeed despite trailing slash differences.
+
+    Regression test for URL normalization inconsistency that caused 0% coverage
+    with Perplexica backend. Ensures canonical URLs are normalized consistently
+    with search result URLs.
+    """
+    config = ReverseSearchConfig()
+    matcher = ResourceMatcher(config, mock_fetcher)
+
+    # Target with URL that will have trailing slash removed by normalize_url
+    target = KnownResource(url="https://example.com/paper/")
+
+    # Result without trailing slash
+    result = SearchResult(
+        title="Test Paper",
+        url="https://example.com/paper",  # No trailing slash
+        backend="test",
+        metadata={},
+    )
+    results = SearchResults(
+        query=SearchQuery(query="test"),
+        results=[result],
+        backend="test",
+    )
+
+    matches = await matcher.match_results(results, {target}, query_index=0)
+
+    # Should match by URL despite trailing slash difference
+    assert len(matches) == 1
+    assert matches[0].match_method == "url"
+    assert matches[0].confidence == 1.0
+
+
+@pytest.mark.asyncio
+async def test_pmid_canonical_url_normalization(mock_fetcher):
+    """PMID-based canonical URLs should be normalized consistently.
+
+    Regression test for PMID 22922874 scenario where KnownResource.canonical_url
+    had trailing slash but search result URL was normalized without it, causing
+    match failure.
+    """
+    config = ReverseSearchConfig()
+    matcher = ResourceMatcher(config, mock_fetcher)
+
+    # Target with PMID (canonical_url will be PubMed URL)
+    target = KnownResource(
+        pmid="22922874", url="https://pubmed.ncbi.nlm.nih.gov/22922874/"
+    )
+
+    # Result with PubMed URL without trailing slash (as Perplexica returns)
+    result = SearchResult(
+        title="Test Paper",
+        url="https://pubmed.ncbi.nlm.nih.gov/22922874",  # No trailing slash
+        backend="perplexica",
+        metadata={},  # Perplexica doesn't extract PMID
+    )
+    results = SearchResults(
+        query=SearchQuery(query="test"),
+        results=[result],
+        backend="perplexica",
+    )
+
+    matches = await matcher.match_results(results, {target}, query_index=0)
+
+    # Should match by URL (since no PMID in metadata, falls back to URL matching)
+    assert len(matches) == 1
+    assert matches[0].match_method == "url"
+    assert matches[0].confidence == 1.0
+    # Verify canonical URL was normalized (no trailing slash)
+    assert target.canonical_url == "https://pubmed.ncbi.nlm.nih.gov/22922874"
+
+
 # PMID extraction unit tests (Task 01)
 class TestPMIDExtraction:
     """Unit tests for _extract_pmid_from_metadata helper."""

@@ -64,12 +64,17 @@ class KnownResource(BaseModel):
         Otherwise, normalize the provided URL (lowercase, strip trailing slash,
         remove tracking parameters).
 
+        Canonical URLs are normalized to ensure consistent matching with search
+        result URLs (which are also normalized via normalize_url).
+
         Returns:
             Self with canonical_url set
         """
         if self.pmid:
             # PMID takes precedence - use canonical PubMed URL
-            self.canonical_url = f"https://pubmed.ncbi.nlm.nih.gov/{self.pmid.strip()}/"
+            # Normalize to ensure consistency with search result URLs
+            pubmed_url = f"https://pubmed.ncbi.nlm.nih.gov/{self.pmid.strip()}/"
+            self.canonical_url = normalize_url(pubmed_url)
         else:
             # Use comprehensive normalization: lowercase, strip trailing slash,
             # remove tracking parameters, remove fragments

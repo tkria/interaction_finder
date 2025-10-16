@@ -32,15 +32,23 @@ from interaction_finder.search.reverse import (
 
 
 def test_known_resource_canonical_url_from_pmid():
-    """Test that canonical URL is derived from PMID when available."""
+    """Test that canonical URL is derived from PMID when available.
+
+    Canonical URLs are normalized (trailing slash removed) to ensure consistent
+    matching with search result URLs.
+    """
     resource = KnownResource(pmid="12345678", url="https://example.com/paper")
-    assert resource.canonical_url == "https://pubmed.ncbi.nlm.nih.gov/12345678/"
+    assert resource.canonical_url == "https://pubmed.ncbi.nlm.nih.gov/12345678"
 
 
 def test_known_resource_canonical_url_from_pmid_with_whitespace():
-    """Test that PMID whitespace is stripped in canonical URL."""
+    """Test that PMID whitespace is stripped in canonical URL.
+
+    Canonical URLs are normalized (trailing slash removed) to ensure consistent
+    matching with search result URLs.
+    """
     resource = KnownResource(pmid="  12345678  ", url="https://example.com/paper")
-    assert resource.canonical_url == "https://pubmed.ncbi.nlm.nih.gov/12345678/"
+    assert resource.canonical_url == "https://pubmed.ncbi.nlm.nih.gov/12345678"
 
 
 def test_known_resource_canonical_url_normalization():
