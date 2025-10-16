@@ -9,9 +9,10 @@ refinement for generating shared queries across similar resources.
 Order: helper dataclasses → QueryGenerator class → helper methods
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 import asyncio
 import httpx
+import time
 from dataclasses import dataclass
 
 from .models import (
@@ -21,7 +22,7 @@ from .models import (
 )
 from .keyword_extractors import create_extractor
 from .query_constructors import create_constructor
-from .investigation_logger import _format_resource_ref
+from .investigation_logger import _format_resource_ref, QueryConstructionDetails
 
 
 # ==============================================================================
@@ -125,7 +126,7 @@ class QueryGenerator:
     async def generate_initial_queries(
         self,
         resources: List[KnownResource],
-    ) -> List[str]:
+    ) -> List[Tuple[str, QueryConstructionDetails]]:
         """
         Generate initial queries for target resources.
 
@@ -136,7 +137,7 @@ class QueryGenerator:
             resources: List[KnownResource] - Target resources
 
         Returns:
-            List[str] - Generated queries
+            List[Tuple[str, QueryConstructionDetails]] - Generated queries with construction details
 
         Raises:
             QueryGenerationError: If query generation fails
@@ -156,7 +157,7 @@ class QueryGenerator:
     async def generate_initial_queries_individual(
         self,
         resources: List[KnownResource],
-    ) -> List[str]:
+    ) -> List[Tuple[str, QueryConstructionDetails]]:
         """
         Generate one query per resource using two-stage pipeline (no clustering).
 
@@ -168,7 +169,7 @@ class QueryGenerator:
             resources: List[KnownResource] - Target resources
 
         Returns:
-            List[str] - One query per resource
+            List[Tuple[str, QueryConstructionDetails]] - One query per resource with construction details
         """
         # Fetch content for all resources with enhanced details
         contents, contents_dict = await self._fetch_resource_contents(resources)
@@ -192,9 +193,9 @@ class QueryGenerator:
         self._log_content_sources(contents)
 
         queries = []
-        query_index = 0
         for content in contents:
             # Stage 1: Keyword Extraction
+            extraction_start = time.perf_counter()
             keywords_with_scores = []
             keywords = []
 
@@ -216,8 +217,10 @@ class QueryGenerator:
                     keywords_with_scores.append({"keyword": kw, "score": None})
             # Extract keywords list
             keywords = [kw["keyword"] for kw in keywords_with_scores]
+            extraction_time = time.perf_counter() - extraction_start
 
             # Stage 2: Query Construction
+            construction_start = time.perf_counter()
             # Build QueryConstructionContext with ALL available info
             keyword_scores = [kw["score"] for kw in keywords_with_scores]
             context = QueryConstructionContext(
@@ -232,33 +235,61 @@ class QueryGenerator:
 
             # Construct query using constructor
             query = await self.constructor.construct(context)
+            construction_time = time.perf_counter() - construction_start
 
-            # Log query generation if investigation logger is available
-            if self.inv_logger and query:
+            # Build QueryConstructionDetails
+            if query:  # Only add non-empty queries
+                # Get extractor configuration
+                extractor_config = {
+                    "keywords_per_query": self.config.keywords_per_query,
+                }
+
+                # Get constructor configuration
+                if self.config.query_constructor == "llm":
+                    constructor_config = {
+                        "model": self.config.llm_query_config.get(
+                            "model", "openai:gpt-4o-mini"
+                        ),
+                        "temperature": self.config.llm_query_config.get(
+                            "temperature", 0.7
+                        ),
+                        "backend_specific": self.config.llm_query_config.get(
+                            "backend_specific_syntax", True
+                        ),
+                        "enable_fallback": self.config.query_construction_config.get(
+                            "enable_fallback", True
+                        ),
+                    }
+                    fallback_used = getattr(self.constructor, "fallback_used", False)
+                else:
+                    constructor_config = {}
+                    fallback_used = False
+
                 # Format input resource ID
                 input_resources = [_format_resource_ref(content.resource)]
-                await self.inv_logger.log_query_generation(
-                    query_index=query_index,
-                    query_type="initial",
-                    extractor_type=self.config.keyword_extractor,
-                    keywords=keywords_with_scores,
-                    final_query=query,
-                    cluster_id=None,
-                    resource_count=1,
-                    input_resources=input_resources,
-                    cumulative_coverage=0.0,  # Will be updated by searcher
-                )
-                query_index += 1
 
-            if query:  # Only add non-empty queries
-                queries.append(query)
+                details = QueryConstructionDetails(
+                    keywords=keywords_with_scores,
+                    keyword_scores=keyword_scores,
+                    extractor_type=self.config.keyword_extractor,
+                    extractor_config=extractor_config,
+                    constructor_type=self.config.query_constructor,
+                    constructor_config=constructor_config,
+                    fallback_used=fallback_used,
+                    input_resources=input_resources,
+                    cluster_id=None,
+                    construction_time=construction_time,
+                    extraction_time=extraction_time,
+                )
+
+                queries.append((query, details))
 
         return queries
 
     async def generate_initial_queries_clustered(
         self,
         resources: List[KnownResource],
-    ) -> List[str]:
+    ) -> List[Tuple[str, QueryConstructionDetails]]:
         """
         Generate queries by clustering resources using two-stage pipeline (more efficient).
 
@@ -270,7 +301,7 @@ class QueryGenerator:
             resources: List[KnownResource] - Target resources
 
         Returns:
-            List[str] - One query per cluster (fewer than resources)
+            List[Tuple[str, QueryConstructionDetails]] - One query per cluster with construction details
         """
         import numpy as np
         from sentence_transformers import SentenceTransformer
@@ -330,7 +361,6 @@ class QueryGenerator:
 
         # Generate query for each cluster
         queries = []
-        query_index = 0
         # Use actual number of unique clusters (may be less than n_clusters if data is identical)
         unique_labels = set(labels)
         for cluster_id in unique_labels:
@@ -352,6 +382,7 @@ class QueryGenerator:
             representative_content = contents[representative_idx]
 
             # Stage 1: Keyword Extraction from representative
+            extraction_start = time.perf_counter()
             keywords_with_scores = []
             keywords = []
 
@@ -373,8 +404,10 @@ class QueryGenerator:
                     keywords_with_scores.append({"keyword": kw, "score": None})
             # Extract keywords list
             keywords = [kw["keyword"] for kw in keywords_with_scores]
+            extraction_time = time.perf_counter() - extraction_start
 
             # Stage 2: Query Construction
+            construction_start = time.perf_counter()
             # Build QueryConstructionContext with ALL available info
             keyword_scores = [kw["score"] for kw in keywords_with_scores]
             context = QueryConstructionContext(
@@ -389,26 +422,54 @@ class QueryGenerator:
 
             # Construct query using constructor
             query = await self.constructor.construct(context)
+            construction_time = time.perf_counter() - construction_start
 
-            # Log query generation if investigation logger is available
-            if self.inv_logger and query:
+            # Build QueryConstructionDetails
+            if query:  # Only add non-empty queries
+                # Get extractor configuration
+                extractor_config = {
+                    "keywords_per_query": self.config.keywords_per_query,
+                }
+
+                # Get constructor configuration
+                if self.config.query_constructor == "llm":
+                    constructor_config = {
+                        "model": self.config.llm_query_config.get(
+                            "model", "openai:gpt-4o-mini"
+                        ),
+                        "temperature": self.config.llm_query_config.get(
+                            "temperature", 0.7
+                        ),
+                        "backend_specific": self.config.llm_query_config.get(
+                            "backend_specific_syntax", True
+                        ),
+                        "enable_fallback": self.config.query_construction_config.get(
+                            "enable_fallback", True
+                        ),
+                    }
+                    fallback_used = getattr(self.constructor, "fallback_used", False)
+                else:
+                    constructor_config = {}
+                    fallback_used = False
+
                 # Format input resource IDs
                 input_resources = [_format_resource_ref(r) for r in cluster_resources]
-                await self.inv_logger.log_query_generation(
-                    query_index=query_index,
-                    query_type="initial",
-                    extractor_type=self.config.keyword_extractor,
-                    keywords=keywords_with_scores,
-                    final_query=query,
-                    cluster_id=cluster_id,
-                    resource_count=len(cluster_resources),
-                    input_resources=input_resources,
-                    cumulative_coverage=0.0,  # Will be updated by searcher
-                )
-                query_index += 1
 
-            if query:  # Only add non-empty queries
-                queries.append(query)
+                details = QueryConstructionDetails(
+                    keywords=keywords_with_scores,
+                    keyword_scores=keyword_scores,
+                    extractor_type=self.config.keyword_extractor,
+                    extractor_config=extractor_config,
+                    constructor_type=self.config.query_constructor,
+                    constructor_config=constructor_config,
+                    fallback_used=fallback_used,
+                    input_resources=input_resources,
+                    cluster_id=cluster_id,
+                    construction_time=construction_time,
+                    extraction_time=extraction_time,
+                )
+
+                queries.append((query, details))
 
         return queries
 
@@ -416,7 +477,7 @@ class QueryGenerator:
         self,
         unfound_resources: List[KnownResource],
         previous_queries: List[str],
-    ) -> List[str]:
+    ) -> List[Tuple[str, QueryConstructionDetails]]:
         """
         Generate refinement queries for remaining unfound resources.
 
@@ -425,17 +486,23 @@ class QueryGenerator:
             previous_queries: List[str] - Queries already executed
 
         Returns:
-            List[str] - New queries (excluding duplicates of previous)
+            List[Tuple[str, QueryConstructionDetails]] - New queries with construction details (excluding duplicates)
         """
         if not unfound_resources:
             return []
 
         # Generate queries using same logic as initial
-        new_queries = await self.generate_initial_queries(unfound_resources)
+        new_queries_with_details = await self.generate_initial_queries(
+            unfound_resources
+        )
 
         # Filter out duplicates of previous queries
         previous_set = set(previous_queries)
-        unique_queries = [q for q in new_queries if q not in previous_set]
+        unique_queries = [
+            (q, details)
+            for q, details in new_queries_with_details
+            if q not in previous_set
+        ]
 
         return unique_queries
 
