@@ -112,6 +112,27 @@ class MatchDetail(BaseModel):
     confidence: float = Field(description="Match confidence (0.0-1.0)")
 
 
+class QueryResultsSummary(BaseModel):
+    """
+    Summary of search results and matched resources for a query.
+
+    Consolidates search results and match outcomes to enable correlation analysis
+    between queries, results, and target resources. Uses 0-based indexing consistent
+    with SearchResultDetail and MatchDetail.
+
+    Fields:
+        results: List[str] - Compact identifiers for all search results (PMID:X or URL)
+        found_resources: List[Dict[str, Any]] - Matched resources with indices and methods
+    """
+
+    results: List[str] = Field(
+        description="Compact identifiers: PMID:X (with prefix) or raw URL (no prefix) in 0-based order"
+    )
+    found_resources: List[Dict[str, Any]] = Field(
+        description="Matched resources: {resource: str, index: int, method: str, confidence: float}"
+    )
+
+
 # Base log entry model
 
 
@@ -267,6 +288,7 @@ class QueryConstructionEntry(InvestigationLogEntry):
         fallback_used: bool - Whether fallback constructor was used
         backend: str - Target search backend
         cumulative_coverage: float - Coverage achieved after this query (0.0-1.0)
+        query_results: Optional[QueryResultsSummary] - Search results and matches (populated after matching)
     """
 
     stage: Literal["query_construction"] = "query_construction"
@@ -285,6 +307,10 @@ class QueryConstructionEntry(InvestigationLogEntry):
     backend: str = Field(description="Target search backend")
     cumulative_coverage: float = Field(
         description="Cumulative coverage after this query (0.0-1.0)", ge=0.0, le=1.0
+    )
+    query_results: Optional[QueryResultsSummary] = Field(
+        None,
+        description="Search results and matches (populated after matching completes)",
     )
 
 
