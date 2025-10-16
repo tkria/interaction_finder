@@ -389,7 +389,6 @@ def test_reverse_search_config_defaults():
     assert config.max_queries == 100
     assert config.keyword_extractor == "yake"
     assert config.keywords_per_query == 7
-    assert config.use_hint_fields is True
     assert config.sort_by == "relevance"
     assert config.llm_query_config == {
         "model": "openai:gpt-4o-mini",
@@ -417,7 +416,6 @@ def test_reverse_search_config_custom_values():
         max_queries=50,
         keyword_extractor="rake",
         keywords_per_query=10,
-        use_hint_fields=False,
         enable_clustering=False,
         min_cluster_size=2,
         target_clusters=6,
@@ -433,7 +431,6 @@ def test_reverse_search_config_custom_values():
     assert config.max_queries == 50
     assert config.keyword_extractor == "rake"
     assert config.keywords_per_query == 10
-    assert config.use_hint_fields is False
     assert config.enable_clustering is False
     assert config.min_cluster_size == 2
     assert config.target_clusters == 6

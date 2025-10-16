@@ -37,12 +37,12 @@ class ResourceContent:
     Fields:
         resource: KnownResource - The resource this content belongs to
         text: str - Title + abstract or full content for keyword extraction
-        source: Literal - Content source ("metadata", "content", "hint_fields")
+        source: Literal - Content source ("metadata", "content")
     """
 
     resource: KnownResource
     text: str
-    source: str  # "metadata", "content", or "hint_fields"
+    source: str  # "metadata" or "content"
 
 
 # ==============================================================================
@@ -64,8 +64,7 @@ class QueryGenerator:
     Example:
         >>> config = ReverseSearchConfig(
         ...     keyword_extractor="yake",
-        ...     keywords_per_query=7,
-        ...     use_hint_fields=True
+        ...     keywords_per_query=7
         ... )
         >>> generator = QueryGenerator(config, backend_name="pubmed")
         >>> resources = [
@@ -218,11 +217,6 @@ class QueryGenerator:
             # Extract keywords list
             keywords = [kw["keyword"] for kw in keywords_with_scores]
 
-            # Extract hint terms (passed separately to constructor)
-            hint_terms = []
-            if self.config.use_hint_fields:
-                hint_terms = self._extract_hint_terms([content.resource])
-
             # Stage 2: Query Construction
             # Build QueryConstructionContext with ALL available info
             keyword_scores = [kw["score"] for kw in keywords_with_scores]
@@ -231,7 +225,6 @@ class QueryGenerator:
                 keyword_scores=keyword_scores
                 if any(s is not None for s in keyword_scores)
                 else None,
-                hint_terms=hint_terms,
                 backend=self.backend_name,
                 resource_content=content.text,  # FULL CONTENT for LLM constructors
                 extractor_used=self.config.keyword_extractor,
@@ -253,7 +246,6 @@ class QueryGenerator:
                     cluster_id=None,
                     resource_count=1,
                     input_resources=input_resources,
-                    hint_terms=hint_terms,
                     cumulative_coverage=0.0,  # Will be updated by searcher
                 )
                 query_index += 1
@@ -382,11 +374,6 @@ class QueryGenerator:
             # Extract keywords list
             keywords = [kw["keyword"] for kw in keywords_with_scores]
 
-            # Extract hint terms from entire cluster (passed separately to constructor)
-            hint_terms = []
-            if self.config.use_hint_fields:
-                hint_terms = self._extract_hint_terms(cluster_resources)
-
             # Stage 2: Query Construction
             # Build QueryConstructionContext with ALL available info
             keyword_scores = [kw["score"] for kw in keywords_with_scores]
@@ -395,7 +382,6 @@ class QueryGenerator:
                 keyword_scores=keyword_scores
                 if any(s is not None for s in keyword_scores)
                 else None,
-                hint_terms=hint_terms,
                 backend=self.backend_name,
                 resource_content=representative_content.text,  # FULL CONTENT for LLM constructors
                 extractor_used=self.config.keyword_extractor,
@@ -417,7 +403,6 @@ class QueryGenerator:
                     cluster_id=cluster_id,
                     resource_count=len(cluster_resources),
                     input_resources=input_resources,
-                    hint_terms=hint_terms,
                     cumulative_coverage=0.0,  # Will be updated by searcher
                 )
                 query_index += 1
@@ -548,28 +533,13 @@ class QueryGenerator:
                         "error": None,
                     }
                 else:
-                    # Content fetch also failed, use hint fields as last resort
-                    text = " ".join(str(v) for v in resource.hint_fields.values())
-                    # Use first hint field value as title approximation
-                    title = (
-                        list(resource.hint_fields.values())[0]
-                        if resource.hint_fields
-                        else ""
-                    )[:100]
-                    contents.append(
-                        ResourceContent(
-                            resource=resource,
-                            text=text or "unknown",
-                            source="hint_fields",
-                        )
-                    )
-                    # Log enhanced details
+                    # Content fetch failed, skip this resource (no content available)
                     contents_dict[resource.url] = {
-                        "source": "hint_fields",
-                        "title": title,
-                        "content_length": len(text or "unknown"),
-                        "success": bool(text),
-                        "error": "No content sources available" if not text else None,
+                        "source": None,
+                        "title": None,
+                        "content_length": 0,
+                        "success": False,
+                        "error": "No content sources available (metadata and content fetch both failed)",
                     }
 
         return contents, contents_dict
@@ -638,23 +608,6 @@ class QueryGenerator:
 
         return metadata_map
 
-    def _extract_hint_terms(self, resources: List[KnownResource]) -> List[str]:
-        """
-        Extract unique hint field values from resources.
-
-        Parameters:
-            resources: List[KnownResource] - Resources to extract hints from
-
-        Returns:
-            List[str] - Unique hint terms
-        """
-        hint_terms = set()
-        for resource in resources:
-            for value in resource.hint_fields.values():
-                if value:
-                    hint_terms.add(str(value).strip())
-        return list(hint_terms)
-
     def _log_content_sources(self, contents: List[ResourceContent]) -> None:
         """
         Log content source breakdown for debugging/transparency.
@@ -666,7 +619,7 @@ class QueryGenerator:
             return
 
         # Count sources
-        source_counts = {"metadata": 0, "content": 0, "hint_fields": 0}
+        source_counts = {"metadata": 0, "content": 0}
         for content in contents:
             source_counts[content.source] = source_counts.get(content.source, 0) + 1
 
@@ -676,8 +629,6 @@ class QueryGenerator:
             parts.append(f"{source_counts['metadata']} from PMID metadata")
         if source_counts["content"] > 0:
             parts.append(f"{source_counts['content']} from URL content")
-        if source_counts["hint_fields"] > 0:
-            parts.append(f"{source_counts['hint_fields']} from hint fields")
 
         if parts:
             self.console.print(f"  [dim]Content sources: {', '.join(parts)}[/dim]")

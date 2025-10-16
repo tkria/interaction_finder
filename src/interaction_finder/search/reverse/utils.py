@@ -135,7 +135,6 @@ def synthesize_legacy_format(
         ...     "timestamp": "2025-10-10T12:00:01Z",
         ...     "query_index": 0,
         ...     "final_query": '"CD8" OR "T cell"',
-        ...     "hint_terms": ["marker"],
         ...     "cumulative_coverage": 0.5,
         ... }
         >>> legacy = synthesize_legacy_format(extraction, construction)
@@ -182,7 +181,6 @@ def synthesize_legacy_format(
         "keywords": extraction_entry["keywords"],
         "input_resources": extraction_entry["input_resources"],
         # Construction fields
-        "hint_terms": construction_entry["hint_terms"],
         "final_query": construction_entry["final_query"],
         "cumulative_coverage": construction_entry["cumulative_coverage"],
         # Optional fields (may not be present in all entries)

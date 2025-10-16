@@ -118,7 +118,6 @@ async def test_query_construction_entry_structure(temp_log_file: Path):
             constructor_config={"operator": "OR", "quote_terms": True},
             input_keywords=["CD8", "T cell", "marker"],
             keyword_scores=[0.85, 0.72, 0.68],
-            hint_terms=["immune", "response"],
             final_query='"CD8" OR "T cell" OR "marker" OR "immune" OR "response"',
             construction_time=0.02,
             fallback_used=False,
@@ -138,7 +137,6 @@ async def test_query_construction_entry_structure(temp_log_file: Path):
     assert entry["constructor_config"] == {"operator": "OR", "quote_terms": True}
     assert entry["input_keywords"] == ["CD8", "T cell", "marker"]
     assert entry["keyword_scores"] == [0.85, 0.72, 0.68]
-    assert entry["hint_terms"] == ["immune", "response"]
     assert (
         entry["final_query"]
         == '"CD8" OR "T cell" OR "marker" OR "immune" OR "response"'
@@ -173,7 +171,6 @@ async def test_two_stage_logging_consistency(temp_log_file: Path):
             constructor_config={},
             input_keywords=["CD8"],
             keyword_scores=[0.85],
-            hint_terms=[],
             final_query='"CD8"',
             construction_time=0.02,
             fallback_used=False,
@@ -218,7 +215,6 @@ async def test_multiple_queries_two_stage(temp_log_file: Path):
             constructor_config={},
             input_keywords=["CD8"],
             keyword_scores=[0.85],
-            hint_terms=[],
             final_query='"CD8"',
             construction_time=0.02,
             fallback_used=False,
@@ -242,7 +238,6 @@ async def test_multiple_queries_two_stage(temp_log_file: Path):
             constructor_config={},
             input_keywords=["B cell"],
             keyword_scores=[0.90],
-            hint_terms=[],
             final_query='"B cell"',
             construction_time=0.03,
             fallback_used=False,
@@ -305,7 +300,6 @@ async def test_query_construction_with_fallback(temp_log_file: Path):
             constructor_config={},
             input_keywords=["CD8"],
             keyword_scores=[0.85],
-            hint_terms=[],
             final_query='"CD8"',
             construction_time=0.02,
             fallback_used=True,
@@ -352,7 +346,6 @@ def test_query_construction_entry_validation():
         constructor_config={"operator": "OR"},
         input_keywords=["CD8"],
         keyword_scores=[0.85],
-        hint_terms=[],
         final_query='"CD8"',
         construction_time=0.02,
         fallback_used=False,
@@ -373,7 +366,6 @@ def test_query_construction_entry_validation():
             constructor_config={},
             input_keywords=["CD8"],
             keyword_scores=[0.85],
-            hint_terms=[],
             final_query='"CD8"',
             construction_time=0.02,
             fallback_used=False,
@@ -406,7 +398,6 @@ def test_synthesize_legacy_format_basic():
         "constructor_config": {"operator": "OR"},
         "input_keywords": ["CD8"],
         "keyword_scores": [0.85],
-        "hint_terms": ["marker"],
         "final_query": '"CD8" OR "marker"',
         "construction_time": 0.02,
         "fallback_used": False,
@@ -424,7 +415,6 @@ def test_synthesize_legacy_format_basic():
     assert legacy["extractor_type"] == "yake"
     assert legacy["keywords"] == [{"keyword": "CD8", "score": 0.85}]
     assert legacy["input_resources"] == ["PMID:12345678"]
-    assert legacy["hint_terms"] == ["marker"]
     assert legacy["final_query"] == '"CD8" OR "marker"'
     assert legacy["cumulative_coverage"] == 0.33
     assert legacy["timestamp"] == "2025-10-10T12:00:01Z"  # Construction timestamp
@@ -448,7 +438,6 @@ def test_synthesize_legacy_format_validation():
         "timestamp": "2025-10-10T12:00:01Z",
         "query_index": 0,
         "final_query": "test",
-        "hint_terms": [],
         "cumulative_coverage": 0.0,
     }
 
@@ -519,7 +508,6 @@ async def test_empty_keywords_handling(temp_log_file: Path):
             constructor_config={},
             input_keywords=[],  # Empty keywords
             keyword_scores=[],
-            hint_terms=[],
             final_query="",  # Empty query
             construction_time=0.01,
             fallback_used=False,

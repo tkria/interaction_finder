@@ -63,7 +63,6 @@ def basic_config() -> ReverseSearchConfig:
     return ReverseSearchConfig(
         keyword_extractor="yake",
         keywords_per_query=5,
-        use_hint_fields=True,
         enable_clustering=False,
     )
 
@@ -74,7 +73,6 @@ def clustering_config() -> ReverseSearchConfig:
     return ReverseSearchConfig(
         keyword_extractor="yake",
         keywords_per_query=5,
-        use_hint_fields=True,
         enable_clustering=True,
         min_cluster_size=2,
         target_clusters=2,
@@ -535,7 +533,6 @@ async def test_query_generation_logging_llm(
         keyword_extractor="none",
         query_constructor="llm",
         keywords_per_query=5,
-        use_hint_fields=True,
         enable_clustering=False,
         llm_query_config={
             "model": "openai:gpt-4o-mini",

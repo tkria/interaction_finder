@@ -102,7 +102,6 @@ async def test_yake_direct_individual(sample_resources, sample_metadata):
         keyword_extractor="yake",
         query_constructor="direct",
         keywords_per_query=5,
-        use_hint_fields=False,
         enable_clustering=False,
     )
     generator = QueryGenerator(config, backend_name="pubmed")
@@ -130,7 +129,6 @@ async def test_yake_direct_clustered(sample_resources, sample_metadata):
         keyword_extractor="yake",
         query_constructor="direct",
         keywords_per_query=8,
-        use_hint_fields=False,
         enable_clustering=True,
     )
     generator = QueryGenerator(config, backend_name="pubmed")
@@ -157,7 +155,6 @@ async def test_yake_llm_individual(sample_resources, sample_metadata, mock_llm_a
         keyword_extractor="yake",
         query_constructor="llm",
         keywords_per_query=5,
-        use_hint_fields=False,
         enable_clustering=False,
     )
     generator = QueryGenerator(config, backend_name="pubmed")
@@ -191,7 +188,6 @@ async def test_yake_llm_context_validation(sample_resources, sample_metadata):
         keyword_extractor="yake",
         query_constructor="llm",
         keywords_per_query=5,
-        use_hint_fields=False,
         enable_clustering=False,
     )
     generator = QueryGenerator(config, backend_name="pubmed")
@@ -237,7 +233,6 @@ async def test_rake_direct_individual(sample_resources, sample_metadata):
         keyword_extractor="rake",
         query_constructor="direct",
         keywords_per_query=5,
-        use_hint_fields=False,
         enable_clustering=False,
     )
     generator = QueryGenerator(config, backend_name="pubmed")
@@ -264,7 +259,6 @@ async def test_rake_llm_individual(sample_resources, sample_metadata, mock_llm_a
         keyword_extractor="rake",
         query_constructor="llm",
         keywords_per_query=5,
-        use_hint_fields=False,
         enable_clustering=False,
     )
     generator = QueryGenerator(config, backend_name="pubmed")
@@ -295,7 +289,6 @@ async def test_tfidf_direct_individual(sample_resources, sample_metadata):
         keyword_extractor="tfidf",
         query_constructor="direct",
         keywords_per_query=5,
-        use_hint_fields=False,
         enable_clustering=False,
     )
     generator = QueryGenerator(config, backend_name="pubmed")
@@ -321,7 +314,6 @@ async def test_tfidf_llm_individual(sample_resources, sample_metadata, mock_llm_
         keyword_extractor="tfidf",
         query_constructor="llm",
         keywords_per_query=5,
-        use_hint_fields=False,
         enable_clustering=False,
     )
     generator = QueryGenerator(config, backend_name="pubmed")
@@ -352,7 +344,6 @@ async def test_none_llm_individual(sample_resources, sample_metadata, mock_llm_a
         keyword_extractor="none",
         query_constructor="llm",
         keywords_per_query=5,  # Ignored by none extractor
-        use_hint_fields=False,
         enable_clustering=False,
     )
     generator = QueryGenerator(config, backend_name="pubmed")
@@ -377,7 +368,6 @@ async def test_none_llm_context_has_full_content(sample_resources, sample_metada
     config = ReverseSearchConfig(
         keyword_extractor="none",
         query_constructor="llm",
-        use_hint_fields=False,
         enable_clustering=False,
     )
     generator = QueryGenerator(config, backend_name="pubmed")
@@ -424,7 +414,6 @@ async def test_investigation_logging_two_stage(
         keyword_extractor="yake",
         query_constructor="direct",
         keywords_per_query=5,
-        use_hint_fields=False,
         enable_clustering=False,
     )
     async with InvestigationLogger(log_file) as logger:
@@ -469,7 +458,6 @@ async def test_empty_keywords_with_direct_constructor(sample_resources):
         keyword_extractor="yake",
         query_constructor="direct",
         keywords_per_query=5,
-        use_hint_fields=False,
         enable_clustering=False,
     )
     generator = QueryGenerator(config, backend_name="pubmed")
@@ -494,7 +482,6 @@ async def test_llm_failure_with_fallback_enabled(sample_resources, sample_metada
         keyword_extractor="yake",
         query_constructor="llm",
         keywords_per_query=5,
-        use_hint_fields=False,
         enable_clustering=False,
         query_construction_config={
             "enable_fallback": True,
@@ -529,7 +516,6 @@ async def test_metadata_fetch_failure_fallback_to_content(sample_resources):
         keyword_extractor="yake",
         query_constructor="direct",
         keywords_per_query=5,
-        use_hint_fields=False,
         enable_clustering=False,
     )
     generator = QueryGenerator(config, backend_name="pubmed")
@@ -563,69 +549,6 @@ async def test_metadata_fetch_failure_fallback_to_content(sample_resources):
 # ==============================================================================
 
 
-@pytest.mark.asyncio
-async def test_hint_terms_included_in_context(sample_resources, sample_metadata):
-    """Test that hint_terms are included in QueryConstructionContext."""
-    # Create resources with hint_fields
-    resources_with_hints = [
-        KnownResource(
-            pmid="12345678",
-            url="https://pubmed.ncbi.nlm.nih.gov/12345678/",
-            hint_fields={"celltype": "mammary epithelial cell", "gene": "TP53"},
-        ),
-        KnownResource(
-            pmid="87654321",
-            url="https://pubmed.ncbi.nlm.nih.gov/87654321/",
-            hint_fields={"celltype": "pancreatic beta cell", "marker": "insulin"},
-        ),
-    ]
-
-    config = ReverseSearchConfig(
-        keyword_extractor="yake",
-        query_constructor="direct",
-        keywords_per_query=5,
-        use_hint_fields=True,  # Enable hint fields
-        enable_clustering=False,
-    )
-    generator = QueryGenerator(config, backend_name="pubmed")
-
-    captured_contexts = []
-
-    async def capture_construct(context: QueryConstructionContext):
-        captured_contexts.append(context)
-        # Direct constructor behavior
-        keywords_part = " OR ".join(f'"{kw}"' for kw in context.keywords[:5])
-        hints_part = " OR ".join(f'"{ht}"' for ht in context.hint_terms)
-        if keywords_part and hints_part:
-            return f"{keywords_part} OR {hints_part}"
-        elif keywords_part:
-            return keywords_part
-        elif hints_part:
-            return hints_part
-        else:
-            return ""
-
-    with patch.object(generator, "_fetch_pmid_metadata_batch") as mock_fetch:
-        mock_fetch.return_value = sample_metadata
-
-        with patch.object(
-            generator.constructor, "construct", side_effect=capture_construct
-        ):
-            queries = await generator.generate_initial_queries_individual(
-                resources_with_hints
-            )
-
-            assert len(captured_contexts) == 2
-
-            # First resource should have its hint terms
-            assert "mammary epithelial cell" in captured_contexts[0].hint_terms
-            assert "TP53" in captured_contexts[0].hint_terms
-
-            # Second resource should have its hint terms
-            assert "pancreatic beta cell" in captured_contexts[1].hint_terms
-            assert "insulin" in captured_contexts[1].hint_terms
-
-
 # ==============================================================================
 # Test Backend Consistency
 # ==============================================================================
@@ -640,7 +563,6 @@ async def test_context_backend_matches_config(sample_resources, sample_metadata)
             query_constructor="direct",
             search_backend=backend,
             keywords_per_query=5,
-            use_hint_fields=False,
             enable_clustering=False,
         )
         generator = QueryGenerator(config, backend_name=backend)

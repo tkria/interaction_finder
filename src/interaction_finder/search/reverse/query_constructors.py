@@ -60,8 +60,8 @@ class QueryConstructor(ABC):
 
         Parameters:
             context: QueryConstructionContext - All available information for
-                query construction including keywords, scores, hint terms,
-                backend target, and optional full content.
+                query construction including keywords, scores, backend target,
+                and optional full content.
 
         Returns:
             str - Constructed search query ready for backend execution.
@@ -74,13 +74,12 @@ class QueryConstructor(ABC):
             >>> context = QueryConstructionContext(
             ...     keywords=["BRCA1", "breast cancer"],
             ...     keyword_scores=[0.95, 0.87],
-            ...     hint_terms=["TP53"],
             ...     backend="pubmed",
             ...     resource_content=None,
             ...     extractor_used="yake"
             ... )
             >>> query = await constructor.construct(context)
-            >>> # Direct constructor might produce: "BRCA1 breast cancer TP53"
+            >>> # Direct constructor might produce: "BRCA1 breast cancer"
             >>> # LLM constructor might produce: "BRCA1[Title/Abstract] AND (breast cancer OR mammary carcinoma)"
         """
         pass
@@ -108,7 +107,7 @@ class QueryConstructor(ABC):
 
 class DirectQueryConstructor(QueryConstructor):
     """
-    Simple query constructor that directly concatenates keywords and hint terms.
+    Simple query constructor that directly concatenates keywords.
 
     This is a minimal fallback constructor that provides basic query assembly
     without LLM enhancement. It's used as a fallback for LLMQueryConstructor
@@ -116,40 +115,31 @@ class DirectQueryConstructor(QueryConstructor):
 
     Configuration:
         max_keywords: int - Maximum number of keywords to include (default: 10)
-        include_hints: bool - Whether to include hint terms (default: True)
     """
 
-    def __init__(self, max_keywords: int = 10, include_hints: bool = True):
+    def __init__(self, max_keywords: int = 10):
         """
         Initialize DirectQueryConstructor.
 
         Parameters:
             max_keywords: int - Maximum keywords to include (default: 10)
-            include_hints: bool - Whether to include hint terms (default: True)
         """
         self._max_keywords = max_keywords
-        self._include_hints = include_hints
 
     async def construct(self, context: QueryConstructionContext) -> str:
         """
-        Construct query by concatenating keywords and hint terms with OR logic.
+        Construct query by concatenating keywords with OR logic.
 
         Parameters:
             context: QueryConstructionContext - Construction context
 
         Returns:
-            str - OR-joined query string (empty if no keywords/hints available)
+            str - OR-joined query string (empty if no keywords available)
         """
-        # Collect query terms
+        # Collect query terms from keywords (up to max_keywords)
         terms = []
-
-        # Add keywords (up to max_keywords)
         if context.keywords:
             terms.extend(context.keywords[: self._max_keywords])
-
-        # Add hint terms if configured
-        if self._include_hints and context.hint_terms:
-            terms.extend(context.hint_terms)
 
         # Return empty string if no terms
         if not terms:
@@ -237,9 +227,9 @@ class LLMQueryConstructor(QueryConstructor):
     LLM-based query constructor with maximum-context prompting.
 
     This constructor uses a Pydantic AI agent to build sophisticated queries
-    from extracted keywords, keyword scores, hint terms, and optionally full
-    resource content. It provides intelligent query optimization while optionally
-    falling back to DirectQueryConstructor on LLM failures.
+    from extracted keywords, keyword scores, and optionally full resource content.
+    It provides intelligent query optimization while optionally falling back to
+    DirectQueryConstructor on LLM failures.
 
     The "maximum context" approach means the LLM receives BOTH extracted keywords
     (structural guidance) AND full content (semantic context) to enable hybrid
@@ -263,7 +253,6 @@ class LLMQueryConstructor(QueryConstructor):
         >>> context = QueryConstructionContext(
         ...     keywords=["BRCA1", "breast cancer"],
         ...     keyword_scores=[0.05, 0.12],
-        ...     hint_terms=["mammary epithelial cell"],
         ...     backend="pubmed",
         ...     resource_content="BRCA1 mutations confer...",
         ...     extractor_used="yake"
@@ -309,9 +298,7 @@ class LLMQueryConstructor(QueryConstructor):
         # Create fallback constructor if enabled
         self._fallback: Optional[DirectQueryConstructor] = None
         if self._enable_fallback:
-            self._fallback = DirectQueryConstructor(
-                max_keywords=max_keywords, include_hints=True
-            )
+            self._fallback = DirectQueryConstructor(max_keywords=max_keywords)
 
     def _create_agent(self) -> Agent:
         """
@@ -331,8 +318,8 @@ class LLMQueryConstructor(QueryConstructor):
         """
         Build user prompt with maximum context.
 
-        Includes all available information: keywords, scores, hint terms,
-        full content, extractor name, and backend-specific instructions.
+        Includes all available information: keywords, scores, full content,
+        extractor name, and backend-specific instructions.
 
         Parameters:
             context: QueryConstructionContext - Construction context
@@ -372,14 +359,7 @@ class LLMQueryConstructor(QueryConstructor):
         else:
             sections.append("EXTRACTED KEYWORDS: (none provided)\n")
 
-        # Section 2: Hint terms
-        if context.hint_terms:
-            hints_section = "\nHINT TERMS (domain-specific metadata):\n"
-            for hint in context.hint_terms:
-                hints_section += f"  • {hint}\n"
-            sections.append(hints_section)
-
-        # Section 3: Full resource content (if available)
+        # Section 2: Full resource content (if available)
         if context.resource_content:
             # Truncate content to first 2000 characters for efficiency
             content = context.resource_content[:2000]
@@ -391,7 +371,7 @@ class LLMQueryConstructor(QueryConstructor):
             content_section = f"\nFULL RESOURCE CONTENT{truncated_note}:\n{content}\n"
             sections.append(content_section)
 
-        # Section 4: Backend-specific instructions
+        # Section 3: Backend-specific instructions
         if self._backend_specific:
             backend_name_normalized = context.backend.lower()
             guidance = BACKEND_SYNTAX_GUIDANCE.get(
@@ -413,8 +393,7 @@ class LLMQueryConstructor(QueryConstructor):
             "\nConstruct ONE optimized search query that:\n"
             "1. Uses extracted keywords as ANCHORS\n"
             "2. Enhances with content understanding (if available)\n"
-            "3. Integrates relevant hint terms\n"
-            "4. Applies appropriate backend syntax\n"
+            "3. Applies appropriate backend syntax\n"
         )
         sections.append(final_instruction)
 

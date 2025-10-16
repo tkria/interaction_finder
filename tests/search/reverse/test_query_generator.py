@@ -7,7 +7,7 @@ Tests cover:
 - Clustered query generation (verify fewer queries than resources)
 - Batch PMID fetching (up to 200)
 - Metadata fetch failure → content fallback
-- Hint fields included when use_hint_fields=True
+- Hint fields NOT used for query generation (deprecated)
 - Query construction with OR logic
 - Refinement queries exclude duplicates
 - Empty resources list (return empty queries)
@@ -34,7 +34,6 @@ async def test_generate_queries_from_pmids():
     config = ReverseSearchConfig(
         keyword_extractor="yake",
         keywords_per_query=5,
-        use_hint_fields=False,
         enable_clustering=False,  # Force individual query generation
     )
     generator = QueryGenerator(config, backend_name="pubmed")
@@ -73,7 +72,6 @@ async def test_generate_queries_from_urls():
     config = ReverseSearchConfig(
         keyword_extractor="yake",
         keywords_per_query=5,
-        use_hint_fields=False,
         enable_clustering=False,
     )
     generator = QueryGenerator(config, backend_name="pubmed")
@@ -129,7 +127,6 @@ async def test_clustering_reduces_query_count():
         target_clusters=2,
         keyword_extractor="yake",
         keywords_per_query=5,
-        use_hint_fields=False,
     )
     generator = QueryGenerator(config, backend_name="pubmed")
 
@@ -176,7 +173,6 @@ async def test_clustering_fallback_for_small_batch():
         target_clusters=2,
         keyword_extractor="yake",
         keywords_per_query=5,
-        use_hint_fields=False,
     )
     generator = QueryGenerator(config, backend_name="pubmed")
 
@@ -276,7 +272,6 @@ async def test_metadata_fetch_failure_falls_back_to_content():
     config = ReverseSearchConfig(
         keyword_extractor="yake",
         keywords_per_query=5,
-        use_hint_fields=False,
         enable_clustering=False,
     )
     generator = QueryGenerator(config, backend_name="pubmed")
@@ -307,12 +302,11 @@ async def test_metadata_fetch_failure_falls_back_to_content():
 
 
 @pytest.mark.asyncio
-async def test_content_fetch_failure_uses_hint_fields():
-    """Test that failed content fetch uses hint fields as last resort."""
+async def test_content_fetch_failure_skips_resource():
+    """Test that failed content fetch skips the resource (no hint fields fallback)."""
     config = ReverseSearchConfig(
         keyword_extractor="yake",
         keywords_per_query=5,
-        use_hint_fields=True,
         enable_clustering=False,
     )
     generator = QueryGenerator(config, backend_name="pubmed")
@@ -331,25 +325,28 @@ async def test_content_fetch_failure_uses_hint_fields():
 
     contents, contents_dict = await generator._fetch_resource_contents(resources)
 
-    # Should have used hint fields
-    assert len(contents) == 1
-    assert contents[0].source == "hint_fields"
-    assert "CD8+ T cell" in contents[0].text
-    assert "CD8A" in contents[0].text
+    # Resource should be skipped (no content available)
+    assert len(contents) == 0
+    # But contents_dict should have error info
+    assert len(contents_dict) == 1
+    assert contents_dict["https://example.com/paper"]["success"] is False
+    assert (
+        "No content sources available"
+        in contents_dict["https://example.com/paper"]["error"]
+    )
 
 
 # ==============================================================================
-# Test Hint Fields
+# Test Query Generation (hint_fields no longer used in queries)
 # ==============================================================================
 
 
 @pytest.mark.asyncio
-async def test_hint_fields_included_when_enabled():
-    """Test that hint fields are included in queries when enabled."""
+async def test_hint_fields_not_used_in_query_generation():
+    """Test that hint fields are NOT included in generated queries."""
     config = ReverseSearchConfig(
         keyword_extractor="yake",
         keywords_per_query=3,
-        use_hint_fields=True,
         enable_clustering=False,
     )
     generator = QueryGenerator(config, backend_name="pubmed")
@@ -376,17 +373,17 @@ async def test_hint_fields_included_when_enabled():
         queries = await generator.generate_initial_queries_individual(resources)
 
         assert len(queries) == 1
-        # Hint fields should be in the query
-        assert "CD8+ T cell" in queries[0] or "CD8A" in queries[0]
+        # Hint fields should NOT be in the query (only content-based keywords)
+        # Query is based purely on content: "T cell biology and immunology research"
+        assert "CD8+ T cell" not in queries[0] and "CD8A" not in queries[0]
 
 
 @pytest.mark.asyncio
-async def test_hint_fields_excluded_when_disabled():
-    """Test that hint fields are excluded when disabled."""
+async def test_query_generation_without_hint_fields():
+    """Test query generation without hint_fields config option."""
     config = ReverseSearchConfig(
         keyword_extractor="yake",
         keywords_per_query=3,
-        use_hint_fields=False,
         enable_clustering=False,
     )
     generator = QueryGenerator(config, backend_name="pubmed")
@@ -435,7 +432,6 @@ async def test_construct_query_with_or_logic():
     context = QueryConstructionContext(
         keywords=["diabetes", "insulin resistance", "glucose"],
         keyword_scores=None,
-        hint_terms=[],
         backend="pubmed",
         resource_content=None,
         extractor_used="yake",
@@ -458,38 +454,12 @@ async def test_construct_query_empty_keywords():
     context = QueryConstructionContext(
         keywords=[],
         keyword_scores=None,
-        hint_terms=[],
         backend="pubmed",
         resource_content=None,
         extractor_used="yake",
     )
     query = await constructor.construct(context)
     assert query == ""
-
-
-def test_extract_hint_terms():
-    """Test extraction of unique hint terms from resources."""
-    config = ReverseSearchConfig()
-    generator = QueryGenerator(config, backend_name="pubmed")
-
-    resources = [
-        KnownResource(
-            url="https://example.com/1",
-            hint_fields={"celltype": "CD8+ T cell", "marker": "CD8A"},
-        ),
-        KnownResource(
-            url="https://example.com/2",
-            hint_fields={"celltype": "CD8+ T cell", "marker": "CD4"},
-        ),
-    ]
-
-    hint_terms = generator._extract_hint_terms(resources)
-
-    # Should have 3 unique terms (CD8+ T cell appears twice, so deduplicated)
-    assert len(hint_terms) == 3
-    assert "CD8+ T cell" in hint_terms
-    assert "CD8A" in hint_terms
-    assert "CD4" in hint_terms
 
 
 # ==============================================================================
@@ -503,7 +473,6 @@ async def test_refinement_queries_exclude_duplicates():
     config = ReverseSearchConfig(
         keyword_extractor="yake",
         keywords_per_query=3,
-        use_hint_fields=False,
         enable_clustering=False,
     )
     generator = QueryGenerator(config, backend_name="pubmed")
@@ -547,7 +516,6 @@ async def test_refinement_queries_with_new_resources():
     config = ReverseSearchConfig(
         keyword_extractor="yake",
         keywords_per_query=3,
-        use_hint_fields=False,
         enable_clustering=False,
     )
     generator = QueryGenerator(config, backend_name="pubmed")
@@ -614,7 +582,6 @@ async def test_single_resource_no_clustering():
         min_cluster_size=2,
         keyword_extractor="yake",
         keywords_per_query=3,
-        use_hint_fields=False,
     )
     generator = QueryGenerator(config, backend_name="pubmed")
 
@@ -645,7 +612,6 @@ async def test_resources_with_no_extractable_keywords():
     config = ReverseSearchConfig(
         keyword_extractor="yake",
         keywords_per_query=5,
-        use_hint_fields=False,
         enable_clustering=False,
     )
     generator = QueryGenerator(config, backend_name="pubmed")

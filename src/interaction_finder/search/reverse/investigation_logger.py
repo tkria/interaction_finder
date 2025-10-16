@@ -66,10 +66,12 @@ class ResourceFetchDetail(BaseModel):
     resource_id: str = Field(
         description="Compact identifier: PMID:X (with prefix) or raw URL (no prefix)"
     )
-    source: Literal["metadata", "content", "hint_fields"] = Field(
-        description="Content source type"
+    source: Optional[Literal["metadata", "content"]] = Field(
+        None, description="Content source type (None if fetch failed)"
     )
-    title: str = Field(description="Title excerpt (first 100 chars)")
+    title: Optional[str] = Field(
+        None, description="Title excerpt (first 100 chars, None if fetch failed)"
+    )
     content_length: int = Field(description="Content length in characters")
     success: bool = Field(description="Whether fetch succeeded")
     error: Optional[str] = Field(None, description="Error message if failed")
@@ -231,7 +233,7 @@ class KeywordExtractionEntry(InvestigationLogEntry):
         keywords: List[KeywordDetail] - Extracted keywords with scores
         extraction_time: float - Time taken for extraction in seconds
         input_resources: List[str] - Compact resource IDs contributing to extraction
-        content_source: str - Content source type ("metadata", "content", "hint_fields")
+        content_source: str - Content source type ("metadata", "content")
     """
 
     stage: Literal["keyword_extraction"] = "keyword_extraction"
@@ -251,7 +253,7 @@ class QueryConstructionEntry(InvestigationLogEntry):
     Logged after query construction stage.
 
     Captures construction details including constructor type, configuration, input
-    keywords, hint terms, final query, and whether fallback was used.
+    keywords, final query, and whether fallback was used.
 
     Fields:
         stage: Literal["query_construction"] - Always "query_construction"
@@ -260,7 +262,6 @@ class QueryConstructionEntry(InvestigationLogEntry):
         constructor_config: Dict[str, Any] - Constructor configuration
         input_keywords: List[str] - Keywords used for construction
         keyword_scores: List[Optional[float]] - Scores for corresponding keywords
-        hint_terms: List[str] - Terms extracted from hint fields
         final_query: str - Final query text sent to backend
         construction_time: float - Time taken for construction in seconds
         fallback_used: bool - Whether fallback constructor was used
@@ -276,7 +277,6 @@ class QueryConstructionEntry(InvestigationLogEntry):
     keyword_scores: List[Optional[float]] = Field(
         description="Scores for corresponding keywords"
     )
-    hint_terms: List[str] = Field(description="Terms extracted from hint fields")
     final_query: str = Field(description="Final query text sent to backend")
     construction_time: float = Field(
         description="Time taken for construction in seconds"
@@ -293,7 +293,7 @@ class QueryGenerationEntry(InvestigationLogEntry):
     Logged for each generated query.
 
     Captures query generation including input resources, keywords with scores from
-    extractor, hint field terms, and cumulative coverage after this query.
+    extractor, and cumulative coverage after this query.
 
     Fields:
         stage: Literal["query_generation"] - Always "query_generation"
@@ -302,7 +302,6 @@ class QueryGenerationEntry(InvestigationLogEntry):
         extractor_type: str - Keyword extractor used (yake/rake/tfidf/llm)
         input_resources: List[str] - Compact resource IDs contributing to query
         keywords: List[KeywordDetail] - Keywords with scores from extractor
-        hint_terms: List[str] - Terms extracted from hint fields
         final_query: str - Final query text sent to backend
         cluster_id: Optional[int] - Cluster ID if applicable
         cumulative_coverage: float - Coverage achieved after this query (0.0-1.0)
@@ -318,7 +317,6 @@ class QueryGenerationEntry(InvestigationLogEntry):
     keywords: List[KeywordDetail] = Field(
         description="Keywords with scores from extractor"
     )
-    hint_terms: List[str] = Field(description="Terms extracted from hint fields")
     final_query: str = Field(description="Final query text sent to backend")
     cluster_id: Optional[int] = Field(None, description="Cluster ID if applicable")
     cumulative_coverage: float = Field(
@@ -571,8 +569,10 @@ class InvestigationLogger:
         for resource in resources:
             content_info = contents.get(resource.url, {})
             # Extract details
-            source = content_info.get("source", "unknown")
-            title = content_info.get("title", "")[:100]  # First 100 chars
+            source = content_info.get("source")
+            title_raw = content_info.get("title")
+            # Handle None title (failed fetch)
+            title = title_raw[:100] if title_raw else None
             content_length = content_info.get("content_length", 0)
             success = not content_info.get("failed", False)
             error = content_info.get("error")
@@ -586,8 +586,8 @@ class InvestigationLogger:
                 error=str(error) if error else None,
             )
             resource_details.append(detail)
-            # Update counts
-            if success:
+            # Update counts (only count successful fetches with valid sources)
+            if success and source:
                 source_counts[source] = source_counts.get(source, 0) + 1
             else:
                 failed_count += 1
@@ -674,7 +674,7 @@ class InvestigationLogger:
             keywords: Extracted keywords with scores (list of dicts with keyword/score)
             extraction_time: Time taken for extraction in seconds
             input_resources: Compact resource IDs contributing to extraction
-            content_source: Content source type ("metadata", "content", "hint_fields")
+            content_source: Content source type ("metadata", "content")
         """
         # Convert keywords to KeywordDetail objects
         keyword_details = []
@@ -710,7 +710,6 @@ class InvestigationLogger:
         constructor_config: Dict[str, Any],
         input_keywords: List[str],
         keyword_scores: List[Optional[float]],
-        hint_terms: List[str],
         final_query: str,
         construction_time: float,
         fallback_used: bool,
@@ -726,7 +725,6 @@ class InvestigationLogger:
             constructor_config: Constructor configuration
             input_keywords: Keywords used for construction
             keyword_scores: Scores for corresponding keywords
-            hint_terms: Terms extracted from hint fields
             final_query: Final query text sent to backend
             construction_time: Time taken for construction in seconds
             fallback_used: Whether fallback constructor was used
@@ -741,7 +739,6 @@ class InvestigationLogger:
             constructor_config=constructor_config,
             input_keywords=input_keywords,
             keyword_scores=keyword_scores,
-            hint_terms=hint_terms,
             final_query=final_query,
             construction_time=construction_time,
             fallback_used=fallback_used,
@@ -760,7 +757,6 @@ class InvestigationLogger:
         cluster_id: Optional[int] = None,
         resource_count: int = 1,
         input_resources: Optional[List[str]] = None,
-        hint_terms: Optional[List[str]] = None,
         cumulative_coverage: float = 0.0,
     ) -> None:
         """
@@ -780,7 +776,6 @@ class InvestigationLogger:
             cluster_id: Cluster ID if applicable
             resource_count: Number of resources contributing to query
             input_resources: Compact resource IDs contributing to query
-            hint_terms: Terms extracted from hint fields
             cumulative_coverage: Coverage achieved after this query (0.0-1.0)
         """
         # Handle backward compatibility: keywords might be List[str] or List[dict]
@@ -810,7 +805,6 @@ class InvestigationLogger:
             extractor_type=extractor_type,
             input_resources=input_resources or [],
             keywords=keyword_details,
-            hint_terms=hint_terms or [],
             final_query=final_query,
             cluster_id=cluster_id,
             cumulative_coverage=cumulative_coverage,

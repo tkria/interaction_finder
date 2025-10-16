@@ -825,7 +825,6 @@ async def test_backend_syntax_pubmed_generates_field_tags(
         context = QueryConstructionContext(
             keywords=["BRCA1", "breast cancer"],
             keyword_scores=[0.05, 0.12],
-            hint_terms=["mammary epithelial cell"],
             backend="pubmed",  # This should trigger PubMed syntax
             resource_content=None,
             extractor_used="yake",
@@ -889,7 +888,6 @@ async def test_backend_syntax_perplexica_generates_natural_language(
         context = QueryConstructionContext(
             keywords=["BRCA1", "breast cancer"],
             keyword_scores=[0.05, 0.12],
-            hint_terms=["mammary epithelial cell"],
             backend="perplexica",  # This should NOT trigger PubMed syntax
             resource_content=None,
             extractor_used="yake",

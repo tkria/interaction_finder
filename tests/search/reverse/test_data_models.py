@@ -158,14 +158,12 @@ def test_query_construction_context_full():
     context = QueryConstructionContext(
         keywords=["BRCA1", "breast cancer", "mutation"],
         keyword_scores=[0.95, 0.87, 0.82],
-        hint_terms=["mammary epithelial cell", "TP53"],
         backend="pubmed",
         resource_content="Full paper text about BRCA1...",
         extractor_used="yake",
     )
     assert context.keywords == ["BRCA1", "breast cancer", "mutation"]
     assert context.keyword_scores == [0.95, 0.87, 0.82]
-    assert context.hint_terms == ["mammary epithelial cell", "TP53"]
     assert context.backend == "pubmed"
     assert context.resource_content == "Full paper text about BRCA1..."
     assert context.extractor_used == "yake"
@@ -176,14 +174,12 @@ def test_query_construction_context_minimal():
     context = QueryConstructionContext(
         keywords=["gene", "disease"],
         keyword_scores=None,
-        hint_terms=[],
         backend="pubmed",
         resource_content=None,
         extractor_used="rake",
     )
     assert context.keywords == ["gene", "disease"]
     assert context.keyword_scores is None
-    assert context.hint_terms == []
     assert context.backend == "pubmed"
     assert context.resource_content is None
     assert context.extractor_used == "rake"
@@ -194,25 +190,11 @@ def test_query_construction_context_empty_keywords():
     context = QueryConstructionContext(
         keywords=[],
         keyword_scores=None,
-        hint_terms=["cell type"],
         backend="pubmed",
         resource_content=None,
         extractor_used="yake",
     )
     assert context.keywords == []
-
-
-def test_query_construction_context_empty_hint_terms():
-    """Test creating QueryConstructionContext with empty hint_terms."""
-    context = QueryConstructionContext(
-        keywords=["BRCA1"],
-        keyword_scores=[0.95],
-        hint_terms=[],
-        backend="pubmed",
-        resource_content=None,
-        extractor_used="yake",
-    )
-    assert context.hint_terms == []
 
 
 def test_query_construction_context_different_backends():
@@ -221,7 +203,6 @@ def test_query_construction_context_different_backends():
         context = QueryConstructionContext(
             keywords=["test"],
             keyword_scores=None,
-            hint_terms=[],
             backend=backend,
             resource_content=None,
             extractor_used="yake",
@@ -234,7 +215,6 @@ def test_query_construction_context_json_serialization():
     context = QueryConstructionContext(
         keywords=["BRCA1", "mutation"],
         keyword_scores=[0.95, 0.80],
-        hint_terms=["T cell", "CD8A"],
         backend="pubmed",
         resource_content="Sample content",
         extractor_used="yake",
@@ -243,7 +223,6 @@ def test_query_construction_context_json_serialization():
     assert context_dict == {
         "keywords": ["BRCA1", "mutation"],
         "keyword_scores": [0.95, 0.80],
-        "hint_terms": ["T cell", "CD8A"],
         "backend": "pubmed",
         "resource_content": "Sample content",
         "extractor_used": "yake",
@@ -261,14 +240,12 @@ def test_query_construction_context_json_serialization_minimal():
     context = QueryConstructionContext(
         keywords=["gene"],
         keyword_scores=None,
-        hint_terms=[],
         backend="pubmed",
         resource_content=None,
         extractor_used="rake",
     )
     context_dict = asdict(context)
     assert context_dict["keyword_scores"] is None
-    assert context_dict["hint_terms"] == []
     assert context_dict["resource_content"] is None
     # JSON serialization
     json_str = json.dumps(context_dict)
@@ -283,7 +260,6 @@ def test_query_construction_context_large_content():
     context = QueryConstructionContext(
         keywords=["test"],
         keyword_scores=None,
-        hint_terms=[],
         backend="pubmed",
         resource_content=large_content,
         extractor_used="yake",
@@ -296,13 +272,11 @@ def test_query_construction_context_unicode_content():
     context = QueryConstructionContext(
         keywords=["α-synuclein", "β-amyloid", "γ-secretase"],
         keyword_scores=[0.9, 0.8, 0.7],
-        hint_terms=["神经退行性疾病", "Alzheimer's"],
         backend="pubmed",
         resource_content="研究内容 with mixed 文字",
         extractor_used="llm",
     )
     assert context.keywords[0] == "α-synuclein"
-    assert "神经退行性疾病" in context.hint_terms
     # Verify JSON handles Unicode
     context_dict = asdict(context)
     json_str = json.dumps(context_dict, ensure_ascii=False)
@@ -327,7 +301,6 @@ def test_pipeline_data_flow():
     construction_context = QueryConstructionContext(
         keywords=extraction_result.keywords,
         keyword_scores=extraction_result.scores,
-        hint_terms=["mammary epithelial cell"],
         backend="pubmed",
         resource_content=None,  # Not available in this case
         extractor_used=extraction_result.extractor,
@@ -353,7 +326,6 @@ def test_pipeline_data_flow_no_scores():
     construction_context = QueryConstructionContext(
         keywords=extraction_result.keywords,
         keyword_scores=extraction_result.scores,
-        hint_terms=["CD8+ T cell", "CD8A"],
         backend="pubmed",
         resource_content="Full text...",
         extractor_used=extraction_result.extractor,
@@ -376,7 +348,6 @@ def test_serialization_round_trip_both_models():
     context = QueryConstructionContext(
         keywords=["k1", "k2"],
         keyword_scores=[0.9, 0.8],
-        hint_terms=["hint"],
         backend="pubmed",
         resource_content="content",
         extractor_used="yake",

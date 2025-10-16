@@ -37,7 +37,6 @@ async def test_empty_keywords_list():
         keyword_extractor="yake",
         query_constructor="direct",
         keywords_per_query=5,
-        use_hint_fields=False,
         enable_clustering=False,
     )
     generator = QueryGenerator(config, backend_name="pubmed")
@@ -63,7 +62,6 @@ async def test_empty_hint_terms():
         keyword_extractor="yake",
         query_constructor="direct",
         keywords_per_query=5,
-        use_hint_fields=True,
         enable_clustering=False,
     )
     generator = QueryGenerator(config, backend_name="pubmed")
@@ -93,7 +91,6 @@ async def test_empty_resource_content():
     config = ReverseSearchConfig(
         keyword_extractor="none",  # Relies on content
         query_constructor="llm",
-        use_hint_fields=False,
         enable_clustering=False,
     )
     generator = QueryGenerator(config, backend_name="pubmed")
@@ -533,7 +530,6 @@ async def test_failed_url_fetch():
         keyword_extractor="yake",
         query_constructor="direct",
         keywords_per_query=5,
-        use_hint_fields=True,  # Will use hint fields as last resort
         enable_clustering=False,
     )
     generator = QueryGenerator(config, backend_name="pubmed")
@@ -542,7 +538,7 @@ async def test_failed_url_fetch():
         KnownResource(
             pmid="12345678",
             url="https://pubmed.ncbi.nlm.nih.gov/12345678/",
-            hint_fields={"disease": "breast cancer", "gene": "BRCA1"},  # Fallback
+            hint_fields={"disease": "breast cancer", "gene": "BRCA1"},
         )
     ]
 
@@ -556,8 +552,8 @@ async def test_failed_url_fetch():
 
         queries = await generator.generate_initial_queries_individual(resources)
 
-        # Should fall back to hint fields
-        assert len(queries) == 1
+        # Resource should be skipped (no content available)
+        assert len(queries) == 0
 
 
 # ==============================================================================

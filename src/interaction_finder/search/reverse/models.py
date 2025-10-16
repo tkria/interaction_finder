@@ -250,7 +250,6 @@ class ReverseSearchConfig(BaseModel):
         keyword_extractor: Literal - Stage 1: Keyword extraction (yake/rake/tfidf/none)
         query_constructor: Literal - Stage 2: Query construction (direct/llm)
         keywords_per_query: int - Number of keywords per query (3-15)
-        use_hint_fields: bool - Include hint_fields in query generation
         sort_by: Literal - Sort order for search results (relevance/date/date_desc)
         query_construction_config: Dict[str, Any] - Configuration for query construction stage
         llm_query_config: Dict[str, Any] - Configuration for LLM constructor (when query_constructor="llm")
@@ -320,9 +319,6 @@ class ReverseSearchConfig(BaseModel):
     )
     keywords_per_query: int = Field(
         7, ge=3, le=15, description="Number of keywords per query (Stage 1)"
-    )
-    use_hint_fields: bool = Field(
-        True, description="Include hint_fields in query generation (both stages)"
     )
     sort_by: Literal["relevance", "date", "date_desc"] = Field(
         "relevance", description="Sort order for search results"
@@ -596,10 +592,6 @@ class QueryConstructionContext:
             Can be used for keyword selection/weighting if available.
             Length must match keywords if provided.
 
-        hint_terms: List[str] - Domain-specific hint terms from resource metadata.
-            Examples: cell types ("CD8+ T cell"), markers ("CD8A"),
-            disease names ("breast cancer"). May be empty.
-
         backend: str - Target search backend (e.g., "pubmed", "perplexica").
             Allows constructors to use backend-specific syntax/operators.
 
@@ -614,7 +606,6 @@ class QueryConstructionContext:
         >>> context = QueryConstructionContext(
         ...     keywords=["BRCA1", "breast cancer", "mutation"],
         ...     keyword_scores=[0.95, 0.87, 0.82],
-        ...     hint_terms=["mammary epithelial cell", "TP53"],
         ...     backend="pubmed",
         ...     resource_content="Full paper text...",
         ...     extractor_used="yake"
@@ -623,7 +614,6 @@ class QueryConstructionContext:
         >>> minimal_context = QueryConstructionContext(
         ...     keywords=["gene", "disease"],
         ...     keyword_scores=None,
-        ...     hint_terms=[],
         ...     backend="pubmed",
         ...     resource_content=None,
         ...     extractor_used="rake"
@@ -632,7 +622,6 @@ class QueryConstructionContext:
 
     keywords: List[str]
     keyword_scores: Optional[List[float]]
-    hint_terms: List[str]
     backend: str
     resource_content: Optional[str]
     extractor_used: str

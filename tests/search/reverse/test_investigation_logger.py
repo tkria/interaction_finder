@@ -194,8 +194,8 @@ async def test_session_lifecycle_logging(
                 "failed": False,
             },
             sample_resources[2].url: {
-                "source": "hint_fields",
-                "title": "",
+                "source": None,
+                "title": None,
                 "content_length": 0,
                 "failed": True,
                 "error": "Network timeout",
@@ -407,7 +407,6 @@ async def test_entry_models_validation():
             KeywordDetail(keyword="keyword1", score=0.85),
             KeywordDetail(keyword="keyword2", score=0.72),
         ],
-        hint_terms=["hint1", "hint2"],
         final_query="keyword1 keyword2",
         cluster_id=1,
         cumulative_coverage=0.5,
@@ -620,8 +619,8 @@ async def test_content_fetch_entry(
                 "failed": False,
             },
             sample_resources[2].url: {
-                "source": "hint_fields",
-                "title": "",
+                "source": None,
+                "title": None,
                 "content_length": 0,
                 "failed": True,
                 "error": "Network timeout",
@@ -746,17 +745,19 @@ def test_resource_fetch_detail_validation():
     assert detail.success is True
     assert detail.error is None
 
-    # Valid detail with error
+    # Valid detail with error (failed fetch)
     detail_with_error = ResourceFetchDetail(
         resource_id="https://example.com/paper",
-        source="hint_fields",
-        title="Failed fetch",
+        source=None,  # No source when fetch failed
+        title=None,  # No title when fetch failed
         content_length=0,
         success=False,
         error="Network timeout",
     )
     assert detail_with_error.success is False
     assert detail_with_error.error == "Network timeout"
+    assert detail_with_error.source is None
+    assert detail_with_error.title is None
 
     # Invalid source type
     with pytest.raises(ValidationError):

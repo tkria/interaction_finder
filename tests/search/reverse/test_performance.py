@@ -93,7 +93,6 @@ async def test_baseline_yake_direct_10_resources(
         keyword_extractor="yake",
         query_constructor="direct",
         keywords_per_query=5,
-        use_hint_fields=False,
         enable_clustering=False,
     )
     generator = QueryGenerator(config, backend_name="pubmed")
@@ -126,7 +125,6 @@ async def test_baseline_yake_direct_scaling(sample_metadata_10):
         keyword_extractor="yake",
         query_constructor="direct",
         keywords_per_query=5,
-        use_hint_fields=False,
         enable_clustering=False,
     )
     generator = QueryGenerator(config, backend_name="pubmed")
@@ -182,7 +180,6 @@ async def test_two_stage_overhead_is_minimal(sample_resources_10, sample_metadat
         keyword_extractor="yake",
         query_constructor="direct",
         keywords_per_query=5,
-        use_hint_fields=False,
         enable_clustering=False,
     )
     generator = QueryGenerator(config, backend_name="pubmed")
@@ -222,7 +219,6 @@ async def test_hybrid_faster_than_full_llm(sample_resources_10, sample_metadata_
         keyword_extractor="yake",
         query_constructor="llm",
         keywords_per_query=5,
-        use_hint_fields=False,
         enable_clustering=False,
     )
     generator_hybrid = QueryGenerator(config_hybrid, backend_name="pubmed")
@@ -231,7 +227,6 @@ async def test_hybrid_faster_than_full_llm(sample_resources_10, sample_metadata_
     config_full = ReverseSearchConfig(
         keyword_extractor="none",
         query_constructor="llm",
-        use_hint_fields=False,
         enable_clustering=False,
     )
     generator_full = QueryGenerator(config_full, backend_name="pubmed")
@@ -311,7 +306,6 @@ async def test_extraction_stage_performance(sample_resources_10, sample_metadata
             keyword_extractor=extractor_name,
             query_constructor="direct",
             keywords_per_query=5,
-            use_hint_fields=False,
             enable_clustering=False,
         )
         generator = QueryGenerator(config, backend_name="pubmed")
@@ -511,7 +505,6 @@ async def test_no_performance_regression(sample_resources_10, sample_metadata_10
         keyword_extractor="yake",
         query_constructor="direct",
         keywords_per_query=5,
-        use_hint_fields=False,
         enable_clustering=False,
     )
     generator = QueryGenerator(config, backend_name="pubmed")

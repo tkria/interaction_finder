@@ -34,7 +34,6 @@ def basic_context() -> QueryConstructionContext:
     return QueryConstructionContext(
         keywords=["BRCA1", "breast cancer", "mutation"],
         keyword_scores=[0.05, 0.12, 0.18],
-        hint_terms=["mammary epithelial cell"],
         backend="pubmed",
         resource_content=None,
         extractor_used="yake",
@@ -47,7 +46,6 @@ def context_with_content() -> QueryConstructionContext:
     return QueryConstructionContext(
         keywords=["FBLN4", "calcification"],
         keyword_scores=[0.03, 0.15],
-        hint_terms=["arterial stiffness"],
         backend="pubmed",
         resource_content="FBLN4 mutations cause vascular calcification and arterial stiffness in patients with cutis laxa. The protein plays a critical role in elastic fiber assembly.",
         extractor_used="yake",
@@ -60,7 +58,6 @@ def minimal_context() -> QueryConstructionContext:
     return QueryConstructionContext(
         keywords=["gene", "disease"],
         keyword_scores=None,
-        hint_terms=[],
         backend="pubmed",
         resource_content=None,
         extractor_used="rake",
@@ -73,7 +70,6 @@ def empty_context() -> QueryConstructionContext:
     return QueryConstructionContext(
         keywords=[],
         keyword_scores=None,
-        hint_terms=[],
         backend="pubmed",
         resource_content=None,
         extractor_used="yake",
@@ -97,11 +93,10 @@ async def test_direct_constructor_basic(basic_context):
     constructor = DirectQueryConstructor()
     query = await constructor.construct(basic_context)
 
-    # Should concatenate keywords and hint terms
+    # Should concatenate keywords
     assert "BRCA1" in query
     assert "breast cancer" in query
     assert "mutation" in query
-    assert "mammary epithelial cell" in query
 
 
 @pytest.mark.asyncio
@@ -120,13 +115,12 @@ async def test_direct_constructor_max_keywords():
     context = QueryConstructionContext(
         keywords=["k1", "k2", "k3", "k4", "k5"],
         keyword_scores=None,
-        hint_terms=[],
         backend="pubmed",
         resource_content=None,
         extractor_used="yake",
     )
 
-    constructor = DirectQueryConstructor(max_keywords=3, include_hints=True)
+    constructor = DirectQueryConstructor(max_keywords=3)
     query = await constructor.construct(context)
 
     # Should only include first 3 keywords
@@ -135,27 +129,6 @@ async def test_direct_constructor_max_keywords():
     assert "k3" in query
     assert "k4" not in query
     assert "k5" not in query
-
-
-@pytest.mark.asyncio
-async def test_direct_constructor_no_hints():
-    """Test DirectQueryConstructor excluding hint terms."""
-    context = QueryConstructionContext(
-        keywords=["BRCA1"],
-        keyword_scores=None,
-        hint_terms=["TP53", "PTEN"],
-        backend="pubmed",
-        resource_content=None,
-        extractor_used="yake",
-    )
-
-    constructor = DirectQueryConstructor(include_hints=False)
-    query = await constructor.construct(context)
-
-    # Should not include hint terms
-    assert "BRCA1" in query
-    assert "TP53" not in query
-    assert "PTEN" not in query
 
 
 def test_direct_constructor_name():
@@ -396,7 +369,6 @@ def test_llm_build_prompt_max_keywords():
     context = QueryConstructionContext(
         keywords=[f"keyword{i}" for i in range(20)],
         keyword_scores=[0.1 * i for i in range(20)],
-        hint_terms=[],
         backend="pubmed",
         resource_content=None,
         extractor_used="yake",
@@ -433,7 +405,6 @@ def test_llm_build_prompt_natural_language():
     context = QueryConstructionContext(
         keywords=["BRCA1", "cancer"],
         keyword_scores=None,
-        hint_terms=[],
         backend="generic",
         resource_content=None,
         extractor_used="yake",
@@ -464,7 +435,7 @@ def test_llm_constructor_name():
 
 def test_create_constructor_direct():
     """Test factory creates DirectQueryConstructor."""
-    constructor = create_constructor("direct", max_keywords=10, include_hints=True)
+    constructor = create_constructor("direct", max_keywords=10)
 
     assert isinstance(constructor, DirectQueryConstructor)
     assert constructor.name == "direct"
@@ -534,7 +505,6 @@ def test_llm_prompt_pubmed_syntax():
     context = QueryConstructionContext(
         keywords=["BRCA1", "breast cancer"],
         keyword_scores=[0.05, 0.12],
-        hint_terms=["hereditary"],
         backend="pubmed",
         resource_content=None,
         extractor_used="yake",
@@ -559,7 +529,6 @@ def test_llm_prompt_perplexica_syntax():
     context = QueryConstructionContext(
         keywords=["FBLN4", "calcification"],
         keyword_scores=[0.03, 0.15],
-        hint_terms=["arterial stiffness"],
         backend="perplexica",
         resource_content=None,
         extractor_used="yake",
@@ -587,7 +556,6 @@ def test_llm_prompt_openai_syntax():
     context = QueryConstructionContext(
         keywords=["TP53", "tumor suppressor"],
         keyword_scores=[0.08, 0.14],
-        hint_terms=["p53 pathway"],
         backend="openai",
         resource_content=None,
         extractor_used="yake",
@@ -612,7 +580,6 @@ def test_llm_prompt_pmc_syntax():
     context = QueryConstructionContext(
         keywords=["collagen", "fibrosis"],
         keyword_scores=[0.07, 0.11],
-        hint_terms=["extracellular matrix"],
         backend="pmc",
         resource_content=None,
         extractor_used="yake",
@@ -637,7 +604,6 @@ def test_llm_prompt_google_syntax():
     context = QueryConstructionContext(
         keywords=["hypertension", "BMPR2"],
         keyword_scores=[0.09, 0.16],
-        hint_terms=["pulmonary arterial"],
         backend="google",
         resource_content=None,
         extractor_used="yake",
@@ -662,7 +628,6 @@ def test_llm_prompt_semantic_scholar_syntax():
     context = QueryConstructionContext(
         keywords=["Marfan", "fibrillin"],
         keyword_scores=[0.06, 0.13],
-        hint_terms=["connective tissue"],
         backend="semantic_scholar",
         resource_content=None,
         extractor_used="yake",
@@ -687,7 +652,6 @@ def test_llm_prompt_unknown_backend_fallback():
     context = QueryConstructionContext(
         keywords=["gene", "disease"],
         keyword_scores=[0.10, 0.20],
-        hint_terms=["phenotype"],
         backend="unknown_backend",
         resource_content=None,
         extractor_used="yake",
@@ -713,7 +677,6 @@ def test_llm_prompt_backend_specific_false():
     context = QueryConstructionContext(
         keywords=["BRCA1", "cancer"],
         keyword_scores=[0.05, 0.15],
-        hint_terms=["mutation"],
         backend="pubmed",
         resource_content=None,
         extractor_used="yake",
@@ -740,7 +703,6 @@ def test_llm_prompt_case_insensitive_backend():
     context_upper = QueryConstructionContext(
         keywords=["test"],
         keyword_scores=[0.10],
-        hint_terms=[],
         backend="PUBMED",
         resource_content=None,
         extractor_used="yake",
@@ -750,7 +712,6 @@ def test_llm_prompt_case_insensitive_backend():
     context_mixed = QueryConstructionContext(
         keywords=["test"],
         keyword_scores=[0.10],
-        hint_terms=[],
         backend="PubMed",
         resource_content=None,
         extractor_used="yake",
@@ -776,7 +737,7 @@ def test_llm_prompt_case_insensitive_backend():
 @pytest.mark.asyncio
 async def test_integration_direct_constructor_full_workflow(basic_context):
     """Test DirectQueryConstructor end-to-end workflow."""
-    constructor = create_constructor("direct", max_keywords=10, include_hints=True)
+    constructor = create_constructor("direct", max_keywords=10)
 
     query = await constructor.construct(basic_context)
 
@@ -850,7 +811,6 @@ async def test_integration_perplexica_backend_avoids_pubmed_syntax():
     context = QueryConstructionContext(
         keywords=["FBLN4", "calcification"],
         keyword_scores=[0.03, 0.15],
-        hint_terms=["arterial stiffness"],
         backend="perplexica",
         resource_content=None,
         extractor_used="yake",

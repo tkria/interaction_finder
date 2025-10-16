@@ -134,7 +134,6 @@ async def test_query_generation_unchanged(extractor_name, fixed_resources):
     config = ReverseSearchConfig(
         keyword_extractor=extractor_name,
         keywords_per_query=7,
-        use_hint_fields=False,  # Disable hints for deterministic testing
         search_backend="test_backend",
     )
 
@@ -218,89 +217,6 @@ def test_tfidf_parameters_unchanged():
 
 
 @pytest.mark.asyncio
-async def test_hint_fields_still_work_for_existing_extractors(fixed_resources):
-    """
-    Test that use_hint_fields=True still works for YAKE/RAKE/TF-IDF.
-
-    This verifies backward compatibility: existing extractors should still
-    receive and use hint fields when enabled.
-    """
-    # Test with YAKE as representative extractor
-    config = ReverseSearchConfig(
-        keyword_extractor="yake",
-        keywords_per_query=7,
-        use_hint_fields=True,  # Enabled
-        search_backend="test_backend",
-    )
-
-    generator = QueryGenerator(config, backend_name="pubmed", console=None)
-
-    with patch.object(
-        generator,
-        "_fetch_pmid_metadata_batch",
-        return_value={
-            "12345678": {"title": "Study", "abstract": "Abstract text here."},
-        },
-    ):
-        # Resource with hint fields
-        resources = [fixed_resources[0]]  # Has gene="BRCA1", disease="breast cancer"
-        queries = await generator.generate_initial_queries(resources)
-
-    assert len(queries) > 0, "Should generate queries with hint fields enabled"
-
-    # Hint fields should be incorporated into query (appended as keywords)
-    combined_query = " ".join(queries).lower()
-    # At least one hint field value should appear
-    assert (
-        "brca1" in combined_query
-        or "breast" in combined_query
-        or "cancer" in combined_query
-    ), (
-        f"Hint fields (gene=BRCA1, disease=breast cancer) not incorporated into query: {queries}"
-    )
-
-
-@pytest.mark.asyncio
-async def test_no_llm_calls_for_existing_extractors(fixed_resources):
-    """
-    Test that YAKE/RAKE/TF-IDF never make LLM calls.
-
-    This verifies that adding LLM extractor doesn't accidentally trigger
-    LLM usage for existing extractors (which would increase costs and latency).
-    """
-    for extractor_name in ["yake", "rake", "tfidf"]:
-        config = ReverseSearchConfig(
-            keyword_extractor=extractor_name,
-            keywords_per_query=7,
-            search_backend="test_backend",
-        )
-
-        generator = QueryGenerator(config, backend_name="pubmed", console=None)
-
-        # Patch LLM classes to detect any calls
-        with patch(
-            "interaction_finder.search.reverse.keyword_extractors.LLMExtractor"
-        ) as MockLLM:
-            mock_instance = AsyncMock()
-            MockLLM.return_value = mock_instance
-
-            with patch.object(
-                generator,
-                "_fetch_pmid_metadata_batch",
-                return_value={
-                    "12345678": {"title": "Test", "abstract": "Abstract"},
-                },
-            ):
-                queries = await generator.generate_initial_queries([fixed_resources[0]])
-
-            # LLM should never be instantiated or called
-            MockLLM.assert_not_called()
-            mock_instance.extract_async.assert_not_called()
-
-        assert len(queries) > 0, f"Should generate queries with {extractor_name}"
-
-
-@pytest.mark.asyncio
 async def test_clustering_still_works_for_existing_extractors(fixed_resources):
     """
     Test that clustering logic works unchanged for YAKE/RAKE/TF-IDF.
@@ -350,7 +266,6 @@ def test_configuration_defaults_unchanged():
     assert config.coverage_target == 0.95, "Default coverage target should remain 95%"
     assert config.consecutive_zero_limit == 3, "Default zero limit should remain 3"
     assert config.max_queries == 100, "Default max queries should remain 100"
-    assert config.use_hint_fields is True, "Hint fields should be enabled by default"
     assert config.enable_clustering is True, "Clustering should be enabled by default"
     assert config.sort_by == "relevance", "Default sort should be relevance"
 

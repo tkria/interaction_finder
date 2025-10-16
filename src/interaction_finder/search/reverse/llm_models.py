@@ -12,8 +12,8 @@ class LLMQueryResponse(BaseModel):
     """
     Structured response from LLM query generation agent.
 
-    The LLM analyzes paper content and hint fields to generate 1-3
-    precision-focused search queries that can recover the paper.
+    The LLM analyzes paper content to generate 1-3 precision-focused
+    search queries that can recover the paper.
     """
 
     queries: list[str] = Field(
@@ -42,9 +42,8 @@ class LLMQueryConstructionResponse(BaseModel):
     """
     Structured response from LLM query construction agent.
 
-    The LLM analyzes extracted keywords, keyword scores, hint terms, and
-    optionally full resource content to construct a single, optimized
-    search query.
+    The LLM analyzes extracted keywords, keyword scores, and optionally
+    full resource content to construct a single, optimized search query.
 
     This model is used for Stage 2 of the two-stage pipeline (query construction),
     where the LLM receives both extracted keywords (structural guidance) AND

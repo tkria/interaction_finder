@@ -10,7 +10,6 @@ max_queries = 100               # Hard limit on total queries
 # Query generation
 keyword_extractor = "yake"      # Options: "yake", "rake", "tfidf"
 keywords_per_query = 7          # Number of keywords per query
-use_hint_fields = true          # Include hint_fields in query generation
 batch_pmid_fetch_size = 200     # Batch size for PMID metadata fetching
 
 # Clustering (groups similar resources for efficient querying)
