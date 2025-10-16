@@ -13,7 +13,6 @@ Tests cover:
 
 import asyncio
 import json
-import re
 from pathlib import Path
 from typing import Dict, Any, List
 
@@ -22,18 +21,16 @@ from pydantic import ValidationError
 
 from interaction_finder.search.base import SearchQuery, SearchResult, SearchResults
 from interaction_finder.search.reverse.investigation_logger import (
-    ClusteringEntry,
-    ContentFetchEntry,
-    ErrorEntry,
     InvestigationLogger,
     KeywordDetail,
     MatchDetail,
     MatchingEntry,
+    QueryConstructionEntry,
     QueryGenerationEntry,
+    QueryResultsSummary,
     ResourceFetchDetail,
     SearchExecutionEntry,
     SearchResultDetail,
-    SessionEndEntry,
     SessionStartEntry,
     _format_resource_ref,
 )
@@ -885,3 +882,539 @@ def test_match_detail_optional_fields():
     )
     assert detail.matched_resource is None
     assert detail.match_method is None
+
+
+# ============================================================================
+# Tests for query_results enhancement (Task 04)
+# ============================================================================
+
+
+def test_query_results_summary_model():
+    """Test QueryResultsSummary model validation with valid data."""
+    # Valid model with PMID and URL results
+    summary = QueryResultsSummary(
+        results=["PMID:12345678", "https://example.com/paper"],
+        found_resources=[
+            {"resource": "PMID:12345678", "index": 0},
+            {"resource": "https://example.com/paper", "index": 1},
+        ],
+    )
+    assert len(summary.results) == 2
+    assert summary.results[0] == "PMID:12345678"
+    assert summary.results[1] == "https://example.com/paper"
+    assert len(summary.found_resources) == 2
+    assert summary.found_resources[0]["resource"] == "PMID:12345678"
+    assert summary.found_resources[0]["index"] == 0
+
+    # Valid model with empty lists (no results/matches)
+    empty_summary = QueryResultsSummary(
+        results=[],
+        found_resources=[],
+    )
+    assert len(empty_summary.results) == 0
+    assert len(empty_summary.found_resources) == 0
+
+
+def test_query_results_summary_invalid_data():
+    """Test QueryResultsSummary validation rejects invalid data."""
+    # Missing required fields
+    with pytest.raises(ValidationError):
+        QueryResultsSummary(results=["PMID:123"])  # missing found_resources
+
+    with pytest.raises(ValidationError):
+        QueryResultsSummary(found_resources=[])  # missing results
+
+    # Wrong types
+    with pytest.raises(ValidationError):
+        QueryResultsSummary(
+            results="not a list",  # should be list
+            found_resources=[],
+        )
+
+    with pytest.raises(ValidationError):
+        QueryResultsSummary(
+            results=["PMID:123"],
+            found_resources="not a list",  # should be list
+        )
+
+
+def test_query_construction_entry_with_query_results():
+    """Test QueryConstructionEntry with query_results populated."""
+    # Create entry with query_results
+    entry = QueryConstructionEntry(
+        timestamp="2024-01-15T10:30:00Z",
+        session_id="test-session",
+        query_index=0,
+        constructor_type="direct",
+        constructor_config={"max_keywords": 7},
+        input_keywords=["CD8", "T cell"],
+        keyword_scores=[0.9, 0.8],
+        final_query="CD8 T cell",
+        construction_time=0.5,
+        fallback_used=False,
+        backend="pubmed",
+        cumulative_coverage=0.5,
+        query_results=QueryResultsSummary(
+            results=["PMID:12345678"],
+            found_resources=[{"resource": "PMID:12345678", "index": 0}],
+        ),
+    )
+    assert entry.query_results is not None
+    assert len(entry.query_results.results) == 1
+    assert entry.query_results.results[0] == "PMID:12345678"
+
+    # Create entry without query_results (backward compatibility)
+    entry_no_results = QueryConstructionEntry(
+        timestamp="2024-01-15T10:30:00Z",
+        session_id="test-session",
+        query_index=0,
+        constructor_type="direct",
+        constructor_config={"max_keywords": 7},
+        input_keywords=["CD8", "T cell"],
+        keyword_scores=[0.9, 0.8],
+        final_query="CD8 T cell",
+        construction_time=0.5,
+        fallback_used=False,
+        backend="pubmed",
+        cumulative_coverage=0.5,
+    )
+    assert entry_no_results.query_results is None
+
+
+@pytest.mark.asyncio
+async def test_log_query_construction_with_results(
+    temp_log_file: Path,
+    sample_resources: list[KnownResource],
+    sample_search_results: SearchResults,
+):
+    """Test log_query_construction() with results and matches provided."""
+    async with InvestigationLogger(temp_log_file) as logger:
+        # Create matches for the first result
+        matches = [
+            ResourceMatch(
+                resource=sample_resources[0],
+                search_result=sample_search_results.results[0],
+                match_method="pmid",
+                confidence=1.0,
+                query_index=0,
+            )
+        ]
+
+        # Log query construction with results and matches
+        await logger.log_query_construction(
+            query_index=0,
+            constructor_type="direct",
+            constructor_config={"max_keywords": 7},
+            input_keywords=["CD8", "T cell"],
+            keyword_scores=[0.9, 0.8],
+            final_query="CD8 T cell marker",
+            construction_time=0.5,
+            fallback_used=False,
+            backend="pubmed",
+            cumulative_coverage=0.33,
+            search_results=sample_search_results,
+            matches=matches,
+        )
+
+    # Parse log and verify query_results field
+    content = temp_log_file.read_text()
+    entries = parse_pretty_json_entries(content)
+    assert len(entries) == 1
+
+    entry = entries[0]
+    assert entry["stage"] == "query_construction"
+    assert "query_results" in entry
+    assert entry["query_results"] is not None
+
+    # Verify results list format (PMID:X for PMID, URL for others)
+    query_results = entry["query_results"]
+    assert "results" in query_results
+    assert len(query_results["results"]) == 2
+    assert query_results["results"][0] == "PMID:12345678"  # Has PMID metadata
+    assert query_results["results"][1] == "https://example.com/paper2"  # No PMID
+
+    # Verify found_resources structure
+    assert "found_resources" in query_results
+    assert len(query_results["found_resources"]) == 1
+    found = query_results["found_resources"][0]
+    assert found["resource"] == "PMID:12345678"
+    assert found["index"] == 0  # 0-based index
+
+
+@pytest.mark.asyncio
+async def test_log_query_construction_without_results(
+    temp_log_file: Path,
+):
+    """Test log_query_construction() backward compatibility (None parameters)."""
+    async with InvestigationLogger(temp_log_file) as logger:
+        # Log query construction without results/matches (old behavior)
+        await logger.log_query_construction(
+            query_index=0,
+            constructor_type="direct",
+            constructor_config={"max_keywords": 7},
+            input_keywords=["CD8", "T cell"],
+            keyword_scores=[0.9, 0.8],
+            final_query="CD8 T cell marker",
+            construction_time=0.5,
+            fallback_used=False,
+            backend="pubmed",
+            cumulative_coverage=0.33,
+            # search_results and matches not provided (defaults to None)
+        )
+
+    # Parse log and verify query_results is None
+    content = temp_log_file.read_text()
+    entries = parse_pretty_json_entries(content)
+    assert len(entries) == 1
+
+    entry = entries[0]
+    assert entry["stage"] == "query_construction"
+    assert "query_results" in entry
+    assert entry["query_results"] is None
+
+
+@pytest.mark.asyncio
+async def test_query_results_pmid_formatting(
+    temp_log_file: Path,
+    sample_resources: list[KnownResource],
+):
+    """Test result identifier formatting (PMID vs URL)."""
+    async with InvestigationLogger(temp_log_file) as logger:
+        # Create search results with mix of PMID and URL-only results
+        query = SearchQuery(query="test", max_results=10)
+        results = [
+            SearchResult(
+                title="Paper with PMID",
+                url="https://pubmed.ncbi.nlm.nih.gov/12345678/",
+                snippet="Test paper",
+                relevance_score=0.95,
+                backend="pubmed",
+                metadata={"pmid": "12345678"},  # Has PMID
+            ),
+            SearchResult(
+                title="Paper without PMID",
+                url="https://example.com/paper1",
+                snippet="Another paper",
+                relevance_score=0.85,
+                backend="pubmed",
+                # No metadata → no PMID
+            ),
+            SearchResult(
+                title="Paper with empty metadata",
+                url="https://example.com/paper2",
+                snippet="Third paper",
+                relevance_score=0.75,
+                backend="pubmed",
+                metadata={},  # Empty metadata → no PMID
+            ),
+        ]
+        search_results = SearchResults(
+            query=query,
+            results=results,
+            total_found=3,
+            search_time=1.0,
+            backend="pubmed",
+        )
+
+        # Create a match for the first result
+        matches = [
+            ResourceMatch(
+                resource=sample_resources[0],
+                search_result=results[0],
+                match_method="pmid",
+                confidence=1.0,
+                query_index=0,
+            )
+        ]
+
+        await logger.log_query_construction(
+            query_index=0,
+            constructor_type="direct",
+            constructor_config={},
+            input_keywords=["test"],
+            keyword_scores=[0.9],
+            final_query="test",
+            construction_time=0.5,
+            fallback_used=False,
+            backend="pubmed",
+            cumulative_coverage=0.33,
+            search_results=search_results,
+            matches=matches,
+        )
+
+    # Verify result identifier formatting
+    content = temp_log_file.read_text()
+    entries = parse_pretty_json_entries(content)
+    query_results = entries[0]["query_results"]
+
+    # First result has PMID → PMID:X format
+    assert query_results["results"][0] == "PMID:12345678"
+    # Second result no PMID → raw URL
+    assert query_results["results"][1] == "https://example.com/paper1"
+    # Third result no PMID → raw URL
+    assert query_results["results"][2] == "https://example.com/paper2"
+
+
+@pytest.mark.asyncio
+async def test_query_results_found_resources_indices(
+    temp_log_file: Path,
+    sample_resources: list[KnownResource],
+):
+    """Test found_resources position tracking with 0-based indices."""
+    async with InvestigationLogger(temp_log_file) as logger:
+        # Create search results with multiple results
+        query = SearchQuery(query="test", max_results=10)
+        results = [
+            SearchResult(
+                title="Result 0",
+                url="https://pubmed.ncbi.nlm.nih.gov/12345678/",
+                snippet="First",
+                relevance_score=0.95,
+                backend="pubmed",
+                metadata={"pmid": "12345678"},
+            ),
+            SearchResult(
+                title="Result 1",
+                url="https://example.com/paper1",
+                snippet="Second",
+                relevance_score=0.85,
+                backend="pubmed",
+            ),
+            SearchResult(
+                title="Result 2",
+                url="https://pubmed.ncbi.nlm.nih.gov/87654321/",
+                snippet="Third",
+                relevance_score=0.75,
+                backend="pubmed",
+                metadata={"pmid": "87654321"},
+            ),
+        ]
+        search_results = SearchResults(
+            query=query,
+            results=results,
+            total_found=3,
+            search_time=1.0,
+            backend="pubmed",
+        )
+
+        # Create matches at different positions
+        matches = [
+            ResourceMatch(
+                resource=sample_resources[0],  # PMID:12345678
+                search_result=results[0],  # Index 0
+                match_method="pmid",
+                confidence=1.0,
+                query_index=0,
+            ),
+            ResourceMatch(
+                resource=sample_resources[2],  # PMID:87654321
+                search_result=results[2],  # Index 2
+                match_method="pmid",
+                confidence=1.0,
+                query_index=0,
+            ),
+        ]
+
+        await logger.log_query_construction(
+            query_index=0,
+            constructor_type="direct",
+            constructor_config={},
+            input_keywords=["test"],
+            keyword_scores=[0.9],
+            final_query="test",
+            construction_time=0.5,
+            fallback_used=False,
+            backend="pubmed",
+            cumulative_coverage=0.67,
+            search_results=search_results,
+            matches=matches,
+        )
+
+    # Verify found_resources indices are 0-based and correct
+    content = temp_log_file.read_text()
+    entries = parse_pretty_json_entries(content)
+    query_results = entries[0]["query_results"]
+
+    found_resources = query_results["found_resources"]
+    assert len(found_resources) == 2
+
+    # First match at index 0
+    assert found_resources[0]["resource"] == "PMID:12345678"
+    assert found_resources[0]["index"] == 0
+
+    # Second match at index 2 (skipped index 1)
+    assert found_resources[1]["resource"] == "PMID:87654321"
+    assert found_resources[1]["index"] == 2
+
+
+@pytest.mark.asyncio
+async def test_query_results_empty_results(
+    temp_log_file: Path,
+):
+    """Test edge case: empty results list."""
+    async with InvestigationLogger(temp_log_file) as logger:
+        # Create empty search results
+        query = SearchQuery(query="test", max_results=10)
+        search_results = SearchResults(
+            query=query,
+            results=[],  # Empty results
+            total_found=0,
+            search_time=1.0,
+            backend="pubmed",
+        )
+
+        # No matches (empty list)
+        matches = []
+
+        await logger.log_query_construction(
+            query_index=0,
+            constructor_type="direct",
+            constructor_config={},
+            input_keywords=["test"],
+            keyword_scores=[0.9],
+            final_query="test",
+            construction_time=0.5,
+            fallback_used=False,
+            backend="pubmed",
+            cumulative_coverage=0.0,
+            search_results=search_results,
+            matches=matches,
+        )
+
+    # Verify query_results has empty lists
+    content = temp_log_file.read_text()
+    entries = parse_pretty_json_entries(content)
+    query_results = entries[0]["query_results"]
+
+    assert query_results["results"] == []
+    assert query_results["found_resources"] == []
+
+
+@pytest.mark.asyncio
+async def test_query_results_no_matches(
+    temp_log_file: Path,
+):
+    """Test edge case: results with no matches."""
+    async with InvestigationLogger(temp_log_file) as logger:
+        # Create search results with results but no matches
+        query = SearchQuery(query="test", max_results=10)
+        results = [
+            SearchResult(
+                title="Unmatched result",
+                url="https://example.com/paper1",
+                snippet="Test paper",
+                relevance_score=0.95,
+                backend="pubmed",
+            ),
+        ]
+        search_results = SearchResults(
+            query=query,
+            results=results,
+            total_found=1,
+            search_time=1.0,
+            backend="pubmed",
+        )
+
+        # No matches (empty list)
+        matches = []
+
+        await logger.log_query_construction(
+            query_index=0,
+            constructor_type="direct",
+            constructor_config={},
+            input_keywords=["test"],
+            keyword_scores=[0.9],
+            final_query="test",
+            construction_time=0.5,
+            fallback_used=False,
+            backend="pubmed",
+            cumulative_coverage=0.0,
+            search_results=search_results,
+            matches=matches,
+        )
+
+    # Verify query_results has results but empty found_resources
+    content = temp_log_file.read_text()
+    entries = parse_pretty_json_entries(content)
+    query_results = entries[0]["query_results"]
+
+    assert len(query_results["results"]) == 1
+    assert query_results["results"][0] == "https://example.com/paper1"
+    assert query_results["found_resources"] == []
+
+
+@pytest.mark.asyncio
+async def test_query_results_missing_metadata(
+    temp_log_file: Path,
+    sample_resources: list[KnownResource],
+):
+    """Test edge case: results missing PMID metadata."""
+    async with InvestigationLogger(temp_log_file) as logger:
+        # Create search results with missing PMID metadata
+        query = SearchQuery(query="test", max_results=10)
+        results = [
+            SearchResult(
+                title="Paper 1",
+                url="https://example.com/paper1",
+                snippet="First paper",
+                relevance_score=0.95,
+                backend="pubmed",
+                metadata={},  # Empty metadata (no PMID)
+            ),
+            SearchResult(
+                title="Paper 2",
+                url="https://example.com/paper2",
+                snippet="Second paper",
+                relevance_score=0.85,
+                backend="pubmed",
+                metadata={},  # Empty metadata (no PMID)
+            ),
+        ]
+        search_results = SearchResults(
+            query=query,
+            results=results,
+            total_found=2,
+            search_time=1.0,
+            backend="pubmed",
+        )
+
+        # Create match using URL-only resource
+        matches = [
+            ResourceMatch(
+                resource=sample_resources[1],  # URL-only resource
+                search_result=results[0],
+                match_method="url",
+                confidence=0.9,
+                query_index=0,
+            )
+        ]
+
+        await logger.log_query_construction(
+            query_index=0,
+            constructor_type="direct",
+            constructor_config={},
+            input_keywords=["test"],
+            keyword_scores=[0.9],
+            final_query="test",
+            construction_time=0.5,
+            fallback_used=False,
+            backend="pubmed",
+            cumulative_coverage=0.33,
+            search_results=search_results,
+            matches=matches,
+        )
+
+    # Verify all results use URL format (no PMID available)
+    content = temp_log_file.read_text()
+    entries = parse_pretty_json_entries(content)
+    query_results = entries[0]["query_results"]
+
+    # Both results should use raw URL format
+    assert query_results["results"][0] == "https://example.com/paper1"
+    assert query_results["results"][1] == "https://example.com/paper2"
+
+    # Found resource should use URL format too
+    assert len(query_results["found_resources"]) == 1
+    assert (
+        query_results["found_resources"][0]["resource"] == "https://example.com/paper1"
+    )
