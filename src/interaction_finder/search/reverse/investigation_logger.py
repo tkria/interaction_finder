@@ -21,6 +21,7 @@ management via async context manager protocol.
 import asyncio
 import logging
 import traceback as tb
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
@@ -142,6 +143,117 @@ class QueryResultsSummary(BaseModel):
     )
 
 
+# Helper function for match string formatting
+
+
+def _format_match_string(
+    match_method: Optional[str], confidence: float
+) -> Optional[str]:
+    """
+    Format match method and confidence as compact string.
+
+    Produces deterministic, parseable match strings for compact logging.
+    Exact matches (pmid, url, doi) produce single-token strings; fuzzy
+    matches include confidence score.
+
+    Args:
+        match_method: Match method used (pmid/url/doi/title_similarity)
+        confidence: Match confidence (0.0-1.0)
+
+    Returns:
+        Compact match string, or None if no match:
+        - "exact" for pmid/url matches
+        - "doi" for DOI matches
+        - "title:{conf}" for title similarity (e.g., "title:0.85")
+        - None if match_method is None
+
+    Examples:
+        >>> _format_match_string("pmid", 1.0)
+        'exact'
+        >>> _format_match_string("url", 1.0)
+        'exact'
+        >>> _format_match_string("doi", 1.0)
+        'doi'
+        >>> _format_match_string("title_similarity", 0.85)
+        'title:0.85'
+        >>> _format_match_string(None, 0.0)
+        None
+    """
+    if match_method is None:
+        return None
+    if match_method in ("pmid", "url"):
+        return "exact"
+    if match_method == "doi":
+        return "doi"
+    if match_method == "title_similarity":
+        return f"title:{confidence:.2f}"
+    # Fallback for unknown methods
+    return match_method
+
+
+# Consolidated query entry models
+
+
+@dataclass
+class QueryConstructionDetails:
+    """
+    Query construction information passed from QueryGenerator to ReverseSearcher.
+
+    This dataclass encapsulates all information needed to log a complete query
+    entry, enabling QueryGenerator to return construction details without
+    directly writing to the investigation log. ReverseSearcher combines these
+    details with search results and matches to write a single consolidated entry.
+
+    Fields:
+        keywords: List[dict] - Keywords with scores (format: {keyword: str, score: float|None})
+        keyword_scores: List[float|None] - Scores for corresponding keywords (parallel array)
+        extractor_type: str - Keyword extractor used (yake/rake/tfidf/llm)
+        extractor_config: dict - Extractor configuration
+        constructor_type: str - Query constructor used (direct/llm)
+        constructor_config: dict - Constructor configuration
+        fallback_used: bool - Whether fallback constructor was used
+        input_resources: List[str] - Compact resource IDs contributing to query
+        cluster_id: int|None - Cluster ID if applicable
+        construction_time: float - Time taken for construction in seconds
+        extraction_time: float - Time taken for extraction in seconds
+    """
+
+    keywords: List[Dict[str, Any]]
+    keyword_scores: List[Optional[float]]
+    extractor_type: str
+    extractor_config: Dict[str, Any]
+    constructor_type: str
+    constructor_config: Dict[str, Any]
+    fallback_used: bool
+    input_resources: List[str]
+    cluster_id: Optional[int]
+    construction_time: float
+    extraction_time: float
+
+
+class QueryResultWithMatch(BaseModel):
+    """
+    Single search result with embedded match information.
+
+    Compact representation for query results array, combining result identity,
+    position, and match outcome in a single structure.
+
+    Fields:
+        resource: str - Compact result identifier (PMID:X or URL)
+        index: int - 0-based position in result list
+        match: str|None - Compact match string ("exact", "doi", "title:0.85", or None)
+    """
+
+    resource: str = Field(
+        description="Compact result identifier: PMID:X (with prefix) or raw URL (no prefix)"
+    )
+    index: int = Field(description="0-based position in result list")
+    match: Optional[str] = Field(
+        None,
+        description="Compact match string: 'exact', 'doi', 'title:{conf}', or null",
+    )
+
+
 # Base log entry model
 
 
@@ -164,11 +276,12 @@ class InvestigationLogEntry(BaseModel):
         "session_start",
         "content_fetch",
         "clustering",
-        "keyword_extraction",
-        "query_construction",
+        "query",  # Consolidated query entry (new format)
+        "keyword_extraction",  # Deprecated: legacy stage for backward compatibility
+        "query_construction",  # Deprecated: legacy stage for backward compatibility
         "query_generation",  # Deprecated: legacy stage for backward compatibility
-        "search_execution",
-        "matching",
+        "search_execution",  # Deprecated: legacy stage for backward compatibility
+        "matching",  # Deprecated: legacy stage for backward compatibility
         "session_end",
         "error",
     ] = Field(description="Pipeline stage identifier")
@@ -176,6 +289,86 @@ class InvestigationLogEntry(BaseModel):
 
 
 # Specific entry models
+
+
+class QueryEntry(InvestigationLogEntry):
+    """
+    Consolidated query entry combining keyword extraction, query construction,
+    search execution, and matching into a single log entry.
+
+    This replaces the separate keyword_extraction, query_construction,
+    search_execution, and matching entries with a unified entry that captures
+    the complete query lifecycle. Provides atomic query logging with full
+    provenance and enables easier analysis of query-to-results relationships.
+
+    Fields:
+        stage: Literal["query"] - Always "query"
+        query_index: int - Sequential index of this query
+
+        # Keyword extraction
+        keywords: List[dict] - Keywords with scores from extractor
+        keyword_extractor: str - Extractor type (yake/rake/tfidf/llm)
+        extractor_config: dict - Extractor configuration
+        extraction_time: float - Extraction time in seconds
+
+        # Query construction
+        query_constructor: str - Constructor type (direct/llm)
+        constructor_config: dict - Constructor configuration
+        fallback_used: bool - Whether fallback constructor was used
+        input_resources: List[str] - Compact resource IDs contributing to query
+        cluster_id: int|None - Cluster ID if applicable
+        query_text: str - Final query text sent to backend
+        construction_time: float - Construction time in seconds
+
+        # Search execution
+        backend: str - Search backend used
+        cache_hit: bool - Whether results came from cache
+        search_time: float - Search execution time in seconds
+
+        # Results and matching
+        results: List[QueryResultWithMatch] - Results with embedded match info
+        result_count: int - Number of results returned
+        new_finds: int - Number of new matches found in this query
+        cumulative_coverage: float - Coverage after this query (0.0-1.0)
+
+        # Timing
+        total_time: float - Total time for complete query lifecycle
+    """
+
+    stage: Literal["query"] = "query"
+    query_index: int = Field(description="Sequential index of this query")
+    # Keyword extraction fields
+    keywords: List[Dict[str, Any]] = Field(
+        description="Keywords with scores from extractor"
+    )
+    keyword_extractor: str = Field(description="Keyword extractor type")
+    extractor_config: Dict[str, Any] = Field(description="Extractor configuration")
+    extraction_time: float = Field(description="Extraction time in seconds")
+    # Query construction fields
+    query_constructor: str = Field(description="Query constructor type")
+    constructor_config: Dict[str, Any] = Field(description="Constructor configuration")
+    fallback_used: bool = Field(description="Whether fallback constructor was used")
+    input_resources: List[str] = Field(
+        description="Compact resource IDs contributing to query"
+    )
+    cluster_id: Optional[int] = Field(None, description="Cluster ID if applicable")
+    query_text: str = Field(description="Final query text sent to backend")
+    construction_time: float = Field(description="Construction time in seconds")
+    # Search execution fields
+    backend: str = Field(description="Search backend used")
+    cache_hit: bool = Field(description="Whether results came from cache")
+    search_time: float = Field(description="Search execution time in seconds")
+    # Results and matching fields
+    results: List[QueryResultWithMatch] = Field(
+        description="Results with embedded match information"
+    )
+    result_count: int = Field(description="Number of results returned")
+    new_finds: int = Field(description="Number of new matches found")
+    cumulative_coverage: float = Field(
+        description="Cumulative coverage after this query", ge=0.0, le=1.0
+    )
+    # Timing fields
+    total_time: float = Field(description="Total time for complete query lifecycle")
 
 
 class SessionStartEntry(InvestigationLogEntry):
@@ -254,6 +447,8 @@ class KeywordExtractionEntry(InvestigationLogEntry):
     """
     Logged after keyword extraction stage.
 
+    DEPRECATED: Use QueryEntry for new code. Kept for backward compatibility.
+
     Captures extraction details including extractor type, configuration, extracted
     keywords with scores, extraction timing, and input resources.
 
@@ -283,6 +478,8 @@ class KeywordExtractionEntry(InvestigationLogEntry):
 class QueryConstructionEntry(InvestigationLogEntry):
     """
     Logged after query construction stage.
+
+    DEPRECATED: Use QueryEntry for new code. Kept for backward compatibility.
 
     Captures construction details including constructor type, configuration, input
     keywords, final query, and whether fallback was used.
@@ -331,6 +528,8 @@ class QueryGenerationEntry(InvestigationLogEntry):
     """
     Logged for each generated query.
 
+    DEPRECATED: Use QueryEntry for new code. Kept for backward compatibility.
+
     Captures query generation including input resources, keywords with scores from
     extractor, and cumulative coverage after this query.
 
@@ -367,6 +566,8 @@ class SearchExecutionEntry(InvestigationLogEntry):
     """
     Logged after executing a search query.
 
+    DEPRECATED: Use QueryEntry for new code. Kept for backward compatibility.
+
     Captures search results with 0-based position indices, enabling analysis of
     where targets were found in result lists.
 
@@ -396,6 +597,8 @@ class SearchExecutionEntry(InvestigationLogEntry):
 class MatchingEntry(InvestigationLogEntry):
     """
     Logged after matching search results to target resources.
+
+    DEPRECATED: Use QueryEntry for new code. Kept for backward compatibility.
 
     Captures per-result match attempts with 0-based position indices, enabling
     analysis of which results matched which targets.
