@@ -10,7 +10,7 @@ Order: imports → ReverseSearcher class → helper methods
 """
 
 import time
-from typing import List, Set, Any, Optional, TYPE_CHECKING
+from typing import List, Set, Any, Optional, Tuple, TYPE_CHECKING
 
 from rich.console import Console
 from rich.progress import (
@@ -34,7 +34,7 @@ from interaction_finder.search.base import SearchBackend, SearchQuery, SearchRes
 from interaction_finder.search.cache import SearchCache
 
 if TYPE_CHECKING:
-    from .investigation_logger import InvestigationLogger
+    from .investigation_logger import InvestigationLogger, QueryConstructionDetails
 
 
 class ReverseSearcher:
@@ -183,7 +183,9 @@ class ReverseSearcher:
             )
 
         query_index = 0
-        all_queries = initial_queries.copy()
+        all_queries: List[Tuple[str, "QueryConstructionDetails"]] = (
+            initial_queries.copy()
+        )
         # Phase 2: Execute queries until stopping criteria met
         while query_index < len(all_queries):
             # Check stopping criteria before executing next query
@@ -192,8 +194,10 @@ class ReverseSearcher:
             ):
                 break
 
-            query_text = all_queries[query_index]
+            # Unpack query tuple
+            query_text, construction_details = all_queries[query_index]
             # Execute query with caching
+            query_start_time = time.time()
             try:
                 search_results = await self._execute_query_cached(query_text)
             except Exception as e:
@@ -204,15 +208,9 @@ class ReverseSearcher:
                     )
                 query_index += 1
                 continue
-            # Log search execution if investigation logger is available
-            if self.inv_logger:
-                await self.inv_logger.log_search_execution(
-                    query_index=query_index,
-                    query_text=query_text,
-                    backend=self.backend.backend_name,
-                    cache_hit=getattr(search_results, "from_cache", False),
-                    results=search_results,
-                )
+            # Calculate search time
+            search_time = time.time() - query_start_time
+            cache_hit = getattr(search_results, "from_cache", False)
             # Match results to target resources
             new_matches = await self.matcher.match_results(
                 search_results, unfound, query_index
@@ -222,27 +220,26 @@ class ReverseSearcher:
             newly_found = {m.resource for m in new_matches}
             unfound -= newly_found
             coverage = 1.0 - (len(unfound) / len(target_resources))
-            # Log query construction with results and matches if investigation logger available
-            # Note: This call provides richer data than log_query_generation() by including
-            # search_results and matches, enabling query_results field population
+            # Log consolidated query entry if investigation logger available
             if self.inv_logger:
-                # Extract query construction details from QueryGenerator state
-                # For now, we use simplified logging that focuses on results/matches integration
-                # Full constructor details (keywords, scores, etc.) are logged by QueryGenerator
-                await self.inv_logger.log_query_construction(
-                    query_index=query_index,
-                    constructor_type=self.config.query_constructor,
-                    constructor_config={},  # QueryGenerator logs detailed config
-                    input_keywords=[],  # QueryGenerator logs actual keywords
-                    keyword_scores=[],  # QueryGenerator logs actual scores
-                    final_query=query_text,
-                    construction_time=0.0,  # Timing tracked at QueryGenerator level
-                    fallback_used=False,  # QueryGenerator tracks fallback usage
-                    backend=self.backend.backend_name,
-                    cumulative_coverage=coverage,
-                    search_results=search_results,
-                    matches=new_matches,
-                )
+                try:
+                    await self.inv_logger.log_query(
+                        query_index=query_index,
+                        construction_details=construction_details,
+                        query_text=query_text,
+                        backend=self.backend.backend_name,
+                        cache_hit=cache_hit,
+                        search_time=search_time,
+                        results=search_results,
+                        matches=new_matches,
+                        cumulative_coverage=coverage,
+                    )
+                except Exception as log_error:
+                    # Non-fatal: log warning but continue search
+                    if verbose:
+                        self.console.print(
+                            f"[yellow]Warning: Failed to write investigation log for query {query_index}: {log_error}[/yellow]"
+                        )
             # Record result
             result = ReverseSearchResult(
                 query=query_text,
@@ -282,10 +279,12 @@ class ReverseSearcher:
                     break
 
                 try:
+                    # Extract query strings for duplicate checking
+                    previous_query_strings = [q[0] for q in all_queries]
                     refinement_queries = (
                         await self.query_generator.generate_refinement_queries(
                             list(unfound),
-                            all_queries,
+                            previous_query_strings,
                         )
                     )
                     if refinement_queries:
