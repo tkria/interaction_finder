@@ -222,6 +222,27 @@ class ReverseSearcher:
             newly_found = {m.resource for m in new_matches}
             unfound -= newly_found
             coverage = 1.0 - (len(unfound) / len(target_resources))
+            # Log query construction with results and matches if investigation logger available
+            # Note: This call provides richer data than log_query_generation() by including
+            # search_results and matches, enabling query_results field population
+            if self.inv_logger:
+                # Extract query construction details from QueryGenerator state
+                # For now, we use simplified logging that focuses on results/matches integration
+                # Full constructor details (keywords, scores, etc.) are logged by QueryGenerator
+                await self.inv_logger.log_query_construction(
+                    query_index=query_index,
+                    constructor_type=self.config.query_constructor,
+                    constructor_config={},  # QueryGenerator logs detailed config
+                    input_keywords=[],  # QueryGenerator logs actual keywords
+                    keyword_scores=[],  # QueryGenerator logs actual scores
+                    final_query=query_text,
+                    construction_time=0.0,  # Timing tracked at QueryGenerator level
+                    fallback_used=False,  # QueryGenerator tracks fallback usage
+                    backend=self.backend.backend_name,
+                    cumulative_coverage=coverage,
+                    search_results=search_results,
+                    matches=new_matches,
+                )
             # Record result
             result = ReverseSearchResult(
                 query=query_text,
