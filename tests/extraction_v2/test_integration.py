@@ -13,6 +13,7 @@ import logging
 import os
 from pathlib import Path
 
+from pydantic_ai import models
 from interaction_finder.extraction_graph_v2.run import run_extraction_v2
 from interaction_finder.extraction_graph_v2.deps import ExtractionDeps
 from interaction_finder.extraction_graph_v2.state import ExtractionState
@@ -24,6 +25,15 @@ from .fixtures import BRCA1_DOCUMENT, TEST_URLS, create_test_resource_pool
 # Set up logging for tests
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+@pytest.fixture(scope="class", autouse=True)
+def enable_model_requests():
+    """Enable real model requests for integration tests that use slow marker."""
+    original_setting = models.ALLOW_MODEL_REQUESTS
+    models.ALLOW_MODEL_REQUESTS = True
+    yield
+    models.ALLOW_MODEL_REQUESTS = original_setting
 
 
 class TestExtractionPipelineIntegration:

@@ -31,7 +31,7 @@ def mk_agent(
     """
     return Agent(
         model=model,
-        result_type=output_type,
+        output_type=output_type,
         system_prompt=system_prompt,
         deps_type=ExtractionDeps,
     )
