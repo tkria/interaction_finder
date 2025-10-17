@@ -197,13 +197,13 @@ class TestRunExtractionV2Simple:
         """Test that nodes execute in correct order."""
         with (
             patch(
-                "interaction_finder.extraction_graph_v2.run_simple.ExtractEntities"
+                "interaction_finder.extraction_graph_v2.nodes.ExtractEntities"
             ) as mock_extract,
             patch(
-                "interaction_finder.extraction_graph_v2.run_simple.AssessIndividually"
+                "interaction_finder.extraction_graph_v2.nodes.AssessIndividually"
             ) as mock_assess,
             patch(
-                "interaction_finder.extraction_graph_v2.run_simple.AggregateIntoPairs"
+                "interaction_finder.extraction_graph_v2.nodes.AggregateIntoPairs"
             ) as mock_aggregate,
         ):
             # Setup mocks
@@ -235,7 +235,7 @@ class TestRunExtractionV2Simple:
     ):
         """Test early termination when extraction returns a result."""
         with patch(
-            "interaction_finder.extraction_graph_v2.run_simple.ExtractEntities"
+            "interaction_finder.extraction_graph_v2.nodes.ExtractEntities"
         ) as mock_extract:
             mock_extract_instance = AsyncMock()
             mock_extract.return_value = mock_extract_instance
@@ -294,10 +294,8 @@ class TestRunExtractionV2:
 
     @pytest.mark.asyncio
     async def test_run_extraction_v2_no_groups(self, test_resource_pool, test_deps):
-        """Test main runner without document groups."""
-        result = await run_extraction_v2(
-            test_resource_pool, test_deps, document_groups=None
-        )
+        """Test main runner without document groups (default behavior in v2)."""
+        result = await run_extraction_v2(test_resource_pool, test_deps)
 
         assert isinstance(result, list)
         # All results should be EntityPairOut instances
@@ -305,13 +303,15 @@ class TestRunExtractionV2:
 
     @pytest.mark.asyncio
     async def test_run_extraction_v2_empty_groups(self, test_resource_pool, test_deps):
-        """Test main runner with empty groups list."""
-        result = await run_extraction_v2(
-            test_resource_pool, test_deps, document_groups=[]
-        )
+        """Test main runner with empty resource pool (no documents)."""
+        # Create empty resource pool
+        empty_pool = ResourcePool()
+
+        result = await run_extraction_v2(empty_pool, test_deps)
 
         assert isinstance(result, list)
-        assert all(isinstance(pair, EntityPairOut) for pair in result)
+        # Empty pool should return empty results
+        assert len(result) == 0
 
     @pytest.mark.asyncio
     async def test_run_extraction_v2_with_groups(self, test_deps):
