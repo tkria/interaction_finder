@@ -13,7 +13,6 @@ from interaction_finder.search.evaluation import EvaluationRunner, EvaluationCon
 from interaction_finder.search.config import (
     SearchConfig,
     PubMedConfig,
-    LLMExpansionConfig,
 )
 
 
@@ -163,8 +162,7 @@ class TestSearchIntegration:
             )
 
             # Test expansion
-            config = LLMExpansionConfig(model_name="openai:gpt-4o-mini")
-            expander = LLMQueryExpander(model_name=config.model_name)
+            expander = LLMQueryExpander(model_name="openai:gpt-4o-mini")
 
             expanded = await expander.expand_query("BRCA1")
 
