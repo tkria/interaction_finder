@@ -5,6 +5,26 @@ Known documents with verified gene-disease relationships
 for testing ResourceQuote integration.
 """
 
+from typing import List
+from interaction_finder.resources import ResourcePool
+
+
+def create_test_resource_pool(documents: List[tuple[str, str, str]]) -> ResourcePool:
+    """
+    Create test resource pool from document tuples.
+
+    Args:
+        documents: List of (url, title, content) tuples
+
+    Returns:
+        ResourcePool with loaded documents
+    """
+    pool = ResourcePool()
+    for url, title, content in documents:
+        pool.add(url, title, content)
+    return pool
+
+
 # Test document with known BRCA1-breast cancer relationship
 BRCA1_DOCUMENT = """
 BRCA1 mutations significantly increase breast cancer risk.

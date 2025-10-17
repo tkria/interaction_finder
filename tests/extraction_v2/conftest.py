@@ -12,8 +12,14 @@ from pydantic_ai import models
 from pydantic_ai.models.test import TestModel
 from pydantic_ai.models.function import FunctionModel, AgentInfo
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
+from pydantic_graph import GraphRunContext
 
 from src.interaction_finder.resources import ResourcePool
+from src.interaction_finder.settings import IfetcherConfig
+from src.interaction_finder.fetcher import PageFetcher
+from src.interaction_finder.extraction_graph_v2.deps import ExtractionDeps
+from src.interaction_finder.extraction_graph_v2.state import ExtractionState
+from .fixtures import create_test_resource_pool, BRCA1_DOCUMENT, TEST_URLS
 
 # Prevent accidental real LLM calls during all tests
 models.ALLOW_MODEL_REQUESTS = False
@@ -104,3 +110,57 @@ def message_capture():
         return FunctionModel(model_function)
 
     return captured_messages, create_capturing_model
+
+
+@pytest.fixture
+def extraction_config():
+    """Create extraction config for testing."""
+    config_data = {
+        "task": {
+            "kinds": {
+                "gene": {
+                    "kind": ["gene"],
+                    "form": ["name"],
+                    "example": ["BRCA1", "TP53"],
+                },
+                "disease": {
+                    "kind": ["disease"],
+                    "form": ["name"],
+                    "example": ["breast cancer", "lung cancer"],
+                },
+            },
+            "relation": "interaction",
+            "context": "Test gene-disease interactions",
+        },
+        "agents": {"_": {"llm": "test"}},
+        "cache": {"directory": "test_cache"},
+    }
+    return IfetcherConfig(**config_data)
+
+
+@pytest.fixture
+def test_deps(extraction_config):
+    """Create test dependencies."""
+    page_fetcher = PageFetcher(extraction_config)
+    return ExtractionDeps.from_config(
+        extraction_config, page_fetcher, model=TestModel()
+    )
+
+
+@pytest.fixture
+def test_resource_pool():
+    """Create resource pool with test document for extraction node testing."""
+    documents = [(TEST_URLS[0], "BRCA1 Study", BRCA1_DOCUMENT)]
+    return create_test_resource_pool(documents)
+
+
+@pytest.fixture
+def test_state(test_resource_pool):
+    """Create test extraction state."""
+    return ExtractionState(resource_pool=test_resource_pool)
+
+
+@pytest.fixture
+def test_context(test_state, test_deps):
+    """Create test graph run context."""
+    return GraphRunContext(state=test_state, deps=test_deps)

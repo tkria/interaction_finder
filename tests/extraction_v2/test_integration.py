@@ -13,16 +13,13 @@ import logging
 import os
 from pathlib import Path
 
-from interaction_finder.extraction_graph_v2.run import (
-    run_extraction_v2,
-    create_test_resource_pool,
-)
+from interaction_finder.extraction_graph_v2.run import run_extraction_v2
 from interaction_finder.extraction_graph_v2.deps import ExtractionDeps
 from interaction_finder.extraction_graph_v2.state import ExtractionState
 from interaction_finder.extraction_graph_v2.models import EntityPairOut
 from interaction_finder.settings import IfetcherConfig
 from interaction_finder.fetcher import PageFetcher
-from .fixtures import BRCA1_DOCUMENT, TEST_URLS
+from .fixtures import BRCA1_DOCUMENT, TEST_URLS, create_test_resource_pool
 
 # Set up logging for tests
 logging.basicConfig(level=logging.INFO)

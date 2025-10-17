@@ -8,10 +8,7 @@ import pytest
 import logging
 from unittest.mock import Mock, patch, AsyncMock
 
-from interaction_finder.extraction_graph_v2.run import (
-    run_extraction_v2,
-    create_test_resource_pool,
-)
+from interaction_finder.extraction_graph_v2.run import run_extraction_v2
 from interaction_finder.extraction_graph_v2.run_simple import run_extraction_v2_simple
 from interaction_finder.extraction_graph_v2.deps import ExtractionDeps
 from interaction_finder.extraction_graph_v2.state import ExtractionState
@@ -24,6 +21,7 @@ from .fixtures import (
     MULTI_GENE_DOCUMENT,
     NO_RELATIONSHIP_DOCUMENT,
     TEST_URLS,
+    create_test_resource_pool,
 )
 
 logger = logging.getLogger(__name__)
