@@ -7,6 +7,9 @@ were introduced during LLM extractor implementation.
 
 Tests use fixed input data and snapshot-style assertions to detect any
 deviations from expected keyword extraction behavior.
+
+Updated 2025-10-17: Query generation tests updated to handle improved API
+that returns (query_str, construction_details) tuples for investigation logging.
 """
 
 import pytest
@@ -130,6 +133,10 @@ async def test_query_generation_unchanged(extractor_name, fixed_resources):
 
     This verifies the complete flow from KnownResource → metadata → keyword extraction → query.
     If this fails, it indicates changes in query construction logic.
+
+    Expected behavior updated 2025-10-17: generate_initial_queries now returns
+    List[Tuple[str, QueryConstructionDetails]] instead of List[str] to support
+    investigation logging. Test updated to unpack tuples and extract query strings.
     """
     config = ReverseSearchConfig(
         keyword_extractor=extractor_name,
@@ -148,7 +155,11 @@ async def test_query_generation_unchanged(extractor_name, fixed_resources):
             "87654321": {"title": "BMPR2 Research", "abstract": FIXED_ABSTRACT_2},
         },
     ):
-        queries = await generator.generate_initial_queries(fixed_resources)
+        query_results = await generator.generate_initial_queries(fixed_resources)
+
+    # Unpack tuples (query_str, construction_details) to get just query strings
+    # This is an intentional API change to support investigation logging
+    queries = [query_str for query_str, _details in query_results]
 
     # Basic sanity checks
     assert len(queries) > 0, f"Should generate at least one query with {extractor_name}"
@@ -243,7 +254,10 @@ async def test_clustering_still_works_for_existing_extractors(fixed_resources):
             "87654321": {"title": "T cells", "abstract": FIXED_ABSTRACT_2},
         },
     ):
-        queries = await generator.generate_initial_queries(fixed_resources)
+        query_results = await generator.generate_initial_queries(fixed_resources)
+
+    # Unpack tuples (query_str, construction_details) to get just query strings
+    queries = [query_str for query_str, _details in query_results]
 
     # Should generate queries (clustering may reduce query count)
     assert len(queries) > 0, "Should generate queries with clustering enabled"
