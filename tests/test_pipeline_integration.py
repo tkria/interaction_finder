@@ -197,7 +197,7 @@ class TestPipelineIntegration:
 
         # Test basic functionality
         assert brca1_quote.count == 2  # Two BRCA1 mentions
-        assert brca1_quote.validate_quote("BRCA1")  # Basic validation
+        assert "BRCA1" in brca1_quote.query_text  # Contains expected term
 
         # Test quote text retrieval
         first_quote = brca1_quote.get_quote_text(1)

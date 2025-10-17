@@ -263,7 +263,7 @@ class TestValidation:
             Path(f.name).unlink()
 
     def test_kinds_validation_empty(self):
-        """Test that empty kinds configuration raises error."""
+        """Test that empty kinds configuration is now allowed (for non-extraction workflows)."""
         toml_content = """
         [task]
         relation = "test"
@@ -273,8 +273,9 @@ class TestValidation:
             f.write(toml_content)
             f.flush()
 
-            with pytest.raises(ValueError, match="At least one kind must be defined"):
-                IfetcherConfig.from_path(f.name)
+            # Empty kinds are now allowed - validation happens at extraction time
+            config = IfetcherConfig.from_path(f.name)
+            assert config.task.kinds == {}
 
             Path(f.name).unlink()
 

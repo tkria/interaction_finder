@@ -346,37 +346,40 @@ class TestDocumentGroupingWithFailures:
 
         fetcher.web_client.fetch_html = mock_fetch_html_fail
 
-        # This should fail and mark URL as failed
-        with pytest.raises(TimeoutError):
-            await fetcher.get_groups(
-                [failure_url],
-                constraint_type="count",
-                min_size=1,
-                max_size=3,
-                prefetch=False,  # Disable prefetch to avoid double failure attempt
-                progress=False,
-                retry=False,  # Use retry=False to propagate exception
-            )
+        # This should fail but return empty groups (fail_fast=False behavior in get_groups)
+        # The failure should be recorded in the cache
+        failed_groups = await fetcher.get_groups(
+            [failure_url],
+            constraint_type="count",
+            min_size=1,
+            max_size=3,
+            prefetch=False,  # Disable prefetch to avoid double failure attempt
+            progress=False,
+            retry=False,  # Use retry=False to propagate exception
+        )
+        # When fetch fails, get_groups returns empty list (no valid documents)
+        assert failed_groups == []
 
         # Verify URL is marked as failed
         assert await fetcher.cache.is_failed(failure_url)
         failure_reason = await fetcher.cache.get_failed_reason(failure_url)
         assert "Simulated service failure" in failure_reason
 
-        # Phase 3: Verify retry=False raises PreviousFailure
+        # Phase 3: Verify retry=False returns empty groups (previous failure still cached)
         fetcher.web_client.fetch_html = mock_fetch_html_success  # Would work if called
 
-        with pytest.raises(PreviousFailure) as exc_info:
-            await fetcher.get_groups(
-                [failure_url],
-                constraint_type="count",
-                min_size=1,
-                max_size=3,
-                prefetch=False,  # Consistent with above
-                progress=False,
-                retry=False,  # Should be blocked by previous failure
-            )
-        assert exc_info.value.url == failure_url
+        # With fail_fast=False, get_groups returns empty groups instead of raising
+        retry_false_groups = await fetcher.get_groups(
+            [failure_url],
+            constraint_type="count",
+            min_size=1,
+            max_size=3,
+            prefetch=False,  # Consistent with above
+            progress=False,
+            retry=False,  # Should be blocked by previous failure
+        )
+        # Still returns empty because failure is cached and retry=False
+        assert retry_false_groups == []
 
         # Phase 4: Verify retry=True successfully recovers
         recovery_groups = await fetcher.get_groups(

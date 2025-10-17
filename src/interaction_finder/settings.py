@@ -315,10 +315,8 @@ class IfetcherConfig(BaseModel):
         def validate_kinds_not_empty(
             cls, v: dict[str, "Task.Kind"]
         ) -> dict[str, "Task.Kind"]:
-            if not v:
-                raise ValueError(
-                    "At least one kind must be defined in [task.kinds] or [task.kinds.*]"
-                )
+            # NOTE: Validation removed - empty kinds are now allowed for non-extraction workflows
+            # The CLI and extraction functions should validate kinds are present when needed
             return v
 
         def get_kind_names(self) -> list[str]:

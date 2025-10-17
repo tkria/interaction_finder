@@ -47,7 +47,9 @@ class TestPageFetcherInitialization:
 
         fetcher = PageFetcher(config, show_status=False)
 
-        assert fetcher.verbose is False  # show_status is passed to batch_ops, not stored on fetcher
+        assert (
+            fetcher.verbose is False
+        )  # show_status is passed to batch_ops, not stored on fetcher
 
     def test_pagefetcher_abspath_delegation(self):
         """Test that abspath is properly delegated to config."""
@@ -57,6 +59,7 @@ class TestPageFetcherInitialization:
 
         # Create a temporary directory for the test instead of using /absolute/path
         import tempfile
+
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir) / "cache"
             config.abspath.return_value = temp_path
@@ -118,15 +121,11 @@ class TestGetChunksWithEmbeddings:
         # Mock cache miss
         fetcher.cache.has_path = AsyncMock(return_value=False)
 
-        # Mock web client
-        mock_markdown = "Test markdown content."
+        # Mock the batch operations method that's actually called
         mock_chunks = [
             {"text": "chunk1", "wordcount": 5, "embedding": [1.0, 2.0, 3.0]},
         ]
-
-        fetcher.get_markdown = AsyncMock(return_value=mock_markdown)
-        fetcher.web_client.create_chunks = Mock(return_value=mock_chunks)
-        fetcher.cache.set_content = AsyncMock()
+        fetcher.batch_ops._fetch_chunks_and_cache = AsyncMock(return_value=mock_chunks)
 
         result = await fetcher.get_chunks_with_embeddings(url)
 
@@ -134,12 +133,10 @@ class TestGetChunksWithEmbeddings:
         assert len(result) == 1
         assert result[0]["text"] == "chunk1"
 
-        # Check calls
-        fetcher.get_markdown.assert_called_once_with(url, retry=False)
-        fetcher.web_client.create_chunks.assert_called_once_with(mock_markdown)
-
-        # Should cache the result
-        fetcher.cache.set_content.assert_called_once()
+        # Check that batch_ops method was called with correct parameters
+        fetcher.batch_ops._fetch_chunks_and_cache.assert_called_once_with(
+            url, retry=False
+        )
 
     @pytest.mark.asyncio
     async def test_get_chunks_with_embeddings_retry(self, fetcher):
@@ -147,13 +144,14 @@ class TestGetChunksWithEmbeddings:
         url = "http://example.com/test"
 
         fetcher.cache.has_path = AsyncMock(return_value=False)
-        fetcher.get_markdown = AsyncMock(return_value="content")
-        fetcher.web_client.create_chunks = Mock(return_value=[])
-        fetcher.cache.set_content = AsyncMock()
+        fetcher.batch_ops._fetch_chunks_and_cache = AsyncMock(return_value=[])
 
         await fetcher.get_chunks_with_embeddings(url, retry=True)
 
-        fetcher.get_markdown.assert_called_once_with(url, retry=True)
+        # Check that batch_ops method was called with retry=True
+        fetcher.batch_ops._fetch_chunks_and_cache.assert_called_once_with(
+            url, retry=True
+        )
 
 
 class TestGetChunks:
@@ -240,6 +238,7 @@ class TestDocumentEmbeddings:
         assert "doc1" in result
         # Should be average: [(1+4)/2, (2+5)/2, (3+6)/2] = [2.5, 3.5, 4.5]
         import numpy as np
+
         assert isinstance(result["doc1"], np.ndarray)
         np.testing.assert_array_almost_equal(result["doc1"], [2.5, 3.5, 4.5])
 
@@ -253,10 +252,13 @@ class TestDocumentEmbeddings:
         result = fetcher._compute_document_embeddings(doc_chunks)
 
         import numpy as np
+
         assert isinstance(result["doc1"], np.ndarray)
         assert isinstance(result["doc2"], np.ndarray)
         np.testing.assert_array_almost_equal(result["doc1"], [1.0, 2.0])
-        np.testing.assert_array_almost_equal(result["doc2"], [4.0, 5.0])  # Average of [3,4] and [5,6]
+        np.testing.assert_array_almost_equal(
+            result["doc2"], [4.0, 5.0]
+        )  # Average of [3,4] and [5,6]
 
     def test_compute_document_embeddings_no_embeddings(self, fetcher):
         """Test document embedding with chunks that have no embeddings."""
@@ -283,8 +285,11 @@ class TestDocumentEmbeddings:
 
         # Should average only the chunks with embeddings
         import numpy as np
+
         assert isinstance(result["doc1"], np.ndarray)
-        np.testing.assert_array_almost_equal(result["doc1"], [2.0, 3.0])  # Average of [1,2] and [3,4]
+        np.testing.assert_array_almost_equal(
+            result["doc1"], [2.0, 3.0]
+        )  # Average of [1,2] and [3,4]
 
 
 class TestErrorHandling:
@@ -304,9 +309,9 @@ class TestErrorHandling:
 
     @pytest.mark.asyncio
     async def test_get_chunks_web_client_error(self, fetcher):
-        """Test error handling when web client fails."""
+        """Test error handling when batch operations fail."""
         fetcher.cache.has_path = AsyncMock(return_value=False)
-        fetcher.get_markdown = AsyncMock(
+        fetcher.batch_ops._fetch_chunks_and_cache = AsyncMock(
             side_effect=RuntimeError("Network error")
         )
 

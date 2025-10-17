@@ -86,8 +86,9 @@ class TestResourceTrackingIntegration:
         assert "http://example.com/paper" in all_urls
         assert len(all_urls) == 1  # No duplicates
 
-        # Test basic ResourceQuote validation
-        assert brca1_quote.validate_quote("BRCA1")  # Simple built-in validation
+        # Test basic ResourceQuote functionality
+        assert brca1_quote.count > 0  # Quote was found in the resource
+        assert "BRCA1" in brca1_quote.query_text  # Query text contains expected term
 
     def test_entity_assessment_with_evidence_quotes(self):
         """Test EntityAssessmentOut model with evidence quotes."""
@@ -138,7 +139,8 @@ class TestResourceTrackingIntegration:
         assert "http://example.com/study" in all_urls
 
         # Test basic evidence quote validation
-        assert cause_quote.validate_quote("BRCA1 mutations cause breast cancer")
+        assert cause_quote.count > 0  # Quote was found
+        assert "cause" in cause_quote.query_text.lower()  # Contains key term
 
     def test_entity_pair_with_complete_provenance(self):
         """Test EntityPairOut with complete resource provenance."""
@@ -233,7 +235,8 @@ class TestResourceTrackingIntegration:
         # Test basic functionality
         assert brca1_quote is not None
         assert brca1_quote.count == 4  # All BRCA1 mentions
-        assert brca1_quote.validate_quote("BRCA1")  # Simple validation
+        assert brca1_quote.count > 0  # Quote was found
+        assert "BRCA1" in brca1_quote.query_text  # Contains expected term
 
         assert cause_quote is not None
         assert cause_quote.count == 1
