@@ -119,10 +119,9 @@ class SearchEvaluator:
             if ground_truth:
                 relevant_found = set()
                 for result in results.results[: self.config.max_results_to_evaluate]:
-                    if result.url in ground_truth or (
-                        result.pmid and result.pmid in ground_truth
-                    ):
-                        relevant_found.add(result.url or result.pmid)
+                    pmid = result.metadata.get("pmid")
+                    if result.url in ground_truth or (pmid and pmid in ground_truth):
+                        relevant_found.add(result.url or pmid)
 
                 metrics.relevant_results = len(relevant_found)
 
@@ -145,9 +144,12 @@ class SearchEvaluator:
             if relevance_scores:
                 relevance_values = []
                 for result in results.results[: self.config.max_results_to_evaluate]:
-                    key = result.url or result.pmid
-                    if key and key in relevance_scores:
-                        relevance_values.append(relevance_scores[key])
+                    pmid = result.metadata.get("pmid")
+                    # Check both URL and PMID against relevance_scores
+                    if result.url and result.url in relevance_scores:
+                        relevance_values.append(relevance_scores[result.url])
+                    elif pmid and pmid in relevance_scores:
+                        relevance_values.append(relevance_scores[pmid])
 
                 if relevance_values:
                     metrics.average_relevance_score = statistics.mean(relevance_values)
@@ -208,8 +210,10 @@ class SearchEvaluator:
                 for result in results.results:
                     if result.url:
                         ids.add(result.url)
-                    elif result.pmid:
-                        ids.add(result.pmid)
+                    else:
+                        pmid = result.metadata.get("pmid")
+                        if pmid:
+                            ids.add(pmid)
                 return ids
 
             ids_a = get_result_ids(results_a)
@@ -229,10 +233,12 @@ class SearchEvaluator:
             # Simple rank correlation (if results have scores)
             common_results = []
             for result_a in results_a.results:
-                key_a = result_a.url or result_a.pmid
+                pmid_a = result_a.metadata.get("pmid")
+                key_a = result_a.url or pmid_a
                 if key_a in ids_b:
                     for i, result_b in enumerate(results_b.results):
-                        key_b = result_b.url or result_b.pmid
+                        pmid_b = result_b.metadata.get("pmid")
+                        key_b = result_b.url or pmid_b
                         if key_a == key_b:
                             rank_a = results_a.results.index(result_a)
                             rank_b = i

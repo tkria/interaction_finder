@@ -41,20 +41,20 @@ def sample_results():
             SearchResult(
                 title="BRCA1 mutations in breast cancer",
                 url="https://pubmed.ncbi.nlm.nih.gov/123456",
-                pmid="123456",
                 backend="pubmed",
+                metadata={"pmid": "123456"},
             ),
             SearchResult(
                 title="Another BRCA1 paper",
                 url="https://pubmed.ncbi.nlm.nih.gov/789012",
-                pmid="789012",
                 backend="pubmed",
+                metadata={"pmid": "789012"},
             ),
             SearchResult(
                 title="Unrelated paper",
                 url="https://pubmed.ncbi.nlm.nih.gov/345678",
-                pmid="345678",
                 backend="pubmed",
+                metadata={"pmid": "345678"},
             ),
         ],
         total_found=100,

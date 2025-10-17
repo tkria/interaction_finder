@@ -61,31 +61,32 @@ class TestSearchResult:
         assert result.title == "Test Paper"
         assert result.url == "https://example.com"
         assert result.backend == "pubmed"
-        assert result.authors == []
-        assert result.abstract is None
+        assert result.metadata == {}
 
     def test_full_result(self):
         """Test result with all fields."""
         result = SearchResult(
             title="BRCA1 mutations in breast cancer",
-            authors=["Smith, J.", "Doe, J."],
-            abstract="This study investigates BRCA1 mutations...",
-            journal="Nature Genetics",
-            publication_date=datetime(2023, 1, 15),
             url="https://pubmed.ncbi.nlm.nih.gov/123456",
-            doi="10.1038/s41588-023-01234-5",
-            pmid="123456",
             relevance_score=0.95,
             backend="pubmed",
-            metadata={"source": "pubmed"},
+            metadata={
+                "authors": ["Smith, J.", "Doe, J."],
+                "abstract": "This study investigates BRCA1 mutations...",
+                "journal": "Nature Genetics",
+                "publication_date": datetime(2023, 1, 15),
+                "doi": "10.1038/s41588-023-01234-5",
+                "pmid": "123456",
+                "source": "pubmed",
+            },
         )
 
         assert result.title == "BRCA1 mutations in breast cancer"
-        assert result.authors == ["Smith, J.", "Doe, J."]
-        assert "BRCA1 mutations" in result.abstract
-        assert result.journal == "Nature Genetics"
-        assert result.publication_date == datetime(2023, 1, 15)
-        assert result.pmid == "123456"
+        assert result.metadata["authors"] == ["Smith, J.", "Doe, J."]
+        assert "BRCA1 mutations" in result.metadata["abstract"]
+        assert result.metadata["journal"] == "Nature Genetics"
+        assert result.metadata["publication_date"] == datetime(2023, 1, 15)
+        assert result.metadata["pmid"] == "123456"
         assert result.relevance_score == 0.95
 
     def test_invalid_relevance_score(self):
