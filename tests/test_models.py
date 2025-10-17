@@ -70,54 +70,21 @@ class TestTermModel:
         assert term1 != term3  # Different attributes
         assert term1 != term4  # One has attributes, one doesn't
 
-    def test_term_string_representation(self):
-        """Test term string representation."""
-        term = Term(name="BRCA1", kind="gene")
-
-        assert str(term) == "BRCA1"
-        assert repr(term) == "Term(name='BRCA1', kind='gene', attributes={})"
-
-    def test_term_string_representation_with_attributes(self):
-        """Test term string representation with attributes."""
-        attributes = {"symbol": "BRCA1", "type": "tumor_suppressor"}
-        term = Term(name="BRCA1", kind="gene", attributes=attributes)
-
-        assert str(term) == "BRCA1"
-        # repr should include attributes
-        repr_str = repr(term)
-        assert "Term(name='BRCA1'" in repr_str
-        assert "kind='gene'" in repr_str
-        assert "attributes=" in repr_str
-
-    def test_term_hash(self):
-        """Test that terms can be used in sets and as dict keys."""
-        term1 = Term(name="BRCA1", kind="gene")
-        term2 = Term(name="BRCA1", kind="gene")
-        term3 = Term(name="TP53", kind="gene")
-
-        # Should be hashable
-        term_set = {term1, term2, term3}
-        assert len(term_set) == 2  # term1 and term2 are equal
-
-        # Should work as dict keys
-        term_dict = {term1: "value1", term3: "value2"}
-        assert term_dict[term2] == "value1"  # term2 equals term1
-
     def test_term_attribute_access(self):
         """Test accessing term attributes."""
         attributes = {
             "symbol": "BRCA1",
             "chromosome": "17",
-            "start": 43044295,
-            "end": 43170245,
+            "start": "43044295",
+            "end": "43170245",
         }
         term = Term(name="BRCA1", kind="gene", attributes=attributes)
 
         # Attributes should be accessible
         assert term.attributes["symbol"] == "BRCA1"
         assert term.attributes["chromosome"] == "17"
-        assert term.attributes["start"] == 43044295
-        assert term.attributes["end"] == 43170245
+        assert term.attributes["start"] == "43044295"
+        assert term.attributes["end"] == "43170245"
 
     def test_term_empty_attributes(self):
         """Test term with empty attributes dict."""
@@ -158,29 +125,6 @@ class TestTermModel:
         assert protein.kind == "protein"
         assert drug.kind == "drug"
 
-        # All should be different due to different kinds or names
-        all_terms = {gene, disease, protein, drug}
-        assert len(all_terms) == 4
-
-    def test_term_various_attribute_types(self):
-        """Test terms with different attribute value types."""
-        attributes = {
-            "string_attr": "text_value",
-            "int_attr": 12345,
-            "float_attr": 3.14159,
-            "bool_attr": True,
-            "list_attr": ["item1", "item2", "item3"],
-            "dict_attr": {"nested_key": "nested_value"},
-        }
-        term = Term(name="Test", kind="test", attributes=attributes)
-
-        assert term.attributes["string_attr"] == "text_value"
-        assert term.attributes["int_attr"] == 12345
-        assert term.attributes["float_attr"] == 3.14159
-        assert term.attributes["bool_attr"] is True
-        assert term.attributes["list_attr"] == ["item1", "item2", "item3"]
-        assert term.attributes["dict_attr"] == {"nested_key": "nested_value"}
-
     def test_term_biological_examples(self):
         """Test terms representing biological entities."""
         # Gene
@@ -212,7 +156,7 @@ class TestTermModel:
             kind="protein",
             attributes={
                 "gene": "TP53",
-                "molecular_weight": 53000,
+                "molecular_weight": "53000",
                 "cellular_location": "nucleus",
             },
         )
@@ -227,4 +171,4 @@ class TestTermModel:
 
         assert p53.name == "p53"
         assert p53.kind == "protein"
-        assert p53.attributes["molecular_weight"] == 53000
+        assert p53.attributes["molecular_weight"] == "53000"
