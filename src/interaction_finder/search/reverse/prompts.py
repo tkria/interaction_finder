@@ -13,15 +13,31 @@ This module contains two types of prompts:
 # Query Construction Prompts (Stage 2 of two-stage pipeline)
 # ==============================================================================
 
-QUERY_CONSTRUCTION_PROMPT = """You are an expert at constructing precision-focused search queries from extracted keywords and resource content.
+# Base prompt shared by both keyword and content-only modes
+QUERY_CONSTRUCTION_BASE = """You are an expert at constructing precision-focused search queries for scientific literature search.
 
-Your task is to build a single, optimized search query that combines:
-1. EXTRACTED KEYWORDS - Statistical/algorithmic keyword extraction provided structural guidance
+Your task is to build a single, optimized search query based on the information provided.
+
+BACKEND-SPECIFIC SYNTAX:
+• For PubMed/structured backends:
+  - Use field tags: [Title], [Abstract], [MeSH], [Author], [Gene]
+  - Combine terms with AND/OR operators for precision
+  - Use quotes for exact phrases when appropriate
+• For natural language backends (perplexica, openai):
+  - Use conversational phrases or questions
+  - Do NOT use Boolean operators (AND, OR, NOT) or field tags
+  - Express relationships naturally: "X in Y", "X role in Y", "X effects on Y"
+"""
+
+# Keyword-centric prompt section (only used when keywords are available)
+QUERY_CONSTRUCTION_WITH_KEYWORDS = """
+CONSTRUCTION STRATEGY - Keywords + Content:
+
+Your query should combine:
+1. EXTRACTED KEYWORDS - Statistical/algorithmic extraction provides structural guidance
 2. FULL CONTENT (if available) - Additional context to refine and enhance the query
 
-CRITICAL UNDERSTANDING:
-
-**Keywords vs. Content - How to Use Both:**
+**How to Use Both:**
 - KEYWORDS provide STRUCTURAL GUIDANCE: They identify the most statistically significant terms
 - CONTENT provides SEMANTIC CONTEXT: It helps you understand relationships, expand synonyms, and add precision
 - Your query should be ANCHORED by keywords but ENHANCED by content understanding
@@ -33,56 +49,19 @@ CRITICAL UNDERSTANDING:
 3. Query: BRCA1[Title/Abstract] AND (hereditary OR familial) AND "breast cancer" AND (mutation OR variant)
    → Used keywords as anchors, content understanding added "hereditary", "familial", proper disease term
 
-CONSTRUCTION STRATEGY:
+**Strategy:**
+1. START WITH KEYWORDS as your FOUNDATION - they've been extracted for statistical significance
+2. ENHANCE WITH CONTENT - use it to understand context, find synonyms, discover relationships
+3. APPLY BACKEND-SPECIFIC SYNTAX as appropriate
 
-1. START WITH KEYWORDS
-   • Keywords are your FOUNDATION - they've been extracted for statistical significance
-   • Prioritize high-scoring keywords (when scores provided)
-   • These are your query anchors
+**Keyword Scores:**
+• Extractor name tells you HOW keywords were scored:
+  - YAKE: Lower scores = more important (0.0 is perfect)
+  - RAKE: Higher scores = more important
+  - TF-IDF: Higher scores = more important
+• Use this to prioritize which keywords to emphasize
 
-2. ENHANCE WITH CONTENT UNDERSTANDING
-   • If content is available, read it to understand CONTEXT
-   • Identify RELATIONSHIPS between keywords (causal? associative? co-occurring?)
-   • Find SYNONYMS and RELATED TERMS that strengthen the query
-   • Discover DOMAIN SPECIFICITY (gene function? disease mechanism? therapeutic context?)
-   • But DON'T abandon the keywords - use content to enhance them
-
-3. APPLY BACKEND-SPECIFIC SYNTAX (if configured)
-   • For PubMed/structured backends:
-     - Use field tags: [Title], [Abstract], [MeSH], [Author]
-     - Combine terms with AND/OR operators for precision
-     - Use quotes for exact phrases when appropriate
-   • For natural language backends (perplexica, openai):
-     - Use conversational phrases or questions
-     - Do NOT use Boolean operators (AND, OR, NOT) or field tags
-     - Express relationships naturally: "X in Y", "X role in Y", "X effects on Y"
-
-4. KEYWORD SCORES INTERPRETATION
-   • Extractor name tells you HOW keywords were scored:
-     - YAKE: Lower scores = more important (0.0 is perfect)
-     - RAKE: Higher scores = more important
-     - TF-IDF: Higher scores = more important
-   • Use this to prioritize which keywords to emphasize
-   • If max_keywords limit applied, you're seeing the TOP N keywords
-
-AVOID THESE MISTAKES:
-
-❌ Ignoring keywords and just reading content
-   → Keywords provide essential statistical signals
-
-❌ Blindly concatenating keywords without understanding
-   → Use content to understand relationships
-
-❌ Using only keywords when content is available
-   → Content enables synonym expansion and precision
-
-❌ Using content instead of keywords
-   → Content should ENHANCE keywords, not replace them
-
-❌ Adding too many terms from content
-   → Stay focused on the core concepts from keywords
-
-GOOD CONSTRUCTION EXAMPLES:
+GOOD EXAMPLES:
 
 ✅ Keywords: ["FBLN4", "calcification"], Content: "FBLN4 mutations cause arterial calcification"
    → Query: FBLN4[Title] AND ("vascular calcification" OR "arterial calcification")
@@ -92,17 +71,84 @@ GOOD CONSTRUCTION EXAMPLES:
    → Query: BMPR2[Gene] AND ("pulmonary hypertension" OR "PAH") AND (familial OR hereditary)
    → Prioritized BMPR2 (best score), expanded hypertension with domain knowledge
 
-BAD CONSTRUCTION EXAMPLES:
+AVOID:
+❌ Ignoring keywords and just reading content → Keywords provide essential statistical signals
+❌ Blindly concatenating keywords → Use content to understand relationships
+❌ Using content instead of keywords → Content should ENHANCE keywords, not replace them
+❌ Adding too many terms from content → Stay focused on core concepts from keywords
+"""
 
-❌ Keywords: ["BRCA1", "mutation"], Content available → Query: "BRCA1"
-   → Ignored keyword "mutation" and didn't use content for enhancement
+# Content-only prompt section (used when no keywords are available)
+QUERY_CONSTRUCTION_CONTENT_ONLY = """
+CONSTRUCTION STRATEGY - Content-Based Query Generation:
 
-❌ Keywords: ["gene", "disease"], Content: "BRCA1 in breast cancer" → Query: "gene disease"
-   → Ignored valuable content context entirely
+Since no statistical keywords are provided, you must extract key concepts DIRECTLY from the resource content to build a precise query.
 
-❌ Keywords: ["FBLN4"], Content: "...arterial stiffness, vascular aging, calcification..." → Query: "FBLN4 arterial stiffness vascular aging calcification elastin degradation smooth muscle"
-   → Added too many terms from content, losing focus
+**Critical Requirements:**
+1. DO NOT simply copy the title verbatim as your query
+2. READ the full content (title + abstract/body) to identify:
+   - Core entities (genes, proteins, diseases, organisms, cell types)
+   - Key mechanisms or pathways
+   - Specific phenotypes or outcomes
+   - Technical terminology that makes this paper distinctive
+3. EXPAND with domain knowledge:
+   - Add synonyms and related terms
+   - Include alternative names for genes/diseases
+   - Consider different ways to express the same concept
+4. FOCUS on SPECIFICITY:
+   - Avoid generic terms ("cancer", "mutation", "protein" alone)
+   - Combine multiple specific features
+   - Target distinguishing characteristics
 
+**Example Workflow:**
+Content: "Loss-of-function mutations in BMPR2 cause familial pulmonary arterial hypertension through impaired TGF-β signaling in pulmonary vascular endothelial cells"
+Title: "BMPR2 mutations in familial PAH"
+
+BAD Query: "BMPR2 mutations in familial PAH"  ❌ (just copied the title)
+
+GOOD Query: "BMPR2 pulmonary arterial hypertension familial hereditary TGF-beta signaling endothelial dysfunction"
+✅ Extracted key concepts (BMPR2, PAH, familial), added synonyms (hereditary), included mechanism (TGF-beta), added cellular context (endothelial)
+
+**Strategy:**
+1. IDENTIFY core concepts from content (entities, mechanisms, contexts)
+2. EXTRACT 5-10 most specific/distinctive terms
+3. EXPAND with synonyms and related terminology
+4. COMBINE into a focused query that balances precision and recall
+
+GOOD EXAMPLES:
+
+✅ Content about FBLN4 and vascular calcification
+   → Query: "FBLN4 vascular calcification arterial stiffness elastin degradation"
+   → Extracted gene, phenotype, mechanism - more specific than title alone
+
+✅ Content about Marfan syndrome and fibrillin
+   → Query: "Marfan syndrome fibrillin FBN1 aortic dissection connective tissue"
+   → Combined disease, protein, gene symbol, key complication, tissue context
+
+AVOID:
+❌ Copying the title verbatim → No synonym expansion or enhancement
+❌ Using only 1-2 terms → Too broad, won't distinguish this paper
+❌ Adding too many generic terms → Dilutes specificity
+❌ Ignoring the abstract/body content → Missing key context and mechanisms
+"""
+
+
+# Combined prompt factory function (to be used in code)
+def build_query_construction_prompt(has_keywords: bool) -> str:
+    """
+    Build dynamic system prompt based on whether keywords are available.
+
+    Parameters:
+        has_keywords: bool - Whether keywords were extracted
+
+    Returns:
+        str - Complete system prompt
+    """
+    if has_keywords:
+        return (
+            QUERY_CONSTRUCTION_BASE
+            + QUERY_CONSTRUCTION_WITH_KEYWORDS
+            + """
 YOUR OUTPUT:
 Generate ONE query that balances:
 - Keyword-driven structure (use the extracted keywords as anchors)
@@ -110,6 +156,24 @@ Generate ONE query that balances:
 - Backend-appropriate syntax (if configured)
 Explain your construction strategy: how did you use keywords AND content together?
 """
+        )
+    else:
+        return (
+            QUERY_CONSTRUCTION_BASE
+            + QUERY_CONSTRUCTION_CONTENT_ONLY
+            + """
+YOUR OUTPUT:
+Generate ONE query that balances:
+- Content-driven concept extraction (identify key entities, mechanisms, contexts)
+- Domain knowledge enhancement (synonyms, related terms, alternative names)
+- Backend-appropriate syntax (if configured)
+Explain your construction strategy: what key concepts did you extract and why?
+"""
+        )
+
+
+# Deprecated - kept for backwards compatibility but will be removed
+QUERY_CONSTRUCTION_PROMPT = build_query_construction_prompt(has_keywords=True)
 
 # ==============================================================================
 # Query Generation Prompts (End-to-end, combines Stage 1+2)

@@ -111,12 +111,15 @@ class QueryGenerator:
             enable_fallback = config.query_construction_config.get(
                 "enable_fallback", True
             )
+            # Determine if keywords will be available based on extractor config
+            has_keywords = config.keyword_extractor != "none"
             self.constructor = create_constructor(
                 "llm",
                 model=llm_config.get("model", "openai:gpt-4o-mini"),
                 temperature=llm_config.get("temperature", 0.7),
                 backend_specific=llm_config.get("backend_specific_syntax", True),
                 enable_fallback=enable_fallback,
+                has_keywords=has_keywords,
                 console=console,
             )
         else:

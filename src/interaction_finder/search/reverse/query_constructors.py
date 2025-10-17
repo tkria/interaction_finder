@@ -30,7 +30,7 @@ from interaction_finder.search.reverse.models import (
     QueryConstructionContext,
     QueryGenerationError,
 )
-from interaction_finder.search.reverse.prompts import QUERY_CONSTRUCTION_PROMPT
+from interaction_finder.search.reverse.prompts import build_query_construction_prompt
 
 
 # ==============================================================================
@@ -270,6 +270,7 @@ class LLMQueryConstructor(QueryConstructor):
         enable_fallback: bool = True,
         include_scores: bool = True,
         max_keywords: int = 15,
+        has_keywords: bool = True,
         console: Optional[Console] = None,
     ):
         """
@@ -282,6 +283,7 @@ class LLMQueryConstructor(QueryConstructor):
             enable_fallback: bool - Fall back to DirectQueryConstructor on errors (default: True)
             include_scores: bool - Include keyword scores in prompt (default: True)
             max_keywords: int - Maximum keywords to include (default: 15)
+            has_keywords: bool - Whether keywords will be available (default: True)
             console: Optional[Console] - Rich console for logging (optional)
         """
         self._model = model
@@ -290,10 +292,11 @@ class LLMQueryConstructor(QueryConstructor):
         self._enable_fallback = enable_fallback
         self._include_scores = include_scores
         self._max_keywords = max_keywords
+        self._has_keywords = has_keywords
         self._console = console
 
-        # Lazy agent initialization (created on first use)
-        self._agent: Optional[Agent] = None
+        # Create agent with appropriate prompt based on has_keywords
+        self._agent: Optional[Agent] = None  # Lazy initialization
 
         # Create fallback constructor if enabled
         self._fallback: Optional[DirectQueryConstructor] = None
@@ -302,15 +305,19 @@ class LLMQueryConstructor(QueryConstructor):
 
     def _create_agent(self) -> Agent:
         """
-        Create Pydantic AI agent for query construction.
+        Create Pydantic AI agent for query construction with appropriate prompt.
+
+        Uses the has_keywords configuration to determine which prompt variant to use.
 
         Returns:
-            Agent configured for LLMQueryConstructionResponse output
+            Agent configured for LLMQueryConstructionResponse output with
+            appropriate system prompt (keyword-based or content-only)
         """
+        system_prompt = build_query_construction_prompt(self._has_keywords)
         agent = Agent(
             model=self._model,
             output_type=LLMQueryConstructionResponse,
-            system_prompt=QUERY_CONSTRUCTION_PROMPT,
+            system_prompt=system_prompt,
         )
         return agent
 
@@ -412,11 +419,11 @@ class LLMQueryConstructor(QueryConstructor):
         Raises:
             QueryGenerationError: If LLM fails and fallback disabled
         """
-        # Lazy agent initialization
+        # Lazy agent initialization (created once on first use)
         if self._agent is None:
             self._agent = self._create_agent()
 
-        # Build prompt with maximum context
+        # Build user prompt with maximum context
         user_prompt = self._build_prompt(context)
 
         try:
