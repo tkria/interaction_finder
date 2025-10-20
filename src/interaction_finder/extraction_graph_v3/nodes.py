@@ -71,6 +71,20 @@ class ExtractEntities(BaseNode[ExtractionStateV3, ExtractionDepsV3]):
         resources = state.resource_pool.resources
         logger.info(f"Starting entity extraction from {len(resources)} documents")
         logger.info(f"Entity kinds: {deps.get_entity_kinds()}")
+
+        # Validate entity kinds are configured
+        entity_kinds = deps.get_entity_kinds()
+        if not entity_kinds:
+            raise ValueError(
+                "No entity kinds configured. The V3 extraction pipeline requires entity types to be specified.\n\n"
+                "Add a [task.kinds] section to your config.toml file with at least one entity type.\n\n"
+                "Example configuration:\n"
+                "[task.kinds]\n"
+                "gene = { kind = 'gene', form = ['name', 'symbol'] }\n"
+                "disease = { kind = 'disease', form = ['name'] }\n\n"
+                "See documentation for more details on configuring entity kinds."
+            )
+
         logger.info(
             f"Cache enabled: {deps.semantic_cache_enabled and state.cache is not None}"
         )

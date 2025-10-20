@@ -576,6 +576,34 @@ class TestCheckpointCallback:
         assert checkpoint_calls[0][1] is state_v3
 
 
+class TestEntityKindsValidation:
+    """Test validation of entity_kinds configuration."""
+
+    @pytest.mark.asyncio
+    async def test_empty_entity_kinds_raises_error(self, state_v3, deps_v3):
+        """Test that empty entity_kinds raises clear error with helpful message."""
+        # Mock get_entity_kinds to return empty list
+        deps_v3.get_entity_kinds = lambda: []
+
+        ctx = GraphRunContext(state=state_v3, deps=deps_v3)
+
+        node = ExtractEntities()
+
+        # Should raise ValueError with helpful message
+        with pytest.raises(ValueError) as exc_info:
+            await node.run(ctx)
+
+        error_message = str(exc_info.value)
+
+        # Verify error message contains key information
+        assert "No entity kinds configured" in error_message
+        assert "[task.kinds]" in error_message
+        assert "config.toml" in error_message
+        assert "Example configuration" in error_message
+        assert "gene" in error_message
+        assert "disease" in error_message
+
+
 # ============================================================================
 # AssessIndividually Node Tests
 # ============================================================================
