@@ -11,8 +11,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Callable
 
-from pydantic_graph import GraphRunContext
-
 from .graph import extraction_graph_v3
 from .state import ExtractionStateV3
 from .deps import ExtractionDepsV3
@@ -346,12 +344,37 @@ async def run_extraction_v3(
 
     # Run graph
     logger.info(f"Running extraction graph from stage: {start_stage}")
-    ctx = GraphRunContext(state=state, deps=deps)
+
+    # Map stage name to node instance
+    from .nodes import (
+        ExtractEntities,
+        AssessIndividually,
+        GeneratePairCandidates,
+        EvaluatePairs,
+    )
+
+    stage_to_node = {
+        "ExtractEntities": ExtractEntities(),
+        "extraction": ExtractEntities(),  # Checkpoint uses "extraction"
+        "AssessIndividually": AssessIndividually(),
+        "assessment": AssessIndividually(),  # Checkpoint uses "assessment"
+        "GeneratePairCandidates": GeneratePairCandidates(),
+        "candidates": GeneratePairCandidates(),  # Checkpoint uses "candidates"
+        "EvaluatePairs": EvaluatePairs(),
+        "evaluation": EvaluatePairs(),  # Checkpoint uses "evaluation"
+        "final": EvaluatePairs(),  # Checkpoint uses "final" for completed state
+    }
+
+    start_node = stage_to_node.get(start_stage)
+    if start_node is None:
+        raise ValueError(
+            f"Unknown start stage: {start_stage}. Valid stages: {list(stage_to_node.keys())}"
+        )
 
     try:
-        # Run the graph from the start stage
-        # pydantic-graph 1.0.0 API uses node names as strings
-        await extraction_graph_v3.run(start_stage, ctx)
+        # Run the graph from the start node
+        # Correct pydantic-graph API: run(node_instance, state=state, deps=deps)
+        await extraction_graph_v3.run(start_node, state=state, deps=deps)
 
     except Exception as e:
         logger.error(f"Pipeline execution failed: {e}", exc_info=True)
