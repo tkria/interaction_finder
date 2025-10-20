@@ -397,11 +397,11 @@ def find_quote_with_fuzzy_matching(
     Find quote in resource with multi-strategy matching including fuzzy matching.
 
     Tries multiple strategies in order:
-    1. Exact match via resource.quote()
-    2. Normalized match (existing normalization)
-    3. Shorthand expansion (e.g., "ISCA1,2" → "ISCA1" or "ISCA2")
-    4. Fuzzy matching with auto-correction (≥90% similarity)
-    5. Fuzzy matching with suggestion (75-90% similarity)
+    0. Original text verbatim match (preserves formatting)
+    1. Normalized quote match (handles formatting differences)
+    2. Shorthand expansion (e.g., "ISCA1,2" → "ISCA1" or "ISCA2")
+    3. Fuzzy matching with auto-correction (≥90% similarity)
+    4. Fuzzy matching with suggestion (75-90% similarity)
 
     Args:
         resource: Resource to search within
@@ -415,24 +415,40 @@ def find_quote_with_fuzzy_matching(
         - None: If no match found (<75% similarity)
 
     Notes:
+        - Strategy 0 searches original text verbatim (preserves markdown, special chars)
+        - Strategy 1 normalizes the quote before searching (handles formatting)
         - Fuzzy matching searches against entire normalized document text
         - High auto-correct threshold (90%) prevents false positives
         - Suggestion threshold (75%) provides helpful hints to LLM
     """
-    # Strategy 1: Try exact match
-    try:
-        return resource.quote(quote_text)
-    except ValueError:
-        pass
+    # Strategy 0: Try verbatim match in original text (preserves formatting)
+    spans = []
+    pos = 0
+    while True:
+        idx = resource.text.find(quote_text, pos)
+        if idx == -1:
+            break
+        spans.append((idx, idx + len(quote_text)))
+        pos = idx + 1
 
-    # Strategy 2: Try normalized match
+    if spans:
+        # Create ResourceQuote directly with found spans
+        return ResourceQuote(
+            resource=resource,
+            text=quote_text,
+            spans=spans,
+            query_text=quote_text,
+            is_disjoint=False,
+        )
+
+    # Strategy 1: Try normalized quote match (handles formatting differences)
     normalized_quote = normalize_text_for_matching(quote_text)
     try:
         return resource.quote(normalized_quote)
     except ValueError:
         pass
 
-    # Strategy 3: Try shorthand expansion
+    # Strategy 2: Try shorthand expansion
     expanded_variants = expand_scientific_shorthand(quote_text)
     for variant in expanded_variants:
         try:
@@ -440,7 +456,7 @@ def find_quote_with_fuzzy_matching(
         except ValueError:
             continue
 
-    # Strategy 4 & 5: Try fuzzy matching against entire document
+    # Strategy 3 & 4: Try fuzzy matching against entire document
     # Use resource.normalized_text as single candidate segment
     fuzzy_result = fuzzy_match_quote(
         quote_text,

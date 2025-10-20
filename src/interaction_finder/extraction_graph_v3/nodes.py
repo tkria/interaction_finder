@@ -258,6 +258,7 @@ class ExtractEntities(BaseNode[ExtractionStateV3, ExtractionDepsV3]):
                 quote_text = quote_text.strip()
 
                 # Try fuzzy matching with configurable thresholds
+                # Automatically tries verbatim match first, then normalized, then fuzzy
                 result = find_quote_with_fuzzy_matching(
                     resource=resource,
                     quote_text=quote_text,

@@ -516,6 +516,61 @@ class TestFindQuoteWithFuzzyMatching:
             # Otherwise should return None or suggestion
             assert result is None or isinstance(result, FuzzySuggestion)
 
+    def test_markdown_formatted_quotes(self):
+        """Test that markdown-formatted quotes match in original text (regression for v3 pipeline)."""
+        resource = Resource(
+            id=ResourceId(url="https://example.com/doc", counter=1),
+            title="Test Doc",
+            text="The _MYMK_ gene and _KCNK3_ mutations (c.608 G→A) are associated with disease.",
+        )
+
+        # Test underscore-wrapped gene name (common markdown emphasis)
+        result = find_quote_with_fuzzy_matching(resource, "_MYMK_")
+        assert isinstance(result, ResourceQuote)
+        assert result.query_text == "_MYMK_"
+        assert len(result.spans) == 1
+
+        # Test quote with special arrow character
+        result = find_quote_with_fuzzy_matching(resource, "c.608 G→A")
+        assert isinstance(result, ResourceQuote)
+        assert result.query_text == "c.608 G→A"
+
+        # Test gene name with underscores and context
+        result = find_quote_with_fuzzy_matching(resource, "_KCNK3_ mutations")
+        assert isinstance(result, ResourceQuote)
+        assert result.query_text == "_KCNK3_ mutations"
+
+    def test_bold_markdown_quotes(self):
+        """Test that bold markdown formatting is preserved in quote matching."""
+        resource = Resource(
+            id=ResourceId(url="https://example.com/doc", counter=1),
+            title="Test Doc",
+            text="The **TBX5 gene** is associated with Holt-Oram syndrome.",
+        )
+
+        # Test bold-formatted gene name
+        result = find_quote_with_fuzzy_matching(resource, "**TBX5 gene**")
+        assert isinstance(result, ResourceQuote)
+        assert result.query_text == "**TBX5 gene**"
+
+    def test_special_characters_in_quotes(self):
+        """Test that special scientific characters are preserved in matching."""
+        resource = Resource(
+            id=ResourceId(url="https://example.com/doc", counter=1),
+            title="Test Doc",
+            text="Mutation frequency is ±5% with α-synuclein levels at 2.5±0.3 μg/mL.",
+        )
+
+        # Test plus-minus symbol
+        result = find_quote_with_fuzzy_matching(resource, "±5%")
+        assert isinstance(result, ResourceQuote)
+        assert result.query_text == "±5%"
+
+        # Test Greek letter and measurement
+        result = find_quote_with_fuzzy_matching(resource, "2.5±0.3 μg/mL")
+        assert isinstance(result, ResourceQuote)
+        assert result.query_text == "2.5±0.3 μg/mL"
+
 
 class TestResourceId:
     """Test ResourceId creation and validation."""
