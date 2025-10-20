@@ -32,8 +32,7 @@ async def test_load_documents_success(tmp_path):
         "Chunk 2 text here.",
     ]
     page_fetcher.get_markdown.return_value = (
-        "Chunk 1 text here.\n\nChunk 2 text here.",
-        "Test Document",
+        "# Test Document\n\nChunk 1 text here.\n\nChunk 2 text here."
     )
 
     urls = ["http://example.com/doc1"]
@@ -59,7 +58,7 @@ async def test_load_documents_handles_failures(tmp_path):
         Exception("Network error"),
         ["Chunk text"],
     ]
-    page_fetcher.get_markdown.return_value = ("Chunk text", "Test Document")
+    page_fetcher.get_markdown.return_value = "# Test Document\n\nChunk text"
 
     urls = ["http://example.com/fail", "http://example.com/success"]
 
@@ -208,7 +207,7 @@ async def test_run_extraction_v3_basic(tmp_path):
     # Mock page fetcher
     page_fetcher = AsyncMock()
     page_fetcher.get_chunks.return_value = ["Sample content"]
-    page_fetcher.get_markdown.return_value = ("Sample content", "Test Doc")
+    page_fetcher.get_markdown.return_value = "# Test Doc\n\nSample content"
 
     # Mock config
     config = MagicMock()
@@ -301,7 +300,7 @@ async def test_run_extraction_v3_with_checkpoint_resume(tmp_path):
     # Mock page fetcher with content containing BMPR2
     page_fetcher = AsyncMock()
     page_fetcher.get_chunks.return_value = ["BMPR2 gene content"]
-    page_fetcher.get_markdown.return_value = ("BMPR2 gene content", "Test Doc")
+    page_fetcher.get_markdown.return_value = "# Test Doc\n\nBMPR2 gene content"
 
     # Mock config
     config = MagicMock()

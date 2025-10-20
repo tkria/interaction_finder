@@ -50,8 +50,19 @@ async def _load_documents(urls: List[str], page_fetcher: PageFetcher) -> Resourc
                 logger.warning(f"No chunks retrieved from {url}")
                 continue
 
-            # Get full document and title
-            markdown, title = await page_fetcher.get_markdown(url)
+            # Get full document
+            markdown = await page_fetcher.get_markdown(url)
+            # Extract title from markdown content
+            title = f"Document from {url}"
+            try:
+                lines = markdown.split("\n")
+                for line in lines[:10]:  # Check first 10 lines
+                    line = line.strip()
+                    if line.startswith("# "):
+                        title = line[2:].strip()
+                        break
+            except Exception:
+                pass  # Use default title on any error
             if not markdown:
                 logger.warning(f"No markdown content retrieved from {url}")
                 # Fallback to joined chunks
