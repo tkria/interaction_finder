@@ -276,6 +276,7 @@ async def run_extraction_v3(
     verbose: bool = False,
     checkpoint_path: Optional[Path] = None,
     save_callback: Optional[Callable] = None,
+    target_term: Optional[str] = None,
 ) -> BatchExtractionResultV3:
     """
     Run the V3 extraction pipeline.
@@ -291,6 +292,7 @@ async def run_extraction_v3(
         verbose: Enable Rich progress displays
         checkpoint_path: Path to resume from (if exists) or save to (if new run)
         save_callback: Callback for incremental saves (not currently used)
+        target_term: Optional target term for entity extraction context
 
     Returns:
         BatchExtractionResultV3 with pairs, metadata, cache stats, and stage metrics
@@ -329,6 +331,7 @@ async def run_extraction_v3(
         config,
         page_fetcher,
         model=model,
+        target_term=target_term,
         checkpoint_callback=checkpoint_callback if checkpoint_path else None,
     )
 
@@ -500,6 +503,7 @@ async def extract_from_urls_v3(
         verbose=verbose,
         checkpoint_path=checkpoint_path,
         save_callback=save_callback,
+        target_term=target_term,
     )
 
     return result
