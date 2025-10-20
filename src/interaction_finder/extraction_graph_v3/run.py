@@ -320,17 +320,16 @@ async def run_extraction_v3(
         start_stage = "ExtractEntities"  # First node name
 
     # Initialize dependencies
+    # Create async checkpoint callback if checkpoint_path provided
+    async def checkpoint_callback(stage: str, state_arg: ExtractionStateV3) -> None:
+        """Async wrapper for save_checkpoint."""
+        await save_checkpoint(stage, state_arg, checkpoint_path.parent)
+
     deps = ExtractionDepsV3.from_config(
         config,
         page_fetcher,
         model=model,
-        checkpoint_callback=(
-            lambda stage, state_arg: save_checkpoint(
-                stage, state_arg, checkpoint_path.parent
-            )
-            if checkpoint_path
-            else None
-        ),
+        checkpoint_callback=checkpoint_callback if checkpoint_path else None,
     )
 
     # Initialize cache if enabled
