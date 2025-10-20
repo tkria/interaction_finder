@@ -59,7 +59,7 @@ class ExtractEntities(BaseNode[ExtractionStateV3, ExtractionDepsV3]):
 
     async def run(
         self, ctx: GraphRunContext[ExtractionStateV3, ExtractionDepsV3]
-    ) -> End:
+    ) -> "AssessIndividually":
         """
         Extract entities from all documents with parallel processing.
 
@@ -113,7 +113,7 @@ class ExtractEntities(BaseNode[ExtractionStateV3, ExtractionDepsV3]):
         if hasattr(deps, "checkpoint_callback") and deps.checkpoint_callback:
             await deps.checkpoint_callback("extraction", state)
 
-        return None
+        return AssessIndividually()
 
     async def _extract_from_document(
         self,
@@ -367,7 +367,7 @@ class AssessIndividually(BaseNode[ExtractionStateV3, ExtractionDepsV3]):
 
     async def run(
         self, ctx: GraphRunContext[ExtractionStateV3, ExtractionDepsV3]
-    ) -> End:
+    ) -> "GeneratePairCandidates":
         """
         Assess all entities concurrently with cache checking.
 
@@ -411,7 +411,7 @@ class AssessIndividually(BaseNode[ExtractionStateV3, ExtractionDepsV3]):
         if hasattr(deps, "checkpoint_callback") and deps.checkpoint_callback:
             await deps.checkpoint_callback("assessment", state)
 
-        return None
+        return GeneratePairCandidates()
 
     async def _assess_one_entity(
         self,
@@ -623,7 +623,7 @@ class GeneratePairCandidates(BaseNode[ExtractionStateV3, ExtractionDepsV3]):
 
     async def run(
         self, ctx: GraphRunContext[ExtractionStateV3, ExtractionDepsV3]
-    ) -> End:
+    ) -> "EvaluatePairs":
         """
         Generate pair candidates using co-occurrence and assessment suggestions.
 
@@ -689,7 +689,7 @@ class GeneratePairCandidates(BaseNode[ExtractionStateV3, ExtractionDepsV3]):
         if hasattr(deps, "checkpoint_callback") and deps.checkpoint_callback:
             await deps.checkpoint_callback("candidates", state)
 
-        return None
+        return EvaluatePairs()
 
     def _find_cooccurrence_pairs(
         self, state: ExtractionStateV3, deps: ExtractionDepsV3
@@ -979,7 +979,7 @@ class EvaluatePairs(BaseNode[ExtractionStateV3, ExtractionDepsV3]):
         if hasattr(deps, "checkpoint_callback") and deps.checkpoint_callback:
             await deps.checkpoint_callback("final", state)
 
-        return None
+        return End(state)
 
     async def _evaluate_one_pair(
         self,
