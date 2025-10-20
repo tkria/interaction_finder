@@ -201,8 +201,8 @@ class ExtractEntities(BaseNode[ExtractionStateV3, ExtractionDepsV3]):
             state.metrics.entities_extraction_successes += 1
             state.metrics.extraction_time += duration
 
-            logger.debug(
-                f"Extracted {len(result.entities)} entities from {resource.title} "
+            logger.info(
+                f"Extracted {len(result.output.entities)} entities from {resource.title} "
                 f"in {duration:.2f}s"
             )
         except Exception as e:
@@ -214,7 +214,7 @@ class ExtractEntities(BaseNode[ExtractionStateV3, ExtractionDepsV3]):
             return []
 
         # Convert to EntityWithQuotes with validated quotes
-        entities = self._create_entities_with_quotes(result, resource, deps)
+        entities = self._create_entities_with_quotes(result.output, resource, deps)
 
         # Save to cache if enabled
         if cache and deps.semantic_cache_enabled and entities:
@@ -498,7 +498,7 @@ class AssessIndividually(BaseNode[ExtractionStateV3, ExtractionDepsV3]):
 
             logger.debug(
                 f"Assessed {entity.name} in {duration:.2f}s: "
-                f"potential={result.potential}, related={len(result.related)}"
+                f"potential={result.output.potential}, related={len(result.output.related)}"
             )
         except Exception as e:
             duration = time.time() - start_time
@@ -517,7 +517,7 @@ class AssessIndividually(BaseNode[ExtractionStateV3, ExtractionDepsV3]):
             )
 
         # Convert to IndividualAssessment with validated quotes
-        assessment = self._create_assessment_with_quotes(entity, result, state)
+        assessment = self._create_assessment_with_quotes(entity, result.output, state)
 
         # Save to cache if enabled
         if cache and deps.semantic_cache_enabled:
@@ -1069,8 +1069,8 @@ class EvaluatePairs(BaseNode[ExtractionStateV3, ExtractionDepsV3]):
 
             logger.debug(
                 f"Evaluated {candidate.entity_a.name} - {candidate.entity_b.name} "
-                f"in {duration:.2f}s: relationship={result.relationship_exists}, "
-                f"confidence={result.confidence}"
+                f"in {duration:.2f}s: relationship={result.output.relationship_exists}, "
+                f"confidence={result.output.confidence}"
             )
         except Exception as e:
             duration = time.time() - start_time
@@ -1080,7 +1080,7 @@ class EvaluatePairs(BaseNode[ExtractionStateV3, ExtractionDepsV3]):
             return None
 
         # Reject if no relationship
-        if not result.relationship_exists:
+        if not result.output.relationship_exists:
             logger.debug(
                 f"Rejected pair {candidate.entity_a.name} - {candidate.entity_b.name}: "
                 f"no relationship found"
@@ -1088,7 +1088,7 @@ class EvaluatePairs(BaseNode[ExtractionStateV3, ExtractionDepsV3]):
             return None
 
         # Convert to EntityPairOut with validated quotes
-        pair = self._create_pair_with_quotes(candidate, result, state)
+        pair = self._create_pair_with_quotes(candidate, result.output, state)
 
         # Validate provenance
         if not pair.validate_provenance():

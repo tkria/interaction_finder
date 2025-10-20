@@ -33,6 +33,18 @@ from interaction_finder.resources import ResourcePool
 from interaction_finder.models import Term
 
 
+class MockAgentRunResult:
+    """
+    Mock wrapper for Pydantic-AI v1.0.0 AgentRunResult.
+
+    Wraps the output data to match the real AgentRunResult.output API,
+    allowing tests to accurately reflect production behavior.
+    """
+
+    def __init__(self, output):
+        self.output = output
+
+
 @pytest.fixture
 def mock_config():
     """Create a minimal mock config."""
@@ -98,27 +110,29 @@ def state_v3(sample_resource_pool):
 @pytest.fixture
 def mock_agent_result():
     """Create mock agent result with entities."""
-    return SimpleEntityListOut(
-        entities=[
-            SimpleEntityOut(
-                name="BRCA1",
-                kind="gene",
-                aliases=["BRCA1"],
-                quotes=[
-                    "BRCA1 is a tumor suppressor gene associated with breast cancer.",
-                ],
-            ),
-            SimpleEntityOut(
-                name="breast cancer",
-                kind="disease",
-                aliases=["breast cancer"],
-                quotes=[
-                    "Mutations in BRCA1 significantly increase the risk of developing breast cancer.",
-                ],
-            ),
-        ],
-        entity_kinds=["gene", "disease"],
-        reasoning="Extracted BRCA1 gene and breast cancer disease from document",
+    return MockAgentRunResult(
+        SimpleEntityListOut(
+            entities=[
+                SimpleEntityOut(
+                    name="BRCA1",
+                    kind="gene",
+                    aliases=["BRCA1"],
+                    quotes=[
+                        "BRCA1 is a tumor suppressor gene associated with breast cancer.",
+                    ],
+                ),
+                SimpleEntityOut(
+                    name="breast cancer",
+                    kind="disease",
+                    aliases=["breast cancer"],
+                    quotes=[
+                        "Mutations in BRCA1 significantly increase the risk of developing breast cancer.",
+                    ],
+                ),
+            ],
+            entity_kinds=["gene", "disease"],
+            reasoning="Extracted BRCA1 gene and breast cancer disease from document",
+        )
     )
 
 
@@ -263,17 +277,19 @@ class TestEntityDeduplication:
             else:
                 quote = "BRCA1 plays a critical role."
 
-            return SimpleEntityListOut(
-                entities=[
-                    SimpleEntityOut(
-                        name="BRCA1",
-                        kind="gene",
-                        aliases=["BRCA1"],
-                        quotes=[quote],
-                    ),
-                ],
-                entity_kinds=["gene"],
-                reasoning="Found BRCA1",
+            return MockAgentRunResult(
+                SimpleEntityListOut(
+                    entities=[
+                        SimpleEntityOut(
+                            name="BRCA1",
+                            kind="gene",
+                            aliases=["BRCA1"],
+                            quotes=[quote],
+                        ),
+                    ],
+                    entity_kinds=["gene"],
+                    reasoning="Found BRCA1",
+                )
             )
 
         mock_agent.run.side_effect = lambda text, deps: make_result(text)
@@ -333,19 +349,21 @@ class TestQuoteValidation:
         ctx = GraphRunContext(state=state_v3, deps=deps_v3)
 
         # Mock agent with slightly different quote (should fuzzy match but be below auto-correct)
-        mock_result = SimpleEntityListOut(
-            entities=[
-                SimpleEntityOut(
-                    name="BRCA1",
-                    kind="gene",
-                    aliases=["BRCA1"],
-                    quotes=[
-                        "BRCA1 is tumor suppressor gene",  # Missing "a"
-                    ],
-                ),
-            ],
-            entity_kinds=["gene"],
-            reasoning="Found BRCA1",
+        mock_result = MockAgentRunResult(
+            SimpleEntityListOut(
+                entities=[
+                    SimpleEntityOut(
+                        name="BRCA1",
+                        kind="gene",
+                        aliases=["BRCA1"],
+                        quotes=[
+                            "BRCA1 is tumor suppressor gene",  # Missing "a"
+                        ],
+                    ),
+                ],
+                entity_kinds=["gene"],
+                reasoning="Found BRCA1",
+            )
         )
 
         mock_agent = AsyncMock()
@@ -378,19 +396,21 @@ class TestQuoteValidation:
         ctx = GraphRunContext(state=state_v3, deps=deps_v3)
 
         # Mock agent with invalid quote
-        mock_result = SimpleEntityListOut(
-            entities=[
-                SimpleEntityOut(
-                    name="BRCA1",
-                    kind="gene",
-                    aliases=["BRCA1"],
-                    quotes=[
-                        "This quote does not exist in the document at all.",
-                    ],
-                ),
-            ],
-            entity_kinds=["gene"],
-            reasoning="Found BRCA1",
+        mock_result = MockAgentRunResult(
+            SimpleEntityListOut(
+                entities=[
+                    SimpleEntityOut(
+                        name="BRCA1",
+                        kind="gene",
+                        aliases=["BRCA1"],
+                        quotes=[
+                            "This quote does not exist in the document at all.",
+                        ],
+                    ),
+                ],
+                entity_kinds=["gene"],
+                reasoning="Found BRCA1",
+            )
         )
 
         mock_agent = AsyncMock()
@@ -436,17 +456,19 @@ class TestParallelProcessing:
         async def mock_agent_run(text, deps):
             call_times.append(asyncio.get_event_loop().time())
             await asyncio.sleep(0.1)  # Simulate LLM call
-            return SimpleEntityListOut(
-                entities=[
-                    SimpleEntityOut(
-                        name="BRCA1",
-                        kind="gene",
-                        aliases=["BRCA1"],
-                        quotes=["BRCA1 is important"],
-                    ),
-                ],
-                entity_kinds=["gene"],
-                reasoning="Found BRCA1",
+            return MockAgentRunResult(
+                SimpleEntityListOut(
+                    entities=[
+                        SimpleEntityOut(
+                            name="BRCA1",
+                            kind="gene",
+                            aliases=["BRCA1"],
+                            quotes=["BRCA1 is important"],
+                        ),
+                    ],
+                    entity_kinds=["gene"],
+                    reasoning="Found BRCA1",
+                )
             )
 
         mock_agent = AsyncMock()
@@ -515,17 +537,19 @@ class TestErrorHandling:
             if call_count[0] == 1:
                 raise Exception("First document failed")
 
-            return SimpleEntityListOut(
-                entities=[
-                    SimpleEntityOut(
-                        name="BRCA2",
-                        kind="gene",
-                        aliases=["BRCA2"],
-                        quotes=["BRCA2 is another gene."],
-                    ),
-                ],
-                entity_kinds=["gene"],
-                reasoning="Found BRCA2",
+            return MockAgentRunResult(
+                SimpleEntityListOut(
+                    entities=[
+                        SimpleEntityOut(
+                            name="BRCA2",
+                            kind="gene",
+                            aliases=["BRCA2"],
+                            quotes=["BRCA2 is another gene."],
+                        ),
+                    ],
+                    entity_kinds=["gene"],
+                    reasoning="Found BRCA2",
+                )
             )
 
         mock_agent = AsyncMock()
@@ -612,14 +636,16 @@ class TestEntityKindsValidation:
 @pytest.fixture
 def mock_assessment_result():
     """Create mock assessment agent result."""
-    return AssessmentOut(
-        potential="high",
-        related=["breast cancer", "ovarian cancer"],
-        evidence=[
-            "BRCA1 is a tumor suppressor gene associated with breast cancer.",
-            "BRCA1 mutations are also linked to ovarian cancer.",
-        ],
-        reasoning="BRCA1 shows high relationship potential with multiple cancers",
+    return MockAgentRunResult(
+        AssessmentOut(
+            potential="high",
+            related=["breast cancer", "ovarian cancer"],
+            evidence=[
+                "BRCA1 is a tumor suppressor gene associated with breast cancer.",
+                "BRCA1 mutations are also linked to ovarian cancer.",
+            ],
+            reasoning="BRCA1 shows high relationship potential with multiple cancers",
+        )
     )
 
 
@@ -768,11 +794,13 @@ class TestRelatedEntitiesExtraction:
         ctx = GraphRunContext(state=state_with_entities, deps=deps_v3)
 
         # Mock agent with specific related entities
-        mock_result = AssessmentOut(
-            potential="high",
-            related=["breast cancer", "ovarian cancer", "TP53"],
-            evidence=["BRCA1 interacts with these entities"],
-            reasoning="High potential for relationships",
+        mock_result = MockAgentRunResult(
+            AssessmentOut(
+                potential="high",
+                related=["breast cancer", "ovarian cancer", "TP53"],
+                evidence=["BRCA1 interacts with these entities"],
+                reasoning="High potential for relationships",
+            )
         )
 
         mock_agent = AsyncMock()
@@ -801,11 +829,13 @@ class TestRelatedEntitiesExtraction:
         ctx = GraphRunContext(state=state_with_entities, deps=deps_v3)
 
         # Mock agent with low potential and no related entities
-        mock_result = AssessmentOut(
-            potential="low",
-            related=[],
-            evidence=[],
-            reasoning="Low potential for relationships",
+        mock_result = MockAgentRunResult(
+            AssessmentOut(
+                potential="low",
+                related=[],
+                evidence=[],
+                reasoning="Low potential for relationships",
+            )
         )
 
         mock_agent = AsyncMock()
@@ -834,13 +864,15 @@ class TestEvidenceQuoteValidation:
         ctx = GraphRunContext(state=state_with_entities, deps=deps_v3)
 
         # Mock agent with evidence that exists in resource
-        mock_result = AssessmentOut(
-            potential="high",
-            related=["breast cancer"],
-            evidence=[
-                "BRCA1 is a tumor suppressor gene associated with breast cancer.",
-            ],
-            reasoning="Strong evidence for relationship",
+        mock_result = MockAgentRunResult(
+            AssessmentOut(
+                potential="high",
+                related=["breast cancer"],
+                evidence=[
+                    "BRCA1 is a tumor suppressor gene associated with breast cancer.",
+                ],
+                reasoning="Strong evidence for relationship",
+            )
         )
 
         mock_agent = AsyncMock()
@@ -867,13 +899,15 @@ class TestEvidenceQuoteValidation:
         ctx = GraphRunContext(state=state_with_entities, deps=deps_v3)
 
         # Mock agent with evidence that doesn't exist in resource
-        mock_result = AssessmentOut(
-            potential="high",
-            related=["breast cancer"],
-            evidence=[
-                "This evidence quote does not exist in any resource document.",
-            ],
-            reasoning="Some reasoning",
+        mock_result = MockAgentRunResult(
+            AssessmentOut(
+                potential="high",
+                related=["breast cancer"],
+                evidence=[
+                    "This evidence quote does not exist in any resource document.",
+                ],
+                reasoning="Some reasoning",
+            )
         )
 
         mock_agent = AsyncMock()
@@ -899,11 +933,13 @@ class TestConfidenceMapping:
         """Test high potential maps to 0.9 confidence."""
         ctx = GraphRunContext(state=state_with_entities, deps=deps_v3)
 
-        mock_result = AssessmentOut(
-            potential="high",
-            related=["breast cancer"],
-            evidence=[],
-            reasoning="High potential",
+        mock_result = MockAgentRunResult(
+            AssessmentOut(
+                potential="high",
+                related=["breast cancer"],
+                evidence=[],
+                reasoning="High potential",
+            )
         )
 
         mock_agent = AsyncMock()
@@ -924,11 +960,13 @@ class TestConfidenceMapping:
         """Test medium potential maps to 0.7 confidence."""
         ctx = GraphRunContext(state=state_with_entities, deps=deps_v3)
 
-        mock_result = AssessmentOut(
-            potential="medium",
-            related=["breast cancer"],
-            evidence=[],
-            reasoning="Medium potential",
+        mock_result = MockAgentRunResult(
+            AssessmentOut(
+                potential="medium",
+                related=["breast cancer"],
+                evidence=[],
+                reasoning="Medium potential",
+            )
         )
 
         mock_agent = AsyncMock()
@@ -949,11 +987,13 @@ class TestConfidenceMapping:
         """Test low potential maps to 0.5 confidence."""
         ctx = GraphRunContext(state=state_with_entities, deps=deps_v3)
 
-        mock_result = AssessmentOut(
-            potential="low",
-            related=[],
-            evidence=[],
-            reasoning="Low potential",
+        mock_result = MockAgentRunResult(
+            AssessmentOut(
+                potential="low",
+                related=[],
+                evidence=[],
+                reasoning="Low potential",
+            )
         )
 
         mock_agent = AsyncMock()
@@ -974,11 +1014,13 @@ class TestConfidenceMapping:
         """Test none potential maps to 0.0 confidence."""
         ctx = GraphRunContext(state=state_with_entities, deps=deps_v3)
 
-        mock_result = AssessmentOut(
-            potential="none",
-            related=[],
-            evidence=[],
-            reasoning="No potential",
+        mock_result = MockAgentRunResult(
+            AssessmentOut(
+                potential="none",
+                related=[],
+                evidence=[],
+                reasoning="No potential",
+            )
         )
 
         mock_agent = AsyncMock()
@@ -1031,11 +1073,13 @@ class TestConcurrentAssessment:
         async def mock_agent_run(prompt, deps):
             call_times.append(asyncio.get_event_loop().time())
             await asyncio.sleep(0.1)  # Simulate LLM call
-            return AssessmentOut(
-                potential="high",
-                related=["breast cancer"],
-                evidence=[],
-                reasoning="Gene with cancer relationship",
+            return MockAgentRunResult(
+                AssessmentOut(
+                    potential="high",
+                    related=["breast cancer"],
+                    evidence=[],
+                    reasoning="Gene with cancer relationship",
+                )
             )
 
         mock_agent = AsyncMock()
@@ -1122,11 +1166,13 @@ class TestAssessmentErrorHandling:
             if call_count[0] == 1:
                 raise Exception("First assessment failed")
 
-            return AssessmentOut(
-                potential="high",
-                related=["breast cancer"],
-                evidence=[],
-                reasoning="Good assessment",
+            return MockAgentRunResult(
+                AssessmentOut(
+                    potential="high",
+                    related=["breast cancer"],
+                    evidence=[],
+                    reasoning="Good assessment",
+                )
             )
 
         mock_agent = AsyncMock()
@@ -1712,27 +1758,31 @@ def state_with_candidates():
 @pytest.fixture
 def mock_pair_evaluation_result_positive():
     """Create mock pair evaluation result with relationship."""
-    return PairEvaluationOut(
-        relationship_exists=True,
-        relationship_type="gene-disease interaction",
-        confidence="high",
-        evidence=[
-            "BRCA1 is a tumor suppressor gene associated with breast cancer.",
-            "Mutations in BRCA1 significantly increase the risk of developing breast cancer.",
-        ],
-        reasoning="Strong evidence for BRCA1-breast cancer relationship",
+    return MockAgentRunResult(
+        PairEvaluationOut(
+            relationship_exists=True,
+            relationship_type="gene-disease interaction",
+            confidence="high",
+            evidence=[
+                "BRCA1 is a tumor suppressor gene associated with breast cancer.",
+                "Mutations in BRCA1 significantly increase the risk of developing breast cancer.",
+            ],
+            reasoning="Strong evidence for BRCA1-breast cancer relationship",
+        )
     )
 
 
 @pytest.fixture
 def mock_pair_evaluation_result_negative():
     """Create mock pair evaluation result without relationship."""
-    return PairEvaluationOut(
-        relationship_exists=False,
-        relationship_type="gene-disease interaction",
-        confidence="low",
-        evidence=[],
-        reasoning="No evidence for direct relationship",
+    return MockAgentRunResult(
+        PairEvaluationOut(
+            relationship_exists=False,
+            relationship_type="gene-disease interaction",
+            confidence="low",
+            evidence=[],
+            reasoning="No evidence for direct relationship",
+        )
     )
 
 
@@ -1796,22 +1846,26 @@ class TestEvaluatePairsBasic:
         async def mock_agent_run(prompt, deps):
             call_count[0] += 1
             if call_count[0] == 1:
-                return PairEvaluationOut(
-                    relationship_exists=True,
-                    relationship_type="gene-disease interaction",
-                    confidence="high",
-                    evidence=[
-                        "BRCA1 is a tumor suppressor gene associated with breast cancer."
-                    ],
-                    reasoning="Accepted",
+                return MockAgentRunResult(
+                    PairEvaluationOut(
+                        relationship_exists=True,
+                        relationship_type="gene-disease interaction",
+                        confidence="high",
+                        evidence=[
+                            "BRCA1 is a tumor suppressor gene associated with breast cancer."
+                        ],
+                        reasoning="Accepted",
+                    )
                 )
             else:
-                return PairEvaluationOut(
-                    relationship_exists=False,
-                    relationship_type="gene-disease interaction",
-                    confidence="low",
-                    evidence=[],
-                    reasoning="Rejected",
+                return MockAgentRunResult(
+                    PairEvaluationOut(
+                        relationship_exists=False,
+                        relationship_type="gene-disease interaction",
+                        confidence="low",
+                        evidence=[],
+                        reasoning="Rejected",
+                    )
                 )
 
         mock_agent = AsyncMock()
@@ -1963,14 +2017,16 @@ class TestProvenanceValidation:
         ctx = GraphRunContext(state=state_with_candidates, deps=deps_v3)
 
         # Mock agent with evidence that doesn't exist in documents
-        mock_result = PairEvaluationOut(
-            relationship_exists=True,
-            relationship_type="gene-disease interaction",
-            confidence="high",
-            evidence=[
-                "This evidence quote does not exist in any document at all.",
-            ],
-            reasoning="Hallucinated evidence",
+        mock_result = MockAgentRunResult(
+            PairEvaluationOut(
+                relationship_exists=True,
+                relationship_type="gene-disease interaction",
+                confidence="high",
+                evidence=[
+                    "This evidence quote does not exist in any document at all.",
+                ],
+                reasoning="Hallucinated evidence",
+            )
         )
 
         mock_agent = AsyncMock()
@@ -2001,14 +2057,16 @@ class TestEvidenceQuoteMatching:
         ctx = GraphRunContext(state=state_with_candidates, deps=deps_v3)
 
         # Mock agent with exact evidence from document
-        mock_result = PairEvaluationOut(
-            relationship_exists=True,
-            relationship_type="gene-disease interaction",
-            confidence="high",
-            evidence=[
-                "BRCA1 is a tumor suppressor gene associated with breast cancer.",
-            ],
-            reasoning="Exact match evidence",
+        mock_result = MockAgentRunResult(
+            PairEvaluationOut(
+                relationship_exists=True,
+                relationship_type="gene-disease interaction",
+                confidence="high",
+                evidence=[
+                    "BRCA1 is a tumor suppressor gene associated with breast cancer.",
+                ],
+                reasoning="Exact match evidence",
+            )
         )
 
         mock_agent = AsyncMock()
@@ -2039,14 +2097,16 @@ class TestEvidenceQuoteMatching:
         ctx = GraphRunContext(state=state_with_candidates, deps=deps_v3)
 
         # Mock agent with slightly different wording (should fuzzy match)
-        mock_result = PairEvaluationOut(
-            relationship_exists=True,
-            relationship_type="gene-disease interaction",
-            confidence="high",
-            evidence=[
-                "BRCA1 tumor suppressor gene associated breast cancer",  # Missing articles
-            ],
-            reasoning="Fuzzy match evidence",
+        mock_result = MockAgentRunResult(
+            PairEvaluationOut(
+                relationship_exists=True,
+                relationship_type="gene-disease interaction",
+                confidence="high",
+                evidence=[
+                    "BRCA1 tumor suppressor gene associated breast cancer",  # Missing articles
+                ],
+                reasoning="Fuzzy match evidence",
+            )
         )
 
         mock_agent = AsyncMock()
@@ -2121,12 +2181,14 @@ class TestParallelEvaluation:
         async def mock_agent_run(prompt, deps):
             call_times.append(asyncio.get_event_loop().time())
             await asyncio.sleep(0.1)  # Simulate LLM call
-            return PairEvaluationOut(
-                relationship_exists=True,
-                relationship_type="gene-disease interaction",
-                confidence="high",
-                evidence=["Evidence text"],
-                reasoning="Accepted",
+            return MockAgentRunResult(
+                PairEvaluationOut(
+                    relationship_exists=True,
+                    relationship_type="gene-disease interaction",
+                    confidence="high",
+                    evidence=["Evidence text"],
+                    reasoning="Accepted",
+                )
             )
 
         mock_agent = AsyncMock()
@@ -2207,14 +2269,16 @@ class TestEvaluationErrorHandling:
             if call_count[0] == 1:
                 raise Exception("First evaluation failed")
 
-            return PairEvaluationOut(
-                relationship_exists=True,
-                relationship_type="gene-disease interaction",
-                confidence="high",
-                evidence=[
-                    "BRCA1 is a tumor suppressor gene associated with breast cancer."
-                ],
-                reasoning="Good evaluation",
+            return MockAgentRunResult(
+                PairEvaluationOut(
+                    relationship_exists=True,
+                    relationship_type="gene-disease interaction",
+                    confidence="high",
+                    evidence=[
+                        "BRCA1 is a tumor suppressor gene associated with breast cancer."
+                    ],
+                    reasoning="Good evaluation",
+                )
             )
 
         mock_agent = AsyncMock()
@@ -2315,16 +2379,18 @@ class TestAcceptanceRate:
 
         async def mock_agent_run(prompt, deps):
             call_count[0] += 1
-            return PairEvaluationOut(
-                relationship_exists=(call_count[0] % 2 == 1),
-                relationship_type="gene-disease interaction",
-                confidence="high" if (call_count[0] % 2 == 1) else "low",
-                evidence=[
-                    "BRCA1 is a tumor suppressor gene associated with breast cancer."
-                ]
-                if (call_count[0] % 2 == 1)
-                else [],
-                reasoning="Alternating results",
+            return MockAgentRunResult(
+                PairEvaluationOut(
+                    relationship_exists=(call_count[0] % 2 == 1),
+                    relationship_type="gene-disease interaction",
+                    confidence="high" if (call_count[0] % 2 == 1) else "low",
+                    evidence=[
+                        "BRCA1 is a tumor suppressor gene associated with breast cancer."
+                    ]
+                    if (call_count[0] % 2 == 1)
+                    else [],
+                    reasoning="Alternating results",
+                )
             )
 
         mock_agent = AsyncMock()
