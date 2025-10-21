@@ -15,6 +15,7 @@ dependencies = [
     "pydantic>=2.11.7",
     "pydantic-ai==1",
     "rake-nltk>=1.0.6",
+    "rapidfuzz>=3.14.1",
     "rich>=14.1.0",
     "scikit-learn>=1.7.1",
     "sentence-transformers>=2.2.0",

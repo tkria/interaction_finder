@@ -327,6 +327,46 @@ class TestFuzzyMatchQuote:
         assert elapsed < 0.01
         assert result is not None
 
+    def test_short_exact_match_with_75_threshold(self):
+        """Regression test: short exact matches should pass 0.75 threshold.
+
+        This test exposes the window margin issue: when margin = 1.5x query length,
+        the window becomes so diluted that even exact matches fail the 0.75 threshold.
+
+        For acceptance criterion: locating short quotes (5-20 chars) in large documents
+        (30-500KB) must succeed.
+        """
+        # Realistic scenario: 10-char quote in ~800-char document segment
+        document_segment = """
+        Background: Pulmonary arterial hypertension (PAH) is a progressive disease
+        characterized by elevated pulmonary artery pressure. Various genetic factors
+        have been implicated in its pathogenesis, including mutations in BMPR2,
+        ACVRL1, and other genes involved in the TGF-beta signaling pathway.
+
+        The BMPR2 gene encodes bone morphogenetic protein receptor type 2, which
+        plays a critical role in vascular development. Mutations in this gene
+        are found in approximately 70% of familial PAH cases and 20% of sporadic cases.
+
+        Other genes of interest include SMAD9, CAV1, KCNK3, and EIF2AK4. Recent
+        studies have identified rare variants in these genes among PAH patients.
+        """
+
+        # LLM extracts exact quote
+        llm_quote = "BMPR2 gene"
+
+        # Should succeed with 0.75 threshold (suggest_threshold)
+        result = fuzzy_match_quote(llm_quote, document_segment, threshold=0.75)
+
+        # EXPECTED: Should find exact match
+        # ACTUAL (with 1.5x margin): Returns None due to window dilution
+        # With 1.5x margin: window = 40 chars, similarity = 0.400 < 0.75
+        assert result is not None, (
+            "Exact match 'BMPR2 gene' should pass 0.75 threshold. "
+            "If this fails, the window margin (currently 1.5x) is too large, "
+            "causing difflib.ratio() to compute similarity against diluted context."
+        )
+        assert result.similarity >= 0.75
+
 
 class TestFindQuoteWithFuzzyMatching:
     """Test integrated quote finding with fuzzy matching fallback."""

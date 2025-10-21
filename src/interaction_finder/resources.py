@@ -14,6 +14,7 @@ import unicodedata
 from difflib import SequenceMatcher
 from typing import List, Optional, Tuple, Union
 from pydantic import BaseModel, Field, field_validator, ValidationInfo
+from rapidfuzz import fuzz
 
 
 # Greek letter mappings for scientific text normalization (lowercase only)
@@ -291,10 +292,12 @@ def fuzzy_match_quote(
     threshold: float = 0.90,
 ) -> Optional[FuzzyMatchResult]:
     """
-    Fuzzy match LLM-generated quote against document segment using difflib.
+    Fuzzy match LLM-generated quote against document segment using hybrid algorithm.
 
-    Uses SequenceMatcher for similarity calculation and alignment-based extraction.
-    Returns auto-corrected quote if similarity meets threshold, otherwise None.
+    Uses three-stage approach:
+    1. RapidFuzz for fast approximate location finding
+    2. Window extraction with margin for boundary capture
+    3. difflib for precise entity-preserving alignment
 
     Args:
         llm_quote: Quote text from LLM (may be slightly paraphrased)
@@ -321,21 +324,37 @@ def fuzzy_match_quote(
     if not normalized_llm or not normalized_doc:
         return None
 
-    # Calculate similarity using SequenceMatcher
-    matcher = SequenceMatcher(None, normalized_llm, normalized_doc)
+    # Stage 1: RapidFuzz finds approximate match location
+    # Convert threshold from 0.0-1.0 scale to 0-100 scale for RapidFuzz
+    score_cutoff = threshold * 100
+    alignment = fuzz.partial_ratio_alignment(
+        normalized_llm, normalized_doc, score_cutoff=score_cutoff
+    )
+
+    # Return None if RapidFuzz found no match above threshold
+    if alignment is None:
+        return None
+
+    # Stage 2: Extract window with margin for boundary capture
+    # Use 0.10x query length as margin to keep window tight for difflib Stage 3
+    # Larger margins (e.g. 1.5x) dilute similarity too much for 0.75 threshold
+    margin = int(len(normalized_llm) * 0.10)
+    window_start = max(0, alignment.dest_start - margin)
+    window_end = min(len(normalized_doc), alignment.dest_end + margin)
+    window = normalized_doc[window_start:window_end]
+
+    # Stage 3: difflib precise alignment on window
+    matcher = SequenceMatcher(None, normalized_llm, window)
     similarity = matcher.ratio()
 
-    # Return None if below threshold
+    # Return None if difflib refinement rejects the match
     if similarity < threshold:
         return None
 
-    # Extract aligned text from document using matching blocks
-    corrected_quote = _auto_correct_quote_from_alignment(
-        normalized_llm, normalized_doc, matcher
+    # Extract aligned text from window using matching blocks
+    corrected_quote, match_blocks = _auto_correct_quote_from_alignment(
+        normalized_llm, window, matcher, window_start
     )
-
-    # Get match blocks for provenance
-    match_blocks = matcher.get_matching_blocks()
 
     return FuzzyMatchResult(
         corrected_quote=corrected_quote,
@@ -346,36 +365,40 @@ def fuzzy_match_quote(
 
 def _auto_correct_quote_from_alignment(
     normalized_llm: str,
-    normalized_doc: str,
+    window: str,
     matcher: SequenceMatcher,
-) -> str:
+    window_start: int,
+) -> Tuple[str, List[Tuple[int, int, int]]]:
     """
-    Extract corrected quote from document using SequenceMatcher alignment.
+    Extract corrected quote from window and translate coordinates to document.
 
-    Builds corrected quote by extracting aligned portions from the document,
-    ensuring the result actually exists in the document.
+    Builds corrected quote by extracting aligned portions from the window,
+    then translates match blocks from window coordinates to document coordinates.
 
     Args:
         normalized_llm: Normalized LLM quote text
-        normalized_doc: Normalized document text
+        window: Normalized document window text
         matcher: Pre-configured SequenceMatcher for the texts
+        window_start: Start position of window in document (for coordinate translation)
 
     Returns:
-        Corrected quote string extracted from document
+        Tuple of (corrected_quote, translated_match_blocks) where match blocks
+        are in document coordinates: (src_start, doc_start, length)
 
     Notes:
         - Uses get_matching_blocks() to identify aligned segments
-        - Extracts text from document at aligned positions
+        - Extracts text from window at aligned positions
+        - Translates match blocks from window-relative to document-absolute coordinates
         - Preserves word boundaries and spacing
     """
-    # Get matching blocks: (llm_pos, doc_pos, length) tuples
+    # Get matching blocks: (llm_pos, window_pos, length) tuples
     blocks = matcher.get_matching_blocks()
 
-    # Extract aligned segments from document
+    # Extract aligned segments from window
     segments = []
-    for llm_pos, doc_pos, length in blocks:
+    for llm_pos, window_pos, length in blocks:
         if length > 0:  # Skip dummy block at end
-            segment = normalized_doc[doc_pos : doc_pos + length]
+            segment = window[window_pos : window_pos + length]
             segments.append(segment)
 
     # Join segments with single space
@@ -384,7 +407,13 @@ def _auto_correct_quote_from_alignment(
     # Clean up multiple spaces and strip
     corrected = " ".join(corrected.split())
 
-    return corrected
+    # Translate match blocks from window coordinates to document coordinates
+    translated_blocks = [
+        (src_start, window_start + dest_start, length)
+        for src_start, dest_start, length in blocks
+    ]
+
+    return corrected, translated_blocks
 
 
 def find_quote_with_fuzzy_matching(
