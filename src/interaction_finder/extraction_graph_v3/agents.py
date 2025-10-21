@@ -341,12 +341,99 @@ OUTPUT FORMAT:
 Entity kinds: {kinds_str}
 """
 
-    return Agent(
+    agent = Agent(
         model=model,
         output_type=AssessmentOut,
         system_prompt=system_prompt,
         deps_type=ExtractionDepsV3,
     )
+
+    # Create quote validator for this agent (same threshold as entity extractor)
+    quote_validator = QuoteValidator(auto_accept_threshold=85.0)
+
+    # Validator 1: Evidence quote validation using alignment system
+    # Validates all evidence quotes from the assessment
+    @agent.output_validator
+    def validate_assessment_evidence_quotes(
+        ctx: RunContext[ExtractionDepsV3], out: AssessmentOut
+    ) -> AssessmentOut:
+        """
+        Validate assessment evidence quotes using the quote validation system.
+        Handles auto-correction for high-confidence fixes.
+        """
+        # Access resources from the context
+        current_resources = ctx.deps.current_resources
+        if not current_resources or not out.evidence:
+            return out  # Skip validation if no resources or no evidence quotes
+
+        # Validate each evidence quote against available resources
+        for i, quote_text in enumerate(out.evidence):
+            quote_text = quote_text.strip()
+
+            # Try validation against each resource (assessment can span multiple sources)
+            for resource in current_resources:
+                validated_quote = quote_validator.validate_and_correct_quote(
+                    entity_name="assessment evidence",  # Generic context name
+                    entity_kind="evidence",
+                    quote_text=quote_text,
+                    resource=resource,
+                    quote_error_log=ctx.deps.quote_error_log,
+                    current_retry=ctx.retry,
+                )
+
+                # If validation succeeded, update the quote and move to next
+                if validated_quote and validated_quote.query_text != quote_text:
+                    out.evidence[i] = validated_quote.query_text
+                    break
+                elif validated_quote:
+                    # Quote was valid as-is
+                    break
+
+            # If validation failed against all resources, let the validator handle it
+            # (it will have already raised ModelRetry if needed)
+
+        return out
+
+    # Validator 2: Success tracking
+    # Marks previous errors as resolved when retries succeed
+    @agent.output_validator
+    def log_successful_assessment_quotes(
+        ctx: RunContext[ExtractionDepsV3], out: AssessmentOut
+    ) -> AssessmentOut:
+        """Log successful assessment evidence quotes to match against previous errors."""
+        current_retry = ctx.retry
+
+        # If this is a retry (retry > 0), mark previous errors as resolved
+        if current_retry > 0:
+            for error_record in ctx.deps.quote_error_log:
+                if (
+                    error_record.retry_attempt == current_retry
+                    and not error_record.resolved
+                ):
+                    # Check if any evidence quote matches the error using bag-of-words similarity
+                    best_match = None
+                    best_similarity = 0.0
+                    similarity_threshold = 0.3  # Require at least 30% word overlap
+
+                    for quote_text in out.evidence:
+                        similarity = compute_bag_of_words_similarity(
+                            error_record.original_quote, quote_text
+                        )
+                        if (
+                            similarity > best_similarity
+                            and similarity >= similarity_threshold
+                        ):
+                            best_similarity = similarity
+                            best_match = quote_text.strip()
+
+                    # Mark as resolved if we found a good match
+                    if best_match:
+                        error_record.final_accepted_quote = best_match
+                        error_record.resolved = True
+
+        return out
+
+    return agent
 
 
 def create_pair_evaluator_v3(
@@ -401,9 +488,96 @@ OUTPUT FORMAT:
 If relationship exists, evidence quotes are required.
 """
 
-    return Agent(
+    agent = Agent(
         model=model,
         output_type=PairEvaluationOut,
         system_prompt=system_prompt,
         deps_type=ExtractionDepsV3,
     )
+
+    # Create quote validator for this agent (same threshold as entity extractor)
+    quote_validator = QuoteValidator(auto_accept_threshold=85.0)
+
+    # Validator 1: Evidence quote validation using alignment system
+    # Validates all evidence quotes from pair evaluation
+    @agent.output_validator
+    def validate_pair_evidence_quotes(
+        ctx: RunContext[ExtractionDepsV3], out: PairEvaluationOut
+    ) -> PairEvaluationOut:
+        """
+        Validate pair evaluation evidence quotes using the quote validation system.
+        Handles auto-correction for high-confidence fixes.
+        """
+        # Access resources from the context
+        current_resources = ctx.deps.current_resources
+        if not current_resources or not out.evidence:
+            return out  # Skip validation if no resources or no evidence quotes
+
+        # Validate each evidence quote against available resources
+        for i, quote_text in enumerate(out.evidence):
+            quote_text = quote_text.strip()
+
+            # Try validation against each resource (pair evaluation can span multiple sources)
+            for resource in current_resources:
+                validated_quote = quote_validator.validate_and_correct_quote(
+                    entity_name="pair evidence",  # Generic context name
+                    entity_kind="evidence",
+                    quote_text=quote_text,
+                    resource=resource,
+                    quote_error_log=ctx.deps.quote_error_log,
+                    current_retry=ctx.retry,
+                )
+
+                # If validation succeeded, update the quote and move to next
+                if validated_quote and validated_quote.query_text != quote_text:
+                    out.evidence[i] = validated_quote.query_text
+                    break
+                elif validated_quote:
+                    # Quote was valid as-is
+                    break
+
+            # If validation failed against all resources, let the validator handle it
+            # (it will have already raised ModelRetry if needed)
+
+        return out
+
+    # Validator 2: Success tracking
+    # Marks previous errors as resolved when retries succeed
+    @agent.output_validator
+    def log_successful_pair_quotes(
+        ctx: RunContext[ExtractionDepsV3], out: PairEvaluationOut
+    ) -> PairEvaluationOut:
+        """Log successful pair evaluation evidence quotes to match against previous errors."""
+        current_retry = ctx.retry
+
+        # If this is a retry (retry > 0), mark previous errors as resolved
+        if current_retry > 0:
+            for error_record in ctx.deps.quote_error_log:
+                if (
+                    error_record.retry_attempt == current_retry
+                    and not error_record.resolved
+                ):
+                    # Check if any evidence quote matches the error using bag-of-words similarity
+                    best_match = None
+                    best_similarity = 0.0
+                    similarity_threshold = 0.3  # Require at least 30% word overlap
+
+                    for quote_text in out.evidence:
+                        similarity = compute_bag_of_words_similarity(
+                            error_record.original_quote, quote_text
+                        )
+                        if (
+                            similarity > best_similarity
+                            and similarity >= similarity_threshold
+                        ):
+                            best_similarity = similarity
+                            best_match = quote_text.strip()
+
+                    # Mark as resolved if we found a good match
+                    if best_match:
+                        error_record.final_accepted_quote = best_match
+                        error_record.resolved = True
+
+        return out
+
+    return agent

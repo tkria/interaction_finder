@@ -490,6 +490,17 @@ class AssessIndividually(BaseNode[ExtractionStateV3, ExtractionDepsV3]):
         # Build prompt with entity contexts
         prompt = self._build_assessment_prompt(entity, contexts, deps)
 
+        # Set current resources for validators (from entity's quotes)
+        # Get unique resources from entity's quotes for validation context
+        unique_resources = []
+        seen_urls = set()
+        for quote in entity.quotes:
+            url = quote.resource.id.url
+            if url not in seen_urls:
+                unique_resources.append(quote.resource)
+                seen_urls.add(url)
+        deps.current_resources = unique_resources
+
         # Run assessment with timing
         start_time = time.time()
         try:
@@ -1025,6 +1036,7 @@ class EvaluatePairs(BaseNode[ExtractionStateV3, ExtractionDepsV3]):
 
         # Gather evidence from shared resources
         evidence_contexts = []
+        shared_resources_list = []  # Track resources for validation
         for resource_id_str in candidate.shared_resources:
             # Find resource by ID string in pool
             resource = None
@@ -1044,6 +1056,7 @@ class EvaluatePairs(BaseNode[ExtractionStateV3, ExtractionDepsV3]):
                 candidate.entity_a, candidate.entity_b, resource
             )
             evidence_contexts.extend(contexts)
+            shared_resources_list.append(resource)
 
         # Fallback: use individual contexts if no shared resources
         if not evidence_contexts:
@@ -1055,6 +1068,16 @@ class EvaluatePairs(BaseNode[ExtractionStateV3, ExtractionDepsV3]):
                 candidate.entity_a.all_contexts[:3]
                 + candidate.entity_b.all_contexts[:3]
             )
+            # Get resources from both entities for validation
+            unique_resources = []
+            seen_urls = set()
+            for entity in [candidate.entity_a, candidate.entity_b]:
+                for quote in entity.quotes:
+                    url = quote.resource.id.url
+                    if url not in seen_urls:
+                        unique_resources.append(quote.resource)
+                        seen_urls.add(url)
+            shared_resources_list = unique_resources
 
         # Create pair evaluator agent
         agent = create_pair_evaluator_v3(
@@ -1064,6 +1087,9 @@ class EvaluatePairs(BaseNode[ExtractionStateV3, ExtractionDepsV3]):
 
         # Build evaluation prompt
         prompt = self._build_evaluation_prompt(candidate, evidence_contexts, deps)
+
+        # Set current resources for validators (from shared evidence resources)
+        deps.current_resources = shared_resources_list
 
         # Run evaluation with timing
         start_time = time.time()
