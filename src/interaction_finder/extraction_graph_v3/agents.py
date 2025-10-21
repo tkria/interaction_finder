@@ -140,6 +140,7 @@ Context: {task_context}
         output_type=SimpleEntityListOut,
         system_prompt=system_prompt,
         deps_type=ExtractionDepsV3,
+        retries=5,
     )
 
     # Create quote validator for this agent
@@ -430,6 +431,7 @@ Entity kinds: {kinds_str}
         output_type=AssessmentOut,
         system_prompt=system_prompt,
         deps_type=ExtractionDepsV3,
+        retries=5,
     )
 
     # Create quote validator for this agent (same threshold as entity extractor)
@@ -615,6 +617,7 @@ If relationship exists, evidence quotes are required.
         output_type=PairEvaluationOut,
         system_prompt=system_prompt,
         deps_type=ExtractionDepsV3,
+        retries=5,
     )
 
     # Create quote validator for this agent (same threshold as entity extractor)

@@ -151,10 +151,14 @@ class ExtractEntities(BaseNode[ExtractionStateV3, ExtractionDepsV3]):
         cache = state.cache
 
         resource = state.resource_pool.get(resource_id)
+        if resource is None:
+            logger.warning(f"Resource {resource_id} not found in pool")
+            return []
+
         logger.debug(f"Processing document: {resource.title}")
 
         # Compute cache key
-        model_str = str(deps.model) if hasattr(deps.model, "__str__") else deps.model
+        model_str = str(deps.model)
         cache_key = compute_extraction_cache_key(
             full_doc_text=resource.text,
             entity_kinds=deps.get_entity_kinds(),
@@ -178,11 +182,13 @@ class ExtractEntities(BaseNode[ExtractionStateV3, ExtractionDepsV3]):
         # Create extraction agent
         from ..models import Term
 
-        target_term = (
-            Term(name=deps.target_term or "unknown", kind=None)
-            if isinstance(deps.target_term, str)
-            else deps.target_term
-        )
+        target_term: Term
+        if isinstance(deps.target_term, str):
+            target_term = Term(name=deps.target_term or "unknown", kind=None)
+        elif deps.target_term is None:
+            target_term = Term(name="unknown", kind=None)
+        else:
+            target_term = deps.target_term
 
         agent = create_entity_extractor_v3(
             model=deps.model,
@@ -197,7 +203,7 @@ class ExtractEntities(BaseNode[ExtractionStateV3, ExtractionDepsV3]):
         # Run extraction with timing
         start_time = time.time()
         try:
-            result = await agent.run(resource.text, deps=deps, max_retries=5)
+            result = await agent.run(resource.text, deps=deps)
             duration = time.time() - start_time
 
             state.metrics.entities_extraction_calls += 1
@@ -415,7 +421,8 @@ class AssessIndividually(BaseNode[ExtractionStateV3, ExtractionDepsV3]):
             if isinstance(result, Exception):
                 logger.error(f"Assessment failed for {entity_name}: {result}")
                 continue
-            state.individual_assessments[entity_name] = result
+            if isinstance(result, IndividualAssessment):
+                state.individual_assessments[entity_name] = result
 
         logger.info(
             f"Assessment complete: {len(state.individual_assessments)} entities assessed"
@@ -455,7 +462,7 @@ class AssessIndividually(BaseNode[ExtractionStateV3, ExtractionDepsV3]):
         logger.debug(f"Assessing entity: {entity.name} ({entity.kind})")
 
         # Compute cache key
-        model_str = str(deps.model) if hasattr(deps.model, "__str__") else deps.model
+        model_str = str(deps.model)
         cache_key = compute_assessment_cache_key(
             entity_name=entity.name,
             entity_kind=entity.kind,
@@ -504,7 +511,7 @@ class AssessIndividually(BaseNode[ExtractionStateV3, ExtractionDepsV3]):
         # Run assessment with timing
         start_time = time.time()
         try:
-            result = await agent.run(prompt, deps=deps, max_retries=5)
+            result = await agent.run(prompt, deps=deps)
             duration = time.time() - start_time
 
             state.metrics.assessment_calls += 1
@@ -773,7 +780,7 @@ class GeneratePairCandidates(BaseNode[ExtractionStateV3, ExtractionDepsV3]):
 
                     # Check tiered co-occurrence
                     co_occurs = False
-                    strategy = None
+                    strategy: str | None = None
 
                     # Tier 1: Same chunk (highest precision)
                     if deps.enable_same_chunk and (a_chunks & b_chunks):
@@ -797,7 +804,7 @@ class GeneratePairCandidates(BaseNode[ExtractionStateV3, ExtractionDepsV3]):
                         strategy = "document_level"
 
                     # Create or update candidate
-                    if co_occurs:
+                    if co_occurs and strategy is not None:
                         key = tuple(sorted([entity_a.name, entity_b.name]))
                         if key in candidates:
                             # Same pair found in another resource
@@ -923,11 +930,12 @@ class GeneratePairCandidates(BaseNode[ExtractionStateV3, ExtractionDepsV3]):
         Returns:
             Sorted tuple of entity names for consistent lookup
         """
-        return tuple(sorted([name_a, name_b]))
+        sorted_names = sorted([name_a, name_b])
+        return (sorted_names[0], sorted_names[1])
 
 
 @dataclass
-class EvaluatePairs(BaseNode[ExtractionStateV3, ExtractionDepsV3]):
+class EvaluatePairs(BaseNode[ExtractionStateV3, ExtractionDepsV3, ExtractionStateV3]):
     """
     Evaluate candidate entity pairs using evidence from shared contexts.
 
@@ -940,7 +948,7 @@ class EvaluatePairs(BaseNode[ExtractionStateV3, ExtractionDepsV3]):
 
     async def run(
         self, ctx: GraphRunContext[ExtractionStateV3, ExtractionDepsV3]
-    ) -> End:
+    ) -> "BaseNode[ExtractionStateV3, ExtractionDepsV3, ExtractionStateV3] | End[ExtractionStateV3]":
         """
         Evaluate all pair candidates in parallel with evidence-based assessment.
 
@@ -955,11 +963,6 @@ class EvaluatePairs(BaseNode[ExtractionStateV3, ExtractionDepsV3]):
         logger.info(
             f"Parallelism: {deps.pair_evaluation_parallelism if deps.pair_evaluation_parallelism > 0 else 'unlimited'}"
         )
-
-        # Evaluate candidates in parallel with parallelism control
-        evaluation_tasks = []
-        for candidate in state.pair_candidates.values():
-            evaluation_tasks.append(self._evaluate_one_pair(candidate, ctx))
 
         # Execute with parallelism control (default 5 concurrent evaluations)
         parallelism_desc = (
@@ -1094,7 +1097,7 @@ class EvaluatePairs(BaseNode[ExtractionStateV3, ExtractionDepsV3]):
         # Run evaluation with timing
         start_time = time.time()
         try:
-            result = await agent.run(prompt, deps=deps, max_retries=5)
+            result = await agent.run(prompt, deps=deps)
             duration = time.time() - start_time
 
             logger.debug(

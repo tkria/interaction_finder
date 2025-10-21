@@ -241,7 +241,7 @@ class ExtractionStateV3:
         pair_metrics = self.metrics.get_pair_metrics()
 
         base_summary.update(
-            {
+            {  # type: ignore[arg-type]
                 "agent_calls": {
                     "extraction_calls": self.metrics.entities_extraction_calls,
                     "assessment_calls": self.metrics.assessment_calls,

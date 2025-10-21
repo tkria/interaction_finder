@@ -8,6 +8,7 @@ Extends V2 deps with:
 - Semantic caching configuration
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Union, Optional, List, Literal, TYPE_CHECKING
 from pathlib import Path
@@ -77,7 +78,7 @@ class ExtractionDepsV3:
     output_dir: Optional[Path] = None
 
     # Checkpoint callback for incremental saves (optional)
-    checkpoint_callback: Optional[callable] = None
+    checkpoint_callback: Optional[Callable] = None  # type: ignore[type-arg]
 
     @classmethod
     def from_config(
@@ -106,7 +107,7 @@ class ExtractionDepsV3:
         # Other
         current_resources: Optional[List["Resource"]] = None,
         output_dir: Optional[Path] = None,
-        checkpoint_callback: Optional[callable] = None,
+        checkpoint_callback: Optional[Callable] = None,  # type: ignore[type-arg]
     ) -> "ExtractionDepsV3":
         """
         Create deps from configuration with sensible defaults.
@@ -138,7 +139,7 @@ class ExtractionDepsV3:
         """
         # Determine model from config hierarchy
         if model is None:
-            default_agent = config.agents.get("_", config.AgentSpec())
+            default_agent = config.agents.get("_", config.AgentSpec())  # type: ignore[call-arg]
             model = default_agent.llm or "openai:gpt-4o"
 
         return cls(

@@ -265,7 +265,7 @@ class SemanticCacheManager:
         # Move to end (most recently used)
         if key in cache:
             cache.move_to_end(key)
-        cache[key] = value
+        cache[key] = value  # type: ignore[assignment]
         # Evict oldest entries if over limit
         while len(cache) > self.max_memory_entries:
             cache.popitem(last=False)
@@ -308,9 +308,9 @@ class SemanticCacheManager:
         """
         cache_dir = self.cache_dir / f"{cache_type}s"
         cache_file = cache_dir / f"{key}.json"
+        temp_file = cache_file.with_suffix(".json.tmp")
         try:
             # Write to temp file then atomic rename
-            temp_file = cache_file.with_suffix(".json.tmp")
             async with aiofiles.open(temp_file, "w", encoding="utf-8") as f:
                 await f.write(json.dumps(data, indent=2, ensure_ascii=False))
             await aiofiles.os.rename(temp_file, cache_file)
@@ -375,7 +375,7 @@ class SemanticCacheManager:
                 # Serialize to JSON
                 data = [e.model_dump() for e in entities]
                 # Save to disk
-                await self._save_to_disk("extraction", cache_key, data)
+                await self._save_to_disk("extraction", cache_key, data)  # type: ignore[arg-type]
                 # Add to memory cache
                 self._add_to_memory_cache("extraction", cache_key, entities)
             except Exception as e:

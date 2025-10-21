@@ -51,7 +51,8 @@ class PairCandidate(BaseModel):
     def get_pair_key(self) -> tuple[str, str]:
         """Get normalized pair key for deduplication."""
         # Always return in sorted order for consistent lookup
-        return tuple(sorted([self.entity_a.name, self.entity_b.name]))
+        sorted_names = sorted([self.entity_a.name, self.entity_b.name])
+        return (sorted_names[0], sorted_names[1])
 
 
 class PairEvaluationOut(BaseModel):

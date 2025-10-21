@@ -7,9 +7,10 @@ pipeline with checkpoint save/resume, resource loading, and result formatting.
 
 import json
 import logging
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional, Callable
+from typing import List, Optional
 
 from .graph import extraction_graph_v3
 from .state import ExtractionStateV3
@@ -49,7 +50,13 @@ async def _load_documents(urls: List[str], page_fetcher: PageFetcher) -> Resourc
                 continue
 
             # Get full document
-            markdown = await page_fetcher.get_markdown(url)
+            markdown_result = await page_fetcher.get_markdown(url)
+            # Handle case where get_markdown returns list (shouldn't happen for single URL)
+            if isinstance(markdown_result, list):
+                markdown = markdown_result[0] if markdown_result else ""
+            else:
+                markdown = markdown_result
+
             # Extract title from markdown content
             title = f"Document from {url}"
             try:
@@ -64,13 +71,20 @@ async def _load_documents(urls: List[str], page_fetcher: PageFetcher) -> Resourc
             if not markdown:
                 logger.warning(f"No markdown content retrieved from {url}")
                 # Fallback to joined chunks
-                markdown = "\n\n".join(chunks)
+                chunk_texts: list[str]
+                if isinstance(chunks, list) and chunks and isinstance(chunks[0], str):
+                    chunk_texts = chunks  # type: ignore
+                else:
+                    chunk_texts = [c["text"] for c in chunks]  # type: ignore
+                markdown = "\n\n".join(chunk_texts)
                 title = f"Document from {url}"
+            else:
+                # Compute chunk spans in full document
+                if isinstance(chunks, list) and chunks and isinstance(chunks[0], str):
+                    chunk_texts = chunks  # type: ignore
+                else:
+                    chunk_texts = [c["text"] for c in chunks]  # type: ignore
 
-            # Compute chunk spans in full document
-            chunk_texts = (
-                chunks if isinstance(chunks, list) else [c["text"] for c in chunks]
-            )
             chunk_spans = compute_chunk_spans(markdown, chunk_texts)
 
             # Add to pool
@@ -323,9 +337,19 @@ async def run_extraction_v3(
 
     # Initialize dependencies
     # Create async checkpoint callback if checkpoint_path provided
-    async def checkpoint_callback(stage: str, state_arg: ExtractionStateV3) -> None:
-        """Async wrapper for save_checkpoint."""
-        await save_checkpoint(stage, state_arg, checkpoint_path.parent)
+    checkpoint_callback: Callable[[str, ExtractionStateV3], Awaitable[None]] | None = (
+        None
+    )
+    if checkpoint_path is not None:
+
+        async def _checkpoint_callback(
+            stage: str, state_arg: ExtractionStateV3
+        ) -> None:
+            """Async wrapper for save_checkpoint."""
+            assert checkpoint_path is not None  # Type narrowing
+            await save_checkpoint(stage, state_arg, checkpoint_path.parent)
+
+        checkpoint_callback = _checkpoint_callback
 
     deps = ExtractionDepsV3.from_config(
         config,
@@ -337,7 +361,7 @@ async def run_extraction_v3(
 
     # Initialize cache if enabled
     if deps.semantic_cache_enabled:
-        cache_dir = config.paths.get("cache_dir", ".cache/semantic")
+        cache_dir = config.output.cache
         state.cache = SemanticCacheManager(Path(cache_dir))
         logger.info(f"Semantic cache enabled: {cache_dir}")
 
@@ -399,7 +423,7 @@ async def run_extraction_v3(
         total_entities=entity_counts,
         metadata=ExtractionMetadata(
             timestamp=datetime.now(),
-            model=str(deps.model) if hasattr(deps.model, "__str__") else deps.model,
+            model=str(deps.model),
             pipeline_version="v3",
             prompt_version="2025-10-v3",
             entity_kinds=deps.get_entity_kinds(),
@@ -409,13 +433,15 @@ async def run_extraction_v3(
             "extraction_misses": state.metrics.cache_misses_extraction,
             "assessment_hits": state.metrics.cache_hits_assessment,
             "assessment_misses": state.metrics.cache_misses_assessment,
-            "extraction_hit_rate": state.metrics.get_cache_hit_rate()[
-                "extraction_hit_rate"
-            ],
-            "assessment_hit_rate": state.metrics.get_cache_hit_rate()[
-                "assessment_hit_rate"
-            ],
-            "overall_hit_rate": state.metrics.get_cache_hit_rate()["overall_hit_rate"],
+            "extraction_hit_rate": int(
+                state.metrics.get_cache_hit_rate()["extraction_hit_rate"] * 100
+            ),
+            "assessment_hit_rate": int(
+                state.metrics.get_cache_hit_rate()["assessment_hit_rate"] * 100
+            ),
+            "overall_hit_rate": int(
+                state.metrics.get_cache_hit_rate()["overall_hit_rate"] * 100
+            ),
         },
         stage_metrics={
             "extraction": {
