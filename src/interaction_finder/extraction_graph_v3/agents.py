@@ -65,12 +65,58 @@ CRITICAL REQUIREMENTS:
 3. List alternative names/aliases if mentioned
 4. Include supporting quotes (exact text passages from the document)
 
-QUOTE REQUIREMENTS:
-• Quotes must be VERBATIM - copy text exactly as written
-• Use the same words, spellings, and structure as the original
+QUOTE REQUIREMENTS - ABSOLUTELY CRITICAL:
+• Quotes must be VERBATIM - copy the meaningful text content exactly as written
+• Use the same words, spellings, and structure as the original document
+• Copy the text EXACTLY as written, including any unusual phrasing
 • Include enough context to be meaningful (typically 1-2 sentences)
-• Do NOT combine text from different locations
-• Do NOT paraphrase or modify the text
+
+ELLIPSIS ("...") USAGE - VERY RESTRICTED:
+✅ ALLOWED: Only to skip irrelevant words within the SAME SENTENCE
+   • "The protein... plays a crucial role" (skipping adjectives in middle)
+   • Must be the same sentence, same location, continuous text
+
+❌ NOT ALLOWED: Almost all other uses are wrong
+   • Never join different sentences: "Gene X... causes disease Y"
+   • Never join different paragraphs or sections
+   • Never use "..." at the start of quotes
+   • If unsure, don't use ellipsis at all - use shorter quotes instead
+
+COMMON ACCURACY ISSUES - UNDERSTAND THE PATTERNS:
+
+❌ SPLIT QUOTES: Combining non-adjacent text (MOST COMMON ERROR - CRITICAL TO AVOID)
+   • NEVER EVER combine text that isn't written together in the document
+   • If you can't find the complete sentence as written, use a shorter quote
+   • DO NOT try to "reconstruct" or "complete" sentences by joining parts
+   • DO NOT join "Gene X" from one location with "causes disease Y" from another
+   • Each quote must be EXACTLY as written in one continuous location
+   • When in doubt, use multiple shorter quotes rather than one combined quote
+
+❌ WORD SUBSTITUTIONS: Using synonyms or similar words
+   • "It suggests" instead of "This suggests"
+   • "Consistent with" instead of "In agreement with"
+   • "The gene" instead of "This gene"
+
+❌ ALTERNATIVE SPELLINGS: Using different spellings
+   • "calcination" instead of "calcification"
+   • "immuniprecipitated" instead of "coimmunoprecipitated"
+
+❌ REFERENCE ARTIFACTS: Including document metadata
+   • Reference numbers: "protein22" instead of "protein"
+   • Citation text: "PubMed Google Scholar" appearing in quotes
+   • Figure references when not grammatically integrated
+
+❌ FABRICATED CONTENT: Never invent quotes that don't exist in the document
+   • Don't create table-like or structured text that isn't there
+   • Don't use "..." as an actual quote - find real text or return empty list
+   • If you can't find suitable text, use empty quotes array
+
+❌ INAPPROPRIATE QUOTE SCOPE: Choose meaningful quote boundaries
+   • Don't include entire paragraphs when a sentence captures the entity mention
+   • Don't make quotes so narrow they lose essential context
+   • Include enough surrounding text to be meaningful but stay focused
+
+✅ CORRECT APPROACH: Copy the core text content with the same words, spellings, and meaning structure.
 
 OUTPUT FORMAT:
 {{
@@ -322,6 +368,44 @@ CRITICAL REQUIREMENTS:
 IMPORTANT: The 'related' field must contain specific entity names (e.g., "BRCA1", "breast cancer"),
 not entity types (e.g., "genes", "diseases"). These names will be used to generate pair candidates.
 
+EVIDENCE QUOTE REQUIREMENTS - ABSOLUTELY CRITICAL:
+• Quotes must be VERBATIM - copy the meaningful text content exactly as written
+• Use the same words, spellings, and structure as the original document
+• Copy the text EXACTLY as written, including any unusual phrasing
+
+ELLIPSIS ("...") USAGE - VERY RESTRICTED:
+✅ ALLOWED: Only to skip irrelevant words within the SAME SENTENCE
+   • "The protein... plays a crucial role" (skipping adjectives in middle)
+   • Must be the same sentence, same location, continuous text
+
+❌ NOT ALLOWED: Almost all other uses are wrong
+   • Never join different sentences with "..."
+   • Never join different paragraphs or sections
+   • Never use "..." at the start of quotes
+   • If unsure, don't use ellipsis at all - use shorter quotes instead
+
+COMMON ACCURACY ISSUES:
+
+❌ SPLIT QUOTES: Combining non-adjacent text (MOST COMMON ERROR)
+   • NEVER combine text that isn't written together in the document
+   • Each quote must be EXACTLY as written in one continuous location
+   • Use multiple shorter quotes rather than one combined quote
+
+❌ WORD SUBSTITUTIONS: Using synonyms or similar words
+   • "It suggests" instead of "This suggests"
+   • "The gene" instead of "This gene"
+
+❌ ALTERNATIVE SPELLINGS: Using different spellings
+   • "calcination" instead of "calcification"
+
+❌ REFERENCE ARTIFACTS: Including document metadata
+   • Reference numbers, citation text, figure references
+
+❌ FABRICATED CONTENT: Never invent quotes that don't exist
+   • If you can't find suitable text, use empty evidence array
+
+✅ CORRECT APPROACH: Copy the core text content with the same words, spellings, and meaning structure.
+
 Context mentions:
 {{contexts}}
 
@@ -463,6 +547,44 @@ CRITICAL REQUIREMENTS:
 2. Consider if the evidence is explicit or implicit
 3. Assess your confidence level (high/medium/low)
 4. Provide exact quotes supporting the relationship
+
+EVIDENCE QUOTE REQUIREMENTS - ABSOLUTELY CRITICAL:
+• Quotes must be VERBATIM - copy the meaningful text content exactly as written
+• Use the same words, spellings, and structure as the original document
+• Copy the text EXACTLY as written, including any unusual phrasing
+
+ELLIPSIS ("...") USAGE - VERY RESTRICTED:
+✅ ALLOWED: Only to skip irrelevant words within the SAME SENTENCE
+   • "The protein... plays a crucial role" (skipping adjectives in middle)
+   • Must be the same sentence, same location, continuous text
+
+❌ NOT ALLOWED: Almost all other uses are wrong
+   • Never join different sentences with "..."
+   • Never join different paragraphs or sections
+   • Never use "..." at the start of quotes
+   • If unsure, don't use ellipsis at all - use shorter quotes instead
+
+COMMON ACCURACY ISSUES:
+
+❌ SPLIT QUOTES: Combining non-adjacent text (MOST COMMON ERROR)
+   • NEVER combine text that isn't written together in the document
+   • Each quote must be EXACTLY as written in one continuous location
+   • Use multiple shorter quotes rather than one combined quote
+
+❌ WORD SUBSTITUTIONS: Using synonyms or similar words
+   • "It suggests" instead of "This suggests"
+   • "The gene" instead of "This gene"
+
+❌ ALTERNATIVE SPELLINGS: Using different spellings
+   • "calcination" instead of "calcification"
+
+❌ REFERENCE ARTIFACTS: Including document metadata
+   • Reference numbers, citation text, figure references
+
+❌ FABRICATED CONTENT: Never invent quotes that don't exist
+   • If you can't find suitable text, use empty evidence array
+
+✅ CORRECT APPROACH: Copy the core text content with the same words, spellings, and meaning structure.
 
 Evidence evaluation:
 - Entity A: {{entity_a_name}} ({{entity_a_kind}})
