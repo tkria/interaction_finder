@@ -13,12 +13,17 @@ Following pydantic-ai patterns:
 """
 
 from typing import List, Union
-from pydantic_ai import Agent
+from pydantic_ai import Agent, ModelRetry, RunContext
 from pydantic_ai.models import Model
 
 from .deps import ExtractionDepsV3
 from .models import PairEvaluationOut
 from ..extraction_graph_v2.models import SimpleEntityListOut, AssessmentOut
+from ..extraction_graph_v2.quote_validation import (
+    QuoteValidator,
+    compute_bag_of_words_similarity,
+)
+from ..resources import normalize_text_for_matching
 from ..models import Term
 
 
@@ -84,12 +89,203 @@ OUTPUT FORMAT:
 Context: {task_context}
 """
 
-    return Agent(
+    agent = Agent(
         model=model,
         output_type=SimpleEntityListOut,
         system_prompt=system_prompt,
         deps_type=ExtractionDepsV3,
     )
+
+    # Create quote validator for this agent
+    quote_validator = QuoteValidator(auto_accept_threshold=85.0)
+
+    # Validator 1: Entity structure validation
+    # Must run first to ensure basic entity structure before quote validation
+    @agent.output_validator
+    def validate_entities(out: SimpleEntityListOut) -> SimpleEntityListOut:
+        """Ensure we provide properly structured entities."""
+        # Check if entities are empty but reasoning contains entity names
+        if not out.entities and out.reasoning:
+            # Look for signs that entities were listed in reasoning instead
+            reasoning_lower = out.reasoning.lower()
+            entity_indicators = [
+                "gene",
+                "disease",
+                "mutation",
+                "syndrome",
+                "cancer",
+                "deficiency",
+            ]
+
+            if any(indicator in reasoning_lower for indicator in entity_indicators):
+                raise ModelRetry(
+                    "Entities appear to be listed in reasoning field instead of entities list. "
+                    'Please put each entity in the \'entities\' list as {"name": "EXACT_TEXT", "kind": "gene|disease"}. '
+                    "Use reasoning field only to explain your extraction process."
+                )
+
+        if not out.entities and not out.reasoning:
+            raise ModelRetry(
+                "Must provide extracted entities or explain why no entities were found"
+            )
+
+        # Basic validation for entity structure
+        for entity in out.entities:
+            if not entity.name or not entity.kind:
+                raise ModelRetry("All entities must have both 'name' and 'kind' fields")
+
+            # Validate entity kind is in expected kinds
+            if entity.kind not in entity_kinds:
+                raise ModelRetry(
+                    f"Entity kind '{entity.kind}' must be one of: {', '.join(entity_kinds)}"
+                )
+
+        return out
+
+    # Validator 2: Quote existence validation
+    # Checks that each entity has quotes mentioning the entity name or alias
+    @agent.output_validator
+    def validate_quotes_exist(out: SimpleEntityListOut) -> SimpleEntityListOut:
+        """
+        Basic validation of entity quotes structure and content.
+        """
+        for entity in out.entities:
+            entity_name = entity.name
+            entity_quotes = entity.quotes
+
+            if not entity_quotes:
+                raise ModelRetry(
+                    f"Entity '{entity_name}' has no supporting quotes. "
+                    "Please provide at least one quote that mentions this entity."
+                )
+
+            # Check that at least one quote contains the entity name or alias
+            entity_found_in_quotes = False
+
+            for quote_text in entity_quotes:
+                normalized_quote = normalize_text_for_matching(quote_text)
+                normalized_entity_name = normalize_text_for_matching(entity_name)
+
+                # Check if entity name appears in quote
+                if normalized_entity_name in normalized_quote:
+                    entity_found_in_quotes = True
+                    break
+
+                # Check aliases if provided
+                if entity.aliases:
+                    for alias in entity.aliases:
+                        normalized_alias = normalize_text_for_matching(alias)
+                        if normalized_alias in normalized_quote:
+                            entity_found_in_quotes = True
+                            break
+                    if entity_found_in_quotes:
+                        break
+
+            # Fail if NO quotes contain the entity name or aliases
+            if not entity_found_in_quotes:
+                alias_info = ""
+                if entity.aliases:
+                    alias_info = f" or aliases {entity.aliases}"
+                raise ModelRetry(
+                    f"No quotes for entity '{entity_name}' contain the entity name{alias_info}. "
+                    f"At least one quote must explicitly mention the entity being described. "
+                    "Other quotes can use implicit references like 'the protein' or 'mutant cells'. "
+                    "If the entity has alternative names, include them in the 'aliases' field."
+                )
+
+        return out
+
+    # Validator 3: Quote validation using alignment system
+    # Uses QuoteValidator for high-confidence auto-correction
+    @agent.output_validator
+    def validate_resourcequote_creation(
+        ctx: RunContext[ExtractionDepsV3], out: SimpleEntityListOut
+    ) -> SimpleEntityListOut:
+        """
+        Validate ResourceQuote creation using the new quote validation system.
+        Handles auto-correction for high-confidence fixes.
+        """
+        # Access resources from the context
+        current_resources = ctx.deps.current_resources
+        if not current_resources:
+            return out  # Skip validation if no resources available
+
+        # Since we're processing one document at a time, use the first (only) resource
+        resource = current_resources[0] if current_resources else None
+        if not resource:
+            return out
+
+        # Validate quotes for each entity
+        for entity in out.entities:
+            entity_name = entity.name
+            entity_kind = entity.kind
+
+            # Validate each quote for this entity
+            for i, quote_text in enumerate(entity.quotes):
+                quote_text = quote_text.strip()
+
+                # Use the new validation system
+                validated_quote = quote_validator.validate_and_correct_quote(
+                    entity_name=entity_name,
+                    entity_kind=entity_kind,
+                    quote_text=quote_text,
+                    resource=resource,
+                    quote_error_log=ctx.deps.quote_error_log,
+                    current_retry=ctx.retry,
+                )
+
+                # If validation/correction succeeded, update the quote
+                if validated_quote and validated_quote.query_text != quote_text:
+                    entity.quotes[i] = validated_quote.query_text
+
+        return out
+
+    # Validator 4: Success tracking
+    # Marks previous errors as resolved when retries succeed
+    @agent.output_validator
+    def log_successful_quotes(
+        ctx: RunContext[ExtractionDepsV3], out: SimpleEntityListOut
+    ) -> SimpleEntityListOut:
+        """Log successful quotes to match against previous errors using bag-of-words similarity."""
+        current_retry = ctx.retry
+
+        # If this is a retry (retry > 0), mark previous errors as resolved
+        if current_retry > 0:
+            for error_record in ctx.deps.quote_error_log:
+                if (
+                    error_record.retry_attempt == current_retry
+                    and not error_record.resolved
+                ):
+                    # Find entity in current successful output
+                    for entity in out.entities:
+                        if entity.name == error_record.entity_name:
+                            # Find best matching quote using bag-of-words similarity
+                            best_match = None
+                            best_similarity = 0.0
+                            similarity_threshold = (
+                                0.3  # Require at least 30% word overlap
+                            )
+
+                            for quote_text in entity.quotes:
+                                similarity = compute_bag_of_words_similarity(
+                                    error_record.original_quote, quote_text
+                                )
+                                if (
+                                    similarity > best_similarity
+                                    and similarity >= similarity_threshold
+                                ):
+                                    best_similarity = similarity
+                                    best_match = quote_text.strip()
+
+                            # Mark as resolved if we found a good match
+                            if best_match:
+                                error_record.final_accepted_quote = best_match
+                                error_record.resolved = True
+                            break
+
+        return out
+
+    return agent
 
 
 def create_assessment_agent_v3(

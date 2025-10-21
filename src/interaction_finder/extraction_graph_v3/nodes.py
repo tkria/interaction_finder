@@ -191,6 +191,9 @@ class ExtractEntities(BaseNode[ExtractionStateV3, ExtractionDepsV3]):
             target_term=target_term,
         )
 
+        # Set current resources for validators (V3 processes one document at a time)
+        deps.current_resources = [resource]
+
         # Run extraction with timing
         start_time = time.time()
         try:
