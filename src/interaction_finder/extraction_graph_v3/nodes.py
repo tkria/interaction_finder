@@ -197,7 +197,7 @@ class ExtractEntities(BaseNode[ExtractionStateV3, ExtractionDepsV3]):
         # Run extraction with timing
         start_time = time.time()
         try:
-            result = await agent.run(resource.text, deps=deps)
+            result = await agent.run(resource.text, deps=deps, max_retries=5)
             duration = time.time() - start_time
 
             state.metrics.entities_extraction_calls += 1
@@ -504,7 +504,7 @@ class AssessIndividually(BaseNode[ExtractionStateV3, ExtractionDepsV3]):
         # Run assessment with timing
         start_time = time.time()
         try:
-            result = await agent.run(prompt, deps=deps)
+            result = await agent.run(prompt, deps=deps, max_retries=5)
             duration = time.time() - start_time
 
             state.metrics.assessment_calls += 1
@@ -1094,7 +1094,7 @@ class EvaluatePairs(BaseNode[ExtractionStateV3, ExtractionDepsV3]):
         # Run evaluation with timing
         start_time = time.time()
         try:
-            result = await agent.run(prompt, deps=deps)
+            result = await agent.run(prompt, deps=deps, max_retries=5)
             duration = time.time() - start_time
 
             logger.debug(

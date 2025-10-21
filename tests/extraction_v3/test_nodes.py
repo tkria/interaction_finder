@@ -292,7 +292,7 @@ class TestEntityDeduplication:
                 )
             )
 
-        mock_agent.run.side_effect = lambda text, deps: make_result(text)
+        mock_agent.run.side_effect = lambda text, deps, **kwargs: make_result(text)
 
         with patch(
             "interaction_finder.extraction_graph_v3.nodes.create_entity_extractor_v3",
@@ -453,7 +453,7 @@ class TestParallelProcessing:
         # Track calls to verify parallelism
         call_times = []
 
-        async def mock_agent_run(text, deps):
+        async def mock_agent_run(text, deps, **kwargs):
             call_times.append(asyncio.get_event_loop().time())
             await asyncio.sleep(0.1)  # Simulate LLM call
             return MockAgentRunResult(
@@ -532,7 +532,7 @@ class TestErrorHandling:
         # Mock agent that fails on first doc, succeeds on second
         call_count = [0]
 
-        async def mock_agent_run(text, deps):
+        async def mock_agent_run(text, deps, **kwargs):
             call_count[0] += 1
             if call_count[0] == 1:
                 raise Exception("First document failed")
@@ -1070,7 +1070,7 @@ class TestConcurrentAssessment:
         # Track concurrent calls
         call_times = []
 
-        async def mock_agent_run(prompt, deps):
+        async def mock_agent_run(prompt, deps, **kwargs):
             call_times.append(asyncio.get_event_loop().time())
             await asyncio.sleep(0.1)  # Simulate LLM call
             return MockAgentRunResult(
@@ -1161,7 +1161,7 @@ class TestAssessmentErrorHandling:
         # Mock agent that fails on first entity, succeeds on second
         call_count = [0]
 
-        async def mock_agent_run(prompt, deps):
+        async def mock_agent_run(prompt, deps, **kwargs):
             call_count[0] += 1
             if call_count[0] == 1:
                 raise Exception("First assessment failed")
@@ -1843,7 +1843,7 @@ class TestEvaluatePairsBasic:
         # Mock agent with alternating results
         call_count = [0]
 
-        async def mock_agent_run(prompt, deps):
+        async def mock_agent_run(prompt, deps, **kwargs):
             call_count[0] += 1
             if call_count[0] == 1:
                 return MockAgentRunResult(
@@ -2178,7 +2178,7 @@ class TestParallelEvaluation:
         # Track parallel calls
         call_times = []
 
-        async def mock_agent_run(prompt, deps):
+        async def mock_agent_run(prompt, deps, **kwargs):
             call_times.append(asyncio.get_event_loop().time())
             await asyncio.sleep(0.1)  # Simulate LLM call
             return MockAgentRunResult(
@@ -2264,7 +2264,7 @@ class TestEvaluationErrorHandling:
         # Mock agent that fails on first pair, succeeds on second
         call_count = [0]
 
-        async def mock_agent_run(prompt, deps):
+        async def mock_agent_run(prompt, deps, **kwargs):
             call_count[0] += 1
             if call_count[0] == 1:
                 raise Exception("First evaluation failed")
@@ -2377,7 +2377,7 @@ class TestAcceptanceRate:
         # Mock agent with 50% acceptance
         call_count = [0]
 
-        async def mock_agent_run(prompt, deps):
+        async def mock_agent_run(prompt, deps, **kwargs):
             call_count[0] += 1
             return MockAgentRunResult(
                 PairEvaluationOut(
