@@ -3,6 +3,7 @@ Quote validation logic and validators.
 """
 
 import logging
+from pathlib import Path
 from typing import List, Optional, TYPE_CHECKING
 from pydantic_ai import ModelRetry
 from rich.console import Console
@@ -13,12 +14,42 @@ from datetime import datetime
 from .alignment import SequenceAligner, ErrorType
 from .corrections import QuoteCorrector
 from .error_messages import build_retry_message
+from ...fetcher.utils import url_to_hash_base36
 
 if TYPE_CHECKING:
     from ...resources import Resource, ResourceQuote
     from ..models import QuoteErrorRecord
 
 logger = logging.getLogger(__name__)
+
+
+def _get_cache_filename(url: str) -> str:
+    """
+    Compute cache filename for a URL.
+
+    Checks for actual cache files with collision resolution suffixes
+    and returns the filename if found, or the expected base filename.
+
+    Args:
+        url: Resource URL
+
+    Returns:
+        Cache filename (e.g. "abc123de.md" or "abc123de_1.md")
+    """
+    base_hash = url_to_hash_base36(url)
+
+    # Check for cache files with collision resolution
+    # Try both 'cache' (default) and '.cache' (alternative) directories
+    for cache_dirname in ["cache", ".cache"]:
+        cache_dir = Path(cache_dirname)
+        for probe in range(10):  # COLLISION_PROBE_LIMIT from cache.py
+            hash_str = base_hash if probe == 0 else f"{base_hash}_{probe}"
+            cache_path = cache_dir / f"{hash_str}.md"
+            if cache_path.exists():
+                return f"{hash_str}.md"
+
+    # No existing file found, return expected base filename
+    return f"{base_hash}.md"
 
 
 class QuoteValidator:
@@ -141,7 +172,7 @@ class QuoteValidator:
                 )
 
         # Auto-correction not possible or failed - prepare for LLM retry
-        self._log_quote_failure(entity_name, quote_text, suggestions)
+        self._log_quote_failure(entity_name, quote_text, suggestions, resource)
 
         # Build retry message
         retry_message = build_retry_message(
@@ -255,7 +286,11 @@ class QuoteValidator:
         )
 
     def _log_quote_failure(
-        self, entity_name: str, quote_text: str, suggestions: List[tuple]
+        self,
+        entity_name: str,
+        quote_text: str,
+        suggestions: List[tuple],
+        resource: "Resource",
     ) -> None:
         """Log quote validation failure with rich formatting."""
         if not suggestions:
@@ -264,11 +299,16 @@ class QuoteValidator:
             best_suggestion, confidence = suggestions[0]
             suggestion_text = f"[yellow]Best suggestion ({confidence:.1f}%):[/yellow]\n{best_suggestion[:100]}..."
 
+        # Get cache filename for manual inspection
+        cache_filename = _get_cache_filename(resource.id.url)
+
         self.console.print(
             Panel(
                 f"[red]❌ QUOTE FAILED[/red] {entity_name}\n"
                 f"[yellow]Failed quote:[/yellow] {quote_text[:100]}...\n"
-                f"{suggestion_text}",
+                f"{suggestion_text}\n"
+                f"[blue]Source:[/blue] {resource.id.url}\n"
+                f"[blue]Cache file:[/blue] {cache_filename}",
                 title="Quote Validation Error",
                 border_style="red",
             )
