@@ -800,8 +800,8 @@ class TestResource:
         assert quote.get_quote_text() == "BRCA1 gene"
         assert quote.resource == resource
 
-        # Test non-existent quote raises ValueError
-        with pytest.raises(ValueError, match="Quote text not found in resource"):
+        # Test non-existent quote raises QuoteNotFoundError (subclass of ValueError)
+        with pytest.raises(ValueError, match="Quote not found in resource"):
             resource.quote("nonexistent text")
 
 
@@ -1053,7 +1053,7 @@ class TestResourceQuote:
     def test_from_quote_no_match(self):
         """Test creating ResourceQuote from non-existent quote."""
         quote = "nonexistent text"
-        with pytest.raises(ValueError, match="Quote text not found in resource"):
+        with pytest.raises(ValueError, match="Quote not found in resource"):
             ResourceQuote(self.resource, quote)
 
     def test_get_context(self):
@@ -1079,8 +1079,8 @@ class TestResourceQuote:
         fragment3 = ResourceQuote(self.resource, "DNA  repair")  # Whitespace tolerance
         assert fragment3.get_quote_text() == "DNA repair"
 
-        # Invalid text should raise ValueError
-        with pytest.raises(ValueError, match="Quote text not found"):
+        # Invalid text should raise ValueError (QuoteNotFoundError is subclass)
+        with pytest.raises(ValueError, match="Quote not found"):
             ResourceQuote(self.resource, "RNA repair")
 
     def test_complex_text_quote_matching(self):
@@ -1383,7 +1383,7 @@ class TestDisjointQuotes:
         resource = pool.add("https://example.com", "Test Document", document_text)
 
         # Should fail when segments don't appear in order
-        with pytest.raises(ValueError, match="Quote text not found"):
+        with pytest.raises(ValueError, match="Quote not found"):
             ResourceQuote(resource, "nonexistent ... segments ... here")
 
     def test_ellipsis_variations(self):

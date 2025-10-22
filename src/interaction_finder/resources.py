@@ -11,10 +11,15 @@ from urllib.parse import urlparse, urlunparse
 import re
 import bisect
 import unicodedata
+from dataclasses import dataclass
+from enum import Enum
 from difflib import SequenceMatcher
-from typing import List, Optional, Tuple, Union
+from typing import List, Optional, Tuple, Union, TYPE_CHECKING
 from pydantic import BaseModel, Field, field_validator, ValidationInfo
 from rapidfuzz import fuzz
+
+if TYPE_CHECKING:
+    pass  # For forward references
 
 
 # Greek letter mappings for scientific text normalization (lowercase only)
@@ -45,6 +50,297 @@ GREEK_LETTER_MAP = {
     "ψ": "psi",
     "ω": "omega",
 }
+
+# Fuzzy matching thresholds
+FUZZY_SUGGESTION_THRESHOLD: float = 0.75  # Minimum similarity for suggestions
+
+
+class ErrorType(Enum):
+    """Types of quote validation errors based on alignment patterns."""
+
+    SPLIT_QUOTE = "split_quote"  # Non-contiguous matching blocks
+    WORD_SUBSTITUTION = "word_substitution"  # High similarity, specific mismatches
+    INSERTION = "insertion"  # Extra words in quote
+    DELETION = "deletion"  # Missing words in quote
+    PARAPHRASE = "paraphrase"  # Low similarity, some structure preserved
+    REORDERING = "reordering"  # Same words, wrong order
+    NOT_FOUND = "not_found"  # No significant alignment
+
+
+@dataclass
+class MatchingBlock:
+    """Represents a contiguous matching block between quote and document."""
+
+    quote_start: int  # Start position in quote words
+    quote_end: int  # End position in quote words
+    doc_start: int  # Start position in document words
+    doc_end: int  # End position in document words
+    length: int  # Number of matching words
+
+    @property
+    def quote_span(self) -> Tuple[int, int]:
+        """Get quote span as (start, end) tuple."""
+        return (self.quote_start, self.quote_end)
+
+    @property
+    def doc_span(self) -> Tuple[int, int]:
+        """Get document span as (start, end) tuple."""
+        return (self.doc_start, self.doc_end)
+
+
+@dataclass
+class CorrectionSuggestion:
+    """A suggested correction for a failed quote match."""
+
+    text: str  # The suggested quote text
+    confidence: float  # Overall confidence score (0.0 to 1.0)
+    similarity: float  # Fuzzy similarity score
+    explanation: str  # Human-readable explanation
+
+    # Optional detailed metrics (populated by V2 alignment system)
+    alignment_score: Optional[float] = None
+    contiguity_score: Optional[float] = None
+    boundary_quality: Optional[float] = None
+
+
+class QuoteValidationError(ValueError):
+    """
+    Base class for all quote validation failures.
+
+    Inherits from ValueError for backwards compatibility with existing
+    code that catches ValueError.
+    """
+
+    def __init__(
+        self, quote_text: str, resource: "Resource", similarity_threshold: float
+    ):
+        self.quote_text = quote_text
+        self.resource = resource
+        self.similarity_threshold = similarity_threshold
+        super().__init__(self._build_message())
+
+    def _build_message(self) -> str:
+        """Subclasses override to provide specific messages."""
+        return f"Quote validation failed: {self.quote_text!r}"
+
+
+class QuoteNotFoundError(QuoteValidationError):
+    """
+    Raised when quote has no match at all in the resource.
+
+    This represents a complete failure - no similar text was found even
+    at the minimum FUZZY_SUGGESTION_THRESHOLD.
+    """
+
+    def _build_message(self) -> str:
+        return f"Quote not found in resource: {self.quote_text!r}"
+
+
+class QuoteNearMatchError(QuoteValidationError):
+    """Base for near-match errors with suggestions."""
+
+    def __init__(
+        self,
+        quote_text: str,
+        resource: "Resource",
+        similarity_threshold: float,
+        suggestions: List[CorrectionSuggestion],
+        similarity: float,
+    ):
+        self.suggestions = suggestions
+        self.similarity = similarity
+        super().__init__(quote_text, resource, similarity_threshold)
+
+    def best_suggestion(self) -> CorrectionSuggestion:
+        """Get the highest-confidence suggestion."""
+        return self.suggestions[0]
+
+
+class SplitQuoteError(QuoteNearMatchError):
+    """Quote matches in multiple non-contiguous locations."""
+
+    def __init__(
+        self,
+        quote_text: str,
+        resource: "Resource",
+        similarity_threshold: float,
+        suggestions: List[CorrectionSuggestion],
+        similarity: float,
+        matching_blocks: List[MatchingBlock],
+        coverage_ratio: float,
+    ):
+        self.matching_blocks = matching_blocks
+        self.coverage_ratio = coverage_ratio
+        super().__init__(
+            quote_text, resource, similarity_threshold, suggestions, similarity
+        )
+
+    def get_block_gaps(self) -> List[int]:
+        """Get distances between matching blocks in document."""
+        if len(self.matching_blocks) <= 1:
+            return []
+
+        gaps = []
+        for i in range(len(self.matching_blocks) - 1):
+            gap = (
+                self.matching_blocks[i + 1].doc_start - self.matching_blocks[i].doc_end
+            )
+            gaps.append(gap)
+        return gaps
+
+    def suggest_ellipsis_format(self) -> str:
+        """Suggest an ellipsis-formatted quote based on matching blocks."""
+        parts = []
+        for block in self.matching_blocks:
+            words = self.resource.normalized_text.split()[
+                block.doc_start : block.doc_end
+            ]
+            parts.append(" ".join(words))
+        return " ... ".join(parts)
+
+    def _build_message(self) -> str:
+        gaps = self.get_block_gaps()
+        return (
+            f"Quote split across {len(self.matching_blocks)} non-contiguous sections: {self.quote_text!r}\n"
+            f"Coverage: {self.coverage_ratio:.1%}, Gaps: {gaps}\n"
+            f"Suggested ellipsis format: {self.suggest_ellipsis_format()!r}"
+        )
+
+
+class WordSubstitutionError(QuoteNearMatchError):
+    """Quote has specific word substitutions."""
+
+    def __init__(
+        self,
+        quote_text: str,
+        resource: "Resource",
+        similarity_threshold: float,
+        suggestions: List[CorrectionSuggestion],
+        similarity: float,
+        substitutions: List[Tuple[int, str, str]],  # (position, quote_word, doc_word)
+    ):
+        self.substitutions = substitutions
+        super().__init__(
+            quote_text, resource, similarity_threshold, suggestions, similarity
+        )
+
+    def _build_message(self) -> str:
+        sub_details = ", ".join(
+            f"'{quote_word}' → '{doc_word}' at pos {pos}"
+            for pos, quote_word, doc_word in self.substitutions[:3]  # Show first 3
+        )
+        return (
+            f"Quote has word substitutions: {self.quote_text!r}\n"
+            f"Substitutions: {sub_details}\n"
+            f"Suggested: {self.best_suggestion().text!r}"
+        )
+
+
+class InsertionError(QuoteNearMatchError):
+    """Quote contains extra words not in document."""
+
+    def __init__(
+        self,
+        quote_text: str,
+        resource: "Resource",
+        similarity_threshold: float,
+        suggestions: List[CorrectionSuggestion],
+        similarity: float,
+        insertions: List[Tuple[int, str]],  # (position, inserted_word)
+    ):
+        self.insertions = insertions
+        super().__init__(
+            quote_text, resource, similarity_threshold, suggestions, similarity
+        )
+
+    def _build_message(self) -> str:
+        inserted_words = [word for _, word in self.insertions]
+        return (
+            f"Quote contains extra words: {self.quote_text!r}\n"
+            f"Inserted words: {', '.join(inserted_words[:5])}\n"
+            f"Suggested (with insertions removed): {self.best_suggestion().text!r}"
+        )
+
+
+class DeletionError(QuoteNearMatchError):
+    """Quote is missing words from document."""
+
+    def __init__(
+        self,
+        quote_text: str,
+        resource: "Resource",
+        similarity_threshold: float,
+        suggestions: List[CorrectionSuggestion],
+        similarity: float,
+        deletions: List[Tuple[int, str]],  # (position, missing_word)
+    ):
+        self.deletions = deletions
+        super().__init__(
+            quote_text, resource, similarity_threshold, suggestions, similarity
+        )
+
+    def _build_message(self) -> str:
+        missing_words = [word for _, word in self.deletions]
+        return (
+            f"Quote is missing words: {self.quote_text!r}\n"
+            f"Missing words: {', '.join(missing_words[:5])}\n"
+            f"Suggested (with missing words added): {self.best_suggestion().text!r}"
+        )
+
+
+class ParaphraseError(QuoteNearMatchError):
+    """Quote is paraphrased - low similarity but some structure preserved."""
+
+    def __init__(
+        self,
+        quote_text: str,
+        resource: "Resource",
+        similarity_threshold: float,
+        suggestions: List[CorrectionSuggestion],
+        similarity: float,
+        coverage_ratio: float,
+        matching_words: List[str],
+    ):
+        self.coverage_ratio = coverage_ratio
+        self.matching_words = matching_words
+        super().__init__(
+            quote_text, resource, similarity_threshold, suggestions, similarity
+        )
+
+    def _build_message(self) -> str:
+        return (
+            f"Quote is paraphrased: {self.quote_text!r}\n"
+            f"Similarity: {self.similarity:.1%} (threshold: {self.similarity_threshold:.1%})\n"
+            f"Coverage: {self.coverage_ratio:.1%}\n"
+            f"Matching words: {', '.join(self.matching_words[:10])}\n"
+            f"Closest match: {self.best_suggestion().text!r}"
+        )
+
+
+class ReorderingError(QuoteNearMatchError):
+    """Quote has words in wrong order."""
+
+    def __init__(
+        self,
+        quote_text: str,
+        resource: "Resource",
+        similarity_threshold: float,
+        suggestions: List[CorrectionSuggestion],
+        similarity: float,
+        expected_order: List[Tuple[int, str]],  # (expected_position, word)
+        actual_order: List[Tuple[int, str]],  # (actual_position, word)
+    ):
+        self.expected_order = expected_order
+        self.actual_order = actual_order
+        super().__init__(
+            quote_text, resource, similarity_threshold, suggestions, similarity
+        )
+
+    def _build_message(self) -> str:
+        return (
+            f"Quote has words in wrong order: {self.quote_text!r}\n"
+            f"Suggested (with correct order): {self.best_suggestion().text!r}"
+        )
 
 
 def normalize_text_for_matching(text: str) -> str:
@@ -801,20 +1097,25 @@ class Resource(BaseModel):
 
         return normalized_text, position_offsets
 
-    def quote(self, text: str) -> "ResourceQuote":
+    def quote(self, text: str, similarity_threshold: float = 1.0) -> "ResourceQuote":
         """
         Create a ResourceQuote by finding all occurrences of the given text in this resource.
 
         Args:
             text: Text to find and quote
+            similarity_threshold: Minimum similarity for matches (default: 1.0 for exact only).
+                - 1.0: Exact matching only
+                - <1.0: Enable fuzzy matching with auto-accept above this threshold
 
         Returns:
             ResourceQuote with all occurrences
 
         Raises:
-            ValueError: If quote text is not found in the resource
+            QuoteNotFoundError: If quote not found (no match at all)
+            QuoteNearMatchError subclasses: If similarity between FUZZY_SUGGESTION_THRESHOLD
+                and similarity_threshold (includes error-specific diagnostics)
         """
-        return ResourceQuote(self, text)
+        return ResourceQuote(self, text, similarity_threshold=similarity_threshold)
 
     def __repr__(self) -> str:
         """Informative representation for REPL display."""
@@ -1108,19 +1409,40 @@ class ResourceQuote(BaseModel):
         description="True if this quote contains ellipsis markers"
     )
 
-    def __init__(self, resource: Resource, text: str, **data):
+    # Fuzzy matching metadata (optional, populated when fuzzy matching used)
+    fuzzy_corrected: bool = Field(
+        default=False, description="Whether quote was auto-corrected via fuzzy matching"
+    )
+    original_query: Optional[str] = Field(
+        default=None, description="Original query text if fuzzy-corrected"
+    )
+    fuzzy_similarity: Optional[float] = Field(
+        default=None, description="Fuzzy similarity score if fuzzy matching was used"
+    )
+
+    def __init__(
+        self, resource: Resource, text: str, similarity_threshold: float = 1.0, **data
+    ):
         """
         Create ResourceQuote by finding all occurrences of text in resource.
 
-        Uses normalized text comparison for robust matching against formatting
-        differences while maintaining precise character spans in original text.
+        Tries multiple strategies in order:
+        0. Verbatim match in original text
+        1. Normalized match (handles formatting)
+        2. Shorthand expansion (e.g., "ISCA1,2" → "ISCA1")
+        3. Fuzzy matching (if similarity_threshold < 1.0)
 
         Args:
             resource: Resource to search within
             text: Text quote to locate
+            similarity_threshold: Minimum similarity for matches (default: 1.0).
+                - 1.0: Exact matching only (strategies 0-2)
+                - <1.0: Enable fuzzy matching, auto-accept above this threshold
 
         Raises:
-            ValueError: If quote text is not found in the resource
+            QuoteNotFoundError: If quote not found (no match at all)
+            QuoteNearMatchError subclasses: If similarity between FUZZY_SUGGESTION_THRESHOLD
+                and similarity_threshold (includes error-specific diagnostics)
         """
         # Allow direct construction if spans and query_text are provided
         if "spans" in data and "query_text" in data:
@@ -1132,6 +1454,123 @@ class ResourceQuote(BaseModel):
             super().__init__(resource=resource, **data)
             return
 
+        # Strategy 0: Try verbatim match in original text (preserves formatting)
+        verbatim_spans = self._find_verbatim(resource.text, text)
+        if verbatim_spans:
+            super().__init__(
+                resource=resource,
+                query_text=text,
+                spans=verbatim_spans,
+                is_disjoint=False,
+                fuzzy_corrected=False,
+            )
+            return
+
+        # Strategy 1: Try normalized match (handles formatting differences)
+        try:
+            spans, is_disjoint = self._find_normalized(resource, text)
+            super().__init__(
+                resource=resource,
+                query_text=text,
+                spans=spans,
+                is_disjoint=is_disjoint,
+                fuzzy_corrected=False,
+            )
+            return
+        except ValueError:
+            pass
+
+        # Strategy 2: Try shorthand expansion
+        for variant in expand_scientific_shorthand(text):
+            try:
+                spans, is_disjoint = self._find_normalized(resource, variant)
+                super().__init__(
+                    resource=resource,
+                    query_text=variant,
+                    spans=spans,
+                    is_disjoint=is_disjoint,
+                    fuzzy_corrected=False,
+                )
+                return
+            except ValueError:
+                continue
+
+        # Strategy 3: Fuzzy matching (if enabled via similarity_threshold < 1.0)
+        if similarity_threshold < 1.0:
+            fuzzy_result = fuzzy_match_quote(
+                text, resource.normalized_text, threshold=FUZZY_SUGGESTION_THRESHOLD
+            )
+
+            if fuzzy_result and fuzzy_result.similarity >= similarity_threshold:
+                # Auto-accept: create ResourceQuote with corrected text
+                try:
+                    spans, is_disjoint = self._find_normalized(
+                        resource, fuzzy_result.corrected_quote
+                    )
+                    super().__init__(
+                        resource=resource,
+                        query_text=fuzzy_result.corrected_quote,
+                        spans=spans,
+                        is_disjoint=is_disjoint,
+                        fuzzy_corrected=True,
+                        original_query=text,
+                        fuzzy_similarity=fuzzy_result.similarity,
+                    )
+                    return
+                except ValueError:
+                    pass
+
+            # Below threshold: raise error with suggestions
+            if fuzzy_result:
+                # Simple fuzzy suggestion (for now, just use ParaphraseError)
+                # Later can integrate V2 alignment system for richer error classification
+                suggestions = [
+                    CorrectionSuggestion(
+                        text=fuzzy_result.corrected_quote,
+                        confidence=fuzzy_result.similarity,
+                        similarity=fuzzy_result.similarity,
+                        explanation="Fuzzy match from RapidFuzz + difflib alignment",
+                    )
+                ]
+                raise ParaphraseError(
+                    quote_text=text,
+                    resource=resource,
+                    similarity_threshold=similarity_threshold,
+                    suggestions=suggestions,
+                    similarity=fuzzy_result.similarity,
+                    coverage_ratio=fuzzy_result.similarity,  # Approximate
+                    matching_words=[],  # TODO: extract from fuzzy_result if needed
+                )
+
+        # No match found with any strategy
+        raise QuoteNotFoundError(
+            quote_text=text,
+            resource=resource,
+            similarity_threshold=similarity_threshold,
+        )
+
+    def _find_verbatim(
+        self, original_text: str, quote_text: str
+    ) -> List[Tuple[int, int]]:
+        """Find all verbatim occurrences in original text."""
+        spans = []
+        pos = 0
+        while True:
+            idx = original_text.find(quote_text, pos)
+            if idx == -1:
+                break
+            spans.append((idx, idx + len(quote_text)))
+            pos = idx + 1
+        return spans
+
+    def _find_normalized(
+        self, resource: Resource, text: str
+    ) -> Tuple[List[Tuple[int, int]], bool]:
+        """
+        Find normalized match and return (spans, is_disjoint).
+
+        Raises ValueError if not found.
+        """
         # Check if this is a disjoint quote (both ... and …)
         segments = re.split(r"\s*(?:\.{3,}|…)\s*", text)
         segments = [s.strip() for s in segments if s.strip()]
@@ -1175,13 +1614,7 @@ class ResourceQuote(BaseModel):
                 raise ValueError(f"Quote text not found in resource: {text!r}")
 
             spans = self._original_positions(resource, all_spans)
-
-            super().__init__(
-                resource=resource,
-                query_text=text,
-                spans=spans,
-                is_disjoint=True,
-            )
+            return (spans, True)
         else:
             # Continuous quote - find all matches by looping
             normalized_text = resource.normalized_text
@@ -1200,13 +1633,7 @@ class ResourceQuote(BaseModel):
                 raise ValueError(f"Quote text not found in resource: {text!r}")
 
             spans = self._original_positions(resource, norm_spans)
-
-            super().__init__(
-                resource=resource,
-                query_text=text,
-                spans=spans,
-                is_disjoint=False,
-            )
+            return (spans, False)
 
     def _find_next_match(
         self, normalized_text: str, pattern: str, start: int = 0
