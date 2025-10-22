@@ -35,8 +35,8 @@ from ..extraction_graph_v2.parallelism import with_parallelism_control
 from ..resources import (
     ResourceId,
     Resource,
-    find_quote_with_fuzzy_matching,
-    FuzzySuggestion,
+    QuoteNotFoundError,
+    ParaphraseError,
 )
 
 if TYPE_CHECKING:
@@ -268,18 +268,21 @@ class ExtractEntities(BaseNode[ExtractionStateV3, ExtractionDepsV3]):
 
                 # Try fuzzy matching with configurable thresholds
                 # Automatically tries verbatim match first, then normalized, then fuzzy
-                result = find_quote_with_fuzzy_matching(
-                    resource=resource,
-                    quote_text=quote_text,
-                    auto_correct_threshold=deps.fuzzy_auto_correct_threshold,
-                    suggest_threshold=deps.fuzzy_suggest_threshold,
-                )
-
-                if isinstance(result, FuzzySuggestion):
+                try:
+                    quote = resource.quote(
+                        quote_text,
+                        similarity_threshold=deps.fuzzy_auto_correct_threshold,
+                    )
+                    # Success: exact or auto-corrected
+                    validated_quotes.append(quote)
+                    logger.debug(
+                        f"Validated quote for {entity_out.name}: {quote_text[:50]}..."
+                    )
+                except ParaphraseError as e:
                     # Log suggestion but don't include (below auto-correct threshold)
                     logger.warning(
                         f"Quote validation for {entity_out.name} below threshold "
-                        f"({result.similarity:.2f}): {quote_text[:50]}..."
+                        f"({e.similarity:.2f}): {quote_text[:50]}..."
                     )
                     # Record quote error (treat as paraphrased)
                     from ..extraction_graph_v2.models import QuoteErrorRecord
@@ -290,11 +293,11 @@ class ExtractEntities(BaseNode[ExtractionStateV3, ExtractionDepsV3]):
                             entity_kind=entity_out.kind,
                             original_quote=quote_text,
                             error_type="paraphrased",
-                            suggested_corrections=[result.suggested_quote],
-                            matched_percentage=result.similarity,
+                            suggested_corrections=[e.best_suggestion().text],
+                            matched_percentage=e.similarity,
                         )
                     )
-                elif result is None:
+                except QuoteNotFoundError:
                     # No match found
                     logger.warning(
                         f"Quote validation failed for {entity_out.name}: {quote_text[:50]}..."
@@ -309,12 +312,6 @@ class ExtractEntities(BaseNode[ExtractionStateV3, ExtractionDepsV3]):
                             original_quote=quote_text,
                             error_type="not_found",
                         )
-                    )
-                else:
-                    # Valid ResourceQuote
-                    validated_quotes.append(result)
-                    logger.debug(
-                        f"Validated quote for {entity_out.name}: {quote_text[:50]}..."
                     )
 
             # Only include entities with at least one valid quote
@@ -617,19 +614,17 @@ These specific names will be used to generate pair candidates for evaluation.
 
             # Search all resources for this evidence
             for resource in state.resource_pool.resources:
-                quote = find_quote_with_fuzzy_matching(
-                    resource=resource,
-                    quote_text=evidence_text,
-                    auto_correct_threshold=0.90,
-                    suggest_threshold=0.75,
-                )
-                if quote and not isinstance(quote, FuzzySuggestion):
+                try:
+                    quote = resource.quote(evidence_text, similarity_threshold=0.90)
                     # Found valid quote in this resource
                     evidence_quotes.append(quote)
                     logger.debug(
                         f"Validated evidence for {entity.name}: {evidence_text[:50]}..."
                     )
                     break  # Found in this resource, move to next evidence
+                except (ParaphraseError, QuoteNotFoundError):
+                    # Not found in this resource, try next resource
+                    continue
 
         # Map potential to confidence score
         confidence_map = {"high": 0.9, "medium": 0.7, "low": 0.5, "none": 0.0}
@@ -1294,14 +1289,8 @@ If relationship exists, provide evidence quotes.
                 if resource is None:
                     continue
 
-                quote = find_quote_with_fuzzy_matching(
-                    resource=resource,
-                    quote_text=evidence_text,
-                    auto_correct_threshold=0.90,
-                    suggest_threshold=0.75,
-                )
-
-                if quote and not isinstance(quote, FuzzySuggestion):
+                try:
+                    quote = resource.quote(evidence_text, similarity_threshold=0.90)
                     # Found valid quote in this resource
                     evidence_quotes.append(quote)
                     logger.debug(
@@ -1310,6 +1299,9 @@ If relationship exists, provide evidence quotes.
                         f"{evidence_text[:50]}..."
                     )
                     break  # Found in this resource, move to next evidence
+                except (ParaphraseError, QuoteNotFoundError):
+                    # Not found in this resource, try next resource
+                    continue
 
         # If no evidence quotes in shared resources, search all resources as fallback
         if not evidence_quotes:
@@ -1324,20 +1316,17 @@ If relationship exists, provide evidence quotes.
                 evidence_text = evidence_text.strip()
 
                 for resource in state.resource_pool.resources:
-                    quote = find_quote_with_fuzzy_matching(
-                        resource=resource,
-                        quote_text=evidence_text,
-                        auto_correct_threshold=0.90,
-                        suggest_threshold=0.75,
-                    )
-
-                    if quote and not isinstance(quote, FuzzySuggestion):
+                    try:
+                        quote = resource.quote(evidence_text, similarity_threshold=0.90)
                         evidence_quotes.append(quote)
                         logger.debug(
                             f"Validated evidence quote in fallback search: "
                             f"{evidence_text[:50]}..."
                         )
                         break  # Found in this resource, move to next evidence
+                    except (ParaphraseError, QuoteNotFoundError):
+                        # Not found in this resource, try next resource
+                        continue
 
         return EntityPairOut(
             entity_a=candidate.entity_a,

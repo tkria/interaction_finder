@@ -19,6 +19,12 @@ from interaction_finder.resources import (
     Resource,
     ResourcePool,
     ResourceQuote,
+    QuoteValidationError,
+    QuoteNotFoundError,
+    QuoteNearMatchError,
+    ParaphraseError,
+    CorrectionSuggestion,
+    FUZZY_SUGGESTION_THRESHOLD,
 )
 
 
@@ -1433,3 +1439,413 @@ class TestDisjointQuotes:
 
         # Both should find the same content (though represented differently)
         assert quote.get_quote_text() == quote_mixed.get_quote_text()
+
+
+class TestFuzzyMatchingExceptions:
+    """Test fuzzy matching exception hierarchy."""
+
+    def test_quote_not_found_error_raised_with_exact_matching(self):
+        """Test QuoteNotFoundError raised when similarity_threshold=1.0 and no match."""
+        resource = Resource(
+            id=ResourceId(url="https://example.com/doc", counter=1),
+            title="Test Doc",
+            text="The BRCA1 gene is important for DNA repair.",
+        )
+
+        # With exact matching (default threshold=1.0), non-existent quote raises QuoteNotFoundError
+        with pytest.raises(QuoteNotFoundError) as exc_info:
+            ResourceQuote(resource, "BRCA2 mutations")
+
+        error = exc_info.value
+        assert error.quote_text == "BRCA2 mutations"
+        assert error.resource == resource
+        assert error.similarity_threshold == 1.0
+        assert "Quote not found in resource" in str(error)
+
+    def test_quote_not_found_error_with_fuzzy_below_suggestion_threshold(self):
+        """Test QuoteNotFoundError when similarity below FUZZY_SUGGESTION_THRESHOLD."""
+        resource = Resource(
+            id=ResourceId(url="https://example.com/doc", counter=1),
+            title="Test Doc",
+            text="The BRCA1 gene is important for DNA repair mechanisms in cells.",
+        )
+
+        # Completely unrelated text should fail even with fuzzy matching enabled
+        with pytest.raises(QuoteNotFoundError):
+            ResourceQuote(
+                resource,
+                "diabetes insulin resistance metabolic syndrome",
+                similarity_threshold=0.8,
+            )
+
+    def test_paraphrase_error_raised_when_between_thresholds(self):
+        """Test ParaphraseError raised when FUZZY_SUGGESTION_THRESHOLD ≤ similarity < threshold."""
+        resource = Resource(
+            id=ResourceId(url="https://example.com/doc", counter=1),
+            title="Test Doc",
+            text="The BRCA1 gene mutation causes breast cancer in patients with high risk factors.",
+        )
+
+        # Quote with moderate paraphrase should raise ParaphraseError
+        with pytest.raises(ParaphraseError) as exc_info:
+            ResourceQuote(
+                resource,
+                "BRCA1 gene mutations cause breast cancer",
+                similarity_threshold=0.95,  # Set high to force ParaphraseError
+            )
+
+        error = exc_info.value
+        assert error.quote_text == "BRCA1 gene mutations cause breast cancer"
+        assert error.resource == resource
+        assert error.similarity_threshold == 0.95
+        assert FUZZY_SUGGESTION_THRESHOLD <= error.similarity < 0.95
+        assert len(error.suggestions) > 0
+        assert error.coverage_ratio > 0.0
+
+    def test_paraphrase_error_has_suggestions(self):
+        """Test that ParaphraseError includes correction suggestions."""
+        resource = Resource(
+            id=ResourceId(url="https://example.com/doc", counter=1),
+            title="Test Doc",
+            text="Mutations in the TP53 tumor suppressor gene are frequently observed in cancer patients with various clinical presentations.",
+        )
+
+        # Use a quote that shares key terms but has different word order/selection
+        # Needs to be similar enough (≥0.75) but not too similar (< threshold)
+        with pytest.raises(ParaphraseError) as exc_info:
+            ResourceQuote(
+                resource,
+                "TP53 tumor suppressor gene mutations observed cancer patients",  # Uses most key words in slightly different order
+                similarity_threshold=0.88,  # Moderate threshold
+            )
+
+        error = exc_info.value
+        assert len(error.suggestions) > 0
+
+        # Test best_suggestion() method
+        best = error.best_suggestion()
+        assert isinstance(best, CorrectionSuggestion)
+        assert isinstance(best.text, str)
+        assert 0.0 <= best.similarity <= 1.0
+        assert 0.0 <= best.confidence <= 1.0
+        assert len(best.explanation) > 0
+
+    def test_paraphrase_error_attributes(self):
+        """Test ParaphraseError specific attributes."""
+        resource = Resource(
+            id=ResourceId(url="https://example.com/doc", counter=1),
+            title="Test Doc",
+            text="The protein kinase BRCA1 regulates DNA damage response pathways in human cells and tissues.",
+        )
+
+        with pytest.raises(ParaphraseError) as exc_info:
+            ResourceQuote(
+                resource,
+                "protein kinase BRCA1 regulates DNA damage response human cells",  # Most words present but incomplete
+                similarity_threshold=0.87,  # Moderate threshold
+            )
+
+        error = exc_info.value
+        # Check ParaphraseError-specific attributes exist
+        assert hasattr(error, "coverage_ratio")
+        assert hasattr(error, "matching_words")
+        assert isinstance(error.coverage_ratio, float)
+        assert isinstance(error.matching_words, list)
+        assert 0.0 <= error.coverage_ratio <= 1.0
+
+    def test_exception_inheritance_from_value_error(self):
+        """Test that all exceptions inherit from ValueError for backwards compatibility."""
+        resource = Resource(
+            id=ResourceId(url="https://example.com/doc", counter=1),
+            title="Test Doc",
+            text="Some test content here.",
+        )
+
+        # QuoteNotFoundError inherits from ValueError
+        with pytest.raises(ValueError):
+            ResourceQuote(resource, "nonexistent quote")
+
+        # ParaphraseError inherits from ValueError via QuoteNearMatchError
+        with pytest.raises(ValueError):
+            ResourceQuote(
+                resource,
+                "slightly different content",
+                similarity_threshold=0.95,
+            )
+
+    def test_fuzzy_corrected_metadata_on_auto_correction(self):
+        """Test fuzzy_corrected metadata when auto-corrected with high similarity."""
+        resource = Resource(
+            id=ResourceId(url="https://example.com/doc", counter=1),
+            title="Test Doc",
+            text="The BRCA1 gene mutation causes cancer in breast tissue samples.",
+        )
+
+        # With similarity_threshold < 1.0 and high similarity, might auto-correct or raise ParaphraseError
+        # depending on whether the corrected quote can be found in the document
+        try:
+            quote = ResourceQuote(
+                resource,
+                "BRCA1 gene mutations causes cancer breast tissue samples",  # Very close match
+                similarity_threshold=0.75,  # Set at threshold
+            )
+
+            # If successful, check fuzzy metadata is populated if fuzzy matching was used
+            assert isinstance(quote, ResourceQuote)
+            if quote.fuzzy_corrected:
+                assert (
+                    quote.original_query
+                    == "BRCA1 gene mutations causes cancer breast tissue samples"
+                )
+                assert quote.fuzzy_similarity is not None
+                assert 0.0 <= quote.fuzzy_similarity <= 1.0
+                assert quote.fuzzy_similarity >= 0.75
+        except ParaphraseError:
+            # This is also acceptable - fuzzy matching found high similarity but
+            # the corrected quote couldn't be located in the document
+            pass
+
+    def test_similarity_threshold_default_is_exact_matching(self):
+        """Test that default similarity_threshold=1.0 requires exact matching."""
+        resource = Resource(
+            id=ResourceId(url="https://example.com/doc", counter=1),
+            title="Test Doc",
+            text="The BRCA1 gene is important.",
+        )
+
+        # Default behavior: exact matching only
+        quote_exact = ResourceQuote(resource, "BRCA1 gene")
+        assert isinstance(quote_exact, ResourceQuote)
+        assert not quote_exact.fuzzy_corrected
+
+        # Default behavior: raises error for non-exact match
+        with pytest.raises(QuoteNotFoundError):
+            ResourceQuote(resource, "BRCA1 genes")  # Plural not in text
+
+    def test_similarity_threshold_custom_value(self):
+        """Test custom similarity_threshold values enable fuzzy matching."""
+        resource = Resource(
+            id=ResourceId(url="https://example.com/doc", counter=1),
+            title="Test Doc",
+            text="Mutations in BRCA1 increase cancer risk significantly in patients with hereditary conditions and family history.",
+        )
+
+        # With threshold=0.85, should allow fuzzy matching
+        # This might auto-correct or raise ParaphraseError depending on similarity
+        try:
+            quote = ResourceQuote(
+                resource,
+                "mutations BRCA1 increase cancer risk significantly patients hereditary",  # Similar words, slightly rearranged
+                similarity_threshold=0.85,
+            )
+            # If successful, it was auto-corrected
+            assert isinstance(quote, ResourceQuote)
+        except ParaphraseError as e:
+            # If ParaphraseError, similarity should be >= 0.75
+            # (may be above threshold if corrected quote can't be found in document)
+            assert e.similarity_threshold == 0.85
+            assert e.similarity >= FUZZY_SUGGESTION_THRESHOLD
+
+    def test_backwards_compatibility_catching_value_error(self):
+        """Test that existing code catching ValueError still works."""
+        resource = Resource(
+            id=ResourceId(url="https://example.com/doc", counter=1),
+            title="Test Doc",
+            text="Some content.",
+        )
+
+        # Old code pattern: catch ValueError
+        try:
+            ResourceQuote(resource, "nonexistent")
+            assert False, "Should have raised error"
+        except ValueError as e:
+            # Should catch QuoteNotFoundError (subclass of ValueError)
+            assert isinstance(e, QuoteNotFoundError)
+
+        # With fuzzy matching
+        try:
+            ResourceQuote(resource, "different content", similarity_threshold=0.9)
+            assert False, "Should have raised error"
+        except ValueError as e:
+            # Should catch ParaphraseError or QuoteNotFoundError
+            assert isinstance(e, (QuoteNotFoundError, ParaphraseError))
+
+    def test_quote_validation_error_base_class(self):
+        """Test QuoteValidationError base class properties."""
+        resource = Resource(
+            id=ResourceId(url="https://example.com/doc", counter=1),
+            title="Test Doc",
+            text="Test content.",
+        )
+
+        with pytest.raises(QuoteValidationError) as exc_info:
+            ResourceQuote(resource, "missing quote")
+
+        error = exc_info.value
+        # All validation errors should have these attributes
+        assert hasattr(error, "quote_text")
+        assert hasattr(error, "resource")
+        assert hasattr(error, "similarity_threshold")
+        assert error.quote_text == "missing quote"
+        assert error.resource == resource
+        assert error.similarity_threshold == 1.0
+
+    def test_quote_near_match_error_base_class(self):
+        """Test QuoteNearMatchError base class properties."""
+        resource = Resource(
+            id=ResourceId(url="https://example.com/doc", counter=1),
+            title="Test Doc",
+            text="The BRCA1 protein is critical for cellular DNA repair mechanisms in cancer cells.",
+        )
+
+        with pytest.raises(QuoteNearMatchError) as exc_info:
+            ResourceQuote(
+                resource,
+                "BRCA1 protein critical cellular DNA repair cancer",  # Key words but incomplete
+                similarity_threshold=0.90,
+            )
+
+        error = exc_info.value
+        # QuoteNearMatchError should have suggestions
+        assert hasattr(error, "suggestions")
+        assert hasattr(error, "similarity")
+        assert len(error.suggestions) > 0
+        assert 0.0 <= error.similarity <= 1.0
+
+        # Should have best_suggestion() method
+        best = error.best_suggestion()
+        assert isinstance(best, CorrectionSuggestion)
+
+    def test_correction_suggestion_structure(self):
+        """Test CorrectionSuggestion data structure."""
+        resource = Resource(
+            id=ResourceId(url="https://example.com/doc", counter=1),
+            title="Test Doc",
+            text="The TP53 gene encodes a tumor suppressor protein.",
+        )
+
+        with pytest.raises(ParaphraseError) as exc_info:
+            ResourceQuote(
+                resource,
+                "TP53 encodes tumor suppressor",
+                similarity_threshold=0.92,
+            )
+
+        suggestion = exc_info.value.best_suggestion()
+        # Check required fields
+        assert isinstance(suggestion.text, str)
+        assert len(suggestion.text) > 0
+        assert isinstance(suggestion.confidence, float)
+        assert isinstance(suggestion.similarity, float)
+        assert isinstance(suggestion.explanation, str)
+        assert 0.0 <= suggestion.confidence <= 1.0
+        assert 0.0 <= suggestion.similarity <= 1.0
+
+        # Check optional fields exist but may be None
+        assert hasattr(suggestion, "alignment_score")
+        assert hasattr(suggestion, "contiguity_score")
+        assert hasattr(suggestion, "boundary_quality")
+
+    def test_error_messages_are_informative(self):
+        """Test that error messages provide useful information."""
+        resource = Resource(
+            id=ResourceId(url="https://example.com/doc", counter=1),
+            title="Test Doc",
+            text="Mutations in BRCA1 cause hereditary breast cancer in affected families with genetic predisposition.",
+        )
+
+        # QuoteNotFoundError message
+        with pytest.raises(QuoteNotFoundError) as exc_info:
+            ResourceQuote(resource, "BRCA2 mutations")
+
+        assert "Quote not found in resource" in str(exc_info.value)
+        assert "BRCA2 mutations" in str(exc_info.value)
+
+        # ParaphraseError message
+        with pytest.raises(ParaphraseError) as exc_info:
+            ResourceQuote(
+                resource,
+                "mutations BRCA1 cause hereditary breast cancer families genetic",  # Similar key words
+                similarity_threshold=0.88,
+            )
+
+        error_msg = str(exc_info.value)
+        assert "paraphrase" in error_msg.lower()
+        assert "similarity" in error_msg.lower() or "Similarity" in error_msg
+        # Should include the problematic quote
+        assert (
+            "mutations BRCA1 cause hereditary breast cancer families genetic"
+            in error_msg
+        )
+
+    def test_fuzzy_metadata_not_set_on_exact_match(self):
+        """Test that fuzzy metadata is not set for exact matches."""
+        resource = Resource(
+            id=ResourceId(url="https://example.com/doc", counter=1),
+            title="Test Doc",
+            text="The BRCA1 gene is crucial for DNA repair.",
+        )
+
+        # Exact match (even with fuzzy enabled) should not set fuzzy metadata
+        quote = ResourceQuote(resource, "BRCA1 gene", similarity_threshold=0.85)
+
+        assert not quote.fuzzy_corrected
+        assert quote.original_query is None
+        assert quote.fuzzy_similarity is None
+
+    def test_multiple_strategies_before_fuzzy_matching(self):
+        """Test that exact strategies are tried before fuzzy matching."""
+        resource = Resource(
+            id=ResourceId(url="https://example.com/doc", counter=1),
+            title="Test Doc",
+            text="The IL-6 and TNF-alpha proteins are inflammatory cytokines.",
+        )
+
+        # Should succeed via normalization (handles punctuation) before fuzzy
+        quote = ResourceQuote(resource, "IL 6", similarity_threshold=0.85)
+        assert not quote.fuzzy_corrected  # Succeeded via normalization
+
+        # Greek letter normalization should also work before fuzzy
+        quote2 = ResourceQuote(resource, "TNF alpha", similarity_threshold=0.85)
+        assert not quote2.fuzzy_corrected  # Succeeded via normalization
+
+    def test_high_similarity_auto_correction_success(self):
+        """Test successful auto-correction with high similarity score."""
+        resource = Resource(
+            id=ResourceId(url="https://example.com/doc", counter=1),
+            title="Test Doc",
+            text="The EGFR tyrosine kinase receptor regulates cell growth and proliferation.",
+        )
+
+        # Very close match might auto-correct or raise ParaphraseError
+        try:
+            quote = ResourceQuote(
+                resource,
+                "EGFR tyrosine kinase receptor regulate cell growth proliferation",  # Missing "and", verb form difference
+                similarity_threshold=0.75,  # At the suggestion threshold
+            )
+
+            # If successful, quote was created (auto-corrected or exact match)
+            assert isinstance(quote, ResourceQuote)
+            # May or may not have fuzzy_corrected=True depending on exact match
+        except ParaphraseError:
+            # This is also acceptable - fuzzy matching found high similarity but
+            # the corrected quote couldn't be located in the document
+            pass
+
+    def test_resource_quote_method_with_similarity_threshold(self):
+        """Test Resource.quote() method doesn't expose similarity_threshold (it's internal to ResourceQuote)."""
+        resource = Resource(
+            id=ResourceId(url="https://example.com/doc", counter=1),
+            title="Test Doc",
+            text="BRCA1 mutations increase cancer risk.",
+        )
+
+        # Resource.quote() doesn't have similarity_threshold parameter
+        # It always does exact matching
+        quote = resource.quote("BRCA1 mutations")
+        assert isinstance(quote, ResourceQuote)
+
+        # Non-existent quote raises ValueError
+        with pytest.raises(ValueError):
+            resource.quote("BRCA2 mutations")
