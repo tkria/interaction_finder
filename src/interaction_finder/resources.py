@@ -565,23 +565,6 @@ class FuzzyMatchResult(BaseModel):
     )
 
 
-class FuzzySuggestion(BaseModel):
-    """
-    Suggestion for LLM correction when fuzzy match is below auto-correct threshold.
-
-    Provides the best matching segment from the document for LLM to consider
-    when correcting the quote.
-    """
-
-    suggested_quote: str = Field(
-        description="Suggested quote from document that best matches LLM output"
-    )
-    similarity: float = Field(
-        description="Similarity score between LLM quote and suggestion (0.0-1.0)"
-    )
-    original_quote: str = Field(description="Original LLM quote for reference")
-
-
 def fuzzy_match_quote(
     llm_quote: str,
     document_segment: str,
@@ -710,103 +693,6 @@ def _auto_correct_quote_from_alignment(
     ]
 
     return corrected, translated_blocks
-
-
-def find_quote_with_fuzzy_matching(
-    resource: "Resource",
-    quote_text: str,
-    auto_correct_threshold: float = 0.90,
-    suggest_threshold: float = 0.75,
-) -> Union["ResourceQuote", FuzzySuggestion, None]:
-    """
-    Find quote in resource with multi-strategy matching including fuzzy matching.
-
-    Tries multiple strategies in order:
-    0. Original text verbatim match (preserves formatting)
-    1. Normalized quote match (handles formatting differences)
-    2. Shorthand expansion (e.g., "ISCA1,2" → "ISCA1" or "ISCA2")
-    3. Fuzzy matching with auto-correction (≥90% similarity)
-    4. Fuzzy matching with suggestion (75-90% similarity)
-
-    Args:
-        resource: Resource to search within
-        quote_text: Quote text to find
-        auto_correct_threshold: Similarity threshold for auto-correction (default: 0.90)
-        suggest_threshold: Similarity threshold for suggestions (default: 0.75)
-
-    Returns:
-        - ResourceQuote: If exact or auto-corrected match found
-        - FuzzySuggestion: If 75-90% similarity (for LLM correction)
-        - None: If no match found (<75% similarity)
-
-    Notes:
-        - Strategy 0 searches original text verbatim (preserves markdown, special chars)
-        - Strategy 1 normalizes the quote before searching (handles formatting)
-        - Fuzzy matching searches against entire normalized document text
-        - High auto-correct threshold (90%) prevents false positives
-        - Suggestion threshold (75%) provides helpful hints to LLM
-    """
-    # Strategy 0: Try verbatim match in original text (preserves formatting)
-    spans = []
-    pos = 0
-    while True:
-        idx = resource.text.find(quote_text, pos)
-        if idx == -1:
-            break
-        spans.append((idx, idx + len(quote_text)))
-        pos = idx + 1
-
-    if spans:
-        # Create ResourceQuote directly with found spans
-        return ResourceQuote(
-            resource=resource,
-            text=quote_text,
-            spans=spans,
-            query_text=quote_text,
-            is_disjoint=False,
-        )
-
-    # Strategy 1: Try normalized quote match (handles formatting differences)
-    normalized_quote = normalize_text_for_matching(quote_text)
-    try:
-        return resource.quote(normalized_quote)
-    except ValueError:
-        pass
-
-    # Strategy 2: Try shorthand expansion
-    expanded_variants = expand_scientific_shorthand(quote_text)
-    for variant in expanded_variants:
-        try:
-            return resource.quote(variant)
-        except ValueError:
-            continue
-
-    # Strategy 3 & 4: Try fuzzy matching against entire document
-    # Use resource.normalized_text as single candidate segment
-    fuzzy_result = fuzzy_match_quote(
-        quote_text,
-        resource.normalized_text,
-        threshold=suggest_threshold,  # Use lower threshold for suggestions
-    )
-
-    if fuzzy_result is None:
-        return None
-
-    # If similarity is high enough for auto-correction
-    if fuzzy_result.similarity >= auto_correct_threshold:
-        # Try to create ResourceQuote with corrected text
-        try:
-            return resource.quote(fuzzy_result.corrected_quote)
-        except ValueError:
-            # Fall through to suggestion if quote creation fails
-            pass
-
-    # Return suggestion for LLM correction (75-90% similarity)
-    return FuzzySuggestion(
-        suggested_quote=fuzzy_result.corrected_quote,
-        similarity=fuzzy_result.similarity,
-        original_quote=quote_text,
-    )
 
 
 def compute_chunk_spans(
