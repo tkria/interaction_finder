@@ -58,7 +58,7 @@ class ExtractionDepsV3:
 
     # Quote validation configuration
     fuzzy_matching_enabled: bool = True
-    fuzzy_auto_correct_threshold: float = 0.9  # Auto-accept above this
+    fuzzy_auto_correct_threshold: float = 0.8  # Auto-accept above this
     fuzzy_suggest_threshold: float = 0.75  # Suggest corrections above this
     enable_llm_fallback: bool = True  # Use LLM to fix quotes if fuzzy fails
     quote_similarity_threshold: float = 0.8  # Minimum similarity when matching quotes
@@ -97,7 +97,7 @@ class ExtractionDepsV3:
         include_same_kind_pairs: bool = False,
         # Quote validation
         fuzzy_matching_enabled: bool = True,
-        fuzzy_auto_correct_threshold: float = 0.9,
+        fuzzy_auto_correct_threshold: float = 0.8,
         fuzzy_suggest_threshold: float = 0.75,
         enable_llm_fallback: bool = True,
         quote_similarity_threshold: float = 0.8,
