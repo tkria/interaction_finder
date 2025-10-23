@@ -1335,29 +1335,41 @@ class TestFuzzyMatchingExceptions:
             text="The BRCA1 gene mutation causes cancer in breast tissue samples.",
         )
 
-        # With similarity_threshold < 1.0 and high similarity, might auto-correct or raise ParaphraseError
-        # depending on whether the corrected quote can be found in the document
-        try:
-            quote = ResourceQuote(
-                resource,
-                "BRCA1 gene mutations causes cancer breast tissue samples",  # Very close match
-                similarity_threshold=0.75,  # Set at threshold
-            )
+        quote = ResourceQuote(
+            resource,
+            "BRCA1 gene mutations causes cancer breast tissue samples",  # Very close match
+            similarity_threshold=0.75,  # Set at threshold
+        )
 
-            # If successful, check fuzzy metadata is populated if fuzzy matching was used
-            assert isinstance(quote, ResourceQuote)
-            if quote.fuzzy_corrected:
-                assert (
-                    quote.original_query
-                    == "BRCA1 gene mutations causes cancer breast tissue samples"
-                )
-                assert quote.fuzzy_similarity is not None
-                assert 0.0 <= quote.fuzzy_similarity <= 1.0
-                assert quote.fuzzy_similarity >= 0.75
-        except ParaphraseError:
-            # This is also acceptable - fuzzy matching found high similarity but
-            # the corrected quote couldn't be located in the document
-            pass
+        assert isinstance(quote, ResourceQuote)
+        assert quote.count >= 1
+        assert quote.original_query == "BRCA1 gene mutations causes cancer breast tissue samples"
+        assert quote.fuzzy_similarity is not None
+        assert quote.fuzzy_similarity >= 0.75
+        assert quote.fuzzy_corrected
+
+    def test_fuzzy_alignment_fallback_maps_quote_to_document_spans(self):
+        """Ensure RapidFuzz alignment data is mapped back to document spans."""
+        resource = Resource(
+            id=ResourceId(url="https://example.com/doc", counter=1),
+            title="Alignment Doc",
+            text="ABC def ghi jkl mno pqr stu",
+        )
+
+        quote = ResourceQuote(
+            resource,
+            "ABC def ghi mno pqr stu",
+            similarity_threshold=0.75,
+        )
+
+        assert quote.fuzzy_corrected
+        assert quote.original_query == "ABC def ghi mno pqr stu"
+        assert quote.fuzzy_similarity is not None
+        assert quote.fuzzy_similarity >= 0.75
+        assert quote.is_disjoint
+        assert quote.spans == [(0, 12), (16, 27)]
+        normalized_quote = " ".join(quote.get_quote_text(1).split())
+        assert normalized_quote == "ABC def ghi ... mno pqr stu"
 
     def test_similarity_threshold_default_is_exact_matching(self):
         """Test that default similarity_threshold=1.0 requires exact matching."""

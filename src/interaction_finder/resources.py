@@ -1393,18 +1393,24 @@ class ResourceQuote(BaseModel):
                     spans, is_disjoint = self._find_normalized(
                         resource, fuzzy_result.corrected_quote
                     )
-                    super().__init__(
-                        resource=resource,
-                        query_text=fuzzy_result.corrected_quote,
-                        spans=spans,
-                        is_disjoint=is_disjoint,
-                        fuzzy_corrected=True,
-                        original_query=text,
-                        fuzzy_similarity=fuzzy_result.similarity,
-                    )
-                    return
+                    query_text = fuzzy_result.corrected_quote
                 except ValueError:
-                    pass
+                    (
+                        spans,
+                        is_disjoint,
+                        query_text,
+                    ) = self._spans_from_fuzzy_alignment(resource, fuzzy_result)
+
+                super().__init__(
+                    resource=resource,
+                    query_text=query_text,
+                    spans=spans,
+                    is_disjoint=is_disjoint,
+                    fuzzy_corrected=True,
+                    original_query=text,
+                    fuzzy_similarity=fuzzy_result.similarity,
+                )
+                return
 
             # Below threshold: raise error with suggestions
             if fuzzy_result:
@@ -1515,11 +1521,95 @@ class ResourceQuote(BaseModel):
                 norm_spans.append(match)
                 pos = match[0] + 1  # Continue from next character
 
-            if not norm_spans:
-                raise ValueError(f"Quote text not found in resource: {text!r}")
+        if not norm_spans:
+            raise ValueError(f"Quote text not found in resource: {text!r}")
 
-            spans = self._original_positions(resource, norm_spans)
-            return (spans, False)
+        spans = self._original_positions(resource, norm_spans)
+        return (spans, False)
+
+    def _spans_from_fuzzy_alignment(
+        self, resource: Resource, fuzzy_result: FuzzyMatchResult
+    ) -> Tuple[List[Tuple[int, int]], bool, str]:
+        """
+        Convert RapidFuzz alignment data to original document spans.
+
+        This acts as a robust fallback when the normalized lookup fails—rather than
+        re-searching for the corrected quote, we directly map the alignment blocks
+        back to the original text, ensuring we can always surface a quote span when
+        similarity is above the acceptance threshold.
+        """
+        candidate_spans: List[Tuple[int, int]] = []
+
+        for _, norm_start, length in fuzzy_result.match_blocks:
+            if length <= 0:
+                continue
+
+            orig_start, orig_end = resource.map_normalized_to_original_position(
+                norm_start, length
+            )
+
+            if orig_start is None or orig_end is None:
+                # As a safety net, try expanding the normalized window by one character
+                # on either side before giving up entirely.
+                expanded_start = max(norm_start - 1, 0)
+                expanded_length = min(
+                    length + 2, len(resource.normalized_text) - expanded_start
+                )
+                orig_start, orig_end = resource.map_normalized_to_original_position(
+                    expanded_start, expanded_length
+                )
+
+            if orig_start is None or orig_end is None or orig_start >= orig_end:
+                continue
+
+            # Expand to cover whole word boundaries if we clipped mid-token
+            text_length = len(resource.text)
+            while (
+                orig_start > 0
+                and resource.text[orig_start - 1].isalnum()
+                and resource.text[orig_start].isalnum()
+            ):
+                orig_start -= 1
+            while (
+                orig_end < text_length
+                and resource.text[orig_end - 1].isalnum()
+                and resource.text[orig_end].isalnum()
+            ):
+                orig_end += 1
+
+            candidate_spans.append((orig_start, orig_end))
+
+        if not candidate_spans:
+            raise ValueError("Unable to map fuzzy alignment blocks to document spans")
+
+        # Merge overlapping or adjacent spans to reduce fragmentation
+        candidate_spans.sort()
+        merged_spans: List[Tuple[int, int]] = []
+        for start, end in candidate_spans:
+            if not merged_spans:
+                merged_spans.append((start, end))
+                continue
+
+            last_start, last_end = merged_spans[-1]
+            if start <= last_end + 1:
+                merged_spans[-1] = (last_start, max(last_end, end))
+            else:
+                merged_spans.append((start, end))
+
+        is_disjoint = len(merged_spans) > 1
+
+        # Build query text directly from the original document spans.
+        if is_disjoint:
+            segments = [resource.text[s:e].strip() for s, e in merged_spans]
+            query_text = " ... ".join(seg for seg in segments if seg)
+        else:
+            span_start, span_end = merged_spans[0]
+            query_text = resource.text[span_start:span_end]
+
+        if not query_text.strip():
+            raise ValueError("Fuzzy alignment produced empty quote text")
+
+        return merged_spans, is_disjoint, query_text
 
     def _find_next_match(
         self, normalized_text: str, pattern: str, start: int = 0
