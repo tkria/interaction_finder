@@ -172,7 +172,13 @@ OUTPUT FORMAT:
         validated_quotes: List["ResourceQuote"] = []
 
         # Validate each quote string for this entity
-        for quote_text in entity.quotes:
+        for idx, quote_text in enumerate(entity.quotes, start=1):
+            logger.info(
+                "Validating quote %s for entity '%s' in resource %s",
+                idx,
+                entity.name,
+                resource.id.id,
+            )
             try:
                 # Validate quote against resource using fuzzy matching
                 validated_quote = resource.quote(

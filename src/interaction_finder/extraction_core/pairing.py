@@ -5,7 +5,7 @@ Provides pure functional interface for generating entity pairs based on document
 co-occurrence patterns using various strategies.
 """
 
-from typing import Dict, List, Literal, Set, Tuple, cast
+from typing import Dict, List, Literal, Optional, Set, Tuple, cast
 from itertools import combinations
 
 # Import with TYPE_CHECKING to avoid circular imports at runtime
@@ -93,6 +93,7 @@ def _check_cooccurrence(
     entity_b: "EntityWithQuotes",
     resource_id: str,
     strategy: CooccurrenceStrategy,
+    allowed_levels: Optional[Set[str]] = None,
 ) -> Tuple[bool, str]:
     """
     Check if two entities co-occur in a resource based on strategy.
@@ -108,6 +109,8 @@ def _check_cooccurrence(
         entities meet the strategy criteria, and generation_strategy indicates
         the specific level at which co-occurrence was found
     """
+    allowed = allowed_levels or {"same_chunk", "adjacent_chunks", "document_level"}
+
     # Get quotes for this resource
     quotes_a = [q for q in entity_a.quotes if q.resource.id.id == resource_id]
     quotes_b = [q for q in entity_b.quotes if q.resource.id.id == resource_id]
@@ -118,6 +121,8 @@ def _check_cooccurrence(
     # Check based on strategy
     if strategy == CooccurrenceStrategy.SAME_CHUNK:
         # Only same-chunk co-occurrence
+        if "same_chunk" not in allowed:
+            return False, ""
         for qa in quotes_a:
             for qb in quotes_b:
                 if _check_same_chunk(qa, qb):
@@ -126,32 +131,43 @@ def _check_cooccurrence(
 
     elif strategy == CooccurrenceStrategy.ADJACENT:
         # Same-chunk OR adjacent chunks
-        for qa in quotes_a:
-            for qb in quotes_b:
-                if _check_same_chunk(qa, qb):
-                    return True, "same_chunk"
-                if _check_adjacent_chunks(qa, qb):
-                    return True, "adjacent_chunks"
+        if "same_chunk" in allowed:
+            for qa in quotes_a:
+                for qb in quotes_b:
+                    if _check_same_chunk(qa, qb):
+                        return True, "same_chunk"
+
+        if "adjacent_chunks" in allowed:
+            for qa in quotes_a:
+                for qb in quotes_b:
+                    if _check_adjacent_chunks(qa, qb):
+                        return True, "adjacent_chunks"
         return False, ""
 
     elif strategy == CooccurrenceStrategy.DOCUMENT:
         # Any co-occurrence in document (already verified by shared resources)
-        return True, "document_level"
+        if "document_level" in allowed:
+            return True, "document_level"
+        return False, ""
 
     elif strategy == CooccurrenceStrategy.TIERED:
         # Try same_chunk first, then adjacent, then document
-        for qa in quotes_a:
-            for qb in quotes_b:
-                if _check_same_chunk(qa, qb):
-                    return True, "same_chunk"
+        if "same_chunk" in allowed:
+            for qa in quotes_a:
+                for qb in quotes_b:
+                    if _check_same_chunk(qa, qb):
+                        return True, "same_chunk"
 
-        for qa in quotes_a:
-            for qb in quotes_b:
-                if _check_adjacent_chunks(qa, qb):
-                    return True, "adjacent_chunks"
+        if "adjacent_chunks" in allowed:
+            for qa in quotes_a:
+                for qb in quotes_b:
+                    if _check_adjacent_chunks(qa, qb):
+                        return True, "adjacent_chunks"
 
-        # Document-level as fallback
-        return True, "document_level"
+        if "document_level" in allowed:
+            return True, "document_level"
+
+        return False, ""
 
     return False, ""
 
@@ -160,6 +176,8 @@ def find_cooccurring_pairs(
     entities: Dict[str, "EntityWithQuotes"],
     resources: List["Resource"],
     strategy: CooccurrenceStrategy,
+    allowed_levels: Optional[Set[str]] = None,
+    include_same_kind_pairs: bool = False,
 ) -> List["PairCandidate"]:
     """
     Generate entity pairs via co-occurrence analysis.
@@ -167,12 +185,15 @@ def find_cooccurring_pairs(
     Identifies entity pairs that appear together in documents based on the
     specified strategy. Each candidate includes co-occurrence count and
     shared resource tracking for provenance. Same-kind pairs (gene-gene,
-    disease-disease) are automatically filtered out.
+    disease-disease) are excluded by default but can be included via configuration.
 
     Args:
         entities: Dictionary mapping entity names to EntityWithQuotes objects
         resources: List of Resource objects being analyzed
         strategy: Co-occurrence strategy (TIERED, SAME_CHUNK, ADJACENT, DOCUMENT)
+        allowed_levels: Optional set of generation strategies ("same_chunk", "adjacent_chunks",
+            "document_level") to permit when evaluating co-occurrence. Defaults to allowing all.
+        include_same_kind_pairs: Include pairs where both entities share the same kind (default: False)
 
     Returns:
         List of PairCandidate objects with co-occurrence metadata
@@ -196,7 +217,7 @@ def find_cooccurring_pairs(
     Notes:
         - TIERED strategy tries same_chunk → adjacent → document for each pair
         - Pairs are deduplicated (A-B same as B-A) using canonical ordering
-        - Same-kind pairs are automatically filtered (gene-gene, disease-disease)
+        - Same-kind pairs can be included via include_same_kind_pairs=True
         - Empty inputs return empty list (no pairs generated)
     """
     # Import here to avoid circular dependency at module load time
@@ -215,7 +236,7 @@ def find_cooccurring_pairs(
     # Generate all possible entity pairs (combinations, not permutations)
     for entity_a, entity_b in combinations(entity_list, 2):
         # Filter out same-kind pairs
-        if entity_a.kind == entity_b.kind:
+        if entity_a.kind == entity_b.kind and not include_same_kind_pairs:
             continue
 
         # Get canonical pair key (alphabetically sorted names)
@@ -238,7 +259,7 @@ def find_cooccurring_pairs(
 
         for resource_id in shared_resources:
             co_occurs, strat = _check_cooccurrence(
-                entity_a, entity_b, resource_id, strategy
+                entity_a, entity_b, resource_id, strategy, allowed_levels
             )
             if co_occurs:
                 co_occurrence_count += 1

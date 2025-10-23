@@ -1,102 +1,82 @@
 """
-Pipeline nodes for extraction graph V3.
+Pipeline nodes for the extraction graph V3.
 
-Implements the three-phase extraction pipeline:
-1. ExtractEntities: Extract entities from full documents with semantic caching
-2. AssessIndividually: Assess each entity's relationship potential (task 06)
-3. GeneratePairs: Generate and evaluate entity pairs (tasks 07-08)
+This version delegates entity extraction, assessment, and pair evaluation
+directly to the stateless helpers in `extraction_core`, removing the mutable
+`deps.current_*` fields that previously carried per-call state.
 """
 
 import asyncio
 import logging
 import time
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple, TYPE_CHECKING
+from typing import Dict, List, Optional, Set, TYPE_CHECKING
 
 from pydantic_graph import BaseNode, GraphRunContext, End
 
 from .state import ExtractionStateV3
 from .deps import ExtractionDepsV3
-from .agents import (
-    create_entity_extractor_v3,
-    create_assessment_agent_v3,
-    create_pair_evaluator_v3,
-)
 from .cache import compute_extraction_cache_key, compute_assessment_cache_key
-from .models import PairCandidate, PairEvaluationOut
+from .models import PairCandidate
 from ..extraction_graph_v2.models import (
     EntityWithQuotes,
-    SimpleEntityListOut,
-    AssessmentOut,
     IndividualAssessment,
     EntityPairOut,
 )
 from ..extraction_graph_v2.parallelism import with_parallelism_control
-from ..resources import (
-    ResourceId,
-    Resource,
-    ResourceQuote,
-    QuoteNotFoundError,
-    ParaphraseError,
+from ..resources import ResourceId
+from ..extraction_core.analysis import analyze_entity
+from ..extraction_core.evaluation import evaluate_pair
+from ..extraction_core.extraction import extract_from_resource
+from ..extraction_core.pairing import find_cooccurring_pairs
+from ..extraction_core.models import (
+    AnalysisConfig,
+    CooccurrenceStrategy,
+    EvaluationConfig,
 )
 
-if TYPE_CHECKING:
+if TYPE_CHECKING:  # pragma: no cover - type-checking only
     from .models import PairCandidate
 
 logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# ExtractEntities
+# ---------------------------------------------------------------------------
+
+
 @dataclass
 class ExtractEntities(BaseNode[ExtractionStateV3, ExtractionDepsV3]):
     """
-    Extract entities from documents using full document context.
+    Extract entities from documents using extraction_core.
 
-    Uses semantic caching to avoid redundant LLM calls and fuzzy quote matching
-    for robust quote validation. Processes each document independently with
-    configurable parallelism.
-
-    Phase 1 of V3 pipeline.
+    The node is responsible for caching, metrics, and deduplication; the actual
+    entity detection is handled by `extract_from_resource`.
     """
 
     async def run(
         self, ctx: GraphRunContext[ExtractionStateV3, ExtractionDepsV3]
     ) -> "AssessIndividually":
-        """
-        Extract entities from all documents with parallel processing.
-
-        Orchestrates per-document extraction with cache checking, LLM calls,
-        quote validation, and entity deduplication across documents.
-        """
         state, deps = ctx.state, ctx.deps
 
         resources = state.resource_pool.resources
         logger.info(f"Starting entity extraction from {len(resources)} documents")
         logger.info(f"Entity kinds: {deps.get_entity_kinds()}")
 
-        # Validate entity kinds are configured
         entity_kinds = deps.get_entity_kinds()
         if not entity_kinds:
             raise ValueError(
-                "No entity kinds configured. The V3 extraction pipeline requires entity types to be specified.\n\n"
-                "Add a [task.kinds] section to your config.toml file with at least one entity type.\n\n"
+                "No entity kinds configured. The V3 extraction pipeline requires "
+                "entity types to be specified.\n\n"
+                "Add a [task.kinds] section to your config.toml file with at least "
+                "one entity type.\n\n"
                 "Example configuration:\n"
                 "[task.kinds]\n"
                 "gene = { kind = 'gene', form = ['name', 'symbol'] }\n"
                 "disease = { kind = 'disease', form = ['name'] }\n\n"
                 "See documentation for more details on configuring entity kinds."
             )
-
-        logger.info(
-            f"Cache enabled: {deps.semantic_cache_enabled and state.cache is not None}"
-        )
-
-        # Execute extractions with parallelism control
-        parallelism_desc = (
-            "unlimited"
-            if deps.extraction_parallelism == 0
-            else f"limit={deps.extraction_parallelism}"
-        )
-        logger.info(f"Processing with parallelism {parallelism_desc}")
 
         results = await with_parallelism_control(
             resources,
@@ -105,7 +85,6 @@ class ExtractEntities(BaseNode[ExtractionStateV3, ExtractionDepsV3]):
             description="document extraction",
         )
 
-        # Merge entities across documents
         for i, doc_entities in enumerate(results):
             if isinstance(doc_entities, Exception):
                 resource = resources[i]
@@ -124,7 +103,6 @@ class ExtractEntities(BaseNode[ExtractionStateV3, ExtractionDepsV3]):
             f"misses: {state.metrics.cache_misses_extraction}"
         )
 
-        # Save checkpoint if callback provided
         if hasattr(deps, "checkpoint_callback") and deps.checkpoint_callback:
             await deps.checkpoint_callback("extraction", state)
 
@@ -135,19 +113,6 @@ class ExtractEntities(BaseNode[ExtractionStateV3, ExtractionDepsV3]):
         resource_id: ResourceId,
         ctx: GraphRunContext[ExtractionStateV3, ExtractionDepsV3],
     ) -> List[EntityWithQuotes]:
-        """
-        Extract entities from a single document with caching.
-
-        Checks semantic cache before calling LLM, converts agent output
-        to EntityWithQuotes with validated quotes, and saves to cache.
-
-        Args:
-            resource_id: Document identifier
-            ctx: Graph context with state and deps
-
-        Returns:
-            List of entities with validated quotes from this document
-        """
         state, deps = ctx.state, ctx.deps
         cache = state.cache
 
@@ -156,18 +121,13 @@ class ExtractEntities(BaseNode[ExtractionStateV3, ExtractionDepsV3]):
             logger.warning(f"Resource {resource_id} not found in pool")
             return []
 
-        logger.debug(f"Processing document: {resource.title}")
-
-        # Compute cache key
-        model_str = str(deps.model)
         cache_key = compute_extraction_cache_key(
             full_doc_text=resource.text,
             entity_kinds=deps.get_entity_kinds(),
-            model_version=model_str,
-            prompt_version="v3_2025-10",  # Update when prompts change
+            model_version=str(deps.model),
+            prompt_version="v3_2025-10",  # Increment when prompts/config change
         )
 
-        # Check cache if enabled
         if cache and deps.semantic_cache_enabled:
             cached = await cache.get_extraction(cache_key)
             if cached is not None:
@@ -177,56 +137,32 @@ class ExtractEntities(BaseNode[ExtractionStateV3, ExtractionDepsV3]):
 
             state.metrics.record_cache_miss("extraction")
 
-        # Cache miss - extract entities via LLM
-        logger.debug(f"Cache miss for {resource.title} - calling LLM")
-
-        # Create extraction agent
-        from ..models import Term
-
-        target_term: Term
-        if isinstance(deps.target_term, str):
-            target_term = Term(name=deps.target_term or "unknown", kind=None)
-        elif deps.target_term is None:
-            target_term = Term(name="unknown", kind=None)
-        else:
-            target_term = deps.target_term
-
-        agent = create_entity_extractor_v3(
-            model=deps.model,
-            entity_kinds=deps.get_entity_kinds(),
-            task_context=deps.get_task_context(),
-            target_term=target_term,
+        similarity_threshold = (
+            deps.fuzzy_auto_correct_threshold if deps.fuzzy_matching_enabled else 0.90
         )
 
-        # Set current resources for validators (V3 processes one document at a time)
-        deps.current_resources = [resource]
-
-        # Run extraction with timing
         start_time = time.time()
         try:
-            result = await agent.run(resource.text, deps=deps)
+            entities = await extract_from_resource(
+                resource=resource,
+                entity_kinds=deps.get_entity_kinds(),
+                model=deps.model,
+                task_context=deps.get_task_context(),
+                similarity_threshold=similarity_threshold,
+            )
             duration = time.time() - start_time
-
-            state.metrics.entities_extraction_calls += 1
-            state.metrics.entities_extraction_successes += 1
-            state.metrics.extraction_time += duration
+            state.metrics.record_extraction_call(success=True, duration=duration)
 
             logger.info(
-                f"Extracted {len(result.output.entities)} entities from {resource.title} "
+                f"Extracted {len(entities)} entities from {resource.title} "
                 f"in {duration:.2f}s"
             )
-        except Exception as e:
+        except Exception as exc:  # pragma: no cover - defensive logging
             duration = time.time() - start_time
-            state.metrics.entities_extraction_calls += 1
-            state.metrics.extraction_time += duration
-
-            logger.error(f"Extraction failed for {resource.title}: {e}")
+            state.metrics.record_extraction_call(success=False, duration=duration)
+            logger.error(f"Extraction failed for {resource.title}: {exc}")
             return []
 
-        # Convert to EntityWithQuotes with validated quotes
-        entities = self._create_entities_with_quotes(result.output, resource, deps)
-
-        # Save to cache if enabled
         if cache and deps.semantic_cache_enabled and entities:
             await cache.set_extraction(cache_key, entities)
             logger.debug(
@@ -235,192 +171,62 @@ class ExtractEntities(BaseNode[ExtractionStateV3, ExtractionDepsV3]):
 
         return entities
 
-    def _create_entities_with_quotes(
-        self,
-        agent_output: "SimpleEntityListOut",
-        resource: Resource,
-        deps: ExtractionDepsV3,
-    ) -> List[EntityWithQuotes]:
-        """
-        Convert agent output to EntityWithQuotes with validated quotes.
-
-        Uses fuzzy matching to validate quotes against resource text.
-        Entities without valid quotes are excluded (quality over quantity).
-
-        Args:
-            agent_output: Raw agent output with entity data and quote strings
-            resource: Source document
-            deps: Dependencies for quote validation config
-
-        Returns:
-            List of entities with validated ResourceQuote objects
-        """
-        entities = []
-
-        for entity_out in agent_output.entities:
-            # Validate quotes using fuzzy matching (task 03)
-            validated_quotes = []
-
-            for quote_text in entity_out.quotes:
-                if not quote_text or not quote_text.strip():
-                    continue
-
-                quote_text = quote_text.strip()
-
-                # Try fuzzy matching with configurable thresholds
-                # Automatically tries verbatim match first, then normalized, then fuzzy
-                try:
-                    quote = resource.quote(
-                        quote_text,
-                        similarity_threshold=deps.fuzzy_auto_correct_threshold,
-                    )
-                    # Success: exact or auto-corrected
-                    validated_quotes.append(quote)
-                    logger.debug(
-                        f"Validated quote for {entity_out.name}: {quote_text[:50]}..."
-                    )
-                except ParaphraseError as e:
-                    # Log suggestion but don't include (below auto-correct threshold)
-                    logger.warning(
-                        f"Quote validation for {entity_out.name} below threshold "
-                        f"({e.similarity:.2f}): {quote_text[:50]}..."
-                    )
-                    # Record quote error (treat as paraphrased)
-                    from ..extraction_graph_v2.models import QuoteErrorRecord
-
-                    deps.quote_error_log.append(
-                        QuoteErrorRecord(
-                            entity_name=entity_out.name,
-                            entity_kind=entity_out.kind,
-                            original_quote=quote_text,
-                            error_type="paraphrased",
-                            suggested_corrections=[e.best_suggestion().text],
-                            matched_percentage=e.similarity,
-                        )
-                    )
-                except QuoteNotFoundError:
-                    # No match found
-                    logger.warning(
-                        f"Quote validation failed for {entity_out.name}: {quote_text[:50]}..."
-                    )
-                    # Record quote error
-                    from ..extraction_graph_v2.models import QuoteErrorRecord
-
-                    deps.quote_error_log.append(
-                        QuoteErrorRecord(
-                            entity_name=entity_out.name,
-                            entity_kind=entity_out.kind,
-                            original_quote=quote_text,
-                            error_type="not_found",
-                        )
-                    )
-
-            # Only include entities with at least one valid quote
-            if validated_quotes:
-                entity = EntityWithQuotes(
-                    name=entity_out.name,
-                    kind=entity_out.kind,
-                    aliases=entity_out.aliases,
-                    quotes=validated_quotes,
-                    confidence=1.0,
-                )
-
-                # Final validation
-                if entity.validate():
-                    entities.append(entity)
-                    logger.debug(
-                        f"Created entity '{entity.name}' with {len(validated_quotes)} quotes"
-                    )
-                else:
-                    logger.warning(f"Entity '{entity.name}' failed validation")
-
-        return entities
-
+    @staticmethod
     def _merge_entities_into_state(
-        self,
-        doc_entities: List[EntityWithQuotes],
-        state: ExtractionStateV3,
+        doc_entities: List[EntityWithQuotes], state: ExtractionStateV3
     ) -> None:
-        """
-        Merge entities from one document into state, handling duplicates.
-
-        Entities are deduplicated by name (case-sensitive). Quotes from
-        multiple documents are aggregated, and aliases are merged.
-
-        Args:
-            doc_entities: Entities extracted from one document
-            state: Extraction state to update
-        """
         for entity in doc_entities:
-            key = entity.name  # Use name as key (case-sensitive)
-
-            if key in state.entities_found:
-                # Merge quotes from this document
-                existing = state.entities_found[key]
+            if entity.name in state.entities_found:
+                existing = state.entities_found[entity.name]
                 existing.quotes.extend(entity.quotes)
-
-                # Merge aliases (deduplicate)
                 for alias in entity.aliases:
                     if alias not in existing.aliases:
                         existing.aliases.append(alias)
-
                 logger.debug(
-                    f"Merged entity '{key}' - now has {len(existing.quotes)} total quotes"
+                    f"Merged entity '{entity.name}' - now has "
+                    f"{len(existing.quotes)} quotes"
                 )
             else:
-                # New entity
-                state.entities_found[key] = entity
+                state.entities_found[entity.name] = entity
                 logger.debug(
-                    f"Added new entity '{key}' with {len(entity.quotes)} quotes"
+                    f"Added new entity '{entity.name}' with {len(entity.quotes)} quotes"
                 )
+
+
+# ---------------------------------------------------------------------------
+# AssessIndividually
+# ---------------------------------------------------------------------------
 
 
 @dataclass
 class AssessIndividually(BaseNode[ExtractionStateV3, ExtractionDepsV3]):
     """
-    Assess each entity's relationship potential individually.
-
-    Processes all entities concurrently (I/O bound) using semantic caching
-    to avoid redundant LLM calls. Extracts related_entities for candidate
-    generation and validates evidence quotes using fuzzy matching.
-
-    Phase 2 of V3 pipeline.
+    Assess each entity's relationship potential using extraction_core.
     """
 
     async def run(
         self, ctx: GraphRunContext[ExtractionStateV3, ExtractionDepsV3]
     ) -> "GeneratePairCandidates":
-        """
-        Assess all entities concurrently with cache checking.
-
-        Orchestrates per-entity assessment with cache checking, LLM calls,
-        evidence quote validation, and storage in state.individual_assessments.
-        """
         state, deps = ctx.state, ctx.deps
 
         logger.info(
             f"Starting individual assessment of {len(state.entities_found)} entities"
         )
-        logger.info(
-            f"Cache enabled: {deps.semantic_cache_enabled and state.cache is not None}"
-        )
 
-        # Process all entities concurrently (unlimited parallelism - I/O bound)
-        assessment_tasks = []
+        tasks = []
         entity_names = []
         for entity_name, entity in state.entities_found.items():
-            assessment_tasks.append(self._assess_one_entity(entity, ctx))
+            tasks.append(self._assess_one_entity(entity, ctx))
             entity_names.append(entity_name)
 
-        results = await asyncio.gather(*assessment_tasks, return_exceptions=True)
+        results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        # Store results in dict for O(1) lookup
-        for entity_name, result in zip(entity_names, results):
+        for name, result in zip(entity_names, results):
             if isinstance(result, Exception):
-                logger.error(f"Assessment failed for {entity_name}: {result}")
+                logger.error(f"Assessment failed for {name}: {result}")
                 continue
             if isinstance(result, IndividualAssessment):
-                state.individual_assessments[entity_name] = result
+                state.individual_assessments[name] = result
 
         logger.info(
             f"Assessment complete: {len(state.individual_assessments)} entities assessed"
@@ -430,7 +236,6 @@ class AssessIndividually(BaseNode[ExtractionStateV3, ExtractionDepsV3]):
             f"misses: {state.metrics.cache_misses_assessment}"
         )
 
-        # Save checkpoint if callback provided
         if hasattr(deps, "checkpoint_callback") and deps.checkpoint_callback:
             await deps.checkpoint_callback("assessment", state)
 
@@ -441,35 +246,17 @@ class AssessIndividually(BaseNode[ExtractionStateV3, ExtractionDepsV3]):
         entity: EntityWithQuotes,
         ctx: GraphRunContext[ExtractionStateV3, ExtractionDepsV3],
     ) -> IndividualAssessment:
-        """
-        Assess a single entity's relationship potential with caching.
-
-        Checks semantic cache before calling LLM, validates evidence quotes
-        using fuzzy matching, and converts potential level to confidence score.
-
-        Args:
-            entity: Entity to assess
-            ctx: Graph context with state and deps
-
-        Returns:
-            IndividualAssessment with validated evidence and related entities
-        """
         state, deps = ctx.state, ctx.deps
         cache = state.cache
 
-        logger.debug(f"Assessing entity: {entity.name} ({entity.kind})")
-
-        # Compute cache key
-        model_str = str(deps.model)
         cache_key = compute_assessment_cache_key(
             entity_name=entity.name,
             entity_kind=entity.kind,
             task_context=deps.get_task_context(),
-            model_version=model_str,
-            prompt_version="v3_2025-10",  # Update when prompts change
+            model_version=str(deps.model),
+            prompt_version="v3_2025-10",
         )
 
-        # Check cache if enabled
         if cache and deps.semantic_cache_enabled:
             cached = await cache.get_assessment(cache_key)
             if cached is not None:
@@ -479,283 +266,100 @@ class AssessIndividually(BaseNode[ExtractionStateV3, ExtractionDepsV3]):
 
             state.metrics.record_cache_miss("assessment")
 
-        # Cache miss - assess entity via LLM
-        logger.debug(f"Cache miss for {entity.name} - calling LLM")
-
-        # Create assessment agent
-        agent = create_assessment_agent_v3(
+        analysis_config = AnalysisConfig(
+            analysis_type="relationship_potential",
+            target_context=deps.get_task_context(),
+            max_contexts=10,
             model=deps.model,
-            entity_kinds=deps.get_entity_kinds(),
-            relationship_type=deps.get_relation_type(),
         )
 
-        # Build prompt with entity contexts and track quotes used
-        prompt, quotes_used = self._build_assessment_prompt(entity, deps)
+        similarity_threshold = (
+            deps.fuzzy_auto_correct_threshold if deps.fuzzy_matching_enabled else 0.90
+        )
 
-        # Run assessment with timing
         start_time = time.time()
         try:
-            result = await agent.run(prompt, deps=deps)
-            duration = time.time() - start_time
-
-            state.metrics.assessment_calls += 1
-            state.metrics.assessment_successes += 1
-            state.metrics.assessment_time += duration
-
-            logger.debug(
-                f"Assessed {entity.name} in {duration:.2f}s: "
-                f"potential={result.output.potential}, related={len(result.output.related)}"
+            assessment = await analyze_entity(
+                entity=entity,
+                analysis_config=analysis_config,
+                similarity_threshold=similarity_threshold,
             )
-        except Exception as e:
             duration = time.time() - start_time
-            state.metrics.assessment_calls += 1
-            state.metrics.assessment_time += duration
-
-            logger.error(f"Assessment failed for {entity.name}: {e}")
-            # Return minimal assessment on failure
+            state.metrics.record_assessment_call(success=True, duration=duration)
+            logger.debug(
+                f"Assessed {entity.name} in {duration:.2f}s "
+                f"(potential={assessment.relationship_potential})"
+            )
+        except Exception as exc:  # pragma: no cover - defensive logging
+            duration = time.time() - start_time
+            state.metrics.record_assessment_call(success=False, duration=duration)
+            logger.error(f"Assessment failed for {entity.name}: {exc}")
             return IndividualAssessment(
                 entity=entity,
                 relationship_potential="none",
                 related_entities=[],
                 evidence_quotes=[],
-                reasoning=f"Assessment failed: {str(e)}",
+                reasoning=f"Assessment failed: {exc}",
                 confidence=0.0,
             )
 
-        # Convert to IndividualAssessment with validated quotes
-        assessment = self._create_assessment_with_quotes(
-            entity, result.output, state, quotes_used
-        )
-
-        # Save to cache if enabled
         if cache and deps.semantic_cache_enabled:
             await cache.set_assessment(cache_key, assessment)
             logger.debug(f"Saved assessment to cache for {entity.name}")
 
         return assessment
 
-    def _build_assessment_prompt(
-        self,
-        entity: EntityWithQuotes,
-        deps: ExtractionDepsV3,
-    ) -> tuple[str, List[ResourceQuote]]:
-        """
-        Build assessment prompt with entity contexts and track source quotes.
 
-        Constructs a prompt emphasizing the need for specific entity names
-        in the related_entities field (not entity types). Iterates over entity
-        quotes to extract contexts while preserving quote objects for validation.
-
-        Args:
-            entity: Entity being assessed
-            deps: Dependencies with task configuration
-
-        Returns:
-            Tuple of (formatted prompt string, list of quotes used for contexts)
-        """
-        # Track quotes used for contexts (for validation constraint)
-        quotes_used: List[ResourceQuote] = []
-        evidence_blocks = []
-        evidence_count = 0
-
-        # Iterate over entity quotes to extract contexts with source labels
-        for quote in entity.quotes:
-            for i in range(quote.count):
-                # Respect 10 context limit for token efficiency
-                if evidence_count >= 10:
-                    break
-
-                # Extract context for this occurrence
-                context = quote.get_context(i + 1, 200)
-                source_url = quote.resource.id.url
-
-                # Build evidence block with source label
-                evidence_count += 1
-                evidence_blocks.append(
-                    f"Evidence {evidence_count} (Source: {source_url}):\n{context}"
-                )
-
-                # Track this quote for validation
-                quotes_used.append(quote)
-
-                # Log source URL in verbose mode
-                logger.debug(f"Evidence {evidence_count} from source: {source_url}")
-
-            # Break outer loop if limit reached
-            if evidence_count >= 10:
-                break
-
-        logger.debug(f"Built assessment prompt with {len(quotes_used)} quotes used")
-
-        contexts_text = "\n\n".join(evidence_blocks)
-
-        prompt = f"""Entity: {entity.name} ({entity.kind})
-
-Contexts where this entity appears:
-{contexts_text}
-
-Assess the relationship potential of this entity for {deps.get_relation_type()}.
-
-IMPORTANT: In the 'related' field, list specific entity names (not types) that this entity might relate to.
-Examples:
-- Good: "BRCA1", "breast cancer", "TP53"
-- Bad: "genes", "diseases", "proteins"
-
-These specific names will be used to generate pair candidates for evaluation.
-"""
-
-        return prompt, quotes_used
-
-    def _create_assessment_with_quotes(
-        self,
-        entity: EntityWithQuotes,
-        agent_output: AssessmentOut,
-        state: ExtractionStateV3,
-        quotes_used: List[ResourceQuote],
-    ) -> IndividualAssessment:
-        """
-        Convert agent output to IndividualAssessment with validated quotes.
-
-        Validates evidence quotes using fuzzy matching only within the specific
-        quotes used for prompt construction (quotes_used), preventing cross-document
-        contamination. Maps potential level to confidence score.
-
-        Args:
-            entity: Entity being assessed
-            agent_output: Raw agent output
-            state: Extraction state (unused - kept for compatibility)
-            quotes_used: List of quotes that provided contexts in the prompt
-                        (validation constrained to these specific quotes)
-
-        Returns:
-            IndividualAssessment with validated evidence quotes
-        """
-        # Validate evidence quotes by searching only quotes_used
-        evidence_quotes = []
-        for evidence_text in agent_output.evidence:
-            if not evidence_text or not evidence_text.strip():
-                continue
-
-            evidence_text = evidence_text.strip()
-
-            # Search only the quotes that were used in the prompt
-            found = False
-            for quote in quotes_used:
-                try:
-                    validated_quote = quote.resource.quote(
-                        evidence_text, similarity_threshold=0.90
-                    )
-                    # Found valid quote in this resource
-                    evidence_quotes.append(validated_quote)
-                    logger.debug(
-                        f"Validated evidence for {entity.name}: {evidence_text[:50]}..."
-                    )
-                    found = True
-                    break  # Found in this quote's resource, move to next evidence
-                except (ParaphraseError, QuoteNotFoundError):
-                    # Not found in this quote's resource, try next quote
-                    continue
-
-            # Log warning if quote not found in any quotes_used
-            if not found:
-                source_urls = [q.resource.id.url for q in quotes_used]
-                logger.warning(
-                    f"Evidence quote not found in quotes_used for {entity.name}: "
-                    f"{evidence_text[:50]}... "
-                    f"(searched {len(quotes_used)} quotes from sources: {source_urls})"
-                )
-
-        # Map potential to confidence score
-        confidence_map = {"high": 0.9, "medium": 0.7, "low": 0.5, "none": 0.0}
-        confidence = confidence_map.get(agent_output.potential, 0.5)
-
-        return IndividualAssessment(
-            entity=entity,
-            relationship_potential=agent_output.potential,
-            related_entities=agent_output.related,  # CRITICAL for task 07
-            evidence_quotes=evidence_quotes,
-            reasoning=agent_output.reasoning,
-            confidence=confidence,
-        )
+# ---------------------------------------------------------------------------
+# GeneratePairCandidates
+# ---------------------------------------------------------------------------
 
 
 @dataclass
 class GeneratePairCandidates(BaseNode[ExtractionStateV3, ExtractionDepsV3]):
     """
-    Generate candidate entity pairs using hybrid strategy.
-
-    Combines tiered co-occurrence analysis (chunk-based, adjacent, document-level)
-    with assessment-suggested pairs to intelligently reduce the N² pair space.
-    This is the key innovation separating V3 from V2.
-
-    Phase 3a of V3 pipeline (before EvaluatePairs in task 08).
+    Generate candidate pairs from co-occurrence analysis and assessment suggestions.
     """
 
     async def run(
         self, ctx: GraphRunContext[ExtractionStateV3, ExtractionDepsV3]
     ) -> "EvaluatePairs":
-        """
-        Generate pair candidates using co-occurrence and assessment suggestions.
-
-        Orchestrates candidate generation from both strategies, deduplicates,
-        filters same-kind pairs if configured, and saves checkpoint.
-        """
         state, deps = ctx.state, ctx.deps
 
         logger.info(
             f"Starting pair candidate generation from {len(state.entities_found)} entities"
         )
-        logger.info(
-            f"Co-occurrence strategy: same_chunk={deps.enable_same_chunk}, "
-            f"adjacent={deps.enable_adjacent_chunks}, document={deps.enable_document_level}"
-        )
 
-        candidates = {}
+        candidates: Dict[tuple[str, str], PairCandidate] = {}
 
-        # Strategy 1: Co-occurrence based
-        cooccurrence_candidates = self._find_cooccurrence_pairs(state, deps)
-        for candidate in cooccurrence_candidates:
+        for candidate in self._find_cooccurrence_pairs(state, deps):
             key = self._make_pair_key(candidate.entity_a.name, candidate.entity_b.name)
             candidates[key] = candidate
             state.metrics.candidates_from_cooccurrence += 1
 
-        logger.info(
-            f"Generated {len(cooccurrence_candidates)} candidates from co-occurrence"
-        )
-
-        # Strategy 2: Assessment-suggested
-        assessment_candidates = self._find_assessment_suggested_pairs(state, deps)
-        for candidate in assessment_candidates:
+        for candidate in self._find_assessment_suggested_pairs(state, deps):
             key = self._make_pair_key(candidate.entity_a.name, candidate.entity_b.name)
             if key in candidates:
-                # Mark as "both" - found by both strategies
                 candidates[key].generation_strategy = "both"
             else:
                 candidates[key] = candidate
             state.metrics.candidates_from_assessment += 1
 
-        logger.info(
-            f"Generated {len(assessment_candidates)} candidates from assessments"
-        )
-
-        # Filter same-kind pairs if configured
         if not deps.include_same_kind_pairs:
-            before_filter = len(candidates)
+            before = len(candidates)
             candidates = {
                 k: v
                 for k, v in candidates.items()
                 if v.entity_a.kind != v.entity_b.kind
             }
-            filtered_count = before_filter - len(candidates)
-            if filtered_count > 0:
-                logger.info(f"Filtered {filtered_count} same-kind pairs")
+            filtered = before - len(candidates)
+            if filtered:
+                logger.info(f"Filtered {filtered} same-kind candidates")
 
         state.pair_candidates = candidates
         state.metrics.candidates_generated = len(candidates)
-
         logger.info(f"Total candidates generated: {len(candidates)}")
 
-        # Save checkpoint if callback provided
         if hasattr(deps, "checkpoint_callback") and deps.checkpoint_callback:
             await deps.checkpoint_callback("candidates", state)
 
@@ -764,147 +368,71 @@ class GeneratePairCandidates(BaseNode[ExtractionStateV3, ExtractionDepsV3]):
     def _find_cooccurrence_pairs(
         self, state: ExtractionStateV3, deps: ExtractionDepsV3
     ) -> List["PairCandidate"]:
-        """
-        Find entity pairs using tiered chunk-based co-occurrence.
+        allowed_levels: Set[str] = set()
+        if deps.enable_same_chunk:
+            allowed_levels.add("same_chunk")
+        if deps.enable_adjacent_chunks:
+            allowed_levels.add("adjacent_chunks")
+        if deps.enable_document_level:
+            allowed_levels.add("document_level")
 
-        Implements three tiers of co-occurrence:
-        - Tier 1: Same semantic chunk (70% of relations, 59% precision)
-        - Tier 2: Adjacent chunks ±1 (25% of relations, 48% precision)
-        - Tier 3: Document-level (remaining, lower precision, optional)
+        if not allowed_levels:
+            return []
 
-        Args:
-            state: Extraction state with entities and resource pool
-            deps: Dependencies with co-occurrence configuration
+        if "document_level" in allowed_levels:
+            strategy = CooccurrenceStrategy.TIERED
+        elif "adjacent_chunks" in allowed_levels:
+            strategy = CooccurrenceStrategy.ADJACENT
+        else:
+            strategy = CooccurrenceStrategy.SAME_CHUNK
 
-        Returns:
-            List of PairCandidate objects from co-occurrence analysis
-        """
-        from collections import defaultdict
-        from .models import PairCandidate
-
-        candidates = {}
-
-        # Build resource → entities mapping
-        resource_to_entities = defaultdict(list)
-        for entity in state.entities_found.values():
-            for quote in entity.quotes:
-                resource_to_entities[quote.resource.id].append(entity)
-
-        # For each resource, find co-occurring pairs
-        for resource_id, entities in resource_to_entities.items():
-            for i, entity_a in enumerate(entities):
-                for entity_b in entities[i + 1 :]:
-                    # Skip same-kind pairs if configured
-                    if (
-                        entity_a.kind == entity_b.kind
-                        and not deps.include_same_kind_pairs
-                    ):
-                        continue
-
-                    # Get chunk indices for each entity in this resource
-                    a_chunks = set()
-                    for quote in entity_a.quotes:
-                        if quote.resource.id == resource_id:
-                            a_chunks.update(quote.chunk_indices)
-
-                    b_chunks = set()
-                    for quote in entity_b.quotes:
-                        if quote.resource.id == resource_id:
-                            b_chunks.update(quote.chunk_indices)
-
-                    # Check tiered co-occurrence
-                    co_occurs = False
-                    strategy: str | None = None
-
-                    # Tier 1: Same chunk (highest precision)
-                    if deps.enable_same_chunk and (a_chunks & b_chunks):
-                        co_occurs = True
-                        strategy = "same_chunk"
-
-                    # Tier 2: Adjacent chunks (±1)
-                    if not co_occurs and deps.enable_adjacent_chunks:
-                        for a_idx in a_chunks:
-                            for b_idx in b_chunks:
-                                if abs(a_idx - b_idx) == 1:
-                                    co_occurs = True
-                                    strategy = "adjacent_chunks"
-                                    break
-                            if co_occurs:
-                                break
-
-                    # Tier 3: Document-level (optional, lowest precision)
-                    if not co_occurs and deps.enable_document_level:
-                        co_occurs = True
-                        strategy = "document_level"
-
-                    # Create or update candidate
-                    if co_occurs and strategy is not None:
-                        key = tuple(sorted([entity_a.name, entity_b.name]))
-                        if key in candidates:
-                            # Same pair found in another resource
-                            candidates[key].co_occurrence_count += 1
-                            candidates[key].shared_resources.append(resource_id.id)
-                        else:
-                            candidates[key] = PairCandidate(
-                                entity_a=entity_a,
-                                entity_b=entity_b,
-                                co_occurrence_count=1,
-                                shared_resources=[resource_id.id],
-                                generation_strategy=strategy,
-                            )
-
-        return list(candidates.values())
+        return find_cooccurring_pairs(
+            entities=state.entities_found,
+            resources=list(state.resource_pool.resources),
+            strategy=strategy,
+            allowed_levels=allowed_levels,
+            include_same_kind_pairs=deps.include_same_kind_pairs,
+        )
 
     def _find_assessment_suggested_pairs(
         self, state: ExtractionStateV3, deps: ExtractionDepsV3
     ) -> List["PairCandidate"]:
-        """
-        Find pairs suggested by individual assessments.
-
-        Uses the related_entities field from each assessment to identify
-        potential relationships. Fuzzy matches suggested names to actual
-        entities found.
-
-        Args:
-            state: Extraction state with assessments and entities
-            deps: Dependencies with pairing configuration
-
-        Returns:
-            List of PairCandidate objects from assessment suggestions
-        """
         from .models import PairCandidate
 
-        candidates = []
+        candidates: List[PairCandidate] = []
 
         for entity_name, assessment in state.individual_assessments.items():
-            # Skip low/none potential entities
-            if assessment.relationship_potential in ["low", "none"]:
+            if assessment.relationship_potential in {"low", "none"}:
                 continue
 
-            # Match related_entities to actual entities_found
-            for related_name in assessment.related_entities:
-                matched_entity = self._fuzzy_match_entity(
-                    related_name, state.entities_found
-                )
-                if not matched_entity:
+            source_entity = state.entities_found.get(entity_name)
+            if source_entity is None:
+                continue
+
+            for related in assessment.related_entities:
+                target_entity = self._fuzzy_match_entity(related, state.entities_found)
+                if target_entity is None:
                     logger.debug(
-                        f"Could not match related entity '{related_name}' "
-                        f"suggested by {entity_name}"
+                        f"Could not match related entity '{related}' suggested by "
+                        f"{entity_name}"
                     )
                     continue
 
-                # Skip same-kind pairs if configured
                 if (
-                    assessment.entity.kind == matched_entity.kind
+                    source_entity.kind == target_entity.kind
                     and not deps.include_same_kind_pairs
                 ):
                     continue
 
+                key = self._make_pair_key(source_entity.name, target_entity.name)
+                if key in state.pair_candidates:
+                    continue
+
                 candidates.append(
                     PairCandidate(
-                        entity_a=assessment.entity,
-                        entity_b=matched_entity,
-                        co_occurrence_count=0,  # Not from co-occurrence
+                        entity_a=source_entity,
+                        entity_b=target_entity,
+                        co_occurrence_count=0,
                         shared_resources=[],
                         generation_strategy="assessment_suggested",
                     )
@@ -912,124 +440,66 @@ class GeneratePairCandidates(BaseNode[ExtractionStateV3, ExtractionDepsV3]):
 
         return candidates
 
+    @staticmethod
+    def _make_pair_key(name_a: str, name_b: str) -> tuple[str, str]:
+        a, b = sorted([name_a, name_b])
+        return a, b
+
+    @staticmethod
     def _fuzzy_match_entity(
-        self, related_name: str, entities_found: Dict[str, EntityWithQuotes]
+        target_name: str, entities: Dict[str, EntityWithQuotes]
     ) -> Optional[EntityWithQuotes]:
-        """
-        Fuzzy match related entity name to actual entities.
+        target_lower = target_name.lower()
+        if target_lower in entities:
+            return entities[target_lower]
 
-        Tries in order:
-        1. Exact match (case-sensitive)
-        2. Case-insensitive match
-        3. Alias match (case-sensitive)
-        4. Alias match (case-insensitive)
-
-        Args:
-            related_name: Entity name from assessment's related_entities
-            entities_found: Dict of all entities found (name → entity)
-
-        Returns:
-            Matched EntityWithQuotes or None if no match found
-        """
-        # Exact match (case-sensitive)
-        if related_name in entities_found:
-            return entities_found[related_name]
-
-        # Case-insensitive match
-        related_lower = related_name.lower()
-        for name, entity in entities_found.items():
-            if name.lower() == related_lower:
+        for entity in entities.values():
+            if entity.name.lower() == target_lower or target_lower in [
+                alias.lower() for alias in entity.aliases
+            ]:
                 return entity
 
-        # Alias match (case-sensitive)
-        for entity in entities_found.values():
-            if related_name in entity.aliases:
-                return entity
-
-        # Alias match (case-insensitive)
-        for entity in entities_found.values():
-            if related_lower in [alias.lower() for alias in entity.aliases]:
+        for entity in entities.values():
+            if target_lower in entity.name.lower():
                 return entity
 
         return None
 
-    def _make_pair_key(self, name_a: str, name_b: str) -> tuple[str, str]:
-        """
-        Create normalized pair key for deduplication.
 
-        Args:
-            name_a: First entity name
-            name_b: Second entity name
-
-        Returns:
-            Sorted tuple of entity names for consistent lookup
-        """
-        sorted_names = sorted([name_a, name_b])
-        return (sorted_names[0], sorted_names[1])
+# ---------------------------------------------------------------------------
+# EvaluatePairs
+# ---------------------------------------------------------------------------
 
 
 @dataclass
 class EvaluatePairs(BaseNode[ExtractionStateV3, ExtractionDepsV3, ExtractionStateV3]):
     """
-    Evaluate candidate entity pairs using evidence from shared contexts.
-
-    Converts PairCandidate objects into EntityPairOut objects by analyzing
-    evidence from shared chunk contexts. Uses parallel evaluation with
-    configurable limits and validates provenance for all accepted pairs.
-
-    Phase 3b of V3 pipeline (final node).
+    Evaluate candidate pairs using extraction_core.
     """
 
     async def run(
         self, ctx: GraphRunContext[ExtractionStateV3, ExtractionDepsV3]
     ) -> "BaseNode[ExtractionStateV3, ExtractionDepsV3, ExtractionStateV3] | End[ExtractionStateV3]":
-        """
-        Evaluate all pair candidates in parallel with evidence-based assessment.
-
-        Orchestrates parallel evaluation of candidates with evidence extraction,
-        LLM-based assessment, quote validation, and provenance checking.
-        """
         state, deps = ctx.state, ctx.deps
 
         logger.info(
             f"Starting pair evaluation of {len(state.pair_candidates)} candidates"
         )
-        logger.info(
-            f"Parallelism: {deps.pair_evaluation_parallelism if deps.pair_evaluation_parallelism > 0 else 'unlimited'}"
-        )
 
-        # Execute with parallelism control (default 5 concurrent evaluations)
-        parallelism_desc = (
-            "unlimited"
-            if deps.pair_evaluation_parallelism == 0
-            else f"limit={deps.pair_evaluation_parallelism}"
-        )
-        logger.info(f"Processing with parallelism {parallelism_desc}")
-
-        start_time = time.time()
         results = await with_parallelism_control(
             list(state.pair_candidates.values()),
             lambda candidate: self._evaluate_one_pair(candidate, ctx),
             parallelism=deps.pair_evaluation_parallelism,
             description="pair evaluation",
         )
-        duration = time.time() - start_time
-        state.metrics.pair_evaluation_time += duration
 
-        # Collect accepted pairs
         for result in results:
             if isinstance(result, Exception):
                 logger.error(f"Pair evaluation failed: {result}")
-                state.metrics.pair_evaluation_calls += 1
                 continue
 
-            state.metrics.pair_evaluation_calls += 1
-            if result:  # Pair accepted
-                state.metrics.pair_evaluation_successes += 1
-                state.metrics.pairs_accepted += 1
+            if result:
                 state.final_pairs.append(result)
-            else:  # Pair rejected
-                state.metrics.pairs_rejected += 1
 
         logger.info(
             f"Pair evaluation complete: {state.metrics.pairs_accepted} accepted, "
@@ -1041,7 +511,6 @@ class EvaluatePairs(BaseNode[ExtractionStateV3, ExtractionDepsV3, ExtractionStat
             else "Acceptance rate: N/A"
         )
 
-        # Final checkpoint
         if hasattr(deps, "checkpoint_callback") and deps.checkpoint_callback:
             await deps.checkpoint_callback("final", state)
 
@@ -1052,154 +521,53 @@ class EvaluatePairs(BaseNode[ExtractionStateV3, ExtractionDepsV3, ExtractionStat
         candidate: PairCandidate,
         ctx: GraphRunContext[ExtractionStateV3, ExtractionDepsV3],
     ) -> Optional[EntityPairOut]:
-        """
-        Evaluate a single pair candidate with evidence-based assessment.
-
-        Extracts evidence contexts from shared resources, calls pair evaluator
-        agent, validates quotes, and checks provenance chain.
-
-        Args:
-            candidate: PairCandidate to evaluate
-            ctx: Graph context with state and deps
-
-        Returns:
-            EntityPairOut if relationship exists and provenance valid, else None
-        """
         state, deps = ctx.state, ctx.deps
 
-        logger.debug(
-            f"Evaluating pair: {candidate.entity_a.name} - {candidate.entity_b.name}"
-        )
-
-        # Gather evidence from shared resources
-        evidence_contexts = []
-        all_quotes_used = []  # Track quotes used in contexts
-        context_sources = []  # Track source URL for each context
-        shared_resources_list = []  # Track resources for validation
-        for resource_id_str in candidate.shared_resources:
-            # Find resource by ID string in pool
-            resource = None
-            for r in state.resource_pool.resources:
-                if r.id.id == resource_id_str:
-                    resource = r
-                    break
-
-            if resource is None:
-                logger.warning(
-                    f"Resource {resource_id_str} not found in pool for pair "
-                    f"{candidate.entity_a.name} - {candidate.entity_b.name}"
-                )
-                continue
-
-            contexts, quotes_from_contexts = self._extract_pair_contexts(
-                candidate.entity_a, candidate.entity_b, resource
-            )
-            evidence_contexts.extend(contexts)
-            all_quotes_used.extend(quotes_from_contexts)
-            # Track source URL for each context from this resource
-            context_sources.extend([resource.id.url] * len(contexts))
-            shared_resources_list.append(resource)
-
-        # Fallback: use individual contexts if no shared resources
-        if not evidence_contexts:
-            logger.debug(
-                f"No shared contexts for {candidate.entity_a.name} - {candidate.entity_b.name}, "
-                f"using individual contexts"
-            )
-
-            # Collect contexts from entity_a (up to 3)
-            contexts_from_a = 0
-            for quote in candidate.entity_a.quotes:
-                for i in range(quote.count):
-                    if contexts_from_a >= 3:
-                        break
-                    context = quote.get_context(i + 1, 200)
-                    source_url = quote.resource.id.url
-                    evidence_contexts.append(context)
-                    all_quotes_used.append(quote)
-                    context_sources.append(source_url)
-                    contexts_from_a += 1
-                if contexts_from_a >= 3:
-                    break
-
-            # Collect contexts from entity_b (up to 3)
-            contexts_from_b = 0
-            for quote in candidate.entity_b.quotes:
-                for i in range(quote.count):
-                    if contexts_from_b >= 3:
-                        break
-                    context = quote.get_context(i + 1, 200)
-                    source_url = quote.resource.id.url
-                    evidence_contexts.append(context)
-                    all_quotes_used.append(quote)
-                    context_sources.append(source_url)
-                    contexts_from_b += 1
-                if contexts_from_b >= 3:
-                    break
-
-            # Build unique resources from quotes used
-            unique_resources = list({quote.resource for quote in all_quotes_used})
-            shared_resources_list = unique_resources
-
-            # Verbose logging: show source URLs for fallback contexts
-            if logger.isEnabledFor(logging.DEBUG):
-                entity_a_urls = [
-                    q.resource.id.url for q in candidate.entity_a.quotes[:3]
-                ]
-                entity_b_urls = [
-                    q.resource.id.url for q in candidate.entity_b.quotes[:3]
-                ]
-                logger.debug(
-                    f"Fallback contexts: {contexts_from_a} from entity_a sources {entity_a_urls}, "
-                    f"{contexts_from_b} from entity_b sources {entity_b_urls}"
-                )
-
-        # Create pair evaluator agent
-        agent = create_pair_evaluator_v3(
-            model=deps.model,
+        evaluation_config = EvaluationConfig(
             relationship_type=deps.get_relation_type(),
+            task_context=deps.get_task_context(),
+            model=deps.model,
+            require_shared_resources=False,
         )
 
-        # Build evaluation prompt with source labels
-        prompt = self._build_evaluation_prompt(
-            candidate, evidence_contexts, context_sources, deps
+        similarity_threshold = (
+            deps.fuzzy_auto_correct_threshold if deps.fuzzy_matching_enabled else 0.90
         )
 
-        # Run evaluation with timing
         start_time = time.time()
         try:
-            result = await agent.run(prompt, deps=deps)
-            duration = time.time() - start_time
-
-            logger.debug(
-                f"Evaluated {candidate.entity_a.name} - {candidate.entity_b.name} "
-                f"in {duration:.2f}s: relationship={result.output.relationship_exists}, "
-                f"confidence={result.output.confidence}"
+            pair = await evaluate_pair(
+                entity_a=candidate.entity_a,
+                entity_b=candidate.entity_b,
+                config=evaluation_config,
+                similarity_threshold=similarity_threshold,
             )
-        except Exception as e:
             duration = time.time() - start_time
+            state.metrics.record_pair_evaluation(
+                success=True, accepted=pair is not None, duration=duration
+            )
+        except Exception as exc:  # pragma: no cover - defensive logging
+            duration = time.time() - start_time
+            state.metrics.record_pair_evaluation(
+                success=False, accepted=False, duration=duration
+            )
             logger.error(
-                f"Evaluation failed for {candidate.entity_a.name} - {candidate.entity_b.name}: {e}"
+                f"Evaluation failed for {candidate.entity_a.name} - "
+                f"{candidate.entity_b.name}: {exc}"
             )
             return None
 
-        # Reject if no relationship
-        if not result.output.relationship_exists:
+        if pair is None:
             logger.debug(
                 f"Rejected pair {candidate.entity_a.name} - {candidate.entity_b.name}: "
                 f"no relationship found"
             )
             return None
 
-        # Convert to EntityPairOut with validated quotes
-        pair = self._create_pair_with_quotes(
-            candidate, result.output, all_quotes_used, state
-        )
-
-        # Validate provenance
         if not pair.validate_provenance():
             logger.warning(
-                f"Pair provenance validation failed: {pair.entity_a.name} - {pair.entity_b.name}"
+                f"Pair provenance validation failed: "
+                f"{pair.entity_a.name} - {pair.entity_b.name}"
             )
             return None
 
@@ -1208,223 +576,3 @@ class EvaluatePairs(BaseNode[ExtractionStateV3, ExtractionDepsV3, ExtractionStat
             f"with {len(pair.evidence_quotes)} evidence quotes"
         )
         return pair
-
-    def _extract_pair_contexts(
-        self,
-        entity_a: EntityWithQuotes,
-        entity_b: EntityWithQuotes,
-        resource: Resource,
-    ) -> Tuple[List[str], List[ResourceQuote]]:
-        """
-        Extract contexts where both entities appear using chunk-based co-occurrence.
-
-        Implements three-tier context extraction:
-        - Tier 1: Same-chunk co-occurrence (highest precision)
-        - Tier 2: Adjacent chunks ±1 (boundary cases)
-        - Tier 3: Document-level fallback (if configured)
-
-        Args:
-            entity_a: First entity
-            entity_b: Second entity
-            resource: Resource to search for co-occurrence
-
-        Returns:
-            Tuple of (context strings, ResourceQuotes used in those contexts)
-        """
-        # Get quotes for both entities in this resource
-        a_quotes = [q for q in entity_a.quotes if q.resource.id == resource.id]
-        b_quotes = [q for q in entity_b.quotes if q.resource.id == resource.id]
-
-        if not (a_quotes and b_quotes):
-            return [], []
-
-        # Get chunk indices
-        a_chunk_indices = set()
-        for quote in a_quotes:
-            a_chunk_indices.update(quote.chunk_indices)
-
-        b_chunk_indices = set()
-        for quote in b_quotes:
-            b_chunk_indices.update(quote.chunk_indices)
-
-        contexts = []
-        quotes_used = []
-
-        # Tier 1: Same-chunk co-occurrence
-        same_chunk = a_chunk_indices & b_chunk_indices
-        for chunk_idx in sorted(same_chunk):
-            chunk_text = resource.get_chunk_text(chunk_idx)
-            if chunk_text:
-                contexts.append(chunk_text)
-                # Track quotes from both entities in this chunk
-                for quote in a_quotes:
-                    if chunk_idx in quote.chunk_indices:
-                        quotes_used.append(quote)
-                for quote in b_quotes:
-                    if chunk_idx in quote.chunk_indices:
-                        quotes_used.append(quote)
-                logger.debug(
-                    f"Found same-chunk context at chunk {chunk_idx} for "
-                    f"{entity_a.name} - {entity_b.name}"
-                )
-
-        # Tier 2: Adjacent chunks (±1)
-        adjacent_chunks = set()
-        for a_idx in a_chunk_indices:
-            for b_idx in b_chunk_indices:
-                if abs(a_idx - b_idx) == 1:
-                    adjacent_chunks.add((min(a_idx, b_idx), max(a_idx, b_idx)))
-
-        for chunk_a, chunk_b in sorted(adjacent_chunks):
-            text_a = resource.get_chunk_text(chunk_a)
-            text_b = resource.get_chunk_text(chunk_b)
-            if text_a and text_b:
-                contexts.append(f"{text_a}\n...\n{text_b}")
-                # Track quotes from both entities in either chunk
-                for quote in a_quotes:
-                    if chunk_a in quote.chunk_indices or chunk_b in quote.chunk_indices:
-                        quotes_used.append(quote)
-                for quote in b_quotes:
-                    if chunk_a in quote.chunk_indices or chunk_b in quote.chunk_indices:
-                        quotes_used.append(quote)
-                logger.debug(
-                    f"Found adjacent-chunk context at chunks {chunk_a}-{chunk_b} for "
-                    f"{entity_a.name} - {entity_b.name}"
-                )
-
-        # Tier 3: Document-level fallback (only if configured and no contexts found)
-        # Note: enable_document_level_cooccurrence not in deps yet, using False
-        # This will be configured per deployment needs
-
-        return contexts, quotes_used
-
-    def _build_evaluation_prompt(
-        self,
-        candidate: PairCandidate,
-        evidence_contexts: List[str],
-        context_sources: List[str],
-        deps: ExtractionDepsV3,
-    ) -> str:
-        """
-        Build pair evaluation prompt with evidence contexts and source labels.
-
-        Constructs a prompt with entity information and evidence contexts,
-        limiting to 5 contexts for token efficiency. Each context is labeled
-        with its source URL.
-
-        Args:
-            candidate: PairCandidate being evaluated
-            evidence_contexts: List of context strings
-            context_sources: Source URLs corresponding to each context
-            deps: Dependencies with task configuration
-
-        Returns:
-            Formatted prompt string for pair evaluator agent
-        """
-        # Limit to 5 contexts for token efficiency
-        limited_contexts = evidence_contexts[:5]
-        limited_sources = context_sources[:5]
-
-        # Log source URLs for verbose output
-        if limited_sources:
-            logger.debug(
-                f"Evidence sources for {candidate.entity_a.name} - {candidate.entity_b.name}: "
-                f"{', '.join(set(limited_sources))}"
-            )
-
-        # Build evidence blocks with source labels
-        evidence_blocks = []
-        for i, (ctx, source_url) in enumerate(zip(limited_contexts, limited_sources)):
-            evidence_blocks.append(f"Evidence {i + 1} (Source: {source_url}):\n{ctx}")
-
-        contexts_text = "\n\n".join(evidence_blocks)
-
-        return f"""Evaluate the relationship between:
-- Entity A: {candidate.entity_a.name} ({candidate.entity_a.kind})
-- Entity B: {candidate.entity_b.name} ({candidate.entity_b.kind})
-
-Evidence contexts:
-{contexts_text}
-
-Task: Determine if a {deps.get_relation_type()} relationship exists.
-
-Consider:
-1. Do the contexts support a direct relationship?
-2. Is the evidence explicit or implicit?
-3. What is your confidence level?
-
-If relationship exists, provide evidence quotes.
-"""
-
-    def _create_pair_with_quotes(
-        self,
-        candidate: PairCandidate,
-        agent_output: PairEvaluationOut,
-        quotes_used: List[ResourceQuote],
-        state: ExtractionStateV3,
-    ) -> EntityPairOut:
-        """
-        Convert agent output to EntityPairOut with validated quotes.
-
-        Validates evidence quotes using fuzzy matching only across quotes_used
-        (the specific ResourceQuote objects provided in prompts). This prevents
-        cross-document contamination by constraining validation to the exact
-        contexts shown to the LLM.
-
-        Args:
-            candidate: PairCandidate being converted
-            agent_output: Raw agent output with evidence strings
-            quotes_used: ResourceQuotes from context extraction (Task 03/04)
-            state: Extraction state with resource pool
-
-        Returns:
-            EntityPairOut with validated evidence quotes
-        """
-        # Validate evidence quotes by searching only quotes_used
-        evidence_quotes = []
-        source_urls = [quote.resource.id.url for quote in quotes_used]
-
-        for evidence_text in agent_output.evidence:
-            if not evidence_text or not evidence_text.strip():
-                continue
-
-            evidence_text = evidence_text.strip()
-            quote_found = False
-
-            # Search only the quotes_used for this evidence
-            for quote in quotes_used:
-                try:
-                    validated_quote = quote.resource.quote(
-                        evidence_text, similarity_threshold=0.90
-                    )
-                    # Found valid quote in this resource
-                    evidence_quotes.append(validated_quote)
-                    logger.debug(
-                        f"Validated evidence quote for pair "
-                        f"{candidate.entity_a.name} - {candidate.entity_b.name}: "
-                        f"{evidence_text[:50]}..."
-                    )
-                    quote_found = True
-                    break  # Found in this resource, move to next evidence
-                except (ParaphraseError, QuoteNotFoundError):
-                    # Not found in this quote's resource, try next quote
-                    continue
-
-            # Log warning if quote not found in quotes_used
-            if not quote_found:
-                logger.warning(
-                    f"Evidence quote not found in provided contexts for pair "
-                    f"{candidate.entity_a.name} - {candidate.entity_b.name}: "
-                    f"'{evidence_text[:50]}...' "
-                    f"(searched {len(quotes_used)} quotes from sources: "
-                    f"{', '.join(set(source_urls))})"
-                )
-
-        return EntityPairOut(
-            entity_a=candidate.entity_a,
-            entity_b=candidate.entity_b,
-            relationship=agent_output.relationship_type or "interaction",
-            confidence=agent_output.confidence,
-            evidence_quotes=evidence_quotes,
-            reasoning=agent_output.reasoning,
-        )

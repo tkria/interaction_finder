@@ -65,9 +65,6 @@ class ExtractionDepsV3:
     # Semantic caching configuration
     semantic_cache_enabled: bool = False  # Disabled by default until task 02
 
-    # Current resources for validation (set by nodes before agent runs)
-    current_resources: Optional[List["Resource"]] = None
-
     # Quote error tracking
     quote_error_log: List["QuoteErrorRecord"] = field(default_factory=list)
 
@@ -105,7 +102,6 @@ class ExtractionDepsV3:
         # Caching
         semantic_cache_enabled: bool = False,
         # Other
-        current_resources: Optional[List["Resource"]] = None,
         output_dir: Optional[Path] = None,
         checkpoint_callback: Optional[Callable] = None,  # type: ignore[type-arg]
     ) -> "ExtractionDepsV3":
@@ -160,7 +156,6 @@ class ExtractionDepsV3:
             fuzzy_suggest_threshold=fuzzy_suggest_threshold,
             enable_llm_fallback=enable_llm_fallback,
             semantic_cache_enabled=semantic_cache_enabled,
-            current_resources=current_resources,
             output_dir=output_dir,
             checkpoint_callback=checkpoint_callback,
         )
