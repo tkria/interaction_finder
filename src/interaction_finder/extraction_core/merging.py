@@ -5,7 +5,7 @@ Provides pure functional interface for combining entities extracted from multipl
 documents, handling aliases and quote consolidation.
 """
 
-from typing import List
+from typing import Dict, List
 
 # Import with TYPE_CHECKING to avoid circular imports at runtime
 from typing import TYPE_CHECKING
@@ -16,36 +16,81 @@ if TYPE_CHECKING:
 
 def merge_entities(
     entities: List["EntityWithQuotes"],
-    case_sensitive: bool = False,
-) -> List["EntityWithQuotes"]:
+) -> Dict[str, "EntityWithQuotes"]:
     """
-    Merge duplicate entities and consolidate their quotes.
+    Merge duplicate entities across resources by name.
 
-    Combines entities with the same name (or aliases) across multiple documents,
-    preserving all quotes and occurrence information. Handles case variations,
-    aliases, and quote deduplication.
+    Deduplicates entities with the same name (case-sensitive) by combining their
+    quotes and aliases. Useful for merging entities extracted from multiple documents
+    into a single canonical entity per name.
 
     Args:
-        entities: List of entities to merge (can be from multiple documents)
-        case_sensitive: Whether to treat entity names case-sensitively (default: False)
+        entities: List of entities to merge (potentially from multiple resources)
 
     Returns:
-        List of merged entities with consolidated quotes and aliases
+        Dictionary mapping entity name to merged EntityWithQuotes. Each merged entity
+        contains all quotes from all occurrences and deduplicated aliases.
+
+    Note:
+        - Entity name matching is **case-sensitive** (BRCA1 ≠ brca1)
+        - First occurrence determines kind and initial confidence
+        - Quotes from all occurrences are combined (order not guaranteed)
+        - Aliases are deduplicated (converted to set, then back to list)
+        - If entities with same name have different kinds, raises ValueError
 
     Example:
         ```python
-        # Entities from multiple documents
-        doc1_entities = [
-            EntityWithQuotes(name="BRCA1", kind="gene", quotes=[...]),
-            EntityWithQuotes(name="TP53", kind="gene", quotes=[...])
-        ]
-        doc2_entities = [
-            EntityWithQuotes(name="brca1", kind="gene", quotes=[...]),  # Case variant
-            EntityWithQuotes(name="p53", kind="gene", aliases=["TP53"], quotes=[...])  # Alias
-        ]
+        from interaction_finder.extraction_core import merge_entities
+        from interaction_finder.extraction_graph_v2.models import EntityWithQuotes
+        from interaction_finder.resources import Resource, ResourceId
 
-        merged = merge_entities(doc1_entities + doc2_entities)
-        # Result: BRCA1 (merged cases), TP53 (merged with p53 alias)
+        # Entities from two different resources
+        resource1 = Resource(id=ResourceId('http://a.com', 1), title='A', text='BRCA1 is a gene.')
+        resource2 = Resource(id=ResourceId('http://b.com', 2), title='B', text='BRCA1 encodes a protein.')
+
+        quote1 = resource1.quote('BRCA1 is a gene', similarity_threshold=1.0)
+        quote2 = resource2.quote('BRCA1 encodes', similarity_threshold=1.0)
+
+        entity1 = EntityWithQuotes(name='BRCA1', kind='gene', quotes=[quote1])
+        entity2 = EntityWithQuotes(name='BRCA1', kind='gene', quotes=[quote2], aliases=['FANCS'])
+
+        # Merge entities by name
+        merged = merge_entities([entity1, entity2])
+        # Result: {'BRCA1': EntityWithQuotes(name='BRCA1', quotes=[quote1, quote2], aliases=['FANCS'])}
         ```
     """
-    raise NotImplementedError("merge_entities will be implemented in Task 03")
+    # Handle empty input
+    if not entities:
+        return {}
+
+    # Accumulate merged entities keyed by name
+    merged: Dict[str, "EntityWithQuotes"] = {}
+
+    for entity in entities:
+        if entity.name not in merged:
+            # First occurrence: create a copy to avoid mutating input
+            # Use model_copy() to create a shallow copy (quotes list is shared)
+            # Then create a new quotes list to avoid mutation
+            merged[entity.name] = entity.model_copy(
+                update={"quotes": list(entity.quotes), "aliases": list(entity.aliases)}
+            )
+        else:
+            # Duplicate name: merge quotes and aliases
+            existing = merged[entity.name]
+
+            # Validate that entities with same name have same kind
+            if existing.kind != entity.kind:
+                raise ValueError(
+                    f"Cannot merge entities with same name '{entity.name}' but different kinds: "
+                    f"'{existing.kind}' vs '{entity.kind}'"
+                )
+
+            # Extend quotes list with new entity's quotes
+            existing.quotes.extend(entity.quotes)
+
+            # Union aliases: convert to set, add new aliases, convert back to list
+            existing_aliases_set = set(existing.aliases)
+            existing_aliases_set.update(entity.aliases)
+            existing.aliases = list(existing_aliases_set)
+
+    return merged
