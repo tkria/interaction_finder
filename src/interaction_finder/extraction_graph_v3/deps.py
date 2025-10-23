@@ -61,6 +61,7 @@ class ExtractionDepsV3:
     fuzzy_auto_correct_threshold: float = 0.9  # Auto-accept above this
     fuzzy_suggest_threshold: float = 0.75  # Suggest corrections above this
     enable_llm_fallback: bool = True  # Use LLM to fix quotes if fuzzy fails
+    quote_similarity_threshold: float = 0.8  # Minimum similarity when matching quotes
 
     # Semantic caching configuration
     semantic_cache_enabled: bool = False  # Disabled by default until task 02
@@ -99,6 +100,7 @@ class ExtractionDepsV3:
         fuzzy_auto_correct_threshold: float = 0.9,
         fuzzy_suggest_threshold: float = 0.75,
         enable_llm_fallback: bool = True,
+        quote_similarity_threshold: float = 0.8,
         # Caching
         semantic_cache_enabled: bool = False,
         # Other
@@ -155,6 +157,7 @@ class ExtractionDepsV3:
             fuzzy_auto_correct_threshold=fuzzy_auto_correct_threshold,
             fuzzy_suggest_threshold=fuzzy_suggest_threshold,
             enable_llm_fallback=enable_llm_fallback,
+            quote_similarity_threshold=quote_similarity_threshold,
             semantic_cache_enabled=semantic_cache_enabled,
             output_dir=output_dir,
             checkpoint_callback=checkpoint_callback,

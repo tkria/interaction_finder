@@ -24,6 +24,8 @@ from ..resources import ResourcePool, compute_chunk_spans
 
 logger = logging.getLogger(__name__)
 
+QUOTE_SIMILARITY_THRESHOLD = 0.8
+
 
 async def _load_documents(urls: List[str], page_fetcher: PageFetcher) -> ResourcePool:
     """
@@ -189,7 +191,9 @@ async def resume_from_checkpoint(
         )
         if resource:
             # Reconstruct quote by searching for phrase in resource
-            return resource.quote(phrase)
+            return resource.quote(
+                phrase, similarity_threshold=QUOTE_SIMILARITY_THRESHOLD
+            )
         else:
             logger.warning(
                 f"Resource {resource_id} not found in pool for quote: {phrase}"

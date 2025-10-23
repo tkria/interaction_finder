@@ -279,6 +279,7 @@ Context: {task_context}
                     resource=resource,
                     quote_error_log=ctx.deps.quote_error_log,
                     current_retry=ctx.retry,
+                    similarity_threshold=ctx.deps.quote_similarity_threshold,
                 )
 
                 # If validation/correction succeeded, update the quote
@@ -465,6 +466,7 @@ Entity kinds: {kinds_str}
                     resource=resource,
                     quote_error_log=ctx.deps.quote_error_log,
                     current_retry=ctx.retry,
+                    similarity_threshold=ctx.deps.quote_similarity_threshold,
                 )
 
                 # If validation succeeded, update the quote and move to next
@@ -651,6 +653,7 @@ If relationship exists, evidence quotes are required.
                     resource=resource,
                     quote_error_log=ctx.deps.quote_error_log,
                     current_retry=ctx.retry,
+                    similarity_threshold=ctx.deps.quote_similarity_threshold,
                 )
 
                 # If validation succeeded, update the quote and move to next

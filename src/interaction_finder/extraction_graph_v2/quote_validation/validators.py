@@ -55,16 +55,23 @@ def _get_cache_filename(url: str) -> str:
 class QuoteValidator:
     """Handles quote validation with alignment-based auto-correction and error logging."""
 
-    def __init__(self, auto_accept_threshold: float = 85.0):
+    def __init__(
+        self,
+        auto_accept_threshold: float = 85.0,
+        default_similarity_threshold: float = 1.0,
+    ):
         """
         Initialize quote validator.
 
         Args:
             auto_accept_threshold: Threshold for auto-accepting corrections (%)
+            default_similarity_threshold: Default similarity threshold to use when
+                constructing ResourceQuote instances.
         """
         self.corrector = QuoteCorrector(auto_accept_threshold)
         self.aligner = SequenceAligner()
         self.console = Console()
+        self.default_similarity_threshold = default_similarity_threshold
 
     def validate_and_correct_quote(
         self,
@@ -74,6 +81,7 @@ class QuoteValidator:
         resource: "Resource",
         quote_error_log: List["QuoteErrorRecord"],
         current_retry: int = 0,
+        similarity_threshold: Optional[float] = None,
     ) -> Optional["ResourceQuote"]:
         """
         Validate a quote and attempt auto-correction if validation fails.
@@ -85,13 +93,21 @@ class QuoteValidator:
             resource: Resource to validate against
             quote_error_log: List to append error records to
             current_retry: Current retry attempt number
+            similarity_threshold: Minimum similarity required when matching quote
+                text against the resource. Defaults to validator setting.
 
         Returns:
             ResourceQuote if successful, None if validation fails
         """
+        threshold = (
+            similarity_threshold
+            if similarity_threshold is not None
+            else self.default_similarity_threshold
+        )
+
         # First try to create ResourceQuote directly
         try:
-            return resource.quote(quote_text)
+            return resource.quote(quote_text, similarity_threshold=threshold)
         except Exception as original_error:
             # Quote validation failed - try auto-correction
             return self._handle_quote_failure(
@@ -102,6 +118,7 @@ class QuoteValidator:
                 original_error=original_error,
                 quote_error_log=quote_error_log,
                 current_retry=current_retry,
+                similarity_threshold=threshold,
             )
 
     def _handle_quote_failure(
@@ -113,6 +130,7 @@ class QuoteValidator:
         original_error: Exception,
         quote_error_log: List["QuoteErrorRecord"],
         current_retry: int,
+        similarity_threshold: float,
     ) -> Optional["ResourceQuote"]:
         """Handle quote validation failure with correction attempts."""
         from ..models import QuoteErrorRecord
@@ -130,7 +148,9 @@ class QuoteValidator:
 
             try:
                 # Try to use the auto-corrected quote
-                corrected_quote = resource.quote(best_suggestion)
+                corrected_quote = resource.quote(
+                    best_suggestion, similarity_threshold=similarity_threshold
+                )
 
                 # Get alignment details for logging
                 alignment = self.aligner.align_quote_to_resource(
