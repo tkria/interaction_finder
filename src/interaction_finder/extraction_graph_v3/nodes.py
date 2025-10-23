@@ -11,7 +11,7 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass
-from typing import Dict, List, Optional, TYPE_CHECKING
+from typing import Dict, List, Optional, Tuple, TYPE_CHECKING
 
 from pydantic_graph import BaseNode, GraphRunContext, End
 
@@ -35,6 +35,7 @@ from ..extraction_graph_v2.parallelism import with_parallelism_control
 from ..resources import (
     ResourceId,
     Resource,
+    ResourceQuote,
     QuoteNotFoundError,
     ParaphraseError,
 )
@@ -481,9 +482,6 @@ class AssessIndividually(BaseNode[ExtractionStateV3, ExtractionDepsV3]):
         # Cache miss - assess entity via LLM
         logger.debug(f"Cache miss for {entity.name} - calling LLM")
 
-        # Get contexts from entity quotes (limit to 10 for token efficiency)
-        contexts = entity.all_contexts[:10]
-
         # Create assessment agent
         agent = create_assessment_agent_v3(
             model=deps.model,
@@ -491,19 +489,8 @@ class AssessIndividually(BaseNode[ExtractionStateV3, ExtractionDepsV3]):
             relationship_type=deps.get_relation_type(),
         )
 
-        # Build prompt with entity contexts
-        prompt = self._build_assessment_prompt(entity, contexts, deps)
-
-        # Set current resources for validators (from entity's quotes)
-        # Get unique resources from entity's quotes for validation context
-        unique_resources = []
-        seen_urls = set()
-        for quote in entity.quotes:
-            url = quote.resource.id.url
-            if url not in seen_urls:
-                unique_resources.append(quote.resource)
-                seen_urls.add(url)
-        deps.current_resources = unique_resources
+        # Build prompt with entity contexts and track quotes used
+        prompt, quotes_used = self._build_assessment_prompt(entity, deps)
 
         # Run assessment with timing
         start_time = time.time()
@@ -536,7 +523,9 @@ class AssessIndividually(BaseNode[ExtractionStateV3, ExtractionDepsV3]):
             )
 
         # Convert to IndividualAssessment with validated quotes
-        assessment = self._create_assessment_with_quotes(entity, result.output, state)
+        assessment = self._create_assessment_with_quotes(
+            entity, result.output, state, quotes_used
+        )
 
         # Save to cache if enabled
         if cache and deps.semantic_cache_enabled:
@@ -548,28 +537,59 @@ class AssessIndividually(BaseNode[ExtractionStateV3, ExtractionDepsV3]):
     def _build_assessment_prompt(
         self,
         entity: EntityWithQuotes,
-        contexts: List[str],
         deps: ExtractionDepsV3,
-    ) -> str:
+    ) -> tuple[str, List[ResourceQuote]]:
         """
-        Build assessment prompt with entity contexts.
+        Build assessment prompt with entity contexts and track source quotes.
 
         Constructs a prompt emphasizing the need for specific entity names
-        in the related_entities field (not entity types).
+        in the related_entities field (not entity types). Iterates over entity
+        quotes to extract contexts while preserving quote objects for validation.
 
         Args:
             entity: Entity being assessed
-            contexts: Context excerpts where entity appears
             deps: Dependencies with task configuration
 
         Returns:
-            Formatted prompt string for assessment agent
+            Tuple of (formatted prompt string, list of quotes used for contexts)
         """
-        contexts_text = "\n\n".join(
-            f"Context {i + 1}:\n{ctx}" for i, ctx in enumerate(contexts[:10])
-        )
+        # Track quotes used for contexts (for validation constraint)
+        quotes_used: List[ResourceQuote] = []
+        evidence_blocks = []
+        evidence_count = 0
 
-        return f"""Entity: {entity.name} ({entity.kind})
+        # Iterate over entity quotes to extract contexts with source labels
+        for quote in entity.quotes:
+            for i in range(quote.count):
+                # Respect 10 context limit for token efficiency
+                if evidence_count >= 10:
+                    break
+
+                # Extract context for this occurrence
+                context = quote.get_context(i + 1, 200)
+                source_url = quote.resource.id.url
+
+                # Build evidence block with source label
+                evidence_count += 1
+                evidence_blocks.append(
+                    f"Evidence {evidence_count} (Source: {source_url}):\n{context}"
+                )
+
+                # Track this quote for validation
+                quotes_used.append(quote)
+
+                # Log source URL in verbose mode
+                logger.debug(f"Evidence {evidence_count} from source: {source_url}")
+
+            # Break outer loop if limit reached
+            if evidence_count >= 10:
+                break
+
+        logger.debug(f"Built assessment prompt with {len(quotes_used)} quotes used")
+
+        contexts_text = "\n\n".join(evidence_blocks)
+
+        prompt = f"""Entity: {entity.name} ({entity.kind})
 
 Contexts where this entity appears:
 {contexts_text}
@@ -584,27 +604,33 @@ Examples:
 These specific names will be used to generate pair candidates for evaluation.
 """
 
+        return prompt, quotes_used
+
     def _create_assessment_with_quotes(
         self,
         entity: EntityWithQuotes,
         agent_output: AssessmentOut,
         state: ExtractionStateV3,
+        quotes_used: List[ResourceQuote],
     ) -> IndividualAssessment:
         """
         Convert agent output to IndividualAssessment with validated quotes.
 
-        Validates evidence quotes using fuzzy matching across all resources
-        in the resource pool. Maps potential level to confidence score.
+        Validates evidence quotes using fuzzy matching only within the specific
+        quotes used for prompt construction (quotes_used), preventing cross-document
+        contamination. Maps potential level to confidence score.
 
         Args:
             entity: Entity being assessed
             agent_output: Raw agent output
-            state: Extraction state with resource pool
+            state: Extraction state (unused - kept for compatibility)
+            quotes_used: List of quotes that provided contexts in the prompt
+                        (validation constrained to these specific quotes)
 
         Returns:
             IndividualAssessment with validated evidence quotes
         """
-        # Validate evidence quotes by searching all resources
+        # Validate evidence quotes by searching only quotes_used
         evidence_quotes = []
         for evidence_text in agent_output.evidence:
             if not evidence_text or not evidence_text.strip():
@@ -612,19 +638,32 @@ These specific names will be used to generate pair candidates for evaluation.
 
             evidence_text = evidence_text.strip()
 
-            # Search all resources for this evidence
-            for resource in state.resource_pool.resources:
+            # Search only the quotes that were used in the prompt
+            found = False
+            for quote in quotes_used:
                 try:
-                    quote = resource.quote(evidence_text, similarity_threshold=0.90)
+                    validated_quote = quote.resource.quote(
+                        evidence_text, similarity_threshold=0.90
+                    )
                     # Found valid quote in this resource
-                    evidence_quotes.append(quote)
+                    evidence_quotes.append(validated_quote)
                     logger.debug(
                         f"Validated evidence for {entity.name}: {evidence_text[:50]}..."
                     )
-                    break  # Found in this resource, move to next evidence
+                    found = True
+                    break  # Found in this quote's resource, move to next evidence
                 except (ParaphraseError, QuoteNotFoundError):
-                    # Not found in this resource, try next resource
+                    # Not found in this quote's resource, try next quote
                     continue
+
+            # Log warning if quote not found in any quotes_used
+            if not found:
+                source_urls = [q.resource.id.url for q in quotes_used]
+                logger.warning(
+                    f"Evidence quote not found in quotes_used for {entity.name}: "
+                    f"{evidence_text[:50]}... "
+                    f"(searched {len(quotes_used)} quotes from sources: {source_urls})"
+                )
 
         # Map potential to confidence score
         confidence_map = {"high": 0.9, "medium": 0.7, "low": 0.5, "none": 0.0}
@@ -1034,6 +1073,8 @@ class EvaluatePairs(BaseNode[ExtractionStateV3, ExtractionDepsV3, ExtractionStat
 
         # Gather evidence from shared resources
         evidence_contexts = []
+        all_quotes_used = []  # Track quotes used in contexts
+        context_sources = []  # Track source URL for each context
         shared_resources_list = []  # Track resources for validation
         for resource_id_str in candidate.shared_resources:
             # Find resource by ID string in pool
@@ -1050,10 +1091,13 @@ class EvaluatePairs(BaseNode[ExtractionStateV3, ExtractionDepsV3, ExtractionStat
                 )
                 continue
 
-            contexts = self._extract_pair_contexts(
+            contexts, quotes_from_contexts = self._extract_pair_contexts(
                 candidate.entity_a, candidate.entity_b, resource
             )
             evidence_contexts.extend(contexts)
+            all_quotes_used.extend(quotes_from_contexts)
+            # Track source URL for each context from this resource
+            context_sources.extend([resource.id.url] * len(contexts))
             shared_resources_list.append(resource)
 
         # Fallback: use individual contexts if no shared resources
@@ -1062,20 +1106,53 @@ class EvaluatePairs(BaseNode[ExtractionStateV3, ExtractionDepsV3, ExtractionStat
                 f"No shared contexts for {candidate.entity_a.name} - {candidate.entity_b.name}, "
                 f"using individual contexts"
             )
-            evidence_contexts = (
-                candidate.entity_a.all_contexts[:3]
-                + candidate.entity_b.all_contexts[:3]
-            )
-            # Get resources from both entities for validation
-            unique_resources = []
-            seen_urls = set()
-            for entity in [candidate.entity_a, candidate.entity_b]:
-                for quote in entity.quotes:
-                    url = quote.resource.id.url
-                    if url not in seen_urls:
-                        unique_resources.append(quote.resource)
-                        seen_urls.add(url)
+
+            # Collect contexts from entity_a (up to 3)
+            contexts_from_a = 0
+            for quote in candidate.entity_a.quotes:
+                for i in range(quote.count):
+                    if contexts_from_a >= 3:
+                        break
+                    context = quote.get_context(i + 1, 200)
+                    source_url = quote.resource.id.url
+                    evidence_contexts.append(context)
+                    all_quotes_used.append(quote)
+                    context_sources.append(source_url)
+                    contexts_from_a += 1
+                if contexts_from_a >= 3:
+                    break
+
+            # Collect contexts from entity_b (up to 3)
+            contexts_from_b = 0
+            for quote in candidate.entity_b.quotes:
+                for i in range(quote.count):
+                    if contexts_from_b >= 3:
+                        break
+                    context = quote.get_context(i + 1, 200)
+                    source_url = quote.resource.id.url
+                    evidence_contexts.append(context)
+                    all_quotes_used.append(quote)
+                    context_sources.append(source_url)
+                    contexts_from_b += 1
+                if contexts_from_b >= 3:
+                    break
+
+            # Build unique resources from quotes used
+            unique_resources = list({quote.resource for quote in all_quotes_used})
             shared_resources_list = unique_resources
+
+            # Verbose logging: show source URLs for fallback contexts
+            if logger.isEnabledFor(logging.DEBUG):
+                entity_a_urls = [
+                    q.resource.id.url for q in candidate.entity_a.quotes[:3]
+                ]
+                entity_b_urls = [
+                    q.resource.id.url for q in candidate.entity_b.quotes[:3]
+                ]
+                logger.debug(
+                    f"Fallback contexts: {contexts_from_a} from entity_a sources {entity_a_urls}, "
+                    f"{contexts_from_b} from entity_b sources {entity_b_urls}"
+                )
 
         # Create pair evaluator agent
         agent = create_pair_evaluator_v3(
@@ -1083,11 +1160,10 @@ class EvaluatePairs(BaseNode[ExtractionStateV3, ExtractionDepsV3, ExtractionStat
             relationship_type=deps.get_relation_type(),
         )
 
-        # Build evaluation prompt
-        prompt = self._build_evaluation_prompt(candidate, evidence_contexts, deps)
-
-        # Set current resources for validators (from shared evidence resources)
-        deps.current_resources = shared_resources_list
+        # Build evaluation prompt with source labels
+        prompt = self._build_evaluation_prompt(
+            candidate, evidence_contexts, context_sources, deps
+        )
 
         # Run evaluation with timing
         start_time = time.time()
@@ -1116,7 +1192,9 @@ class EvaluatePairs(BaseNode[ExtractionStateV3, ExtractionDepsV3, ExtractionStat
             return None
 
         # Convert to EntityPairOut with validated quotes
-        pair = self._create_pair_with_quotes(candidate, result.output, state)
+        pair = self._create_pair_with_quotes(
+            candidate, result.output, all_quotes_used, state
+        )
 
         # Validate provenance
         if not pair.validate_provenance():
@@ -1136,7 +1214,7 @@ class EvaluatePairs(BaseNode[ExtractionStateV3, ExtractionDepsV3, ExtractionStat
         entity_a: EntityWithQuotes,
         entity_b: EntityWithQuotes,
         resource: Resource,
-    ) -> List[str]:
+    ) -> Tuple[List[str], List[ResourceQuote]]:
         """
         Extract contexts where both entities appear using chunk-based co-occurrence.
 
@@ -1151,14 +1229,14 @@ class EvaluatePairs(BaseNode[ExtractionStateV3, ExtractionDepsV3, ExtractionStat
             resource: Resource to search for co-occurrence
 
         Returns:
-            List of context strings where both entities appear
+            Tuple of (context strings, ResourceQuotes used in those contexts)
         """
         # Get quotes for both entities in this resource
         a_quotes = [q for q in entity_a.quotes if q.resource.id == resource.id]
         b_quotes = [q for q in entity_b.quotes if q.resource.id == resource.id]
 
         if not (a_quotes and b_quotes):
-            return []
+            return [], []
 
         # Get chunk indices
         a_chunk_indices = set()
@@ -1170,6 +1248,7 @@ class EvaluatePairs(BaseNode[ExtractionStateV3, ExtractionDepsV3, ExtractionStat
             b_chunk_indices.update(quote.chunk_indices)
 
         contexts = []
+        quotes_used = []
 
         # Tier 1: Same-chunk co-occurrence
         same_chunk = a_chunk_indices & b_chunk_indices
@@ -1177,6 +1256,13 @@ class EvaluatePairs(BaseNode[ExtractionStateV3, ExtractionDepsV3, ExtractionStat
             chunk_text = resource.get_chunk_text(chunk_idx)
             if chunk_text:
                 contexts.append(chunk_text)
+                # Track quotes from both entities in this chunk
+                for quote in a_quotes:
+                    if chunk_idx in quote.chunk_indices:
+                        quotes_used.append(quote)
+                for quote in b_quotes:
+                    if chunk_idx in quote.chunk_indices:
+                        quotes_used.append(quote)
                 logger.debug(
                     f"Found same-chunk context at chunk {chunk_idx} for "
                     f"{entity_a.name} - {entity_b.name}"
@@ -1194,6 +1280,13 @@ class EvaluatePairs(BaseNode[ExtractionStateV3, ExtractionDepsV3, ExtractionStat
             text_b = resource.get_chunk_text(chunk_b)
             if text_a and text_b:
                 contexts.append(f"{text_a}\n...\n{text_b}")
+                # Track quotes from both entities in either chunk
+                for quote in a_quotes:
+                    if chunk_a in quote.chunk_indices or chunk_b in quote.chunk_indices:
+                        quotes_used.append(quote)
+                for quote in b_quotes:
+                    if chunk_a in quote.chunk_indices or chunk_b in quote.chunk_indices:
+                        quotes_used.append(quote)
                 logger.debug(
                     f"Found adjacent-chunk context at chunks {chunk_a}-{chunk_b} for "
                     f"{entity_a.name} - {entity_b.name}"
@@ -1203,23 +1296,26 @@ class EvaluatePairs(BaseNode[ExtractionStateV3, ExtractionDepsV3, ExtractionStat
         # Note: enable_document_level_cooccurrence not in deps yet, using False
         # This will be configured per deployment needs
 
-        return contexts
+        return contexts, quotes_used
 
     def _build_evaluation_prompt(
         self,
         candidate: PairCandidate,
         evidence_contexts: List[str],
+        context_sources: List[str],
         deps: ExtractionDepsV3,
     ) -> str:
         """
-        Build pair evaluation prompt with evidence contexts.
+        Build pair evaluation prompt with evidence contexts and source labels.
 
         Constructs a prompt with entity information and evidence contexts,
-        limiting to 5 contexts for token efficiency.
+        limiting to 5 contexts for token efficiency. Each context is labeled
+        with its source URL.
 
         Args:
             candidate: PairCandidate being evaluated
             evidence_contexts: List of context strings
+            context_sources: Source URLs corresponding to each context
             deps: Dependencies with task configuration
 
         Returns:
@@ -1227,10 +1323,21 @@ class EvaluatePairs(BaseNode[ExtractionStateV3, ExtractionDepsV3, ExtractionStat
         """
         # Limit to 5 contexts for token efficiency
         limited_contexts = evidence_contexts[:5]
+        limited_sources = context_sources[:5]
 
-        contexts_text = "\n\n".join(
-            f"Evidence {i + 1}:\n{ctx}" for i, ctx in enumerate(limited_contexts)
-        )
+        # Log source URLs for verbose output
+        if limited_sources:
+            logger.debug(
+                f"Evidence sources for {candidate.entity_a.name} - {candidate.entity_b.name}: "
+                f"{', '.join(set(limited_sources))}"
+            )
+
+        # Build evidence blocks with source labels
+        evidence_blocks = []
+        for i, (ctx, source_url) in enumerate(zip(limited_contexts, limited_sources)):
+            evidence_blocks.append(f"Evidence {i + 1} (Source: {source_url}):\n{ctx}")
+
+        contexts_text = "\n\n".join(evidence_blocks)
 
         return f"""Evaluate the relationship between:
 - Entity A: {candidate.entity_a.name} ({candidate.entity_a.kind})
@@ -1253,80 +1360,65 @@ If relationship exists, provide evidence quotes.
         self,
         candidate: PairCandidate,
         agent_output: PairEvaluationOut,
+        quotes_used: List[ResourceQuote],
         state: ExtractionStateV3,
     ) -> EntityPairOut:
         """
         Convert agent output to EntityPairOut with validated quotes.
 
-        Validates evidence quotes using fuzzy matching across all shared
-        resources. At least one valid evidence quote is required.
+        Validates evidence quotes using fuzzy matching only across quotes_used
+        (the specific ResourceQuote objects provided in prompts). This prevents
+        cross-document contamination by constraining validation to the exact
+        contexts shown to the LLM.
 
         Args:
             candidate: PairCandidate being converted
             agent_output: Raw agent output with evidence strings
+            quotes_used: ResourceQuotes from context extraction (Task 03/04)
             state: Extraction state with resource pool
 
         Returns:
             EntityPairOut with validated evidence quotes
         """
-        # Validate evidence quotes by searching shared resources
+        # Validate evidence quotes by searching only quotes_used
         evidence_quotes = []
+        source_urls = [quote.resource.id.url for quote in quotes_used]
+
         for evidence_text in agent_output.evidence:
             if not evidence_text or not evidence_text.strip():
                 continue
 
             evidence_text = evidence_text.strip()
+            quote_found = False
 
-            # Search shared resources for this evidence
-            for resource_id_str in candidate.shared_resources:
-                # Find resource by ID string in pool
-                resource = None
-                for r in state.resource_pool.resources:
-                    if r.id.id == resource_id_str:
-                        resource = r
-                        break
-
-                if resource is None:
-                    continue
-
+            # Search only the quotes_used for this evidence
+            for quote in quotes_used:
                 try:
-                    quote = resource.quote(evidence_text, similarity_threshold=0.90)
+                    validated_quote = quote.resource.quote(
+                        evidence_text, similarity_threshold=0.90
+                    )
                     # Found valid quote in this resource
-                    evidence_quotes.append(quote)
+                    evidence_quotes.append(validated_quote)
                     logger.debug(
                         f"Validated evidence quote for pair "
                         f"{candidate.entity_a.name} - {candidate.entity_b.name}: "
                         f"{evidence_text[:50]}..."
                     )
+                    quote_found = True
                     break  # Found in this resource, move to next evidence
                 except (ParaphraseError, QuoteNotFoundError):
-                    # Not found in this resource, try next resource
+                    # Not found in this quote's resource, try next quote
                     continue
 
-        # If no evidence quotes in shared resources, search all resources as fallback
-        if not evidence_quotes:
-            logger.debug(
-                f"No evidence in shared resources, searching all resources for "
-                f"{candidate.entity_a.name} - {candidate.entity_b.name}"
-            )
-            for evidence_text in agent_output.evidence:
-                if not evidence_text or not evidence_text.strip():
-                    continue
-
-                evidence_text = evidence_text.strip()
-
-                for resource in state.resource_pool.resources:
-                    try:
-                        quote = resource.quote(evidence_text, similarity_threshold=0.90)
-                        evidence_quotes.append(quote)
-                        logger.debug(
-                            f"Validated evidence quote in fallback search: "
-                            f"{evidence_text[:50]}..."
-                        )
-                        break  # Found in this resource, move to next evidence
-                    except (ParaphraseError, QuoteNotFoundError):
-                        # Not found in this resource, try next resource
-                        continue
+            # Log warning if quote not found in quotes_used
+            if not quote_found:
+                logger.warning(
+                    f"Evidence quote not found in provided contexts for pair "
+                    f"{candidate.entity_a.name} - {candidate.entity_b.name}: "
+                    f"'{evidence_text[:50]}...' "
+                    f"(searched {len(quotes_used)} quotes from sources: "
+                    f"{', '.join(set(source_urls))})"
+                )
 
         return EntityPairOut(
             entity_a=candidate.entity_a,

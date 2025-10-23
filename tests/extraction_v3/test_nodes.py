@@ -924,6 +924,82 @@ class TestEvidenceQuoteValidation:
         assessment = state_with_entities.individual_assessments["BRCA1"]
         assert len(assessment.evidence_quotes) == 0
 
+    @pytest.mark.asyncio
+    async def test_validation_constrained_to_quotes_used(
+        self, sample_resource_pool, deps_v3
+    ):
+        """
+        Test cross-document contamination prevention.
+
+        Verifies that validation only searches quotes_used, not all entity quotes.
+        Entity exists in both documents A and B, but prompt only uses document A
+        quotes. Evidence from document B should be rejected with warning.
+        """
+        # Create state with entity in both documents
+        state = ExtractionStateV3()
+        state.resource_pool = sample_resource_pool
+        resources = sample_resource_pool.resources
+
+        # Entity has quotes from both documents
+        state.entities_found["BRCA1"] = EntityWithQuotes(
+            name="BRCA1",
+            kind="gene",
+            aliases=["BRCA1"],
+            quotes=[
+                resources[0].quote("BRCA1 is a tumor suppressor gene"),  # doc A
+                resources[1].quote("BRCA1 mutations"),  # doc B
+            ],
+            confidence=1.0,
+        )
+
+        ctx = GraphRunContext(state=state, deps=deps_v3)
+
+        # Mock agent returns evidence from document B
+        # (which exists in entity.quotes but not in quotes_used)
+        mock_result = MockAgentRunResult(
+            AssessmentOut(
+                potential="high",
+                related=["ovarian cancer"],
+                evidence=[
+                    "BRCA1 mutations increase ovarian cancer risk.",  # from doc B
+                ],
+                reasoning="Evidence from document B",
+            )
+        )
+
+        mock_agent = AsyncMock()
+        mock_agent.run.return_value = mock_result
+
+        # Mock _build_assessment_prompt to return only doc A quotes in quotes_used
+        original_build_prompt = AssessIndividually._build_assessment_prompt
+
+        def mock_build_prompt(self, entity, deps):
+            # Return only quotes from document A in quotes_used
+            quotes_used = [resources[0].quote("BRCA1 is a tumor suppressor gene")]
+            prompt = f"Assess {entity.name}"
+            return prompt, quotes_used
+
+        with (
+            patch(
+                "interaction_finder.extraction_graph_v3.nodes.create_assessment_agent_v3",
+                return_value=mock_agent,
+            ),
+            patch.object(
+                AssessIndividually,
+                "_build_assessment_prompt",
+                mock_build_prompt,
+            ),
+        ):
+            node = AssessIndividually()
+            await node.run(ctx)
+
+        # Evidence from document B should be rejected (not in quotes_used)
+        assessment = state.individual_assessments["BRCA1"]
+        assert len(assessment.evidence_quotes) == 0, (
+            "Evidence from document B should be rejected when only document A "
+            "quotes are in quotes_used"
+        )
+
 
 class TestConfidenceMapping:
     """Test mapping of potential levels to confidence scores."""
@@ -1900,10 +1976,14 @@ class TestChunkBasedContextExtraction:
         entity_b = state_with_candidates.entities_found["breast cancer"]
         resource = state_with_candidates.resource_pool.resources[0]
 
-        contexts = node._extract_pair_contexts(entity_a, entity_b, resource)
+        contexts, quotes_used = node._extract_pair_contexts(
+            entity_a, entity_b, resource
+        )
 
         # Should find at least one context where both entities appear
         assert len(contexts) > 0
+        # Should track quotes for extracted contexts
+        assert len(quotes_used) > 0
 
     @pytest.mark.asyncio
     async def test_no_shared_context_returns_empty(self, deps_v3):
@@ -1941,10 +2021,13 @@ class TestChunkBasedContextExtraction:
         node = EvaluatePairs()
 
         # Try to extract contexts from first resource (where only entity_a appears)
-        contexts = node._extract_pair_contexts(entity_a, entity_b, pool.resources[0])
+        contexts, quotes_used = node._extract_pair_contexts(
+            entity_a, entity_b, pool.resources[0]
+        )
 
         # Should return empty (entity_b not in this resource)
         assert len(contexts) == 0
+        assert len(quotes_used) == 0
 
     @pytest.mark.asyncio
     async def test_adjacent_chunk_context_extraction(self, deps_v3):
@@ -1978,11 +2061,80 @@ class TestChunkBasedContextExtraction:
         )
 
         node = EvaluatePairs()
-        contexts = node._extract_pair_contexts(entity_a, entity_b, resource)
+        contexts, quotes_used = node._extract_pair_contexts(
+            entity_a, entity_b, resource
+        )
 
         # Should find contexts (either same-chunk or adjacent)
         # (depends on chunking, but should not be empty for related entities)
         assert len(contexts) >= 0  # May be 0 if chunking separates them
+        # quotes_used should align with contexts
+        if len(contexts) > 0:
+            assert len(quotes_used) > 0
+
+
+class TestEvaluatePairs:
+    """Test pair evaluation with source attribution (Task 03)."""
+
+    @pytest.mark.asyncio
+    async def test_extract_pair_contexts_tracks_quotes(
+        self, state_with_candidates, deps_v3
+    ):
+        """Test that _extract_pair_contexts returns quotes for all contexts."""
+        node = EvaluatePairs()
+
+        entity_a = state_with_candidates.entities_found["BRCA1"]
+        entity_b = state_with_candidates.entities_found["breast cancer"]
+        resource = state_with_candidates.resource_pool.resources[0]
+
+        contexts, quotes_used = node._extract_pair_contexts(
+            entity_a, entity_b, resource
+        )
+
+        # Verify quotes_used contains ResourceQuote objects
+        assert all(hasattr(q, "resource") for q in quotes_used)
+        assert all(hasattr(q, "chunk_indices") for q in quotes_used)
+
+        # If contexts found, quotes should be tracked
+        if len(contexts) > 0:
+            assert len(quotes_used) > 0
+            # All quotes should be from the same resource
+            assert all(q.resource.id == resource.id for q in quotes_used)
+
+    @pytest.mark.asyncio
+    async def test_evaluation_prompt_has_source_labels(
+        self, state_with_candidates, deps_v3
+    ):
+        """Test that evaluation prompt includes source labels for evidence."""
+        node = EvaluatePairs()
+
+        entity_a = state_with_candidates.entities_found["BRCA1"]
+        entity_b = state_with_candidates.entities_found["breast cancer"]
+
+        # Get a candidate to build prompt for
+        candidate = list(state_with_candidates.pair_candidates.values())[0]
+
+        # Mock evidence contexts and sources
+        evidence_contexts = [
+            "BRCA1 is a tumor suppressor gene.",
+            "Breast cancer susceptibility is linked to BRCA1.",
+        ]
+        context_sources = [
+            "https://example.com/doc1",
+            "https://example.com/doc2",
+        ]
+
+        prompt = node._build_evaluation_prompt(
+            candidate, evidence_contexts, context_sources, deps_v3
+        )
+
+        # Verify source labels are present
+        assert "(Source: https://example.com/doc1)" in prompt
+        assert "(Source: https://example.com/doc2)" in prompt
+
+        # Verify evidence numbering
+        assert "Evidence 1" in prompt
+        assert "Evidence 2" in prompt
 
 
 class TestProvenanceValidation:
@@ -2307,8 +2459,11 @@ class TestEvaluationPromptBuilding:
 
         candidate = list(state_with_candidates.pair_candidates.values())[0]
         evidence_contexts = ["Some context text"]
+        context_sources = ["https://example.com/doc"]
 
-        prompt = node._build_evaluation_prompt(candidate, evidence_contexts, deps_v3)
+        prompt = node._build_evaluation_prompt(
+            candidate, evidence_contexts, context_sources, deps_v3
+        )
 
         # Verify entity information in prompt
         assert candidate.entity_a.name in prompt
@@ -2324,13 +2479,16 @@ class TestEvaluationPromptBuilding:
         candidate = list(state_with_candidates.pair_candidates.values())[0]
         # Provide more than 5 contexts
         evidence_contexts = [f"Context {i}" for i in range(10)]
+        context_sources = [f"https://example.com/doc{i}" for i in range(10)]
 
-        prompt = node._build_evaluation_prompt(candidate, evidence_contexts, deps_v3)
+        prompt = node._build_evaluation_prompt(
+            candidate, evidence_contexts, context_sources, deps_v3
+        )
 
         # Verify only first 5 contexts included
-        assert "Evidence 1:" in prompt
-        assert "Evidence 5:" in prompt
-        assert "Evidence 6:" not in prompt
+        assert "Evidence 1 (Source:" in prompt
+        assert "Evidence 5 (Source:" in prompt
+        assert "Evidence 6" not in prompt
 
 
 class TestFinalCheckpoint:
