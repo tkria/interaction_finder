@@ -372,7 +372,7 @@ class ReverseSearchConfig(BaseModel):
     )
     min_cluster_size: int = Field(3, ge=2, description="Minimum resources per cluster")
     target_clusters: int = Field(
-        4, ge=2, le=10, description="Target number of clusters"
+        4, ge=2, le=100, description="Target number of clusters"
     )
 
     # Matching
