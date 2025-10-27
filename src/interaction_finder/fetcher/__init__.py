@@ -25,29 +25,12 @@ from .utils import url_to_hash, normalize_url, url_to_hash_base36
 # Import the URLCache class for direct use if needed
 from .cache import URLCache
 
-# Export the public API - maintains exact compatibility with original fetcher.py
+# Export the public API
 __all__ = [
     "PageFetcher",
     "URLCache",
-    "DocumentGrouper",
-    "compute_group_cohesion",
-    "create_embedder",
-    "create_clusterer",
-    # New modular components
-    "DocumentEmbedder",
-    "SimpleAverageEmbedder",
-    "IDFEmbedder",
     "ChunkData",
     "convert_legacy_chunk_data",
-    "DocumentClusterer",
-    "AgglomerativeClusterer",
-    "SpectralClusterer",
-    "HybridClusterer",
-    "RandomClusterer",
-    "SizeAnnealedAgglomerativeClusterer",
-    "ClusterCache",
-    "ClusteringConstraints",
-    "ClusteringResult",
     # Utilities
     "PreviousFailure",
     "fetch_urls_with_progress",
