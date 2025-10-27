@@ -3,6 +3,49 @@
 import re
 from typing import List, Dict, Optional, Tuple
 from dataclasses import dataclass
+import numpy as np
+
+
+@dataclass
+class ChunkData:
+    """Type-safe representation of a document chunk."""
+
+    text: str
+    embedding: np.ndarray  # L2-normalized
+    wordcount: int
+    metadata: Optional[Dict] = None
+
+
+def convert_legacy_chunk_data(
+    legacy_chunks: Dict[str, List[Dict]],
+) -> Dict[str, List[ChunkData]]:
+    """
+    Convert legacy chunk format to typed ChunkData format.
+
+    Args:
+        legacy_chunks: Dict mapping doc -> list of chunk dicts
+
+    Returns:
+        Dict mapping doc -> list of ChunkData objects
+    """
+    typed_chunks = {}
+
+    for doc, chunks in legacy_chunks.items():
+        typed_list = []
+        for chunk in chunks:
+            chunk_data = ChunkData(
+                text=chunk.get("text", ""),
+                embedding=np.array(chunk["embedding"])
+                if chunk.get("embedding") is not None
+                else None,
+                wordcount=chunk.get("wordcount", 0),
+                metadata=chunk.get("metadata"),
+            )
+            typed_list.append(chunk_data)
+        typed_chunks[doc] = typed_list
+
+    return typed_chunks
+
 
 # Content processing constants
 RELEVANT_HEADINGS = {
