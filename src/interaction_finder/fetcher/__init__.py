@@ -17,6 +17,8 @@ from .content_processor import (
     refine_article_content,
     extract_headings,
     classify_heading_relevance,
+    ChunkData,
+    convert_legacy_chunk_data,
 )
 from .utils import url_to_hash, normalize_url, url_to_hash_base36
 
@@ -31,13 +33,11 @@ from .document_grouper import (
     create_clusterer,
 )
 
-# Import new modular components
+# Import embedding strategies (to be removed in Task 03)
 from .document_embedding import (
     DocumentEmbedder,
     SimpleAverageEmbedder,
     IDFEmbedder,
-    ChunkData,
-    convert_legacy_chunk_data,
 )
 from .document_clustering import (
     DocumentClusterer,

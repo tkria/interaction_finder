@@ -579,7 +579,7 @@ class PageFetcher:
                 clustering_result = result
 
                 # Compute embeddings for cohesion (reuse existing computation)
-                from .document_embedding import convert_legacy_chunk_data
+                from .content_processor import convert_legacy_chunk_data
 
                 typed_chunks = convert_legacy_chunk_data(doc_chunks)
                 doc_embeddings = grouper.embedder.compute_embeddings(
@@ -602,7 +602,7 @@ class PageFetcher:
                 clustering_result = result
 
                 # Compute embeddings for cohesion
-                from .document_embedding import convert_legacy_chunk_data
+                from .content_processor import convert_legacy_chunk_data
 
                 typed_chunks = convert_legacy_chunk_data(doc_chunks)
                 doc_embeddings = grouper.embedder.compute_embeddings(
@@ -623,7 +623,7 @@ class PageFetcher:
             )
             groups = result.groups
             clustering_result = result
-            from .document_embedding import convert_legacy_chunk_data
+            from .content_processor import convert_legacy_chunk_data
 
             typed_chunks = convert_legacy_chunk_data(doc_chunks)
             doc_embeddings = grouper.embedder.compute_embeddings(
