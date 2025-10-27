@@ -67,7 +67,7 @@ uv run interaction-finder reverse-search --known resources.jsonl --investigation
 
 **Log Format**: JSON Lines (one JSON object per line), with each entry containing:
 - `session_id`: Unique identifier linking all entries from a single search session
-- `stage`: Pipeline stage (session_start, content_fetch, clustering, query_generation, search_execution, matching, session_end)
+- `stage`: Pipeline stage (session_start, content_fetch, query_generation, search_execution, matching, session_end)
 - `timestamp`: ISO 8601 timestamp
 - Stage-specific data (queries, results, match details, etc.)
 
@@ -95,7 +95,6 @@ jq 'select(.stage == "matching") | .match_details[] | select(.resource.pmid == "
 **Log Stages**:
 - `session_start`: Initial configuration, target resources, backend selection
 - `content_fetch`: Resource content retrieval timing and statistics
-- `clustering`: Document grouping results (if clustering enabled)
 - `query_generation`: Generated query, contributing resources, coverage progress
 - `search_execution`: Query execution timing, result counts, backend response
 - `matching`: Resource matching attempts, methods tried, final outcomes
@@ -178,7 +177,6 @@ uv run interaction-finder config edit
 - `tests/test_*.py` - Core module tests (agents, models, settings, term_parser, resources)
 - `tests/fetcher/` - Comprehensive PageFetcher and URLCache testing
   - `test_page_fetcher.py`, `test_cache.py` - Core functionality with mock HTTP servers
-  - `test_document_grouper.py` - Semantic document clustering
   - `test_failure_*.py` - Error handling and retry mechanisms
   - `test_regression.py` - Comprehensive regression tests for refactoring
 - `tests/extraction_v2/` - Extraction graph pipeline testing
@@ -218,7 +216,7 @@ from interaction_finder import PageFetcher, URLCache, IfetcherConfig, extraction
 ## Current Architecture Focus
 
 **Primary Pipeline**: The system now uses `extraction_graph_v2` as the main extraction pipeline, featuring:
-- Simplified single-group processing (no document clustering by default)
+- Simplified single-group processing
 - Three-phase workflow: entity extraction → assessment → pair formation
 - Comprehensive quote-level provenance tracking
 - Pydantic-AI integration for structured LLM interactions
