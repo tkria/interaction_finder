@@ -16,8 +16,8 @@ import asyncio
 project_root = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from src.interaction_finder.fetcher import PageFetcher, PreviousFailure
-from src.interaction_finder.settings import IfetcherConfig
+from interaction_finder.fetcher import PageFetcher, PreviousFailure
+from interaction_finder.settings import IfetcherConfig
 
 
 # Mark all tests in this file as integration tests

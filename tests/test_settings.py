@@ -1,24 +1,8 @@
-"""
-Tests for settings and configuration functionality.
+"""Tests for simplified IfetcherConfig settings module."""
 
-Tests cover:
-- IfetcherConfig loading from TOML files
-- Configuration validation and defaults
-- Override functionality with dotted keys
-- Mode-specific configuration
-- Path resolution and validation
-"""
-
-import pytest
 import tempfile
-import tomli
 from pathlib import Path
-from unittest.mock import patch, mock_open
-import sys
-
-# Add src to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
-
+import pytest
 from interaction_finder.settings import IfetcherConfig
 
 
@@ -28,64 +12,8 @@ class TestConfigLoading:
     def test_load_minimal_config(self):
         """Test loading a minimal configuration file."""
         toml_content = """
-        [task.kinds]
-        gene = { kind = "gene", form = ["name"] }
-        disease = { kind = "disease", form = ["name"] }
-        """
-
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".toml", delete=False) as f:
-            f.write(toml_content)
-            f.flush()
-
-            config = IfetcherConfig.from_path(f.name)
-
-            # Check basic structure
-            assert config.task.kinds["gene"].kind == ["gene"]
-            assert config.task.kinds["disease"].kind == ["disease"]
-
-            # Check defaults
-            assert config.workflow.max_loops == 5
-            assert config.tools.crawl4ai.timeout == 30
-
-            # Clean up
-            Path(f.name).unlink()
-
-    def test_load_full_config(self):
-        """Test loading a comprehensive configuration."""
-        toml_content = """
-        researcher = ""
-        training_data = "data/{term}.jsonl"
-        
-        [agents.gene_disease]
-        llm = "gpt-4"
-        expertise = "biomedical"
-        retries = 3
-        
-        [task]
-        relation = "Interaction"
-        pairs = "pairs"
-        context = "biological context"
-        
-        [task.kinds]
-        gene = { kind = "gene", form = ["name", "symbol"] }
-        disease = { kind = "disease", form = ["name"] }
-        
-        [workflow]
-        max_loops = 10
-        max_tokens = 100000
-        
-        [workflow.grouping]
-        enabled = true
-        min_size = 2
-        max_size = 6
-        
-        [tools.crawl4ai]
-        timeout = 60
-        max_retries = 5
-        
         [output]
-        path = "results/{term}"
-        cache = "my_cache"
+        cache = "test_cache"
         """
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".toml", delete=False) as f:
@@ -94,57 +22,83 @@ class TestConfigLoading:
 
             config = IfetcherConfig.from_path(f.name)
 
-            # Check loaded values
-            assert config.training_data == "data/{term}.jsonl"
-            assert config.agents["gene_disease"].llm == "gpt-4"
-            assert config.agents["gene_disease"].retries == 3
-            assert config.task.relation == "Interaction"
-            assert config.task.context == "biological context"
-            assert config.workflow.max_loops == 10
-            assert config.workflow.max_tokens == 100000
-            assert config.workflow.grouping.min_size == 2
-            assert config.workflow.grouping.max_size == 6
-            assert config.tools.crawl4ai.timeout == 60
-            assert config.tools.crawl4ai.max_retries == 5
-            assert config.output.path == "results/{term}"
-            assert config.output.cache == "my_cache"
+            # Verify loaded values
+            assert config.output.cache == "test_cache"
+            # Check defaults
+            assert config.output.path == "runs/{mode}/{model}/{repeat}/{term}"
+            assert config.training_data == "training_data/{term}.jsonl"
 
             Path(f.name).unlink()
+
+    def test_load_with_agents(self):
+        """Test loading configuration with agent specs."""
+        toml_content = """
+        [agents.default]
+        llm = "openai:gpt-4"
+        retries = 3
+        instrument = false
+
+        [agents.critic]
+        llm = "anthropic:claude-3-5-sonnet-20241022"
+        expertise = "biological research"
+        """
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".toml", delete=False) as f:
+            f.write(toml_content)
+            f.flush()
+
+            config = IfetcherConfig.from_path(f.name)
+
+            # Verify agent configs
+            assert "default" in config.agents
+            assert config.agents["default"].llm == "openai:gpt-4"
+            assert config.agents["default"].retries == 3
+            assert config.agents["default"].instrument is False
+
+            assert "critic" in config.agents
+            assert config.agents["critic"].llm == "anthropic:claude-3-5-sonnet-20241022"
+            assert config.agents["critic"].expertise == "biological research"
+
+            Path(f.name).unlink()
+
+    def test_default_config(self):
+        """Test creating config with no file (all defaults)."""
+        config = IfetcherConfig()
+
+        # Check defaults are set
+        assert config.output.cache == "cache"
+        assert config.output.path == "runs/{mode}/{model}/{repeat}/{term}"
+        assert config.training_data == "training_data/{term}.jsonl"
+        assert config.agents == {}
+        assert config.modes == {}
 
 
 class TestConfigOverrides:
-    """Test configuration override functionality."""
+    """Test configuration override system."""
 
     def test_simple_overrides(self):
         """Test simple dotted-key overrides."""
         toml_content = """
-        [task.kinds]
-        gene = { kind = "gene" }
+        [output]
+        cache = "original_cache"
         """
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".toml", delete=False) as f:
             f.write(toml_content)
             f.flush()
 
-            overrides = {
-                "workflow.max_loops": 15,
-                "tools.crawl4ai.timeout": 120,
-                "task.relation": "CustomRelation",
-            }
-
+            overrides = {"output.cache": "overridden_cache"}
             config = IfetcherConfig.from_path(f.name, overrides=overrides)
 
-            assert config.workflow.max_loops == 15
-            assert config.tools.crawl4ai.timeout == 120
-            assert config.task.relation == "CustomRelation"
+            assert config.output.cache == "overridden_cache"
 
             Path(f.name).unlink()
 
     def test_nested_overrides(self):
-        """Test nested configuration overrides."""
+        """Test nested dotted-key overrides."""
         toml_content = """
-        [task.kinds]
-        gene = { kind = "gene" }
+        [agents.default]
+        llm = "openai:gpt-4"
         """
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".toml", delete=False) as f:
@@ -152,497 +106,194 @@ class TestConfigOverrides:
             f.flush()
 
             overrides = {
-                "workflow.grouping.min_size": 5,
-                "workflow.grouping.max_size": 15,
-                "agents.custom.llm": "custom-model",
+                "agents.default.llm": "anthropic:claude-3-5-sonnet-20241022",
+                "agents.default.retries": 5,
             }
-
             config = IfetcherConfig.from_path(f.name, overrides=overrides)
 
-            assert config.workflow.grouping.min_size == 5
-            assert config.workflow.grouping.max_size == 15
-            assert config.agents["custom"].llm == "custom-model"
-
-            Path(f.name).unlink()
-
-    def test_list_overrides(self):
-        """Test overriding list values."""
-        toml_content = """
-        [task.kinds]
-        gene = { kind = "gene" }
-        """
-
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".toml", delete=False) as f:
-            f.write(toml_content)
-            f.flush()
-
-            overrides = {
-                "tools.enabled": "tool1,tool2,tool3",
-                "task.example": "ex1,ex2",
-            }
-
-            config = IfetcherConfig.from_path(f.name, overrides=overrides)
-
-            assert config.tools.enabled == ["tool1", "tool2", "tool3"]
-            assert config.task.example == ["ex1", "ex2"]
+            assert (
+                config.agents["default"].llm == "anthropic:claude-3-5-sonnet-20241022"
+            )
+            assert config.agents["default"].retries == 5
 
             Path(f.name).unlink()
 
 
 class TestModeSpecificConfig:
-    """Test mode-specific configuration functionality."""
+    """Test mode-specific configuration overrides."""
 
     def test_mode_overrides_flat(self):
-        """Test mode overrides in flat dotted format."""
+        """Test mode-specific overrides with flat dotted keys."""
         toml_content = """
-        [task.kinds]
-        gene = { kind = "gene" }
-        
-        [modes.test]
-        "workflow.max_loops" = 20
-        "tools.crawl4ai.timeout" = 90
+        [output]
+        cache = "default_cache"
+
+        [modes.development]
+        "output.cache" = "dev_cache"
         """
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".toml", delete=False) as f:
             f.write(toml_content)
             f.flush()
 
-            config = IfetcherConfig.from_path(f.name, mode="test")
+            # Load without mode
+            config_default = IfetcherConfig.from_path(f.name)
+            assert config_default.output.cache == "default_cache"
 
-            assert config.workflow.max_loops == 20
-            assert config.tools.crawl4ai.timeout == 90
+            # Load with mode
+            config_dev = IfetcherConfig.from_path(f.name, mode="development")
+            assert config_dev.output.cache == "dev_cache"
 
             Path(f.name).unlink()
 
     def test_mode_overrides_nested(self):
-        """Test mode overrides in nested format."""
+        """Test mode-specific overrides with nested structure."""
         toml_content = """
-        [task.kinds]
-        gene = { kind = "gene" }
-        
-        [modes.dev.workflow]
-        max_loops = 3
-        max_tokens = 50000
-        
-        [modes.dev.tools.crawl4ai]
-        timeout = 15
-        """
-
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".toml", delete=False) as f:
-            f.write(toml_content)
-            f.flush()
-
-            config = IfetcherConfig.from_path(f.name, mode="dev")
-
-            assert config.workflow.max_loops == 3
-            assert config.workflow.max_tokens == 50000
-            assert config.tools.crawl4ai.timeout == 15
-
-            Path(f.name).unlink()
-
-
-class TestValidation:
-    """Test configuration validation."""
-
-    def test_researcher_validation(self):
-        """Test researcher field validation."""
-        toml_content = """
-        researcher = "invalid_mode"
-        
-        [task.kinds]
-        gene = { kind = "gene" }
-        """
-
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".toml", delete=False) as f:
-            f.write(toml_content)
-            f.flush()
-
-            with pytest.raises(ValueError, match="researcher must be one of"):
-                IfetcherConfig.from_path(f.name)
-
-            Path(f.name).unlink()
-
-    def test_kinds_validation_empty(self):
-        """Test that empty kinds configuration is now allowed (for non-extraction workflows)."""
-        toml_content = """
-        [task]
-        relation = "test"
-        """
-
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".toml", delete=False) as f:
-            f.write(toml_content)
-            f.flush()
-
-            # Empty kinds are now allowed - validation happens at extraction time
-            config = IfetcherConfig.from_path(f.name)
-            assert config.task.kinds == {}
-
-            Path(f.name).unlink()
-
-    def test_grouping_validation(self):
-        """Test grouping configuration validation."""
-        toml_content = """
-        [task.kinds]
-        gene = { kind = "gene" }
-        
-        [workflow.grouping]
-        min_size = 10
-        max_size = 5
-        """
-
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".toml", delete=False) as f:
-            f.write(toml_content)
-            f.flush()
-
-            with pytest.raises(ValueError, match="min_size must be <= max_size"):
-                IfetcherConfig.from_path(f.name)
-
-            Path(f.name).unlink()
-
-    def test_output_path_validation(self):
-        """Test output path validation (must be relative)."""
-        toml_content = """
-        [task.kinds]
-        gene = { kind = "gene" }
-        
         [output]
-        path = "/absolute/path"
+        cache = "default_cache"
+
+        [modes.development.output]
+        cache = "dev_cache"
+        path = "dev_runs/{term}"
         """
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".toml", delete=False) as f:
             f.write(toml_content)
             f.flush()
 
-            with pytest.raises(ValueError, match="output paths must be relative"):
-                IfetcherConfig.from_path(f.name)
-
-            Path(f.name).unlink()
-
-
-class TestKindsNormalization:
-    """Test task kinds normalization functionality."""
-
-    def test_kinds_array_format(self):
-        """Test array format for kinds (["gene", "disease"])."""
-        toml_content = """
-        [task]
-        kinds = ["gene", "disease"]
-        """
-
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".toml", delete=False) as f:
-            f.write(toml_content)
-            f.flush()
-
-            config = IfetcherConfig.from_path(f.name)
-
-            assert "gene" in config.task.kinds
-            assert "disease" in config.task.kinds
-            assert config.task.kinds["gene"].kind == ["gene"]
-            assert config.task.kinds["disease"].kind == ["disease"]
-
-            Path(f.name).unlink()
-
-    def test_kinds_direct_object(self):
-        """Test direct Kind object format."""
-        toml_content = """
-        [task.kinds]
-        kind = "gene"
-        form = ["name", "symbol"]
-        """
-
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".toml", delete=False) as f:
-            f.write(toml_content)
-            f.flush()
-
-            config = IfetcherConfig.from_path(f.name)
-
-            assert "default" in config.task.kinds
-            assert config.task.kinds["default"].kind == ["gene"]
-            assert config.task.kinds["default"].form == ["name", "symbol"]
-
-            Path(f.name).unlink()
-
-    def test_kinds_named_objects(self):
-        """Test named Kind objects format."""
-        toml_content = """
-        [task.kinds.gene]
-        kind = "gene"
-        form = ["name", "symbol"]
-        example = ["BRCA1", "TP53"]
-        
-        [task.kinds.disease]
-        kind = "disease"
-        form = ["name"]
-        """
-
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".toml", delete=False) as f:
-            f.write(toml_content)
-            f.flush()
-
-            config = IfetcherConfig.from_path(f.name)
-
-            assert config.task.kinds["gene"].kind == ["gene"]
-            assert config.task.kinds["gene"].form == ["name", "symbol"]
-            assert config.task.kinds["gene"].example == ["BRCA1", "TP53"]
-            assert config.task.kinds["disease"].kind == ["disease"]
-            assert config.task.kinds["disease"].form == ["name"]
+            config = IfetcherConfig.from_path(f.name, mode="development")
+            assert config.output.cache == "dev_cache"
+            assert config.output.path == "dev_runs/{term}"
 
             Path(f.name).unlink()
 
 
 class TestPathResolution:
-    """Test path resolution functionality."""
+    """Test path resolution and formatting."""
 
-    def test_abspath_relative_paths(self):
+    def test_abspath_relative(self):
         """Test absolute path resolution for relative paths."""
         toml_content = """
-        [task.kinds]
-        gene = { kind = "gene" }
+        [output]
+        cache = "cache"
         """
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".toml", delete=False) as f:
             f.write(toml_content)
             f.flush()
+            config_dir = Path(f.name).parent
 
             config = IfetcherConfig.from_path(f.name)
 
             # Test relative path resolution
-            abs_path = config.abspath("data/{term}.jsonl", term="BRCA1")
-            expected_dir = Path(f.name).parent
-            expected_path = expected_dir / "data" / "BRCA1.jsonl"
-
-            assert abs_path == expected_path.resolve()
+            cache_path = config.abspath("cache")
+            assert cache_path.is_absolute()
+            assert cache_path == (config_dir / "cache").resolve()
 
             Path(f.name).unlink()
 
-    def test_abspath_absolute_paths(self):
-        """Test that absolute paths are returned as-is."""
+    def test_abspath_with_template(self):
+        """Test absolute path resolution with template formatting."""
         toml_content = """
-        [task.kinds]
-        gene = { kind = "gene" }
+        [output]
+        path = "runs/{term}"
+        """
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".toml", delete=False) as f:
+            f.write(toml_content)
+            f.flush()
+            config_dir = Path(f.name).parent
+
+            config = IfetcherConfig.from_path(f.name)
+
+            # Test template formatting
+            output_path = config.abspath("runs/{term}", term="BRCA1")
+            assert output_path.is_absolute()
+            assert output_path == (config_dir / "runs" / "BRCA1").resolve()
+
+            Path(f.name).unlink()
+
+    def test_abspath_absolute_unchanged(self):
+        """Test that absolute paths are returned unchanged."""
+        config = IfetcherConfig()
+
+        absolute_path = Path("/tmp/test")
+        result = config.abspath(absolute_path)
+
+        assert result == absolute_path
+
+
+class TestValidation:
+    """Test configuration validation."""
+
+    def test_relative_path_validation(self):
+        """Test that output paths must be relative."""
+        toml_content = """
+        [output]
+        cache = "/absolute/path"
         """
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".toml", delete=False) as f:
             f.write(toml_content)
             f.flush()
 
-            config = IfetcherConfig.from_path(f.name)
-
-            # Test absolute path (unchanged)
-            abs_input = Path("/tmp/absolute/path.txt")
-            result = config.abspath(abs_input)
-
-            assert result == abs_input
+            with pytest.raises(Exception):  # Pydantic ValidationError
+                IfetcherConfig.from_path(f.name)
 
             Path(f.name).unlink()
 
-    def test_abspath_with_formatting(self):
-        """Test path resolution with string formatting."""
+    def test_agent_retries_range(self):
+        """Test that agent retries are validated."""
         toml_content = """
-        [task.kinds]
-        gene = { kind = "gene" }
+        [agents.default]
+        retries = 100  # Too high, max is 10
         """
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".toml", delete=False) as f:
             f.write(toml_content)
             f.flush()
 
-            config = IfetcherConfig.from_path(f.name)
-
-            # Test with multiple format parameters
-            result = config.abspath(
-                "runs/{mode}/{model}/{term}.json",
-                mode="train",
-                model="gpt-4",
-                term="BRCA1",
-            )
-
-            expected_dir = Path(f.name).parent
-            expected = expected_dir / "runs" / "train" / "gpt-4" / "BRCA1.json"
-
-            assert result == expected.resolve()
+            with pytest.raises(Exception):  # Pydantic ValidationError
+                IfetcherConfig.from_path(f.name)
 
             Path(f.name).unlink()
 
 
-class TestUtilityMethods:
-    """Test utility methods on configuration objects."""
+class TestApplyOverrides:
+    """Test the apply_overrides static method."""
 
-    def test_get_kind_names(self):
-        """Test getting list of kind names."""
-        toml_content = """
-        [task.kinds]
-        gene = { kind = "gene" }
-        disease = { kind = "disease" }
-        protein = { kind = "protein" }
-        """
+    def test_simple_override(self):
+        """Test applying simple override."""
+        data = {"output": {"cache": "old"}}
+        overrides = {"output.cache": "new"}
 
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".toml", delete=False) as f:
-            f.write(toml_content)
-            f.flush()
+        result = IfetcherConfig.apply_overrides(data, overrides)
 
-            config = IfetcherConfig.from_path(f.name)
+        assert result["output"]["cache"] == "new"
 
-            kind_names = config.task.get_kind_names()
-            assert set(kind_names) == {"gene", "disease", "protein"}
+    def test_deep_nested_override(self):
+        """Test applying deeply nested override."""
+        data = {"agents": {}}
+        overrides = {"agents.default.llm": "openai:gpt-4"}
 
-            Path(f.name).unlink()
+        result = IfetcherConfig.apply_overrides(data, overrides)
 
-    def test_get_complementary_kind_two_kinds(self):
-        """Test getting complementary kind with two kinds."""
-        toml_content = """
-        [task.kinds]
-        gene = { kind = "gene" }
-        disease = { kind = "disease" }
-        """
+        assert result["agents"]["default"]["llm"] == "openai:gpt-4"
 
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".toml", delete=False) as f:
-            f.write(toml_content)
-            f.flush()
+    def test_comma_separated_list_override(self):
+        """Test that comma-separated values become lists."""
+        data = {}
+        overrides = {"some.list": "a,b,c"}
 
-            config = IfetcherConfig.from_path(f.name)
+        result = IfetcherConfig.apply_overrides(data, overrides)
 
-            assert config.task.get_complementary_kind("gene") == "disease"
-            assert config.task.get_complementary_kind("disease") == "gene"
+        assert result["some"]["list"] == ["a", "b", "c"]
 
-            Path(f.name).unlink()
+    def test_array_index_override(self):
+        """Test overriding array elements by index."""
+        data = {"items": []}
+        overrides = {"items[0]": "first", "items[1]": "second"}
 
-    def test_get_complementary_kind_one_kind(self):
-        """Test getting complementary kind with one kind."""
-        toml_content = """
-        [task.kinds]
-        gene = { kind = "gene" }
-        """
+        result = IfetcherConfig.apply_overrides(data, overrides)
 
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".toml", delete=False) as f:
-            f.write(toml_content)
-            f.flush()
-
-            config = IfetcherConfig.from_path(f.name)
-
-            assert config.task.get_complementary_kind("gene") == "gene"
-
-            Path(f.name).unlink()
-
-    def test_get_complementary_kind_multiple_kinds_error(self):
-        """Test error with more than two kinds."""
-        toml_content = """
-        [task.kinds]
-        gene = { kind = "gene" }
-        disease = { kind = "disease" }
-        protein = { kind = "protein" }
-        """
-
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".toml", delete=False) as f:
-            f.write(toml_content)
-            f.flush()
-
-            config = IfetcherConfig.from_path(f.name)
-
-            with pytest.raises(ValueError, match="Cannot get complementary kind"):
-                config.task.get_complementary_kind("gene")
-
-            Path(f.name).unlink()
-
-
-class TestExternalResearcherConfig:
-    """Test external researcher configuration."""
-
-    def test_cmd_string_parsing(self):
-        """Test command string parsing with shlex."""
-        toml_content = """
-        [task.kinds]
-        gene = { kind = "gene" }
-        
-        [tools.external_researcher]
-        cmd = 'python script.py --arg "value with spaces"'
-        """
-
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".toml", delete=False) as f:
-            f.write(toml_content)
-            f.flush()
-
-            config = IfetcherConfig.from_path(f.name)
-
-            expected_cmd = ["python", "script.py", "--arg", "value with spaces"]
-            assert config.tools.external_researcher.cmd == expected_cmd
-
-            Path(f.name).unlink()
-
-    def test_cmd_array_format(self):
-        """Test command as array format."""
-        toml_content = """
-        [task.kinds]
-        gene = { kind = "gene" }
-        
-        [tools.external_researcher]
-        cmd = ["python", "script.py", "--verbose"]
-        """
-
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".toml", delete=False) as f:
-            f.write(toml_content)
-            f.flush()
-
-            config = IfetcherConfig.from_path(f.name)
-
-            assert config.tools.external_researcher.cmd == [
-                "python",
-                "script.py",
-                "--verbose",
-            ]
-
-            Path(f.name).unlink()
-
-    def test_strip_re_normalization(self):
-        """Test strip_re field normalization."""
-        toml_content = """
-        [task.kinds]
-        gene = { kind = "gene" }
-        
-        [tools.external_researcher]
-        strip_re = "^prefix:"
-        """
-
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".toml", delete=False) as f:
-            f.write(toml_content)
-            f.flush()
-
-            config = IfetcherConfig.from_path(f.name)
-
-            assert config.tools.external_researcher.strip_re == ["^prefix:"]
-
-            Path(f.name).unlink()
-
-
-class TestDefaults:
-    """Test default configuration values."""
-
-    def test_minimal_config_defaults(self):
-        """Test that minimal config gets proper defaults."""
-        toml_content = """
-        [task.kinds]
-        gene = { kind = "gene" }
-        """
-
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".toml", delete=False) as f:
-            f.write(toml_content)
-            f.flush()
-
-            config = IfetcherConfig.from_path(f.name)
-
-            # Check critical defaults
-            assert config.researcher == ""
-            assert config.task.relation == "Interaction"
-            assert config.task.pairs == "pairs"
-            assert config.workflow.max_loops == 5
-            assert config.workflow.max_tokens == 500000
-            assert config.workflow.grouping.enabled == True
-            assert config.workflow.grouping.min_size == 3
-            assert config.workflow.grouping.max_size == 8
-            assert config.tools.crawl4ai.timeout == 30
-            assert config.tools.crawl4ai.max_retries == 3
-            assert config.output.path == "runs/{mode}/{model}/{repeat}/{term}"
-            assert config.output.cache == "cache"
-            assert config.training_data == "training_data/{term}.jsonl"
-
-            Path(f.name).unlink()
+        assert result["items"] == ["first", "second"]
