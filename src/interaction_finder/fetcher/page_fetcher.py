@@ -483,8 +483,6 @@ class PageFetcher:
             If return_metadata=True: Tuple of (groups, clustering_metadata) where
             clustering_metadata contains comprehensive metrics
         """
-        from .document_grouper import DocumentGrouper, compute_group_cohesion
-
         if not urls:
             return []
 
@@ -691,8 +689,6 @@ class PageFetcher:
 
     def _parse_constraint(self, constraint: str) -> tuple:
         """Parse constraint string - delegated to DocumentGrouper."""
-        from .document_grouper import DocumentGrouper
-
         return DocumentGrouper.parse_constraint(constraint)
 
     async def get_chunks(

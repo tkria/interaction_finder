@@ -25,33 +25,6 @@ from .utils import url_to_hash, normalize_url, url_to_hash_base36
 # Import the URLCache class for direct use if needed
 from .cache import URLCache
 
-# Import document grouping functionality
-from .document_grouper import (
-    DocumentGrouper,
-    compute_group_cohesion,
-    create_embedder,
-    create_clusterer,
-)
-
-# Import embedding strategies (to be removed in Task 03)
-from .document_embedding import (
-    DocumentEmbedder,
-    SimpleAverageEmbedder,
-    IDFEmbedder,
-)
-from .document_clustering import (
-    DocumentClusterer,
-    AgglomerativeClusterer,
-    SpectralClusterer,
-    HybridClusterer,
-    RandomClusterer,
-    SizeAnnealedAgglomerativeClusterer,
-    ClusterCache,
-    ClusteringConstraints,
-    ClusteringResult,
-)
-
-
 # Export the public API - maintains exact compatibility with original fetcher.py
 __all__ = [
     "PageFetcher",
