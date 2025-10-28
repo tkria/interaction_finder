@@ -1,8 +1,11 @@
 """Tests for cli_fetch module - URL input parsing and validation."""
 
+import io
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
+
+from rich.console import Console
 
 from interaction_finder.cli_fetch import (
     read_urls_from_file,
@@ -11,6 +14,10 @@ from interaction_finder.cli_fetch import (
     fetch_urls_markdown,
     fetch_urls_chunks,
     run_fetch,
+    output_paths,
+    output_content,
+    print_fetch_errors,
+    print_summary,
 )
 
 
@@ -515,3 +522,450 @@ class TestFetchWithRealCache:
         else:
             # Network failure is acceptable for this test
             assert result.error is not None
+
+
+class TestOutputPaths:
+    """Tests for output_paths function."""
+
+    def test_output_paths_all_success(self, tmp_path, capsys):
+        """Output paths for all successful fetches."""
+        # Create temporary cache files
+        cache1 = tmp_path / "cache1.md"
+        cache2 = tmp_path / "cache2.md"
+        cache1.write_text("content1")
+        cache2.write_text("content2")
+
+        results = [
+            FetchResult(
+                url="https://example.com/1",
+                cache_path=cache1,
+                success=True,
+                error=None,
+            ),
+            FetchResult(
+                url="https://example.com/2",
+                cache_path=cache2,
+                success=True,
+                error=None,
+            ),
+        ]
+
+        # Create console with stderr capture
+        stderr = io.StringIO()
+        console = Console(file=stderr, force_terminal=False)
+
+        exit_code = output_paths(results, console)
+
+        # Verify exit code
+        assert exit_code == 0
+
+        # Verify stdout output (absolute paths, one per line)
+        captured = capsys.readouterr()
+        output_lines = captured.out.strip().split("\n")
+        assert len(output_lines) == 2
+        assert str(cache1.resolve()) in output_lines
+        assert str(cache2.resolve()) in output_lines
+
+        # Verify no warnings to stderr
+        assert stderr.getvalue() == ""
+
+    def test_output_paths_partial_failure(self, tmp_path, capsys):
+        """Output paths for successful fetches, warnings for failures."""
+        cache1 = tmp_path / "cache1.md"
+        cache1.write_text("content1")
+
+        results = [
+            FetchResult(
+                url="https://example.com/1",
+                cache_path=cache1,
+                success=True,
+                error=None,
+            ),
+            FetchResult(
+                url="https://example.com/2",
+                cache_path=None,
+                success=False,
+                error="Network timeout",
+            ),
+        ]
+
+        stderr = io.StringIO()
+        console = Console(file=stderr, force_terminal=False)
+
+        exit_code = output_paths(results, console)
+
+        # Exit code 0 for partial success
+        assert exit_code == 0
+
+        # Verify stdout has successful path only
+        captured = capsys.readouterr()
+        output_lines = captured.out.strip().split("\n")
+        assert len(output_lines) == 1
+        assert str(cache1.resolve()) in output_lines[0]
+
+        # Verify warning to stderr
+        stderr_text = stderr.getvalue()
+        assert "Warning" in stderr_text
+        assert "https://example.com/2" in stderr_text
+        assert "Network timeout" in stderr_text
+
+    def test_output_paths_all_failed(self, capsys):
+        """Exit code 1 when all fetches fail."""
+        results = [
+            FetchResult(
+                url="https://example.com/1",
+                cache_path=None,
+                success=False,
+                error="Failed to fetch URL",
+            ),
+            FetchResult(
+                url="https://example.com/2",
+                cache_path=None,
+                success=False,
+                error="Failed to fetch URL",
+            ),
+        ]
+
+        stderr = io.StringIO()
+        console = Console(file=stderr, force_terminal=False)
+
+        exit_code = output_paths(results, console)
+
+        # Exit code 1 for all failed
+        assert exit_code == 1
+
+        # No stdout output
+        captured = capsys.readouterr()
+        assert captured.out == ""
+
+        # Warnings to stderr
+        stderr_text = stderr.getvalue()
+        assert "https://example.com/1" in stderr_text
+        assert "https://example.com/2" in stderr_text
+
+    def test_output_paths_empty_results(self, capsys):
+        """Handle empty results list."""
+        results = []
+
+        stderr = io.StringIO()
+        console = Console(file=stderr, force_terminal=False)
+
+        exit_code = output_paths(results, console)
+
+        # Exit code 1 for no results (all failed)
+        assert exit_code == 1
+
+        # No output
+        captured = capsys.readouterr()
+        assert captured.out == ""
+
+
+class TestOutputContent:
+    """Tests for output_content function."""
+
+    def test_output_content_single_url(self, tmp_path, capsys):
+        """Output markdown content for single successful fetch."""
+        cache_file = tmp_path / "cache.md"
+        content = "# Test Article\n\nThis is test content.\n"
+        cache_file.write_text(content)
+
+        results = [
+            FetchResult(
+                url="https://example.com/article",
+                cache_path=cache_file,
+                success=True,
+                error=None,
+            )
+        ]
+
+        stderr = io.StringIO()
+        console = Console(file=stderr, force_terminal=False)
+
+        exit_code = output_content(results, console)
+
+        # Verify exit code
+        assert exit_code == 0
+
+        # Verify stdout has exact content (no extra newline)
+        captured = capsys.readouterr()
+        assert captured.out == content
+
+    def test_output_content_multiple_urls_error(self):
+        """Raise error when multiple URLs provided."""
+        results = [
+            FetchResult(
+                url="https://example.com/1",
+                cache_path=Path("/cache/1.md"),
+                success=True,
+                error=None,
+            ),
+            FetchResult(
+                url="https://example.com/2",
+                cache_path=Path("/cache/2.md"),
+                success=True,
+                error=None,
+            ),
+        ]
+
+        stderr = io.StringIO()
+        console = Console(file=stderr, force_terminal=False)
+
+        with pytest.raises(ValueError) as exc_info:
+            output_content(results, console)
+
+        # Error message should explain single URL requirement
+        error_msg = str(exc_info.value).lower()
+        assert "exactly one" in error_msg or "single" in error_msg
+        assert "multiple" in error_msg or "2" in error_msg
+
+    def test_output_content_failed_fetch(self, capsys):
+        """Handle failed fetch with error message."""
+        results = [
+            FetchResult(
+                url="https://example.com/article",
+                cache_path=None,
+                success=False,
+                error="Network timeout",
+            )
+        ]
+
+        stderr = io.StringIO()
+        console = Console(file=stderr, force_terminal=False)
+
+        exit_code = output_content(results, console)
+
+        # Exit code 1 for failure
+        assert exit_code == 1
+
+        # No stdout
+        captured = capsys.readouterr()
+        assert captured.out == ""
+
+        # Error to stderr
+        stderr_text = stderr.getvalue()
+        assert "Error" in stderr_text
+        assert "https://example.com/article" in stderr_text
+        assert "Network timeout" in stderr_text
+
+    def test_output_content_missing_cache_file(self, tmp_path, capsys):
+        """Handle missing cache file."""
+        cache_file = tmp_path / "missing.md"
+        # Don't create the file
+
+        results = [
+            FetchResult(
+                url="https://example.com/article",
+                cache_path=cache_file,
+                success=True,
+                error=None,
+            )
+        ]
+
+        stderr = io.StringIO()
+        console = Console(file=stderr, force_terminal=False)
+
+        exit_code = output_content(results, console)
+
+        # Exit code 1 for missing file
+        assert exit_code == 1
+
+        # Error to stderr
+        stderr_text = stderr.getvalue()
+        assert "Error" in stderr_text
+        assert "not found" in stderr_text.lower()
+
+
+class TestPrintFetchErrors:
+    """Tests for print_fetch_errors function."""
+
+    def test_print_fetch_errors_with_failures(self):
+        """Display error table for failed fetches."""
+        results = [
+            FetchResult(
+                url="https://example.com/1",
+                cache_path=Path("/cache/1.md"),
+                success=True,
+                error=None,
+            ),
+            FetchResult(
+                url="https://example.com/2",
+                cache_path=None,
+                success=False,
+                error="Network timeout",
+            ),
+            FetchResult(
+                url="https://example.com/3",
+                cache_path=None,
+                success=False,
+                error="Parse error",
+            ),
+        ]
+
+        stderr = io.StringIO()
+        console = Console(file=stderr, force_terminal=False, width=120)
+
+        print_fetch_errors(results, console)
+
+        output = stderr.getvalue()
+        # Verify table structure
+        assert "Fetch Errors" in output
+        assert "https://example.com/2" in output
+        assert "Network timeout" in output
+        assert "https://example.com/3" in output
+        assert "Parse error" in output
+        # Successful URL should not appear
+        assert "https://example.com/1" not in output
+
+    def test_print_fetch_errors_no_failures(self):
+        """No output when all fetches succeed."""
+        results = [
+            FetchResult(
+                url="https://example.com/1",
+                cache_path=Path("/cache/1.md"),
+                success=True,
+                error=None,
+            )
+        ]
+
+        stderr = io.StringIO()
+        console = Console(file=stderr, force_terminal=False)
+
+        print_fetch_errors(results, console)
+
+        # No output for all successful
+        assert stderr.getvalue() == ""
+
+    def test_print_fetch_errors_unknown_error(self):
+        """Handle missing error message."""
+        results = [
+            FetchResult(
+                url="https://example.com/1",
+                cache_path=None,
+                success=False,
+                error=None,  # No error message
+            )
+        ]
+
+        stderr = io.StringIO()
+        console = Console(file=stderr, force_terminal=False)
+
+        print_fetch_errors(results, console)
+
+        output = stderr.getvalue()
+        assert "Unknown error" in output
+
+
+class TestPrintSummary:
+    """Tests for print_summary function."""
+
+    def test_print_summary_verbose(self):
+        """Display comprehensive summary with statistics."""
+        results = [
+            FetchResult(
+                url="https://example.com/1",
+                cache_path=Path("/cache/1.md"),
+                success=True,
+                error=None,
+            ),
+            FetchResult(
+                url="https://example.com/2",
+                cache_path=Path("/cache/2.md"),
+                success=True,
+                error=None,
+            ),
+            FetchResult(
+                url="https://example.com/3",
+                cache_path=None,
+                success=False,
+                error="Network timeout",
+            ),
+        ]
+
+        stderr = io.StringIO()
+        console = Console(file=stderr, force_terminal=False, width=120)
+
+        print_summary(results, console)
+
+        output = stderr.getvalue()
+        # Verify summary statistics
+        assert "Fetch Summary" in output
+        assert "Total URLs: 3" in output
+        assert "Successful: 2" in output
+        assert "Failed: 1" in output
+        # Verify failed URL details
+        assert "Failed URLs:" in output
+        assert "https://example.com/3" in output
+        assert "Network timeout" in output
+
+    def test_print_summary_all_success(self):
+        """Summary with all successful fetches."""
+        results = [
+            FetchResult(
+                url="https://example.com/1",
+                cache_path=Path("/cache/1.md"),
+                success=True,
+                error=None,
+            ),
+            FetchResult(
+                url="https://example.com/2",
+                cache_path=Path("/cache/2.md"),
+                success=True,
+                error=None,
+            ),
+        ]
+
+        stderr = io.StringIO()
+        console = Console(file=stderr, force_terminal=False, width=120)
+
+        print_summary(results, console)
+
+        output = stderr.getvalue()
+        assert "Total URLs: 2" in output
+        assert "Successful: 2" in output
+        assert "Failed: 0" in output
+        # No failed URLs section
+        assert "Failed URLs:" not in output
+
+    def test_print_summary_all_failed(self):
+        """Summary with all failed fetches."""
+        results = [
+            FetchResult(
+                url="https://example.com/1",
+                cache_path=None,
+                success=False,
+                error="Error 1",
+            ),
+            FetchResult(
+                url="https://example.com/2",
+                cache_path=None,
+                success=False,
+                error="Error 2",
+            ),
+        ]
+
+        stderr = io.StringIO()
+        console = Console(file=stderr, force_terminal=False, width=120)
+
+        print_summary(results, console)
+
+        output = stderr.getvalue()
+        assert "Total URLs: 2" in output
+        assert "Successful: 0" in output
+        assert "Failed: 2" in output
+        assert "Failed URLs:" in output
+        assert "https://example.com/1" in output
+        assert "https://example.com/2" in output
+
+    def test_print_summary_empty_results(self):
+        """Handle empty results list."""
+        results = []
+
+        stderr = io.StringIO()
+        console = Console(file=stderr, force_terminal=False)
+
+        print_summary(results, console)
+
+        output = stderr.getvalue()
+        assert "Total URLs: 0" in output
+        assert "Successful: 0" in output
+        assert "Failed: 0" in output

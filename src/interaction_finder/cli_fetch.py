@@ -10,6 +10,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
 
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
+
 from interaction_finder.fetcher import PageFetcher
 from interaction_finder.settings import IfetcherConfig
 
@@ -185,7 +189,7 @@ async def fetch_urls_chunks(
     for url in urls:
         try:
             # Attempt to fetch and chunk the URL
-            chunks = await fetcher.get_chunks_with_embeddings(
+            _chunks = await fetcher.get_chunks_with_embeddings(
                 url, progress=verbose, fail_fast=False
             )
 
@@ -243,3 +247,157 @@ async def run_fetch(
         return await fetch_urls_chunks(fetcher, urls, verbose)
     else:
         return await fetch_urls_markdown(fetcher, urls, verbose)
+
+
+def output_paths(results: List[FetchResult], console: Console) -> int:
+    """
+    Output cache paths for successful fetches to stdout (one per line).
+
+    Prints absolute cache paths for all successful fetches to stdout, making output
+    suitable for piping to other commands. Failed URLs are printed as warnings to
+    stderr via Rich console.
+
+    Parameters:
+        results: List of fetch results with success/failure tracking
+        console: Rich console for error/warning output (not stdout)
+
+    Returns:
+        Exit code: 0 if any fetch succeeded, 1 if all failed
+    """
+    # Separate successful and failed results
+    successful = [r for r in results if r.success]
+    failed = [r for r in results if not r.success]
+
+    # Print cache paths to stdout (one per line, absolute paths)
+    for result in successful:
+        if result.cache_path:
+            # Use print() for stdout, not console (which may use stderr)
+            print(str(result.cache_path.resolve()))
+
+    # Print warnings for failed URLs to console (stderr)
+    for result in failed:
+        console.print(f"[yellow]Warning:[/yellow] Failed to fetch {result.url}")
+        if result.error:
+            console.print(f"  Reason: {result.error}")
+
+    # Return exit code: 0 if any success, 1 if all failed
+    if successful:
+        return 0
+    else:
+        return 1
+
+
+def output_content(results: List[FetchResult], console: Console) -> int:
+    """
+    Output markdown content for a single URL to stdout.
+
+    Reads cached markdown content and prints to stdout for piping or viewing.
+    Enforces single-URL constraint - raises error if multiple URLs provided.
+
+    Parameters:
+        results: List of fetch results (must contain exactly one URL)
+        console: Rich console for error output
+
+    Returns:
+        Exit code: 0 if successful, 1 if failed
+
+    Raises:
+        ValueError: If results contains multiple URLs (content mode requires single URL)
+    """
+    # Validate single URL constraint
+    if len(results) != 1:
+        raise ValueError(
+            f"Content output requires exactly one URL, got {len(results)}. "
+            "Use --format paths for multiple URLs."
+        )
+
+    result = results[0]
+
+    # Check if fetch was successful
+    if not result.success:
+        console.print(f"[red]Error:[/red] Failed to fetch {result.url}")
+        if result.error:
+            console.print(f"Reason: {result.error}")
+        return 1
+
+    # Read and output markdown content
+    if result.cache_path and result.cache_path.exists():
+        content = result.cache_path.read_text(encoding="utf-8")
+        # Use print() for stdout, not console
+        print(content, end="")  # No extra newline - preserve exact content
+        return 0
+    else:
+        console.print(f"[red]Error:[/red] Cache file not found: {result.cache_path}")
+        return 1
+
+
+def print_fetch_errors(results: List[FetchResult], console: Console) -> None:
+    """
+    Display grouped error summary for failed fetches.
+
+    Groups errors by type and displays them in a structured format using Rich.
+    Shows individual URL failures with error reasons.
+
+    Parameters:
+        results: List of fetch results with failure tracking
+        console: Rich console for formatted error output
+    """
+    # Filter failed results
+    failed = [r for r in results if not r.success]
+
+    if not failed:
+        return  # No errors to display
+
+    # Create error summary table
+    table = Table(title="Fetch Errors", show_header=True, header_style="bold red")
+    table.add_column("URL", style="cyan", no_wrap=False)
+    table.add_column("Error", style="red")
+
+    for result in failed:
+        table.add_row(result.url, result.error or "Unknown error")
+
+    console.print(table)
+
+
+def print_summary(results: List[FetchResult], console: Console) -> None:
+    """
+    Display verbose summary of fetch operation results.
+
+    Shows success/failure counts, lists failed URLs with reasons, and displays
+    summary statistics in a Rich panel.
+
+    Parameters:
+        results: List of fetch results with success/failure tracking
+        console: Rich console for formatted summary output
+    """
+    # Calculate statistics
+    total = len(results)
+    successful = sum(1 for r in results if r.success)
+    failed = total - successful
+
+    # Build summary text
+    summary_lines = [
+        f"Total URLs: {total}",
+        f"Successful: {successful}",
+        f"Failed: {failed}",
+    ]
+
+    # Add failed URL details if any
+    if failed > 0:
+        summary_lines.append("")
+        summary_lines.append("[bold]Failed URLs:[/bold]")
+        for result in results:
+            if not result.success:
+                summary_lines.append(f"  • {result.url}")
+                if result.error:
+                    summary_lines.append(f"    Reason: {result.error}")
+
+    # Display summary in panel
+    summary_text = "\n".join(summary_lines)
+    panel = Panel(
+        summary_text,
+        title="[bold]Fetch Summary[/bold]",
+        border_style="blue",
+        expand=False,
+    )
+    console.print(panel)
