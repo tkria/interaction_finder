@@ -6,6 +6,7 @@ Minimal implementation providing configuration management and basic commands.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from typing import Optional, List, Any
@@ -17,6 +18,7 @@ from rich.table import Table
 
 from .settings import IfetcherConfig
 from .term_parser import parse_term_line
+from . import cli_fetch
 
 app = typer.Typer(
     name="interaction-finder",
@@ -305,6 +307,133 @@ def config(
             console.print("Valid actions: info, validate")
             raise typer.Exit(1)
     except Exception as e:
+        console.print(f"[red]Error:[/red] {e}")
+        if verbose:
+            console.print_exception()
+        raise typer.Exit(1)
+
+
+@app.command()
+def fetch(
+    urls: List[str] = typer.Argument(
+        default=[],
+        help="URLs to fetch (can specify multiple)",
+    ),
+    input_file: Optional[Path] = typer.Option(
+        None,
+        "-i",
+        "--input",
+        help="Read URLs from file (one per line)",
+    ),
+    format: str = typer.Option(
+        "paths",
+        "--format",
+        help="Output format: 'paths' (cache file paths) or 'content' (markdown content)",
+    ),
+    chunk: bool = typer.Option(
+        False,
+        "--chunk/--no-chunk",
+        help="Perform semantic chunking and cache chunks",
+    ),
+    mode: Optional[str] = typer.Option(
+        None, "-m", "--mode", help="Configuration mode to use"
+    ),
+    config: Optional[str] = typer.Option(None, "-c", "--config", help="Config file"),
+    verbose: bool = typer.Option(False, "-v", "--verbose", help="Verbose output"),
+    overrides: List[str] = typer.Option(
+        [], "-O", "--override", help="Config overrides"
+    ),
+):
+    """
+    Fetch web content and cache it using PageFetcher.
+
+    Downloads HTML/PDF content, converts to markdown, and caches locally.
+    Useful for prefetching content, debugging cache behavior, and scripting workflows.
+
+    \b
+    Examples:
+      # Fetch single URL and show cache path
+      interaction-finder fetch https://example.com
+
+      # Fetch multiple URLs
+      interaction-finder fetch https://example.com https://example.org
+
+      # Fetch from file
+      interaction-finder fetch --input urls.txt
+
+      # Show content instead of path
+      interaction-finder fetch https://example.com --format content
+
+      # Perform semantic chunking
+      interaction-finder fetch https://example.com --chunk
+
+      # With config override
+      interaction-finder fetch https://example.com -O output.cache=custom_cache/
+    """
+    # Get effective options with fallback to global options
+    config_path, verbose, overrides = get_options_with_fallback(
+        config, verbose, overrides
+    )
+
+    try:
+        # Load configuration
+        cfg = load_config(config_path, overrides, mode)
+
+        # Collect URLs from args or file input
+        collected_urls = cli_fetch.collect_urls(urls, input_file)
+
+        # Validate format option
+        if format not in ("paths", "content"):
+            console.print(
+                f"[red]Error:[/red] Invalid format '{format}'. "
+                "Must be 'paths' or 'content'"
+            )
+            raise typer.Exit(1)
+
+        # Validate content format constraint (single URL only)
+        if format == "content" and len(collected_urls) != 1:
+            console.print(
+                f"[red]Error:[/red] Content format requires exactly one URL, "
+                f"got {len(collected_urls)}. Use --format paths for multiple URLs."
+            )
+            raise typer.Exit(1)
+
+        # Define async implementation
+        async def fetch_impl():
+            return await cli_fetch.run_fetch(
+                config=cfg,
+                urls=collected_urls,
+                chunk=chunk,
+                verbose=verbose,
+            )
+
+        # Run fetch operation
+        results = asyncio.run(fetch_impl())
+
+        # Output results based on format
+        if format == "paths":
+            exit_code = cli_fetch.output_paths(results, console)
+        else:  # format == "content"
+            exit_code = cli_fetch.output_content(results, console)
+
+        # Print summary if verbose
+        if verbose:
+            cli_fetch.print_summary(results, console)
+
+        # Exit with appropriate code
+        if exit_code != 0:
+            raise typer.Exit(exit_code)
+
+    except ValueError as e:
+        # Handle validation errors (mutual exclusion, empty input, etc.)
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+    except FileNotFoundError as e:
+        # Handle file not found errors
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+    except Exception as e:
+        # Handle unexpected errors
         console.print(f"[red]Error:[/red] {e}")
         if verbose:
             console.print_exception()
