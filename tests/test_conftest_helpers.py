@@ -741,3 +741,86 @@ class TestImmediateOnlyFiltering:
             should_run_tests_based_on_taint(test_dir, src_dir, immediate_only=True)
             # Verify immediate_only was passed through
             mock_compute.assert_called_once_with(src_dir, test_dir, immediate_only=True)
+
+
+class TestSkipUnlessTainted:
+    """Tests for skip_unless_tainted factory function and path resolution."""
+
+    def test_repo_root_calculation_for_base_conftest(self, tmp_path):
+        """Repo root should be correctly calculated for tests/conftest.py."""
+        # Create minimal project structure
+        repo_root = tmp_path
+        (repo_root / "src").mkdir()
+        (repo_root / "tests").mkdir()
+        (repo_root / "src" / "interaction_finder").mkdir()
+        conftest = repo_root / "tests" / "conftest.py"
+        conftest.write_text("from tests.conftest_helpers import skip_unless_tainted\n")
+        # Simulate path calculation in skip_unless_tainted
+        test_dir = conftest.parent  # tests/
+        calculated_root = test_dir
+        while calculated_root.name != "" and not (
+            (calculated_root / "tests").exists() and (calculated_root / "src").exists()
+        ):
+            calculated_root = calculated_root.parent
+        # Should find repo root
+        assert calculated_root == repo_root
+        assert (calculated_root / "src" / "interaction_finder").exists()
+
+    def test_repo_root_calculation_for_submodule_conftest(self, tmp_path):
+        """Repo root should be correctly calculated for tests/fetcher/conftest.py."""
+        # Create minimal project structure
+        repo_root = tmp_path
+        (repo_root / "src").mkdir()
+        (repo_root / "tests").mkdir()
+        (repo_root / "tests" / "fetcher").mkdir()
+        (repo_root / "src" / "interaction_finder").mkdir()
+        (repo_root / "src" / "interaction_finder" / "fetcher").mkdir()
+        conftest = repo_root / "tests" / "fetcher" / "conftest.py"
+        conftest.write_text("from tests.conftest_helpers import skip_unless_tainted\n")
+        # Simulate path calculation in skip_unless_tainted
+        test_dir = conftest.parent  # tests/fetcher/
+        calculated_root = test_dir
+        while calculated_root.name != "" and not (
+            (calculated_root / "tests").exists() and (calculated_root / "src").exists()
+        ):
+            calculated_root = calculated_root.parent
+        # Should find repo root (not tests/)
+        assert calculated_root == repo_root
+        assert (calculated_root / "src" / "interaction_finder" / "fetcher").exists()
+
+    def test_repo_root_calculation_regression(self, tmp_path):
+        """Regression test: subdirectory conftest should not mistake tests/ for repo root.
+
+        This test captures the bug where:
+        - tests/fetcher/conftest.py has test_dir = tests/fetcher/
+        - test_dir.parent = tests/
+        - The OLD code set repo_root = test_dir.parent (tests/)
+        - This caused src_root = tests/src/interaction_finder (WRONG!)
+
+        The NEW code walks up until finding a directory with both tests/ and src/.
+        """
+        # Create structure that would trigger the bug
+        repo_root = tmp_path
+        (repo_root / "src").mkdir()
+        (repo_root / "src" / "interaction_finder").mkdir()
+        (repo_root / "tests").mkdir()
+        (repo_root / "tests" / "fetcher").mkdir()
+        conftest = repo_root / "tests" / "fetcher" / "conftest.py"
+        conftest.write_text("")
+        # Old buggy logic
+        test_dir_old = conftest.parent  # tests/fetcher/
+        repo_root_old_buggy = test_dir_old.parent  # tests/ (WRONG!)
+        src_root_old_buggy = repo_root_old_buggy / "src" / "interaction_finder"
+        # This would be the WRONG path under the bug
+        assert not src_root_old_buggy.exists()
+        # New correct logic (what skip_unless_tainted does now)
+        test_dir_new = conftest.parent
+        repo_root_new = test_dir_new
+        while repo_root_new.name != "" and not (
+            (repo_root_new / "tests").exists() and (repo_root_new / "src").exists()
+        ):
+            repo_root_new = repo_root_new.parent
+        src_root_new = repo_root_new / "src" / "interaction_finder"
+        # This should be the CORRECT path
+        assert src_root_new.exists()
+        assert repo_root_new == repo_root

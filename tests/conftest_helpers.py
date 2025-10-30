@@ -411,7 +411,13 @@ def skip_unless_tainted(module_name: str, is_base: bool = False):
     factory_frame = inspect.currentframe().f_back
     conftest_file = Path(factory_frame.f_globals["__file__"])
     test_dir = conftest_file.parent
-    repo_root = test_dir.parent
+    # Find repo root: walk up until we find a directory containing 'tests' and 'src'
+    # This handles both tests/conftest.py (test_dir=tests) and tests/fetcher/conftest.py (test_dir=tests/fetcher)
+    repo_root = test_dir
+    while repo_root.name != "" and not (
+        (repo_root / "tests").exists() and (repo_root / "src").exists()
+    ):
+        repo_root = repo_root.parent
     src_root = repo_root / "src" / "interaction_finder"
 
     def pytest_collection_modifyitems(config, items):
