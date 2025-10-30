@@ -405,20 +405,20 @@ def skip_unless_tainted(module_name: str, is_base: bool = False):
         Callable compatible with pytest_collection_modifyitems hook
     """
 
+    # Capture the conftest path at factory creation time (when skip_unless_tainted is called)
+    import inspect
+
+    factory_frame = inspect.currentframe().f_back
+    conftest_file = Path(factory_frame.f_globals["__file__"])
+    test_dir = conftest_file.parent
+    repo_root = test_dir.parent
+    src_root = repo_root / "src" / "interaction_finder"
+
     def pytest_collection_modifyitems(config, items):
         """Skip tests unless tainted through symbol dependencies."""
         # Import pytest here to avoid issues when module is imported outside pytest
         import pytest
-        import inspect
 
-        # Calculate paths from the conftest location
-        # This assumes we're called from tests/{module_name}/conftest.py
-        # or tests/conftest.py for base module
-        caller_frame = inspect.currentframe().f_back
-        caller_file = Path(caller_frame.f_globals["__file__"])
-        test_dir = caller_file.parent
-        repo_root = test_dir.parent
-        src_root = repo_root / "src" / "interaction_finder"
         # Determine if tests should run
         if is_base:
             # Base module: check if taint reaches base-level files
