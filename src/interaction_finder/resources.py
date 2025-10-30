@@ -983,7 +983,7 @@ class Resource(BaseModel):
 
         return normalized_text, position_offsets
 
-    def quote(self, text: str, similarity_threshold: float = 1.0) -> "ResourceQuote":
+    def quote(self, text: str, similarity_threshold: float = 0.8) -> "ResourceQuote":
         """
         Create a ResourceQuote by finding all occurrences of the given text in this resource.
 
