@@ -2,14 +2,11 @@
 
 import json
 from pathlib import Path
-from typing import Optional, List, Tuple, Dict, Any, TYPE_CHECKING
+from typing import Optional, List, Tuple, Any
 import aiofiles
 import aiofiles.os
 
 from .utils import normalize_url, url_to_hash_base36
-
-if TYPE_CHECKING:
-    from ..settings import IfetcherConfig
 
 # Caching constants
 COLLISION_PROBE_LIMIT = 10
@@ -32,9 +29,14 @@ CONTENT_TYPE_CONFIG = {
 class URLCache:
     """File-based cache for URLs with support for HTML, PDF, and Markdown content."""
 
-    def __init__(self, config: "IfetcherConfig"):
-        self.config = config
-        self.base_path = Path(config.abspath(config.output.cache))
+    def __init__(self, cache_dir: Path | str = "cache"):
+        """
+        Initialize URL cache.
+
+        Parameters:
+            cache_dir: Directory path for cache storage (default: "cache")
+        """
+        self.base_path = Path(cache_dir)
         self.base_path.mkdir(parents=True, exist_ok=True)
 
     async def _get_paths(self, url: str, *extensions: str) -> tuple[Path, ...]:

@@ -1,6 +1,6 @@
 """Progress display and status management for fetcher operations."""
 
-from typing import Optional, Tuple, Union, Any, Protocol
+from typing import Optional, Protocol
 from rich.console import Console
 from rich.progress import (
     Progress,

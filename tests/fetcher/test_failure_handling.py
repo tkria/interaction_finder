@@ -40,11 +40,10 @@ class TestFailureMarking:
     async def setup_batch_ops(self):
         """Set up batch operations with temporary cache."""
         temp_dir = tempfile.mkdtemp()
-        config = IfetcherConfig.model_validate(
-            {"cache": {"directory": temp_dir}, "tools": {"crawl4ai": {"timeout": 30}}}
-        )
-        cache = URLCache(config)
-        web_client = WebClient(config)
+        cache_dir = Path(temp_dir) / "cache"
+
+        cache = URLCache(cache_dir)
+        web_client = WebClient(timeout=30)
         batch_ops = BatchOperations(cache, web_client)
 
         yield batch_ops, cache, web_client
@@ -174,11 +173,10 @@ class TestPreviousFailureException:
     async def setup_batch_ops(self):
         """Set up batch operations with temporary cache."""
         temp_dir = tempfile.mkdtemp()
-        config = IfetcherConfig.model_validate(
-            {"cache": {"directory": temp_dir}, "tools": {"crawl4ai": {"timeout": 30}}}
-        )
-        cache = URLCache(config)
-        web_client = WebClient(config)
+        cache_dir = Path(temp_dir) / "cache"
+
+        cache = URLCache(cache_dir)
+        web_client = WebClient(timeout=30)
         batch_ops = BatchOperations(cache, web_client)
 
         yield batch_ops, cache, web_client
@@ -328,11 +326,10 @@ class TestRedirectChainFailures:
     async def setup_batch_ops(self):
         """Set up batch operations with temporary cache."""
         temp_dir = tempfile.mkdtemp()
-        config = IfetcherConfig.model_validate(
-            {"cache": {"directory": temp_dir}, "tools": {"crawl4ai": {"timeout": 30}}}
-        )
-        cache = URLCache(config)
-        web_client = WebClient(config)
+        cache_dir = Path(temp_dir) / "cache"
+
+        cache = URLCache(cache_dir)
+        web_client = WebClient(timeout=30)
         batch_ops = BatchOperations(cache, web_client)
 
         yield batch_ops, cache, web_client
@@ -498,11 +495,10 @@ class TestFailureHandlingIntegration:
     async def setup_batch_ops(self):
         """Set up batch operations with temporary cache."""
         temp_dir = tempfile.mkdtemp()
-        config = IfetcherConfig.model_validate(
-            {"cache": {"directory": temp_dir}, "tools": {"crawl4ai": {"timeout": 30}}}
-        )
-        cache = URLCache(config)
-        web_client = WebClient(config)
+        cache_dir = Path(temp_dir) / "cache"
+
+        cache = URLCache(cache_dir)
+        web_client = WebClient(timeout=30)
         batch_ops = BatchOperations(cache, web_client)
 
         yield batch_ops, cache, web_client

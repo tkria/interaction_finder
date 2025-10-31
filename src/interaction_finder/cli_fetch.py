@@ -239,8 +239,14 @@ async def run_fetch(
     Raises:
         No exceptions raised - all failures recorded in results
     """
-    # Create PageFetcher with configuration
-    fetcher = PageFetcher(config, show_status=verbose, verbose=verbose)
+    # Extract configuration values
+    cache_dir = config.abspath(config.output.cache)
+    timeout = config.tools.crawl4ai.timeout
+
+    # Create PageFetcher with direct parameters
+    fetcher = PageFetcher(
+        cache_dir=cache_dir, timeout=timeout, show_status=verbose, verbose=verbose
+    )
 
     # Route to appropriate fetch function based on mode
     if chunk:

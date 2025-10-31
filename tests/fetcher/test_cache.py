@@ -163,7 +163,8 @@ class TestBasicCaching:
     @pytest.fixture
     def cache(self, temp_config):
         """Create a URLCache instance for testing."""
-        return URLCache(temp_config)
+        cache_dir = temp_config.abspath(temp_config.output.cache)
+        return URLCache(cache_dir)
 
     @pytest.mark.asyncio
     async def test_store_and_retrieve_html(self, cache):
@@ -252,11 +253,12 @@ class TestBasicCaching:
         content = "<html>Persistent content</html>"
 
         # Store content with first cache instance
-        cache1 = URLCache(temp_config)
+        cache_dir = temp_config.abspath(temp_config.output.cache)
+        cache1 = URLCache(cache_dir)
         await cache1.set_path(url, "html", content)
 
         # Create new cache instance and verify content exists
-        cache2 = URLCache(temp_config)
+        cache2 = URLCache(cache_dir)
         assert await cache2.has_path(url, "html")
         assert await cache2.get_content(url, "html") == content
 
@@ -283,7 +285,8 @@ class TestUserWorkflows:
     @pytest.fixture
     def fetcher(self, temp_config):
         """Create a PageFetcher instance for testing."""
-        return PageFetcher(temp_config)
+        cache_dir = temp_config.abspath(temp_config.output.cache)
+        return PageFetcher(cache_dir=cache_dir)
 
     @pytest.mark.asyncio
     async def test_basic_caching_workflow(self, fetcher):
@@ -435,7 +438,8 @@ class TestCacheManagement:
     @pytest.fixture
     def cache(self, temp_config):
         """Create a URLCache instance for testing."""
-        return URLCache(temp_config)
+        cache_dir = temp_config.abspath(temp_config.output.cache)
+        return URLCache(cache_dir)
 
     @pytest.mark.asyncio
     async def test_cache_status_checking(self, cache):
@@ -527,7 +531,8 @@ class TestEdgeCases:
     @pytest.fixture
     def cache(self, temp_config):
         """Create a URLCache instance for testing."""
-        return URLCache(temp_config)
+        cache_dir = temp_config.abspath(temp_config.output.cache)
+        return URLCache(cache_dir)
 
     @pytest.mark.asyncio
     async def test_empty_content_handling(self, cache):
@@ -623,11 +628,13 @@ class TestEnhancedFunctionality:
 
     @pytest.fixture
     def cache(self, temp_config):
-        return URLCache(temp_config)
+        cache_dir = temp_config.abspath(temp_config.output.cache)
+        return URLCache(cache_dir)
 
     @pytest.fixture
     def fetcher(self, temp_config):
-        return PageFetcher(temp_config)
+        cache_dir = temp_config.abspath(temp_config.output.cache)
+        return PageFetcher(cache_dir=cache_dir)
 
     def test_pdf_url_detection(self, fetcher):
         """Test that PDF URLs are correctly identified."""
@@ -796,7 +803,8 @@ class TestIntegrationWithHTTPServer:
 
     @pytest.fixture
     def fetcher(self, temp_config):
-        return PageFetcher(temp_config)
+        cache_dir = temp_config.abspath(temp_config.output.cache)
+        return PageFetcher(cache_dir=cache_dir)
 
     @pytest.mark.asyncio
     async def test_real_html_fetching(self, fetcher, http_server):
@@ -986,7 +994,8 @@ class TestMultipleURLFetching:
         """Fixture to create a PageFetcher instance."""
         from interaction_finder.fetcher import PageFetcher
 
-        return PageFetcher(temp_config, show_status=False)
+        cache_dir = temp_config.abspath(temp_config.output.cache)
+        return PageFetcher(cache_dir=cache_dir, show_status=False)
 
     @pytest.mark.asyncio
     async def test_multiple_html_urls(self, fetcher, http_server):

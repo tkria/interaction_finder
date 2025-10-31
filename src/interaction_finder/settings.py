@@ -42,6 +42,24 @@ class IfetcherConfig(BaseModel):
         description="Configuration for different AI agents by name",
     )
 
+    class Tools(BaseModel):
+        """Configuration for external tools."""
+
+        class Crawl4AI(BaseModel):
+            """Configuration for Crawl4AI web scraping."""
+
+            timeout: int = Field(
+                30, description="Request timeout in seconds", ge=1, le=600
+            )
+
+        crawl4ai: Crawl4AI = Field(
+            default_factory=Crawl4AI, description="Crawl4AI configuration"
+        )
+
+    tools: Tools = Field(
+        default_factory=Tools, description="External tools configuration"
+    )
+
     class Output(BaseModel):
         """Configuration for output file paths and caching."""
 

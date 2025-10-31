@@ -1,7 +1,7 @@
 """Batch operations for concurrent URL fetching."""
 
 import asyncio
-from typing import List, Dict, Any, Callable, Union, Optional, Tuple
+from typing import List, Dict, Any, Callable, Optional, Tuple
 from urllib.parse import urlparse
 from .cache import URLCache
 from .web_client import WebClient

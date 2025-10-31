@@ -41,18 +41,9 @@ class TestChunkCreation:
     """Test basic chunk creation functionality."""
 
     @pytest.fixture
-    def mock_config(self):
-        """Create a mock config object."""
-        config = Mock()
-        config.tools = Mock()
-        config.tools.crawl4ai = Mock()
-        config.tools.crawl4ai.timeout = 30
-        return config
-
-    @pytest.fixture
-    def web_client(self, mock_config):
-        """Create WebClient instance with mock config."""
-        return WebClient(mock_config, verbose=False)
+    def web_client(self):
+        """Create WebClient instance."""
+        return WebClient(timeout=30, verbose=False)
 
     def test_create_chunks_basic_functionality(self, web_client):
         """Test that create_chunks returns properly structured data."""
@@ -134,11 +125,7 @@ class TestWeightedAveraging:
     @pytest.fixture
     def web_client(self):
         """Create WebClient instance."""
-        config = Mock()
-        config.tools = Mock()
-        config.tools.crawl4ai = Mock()
-        config.tools.crawl4ai.timeout = 30
-        return WebClient(config, verbose=False)
+        return WebClient(timeout=30, verbose=False)
 
     def test_position_weighting_first_last_sentences(self, web_client):
         """Test that first and last sentences get higher weights."""
@@ -262,11 +249,8 @@ class TestEdgeCases:
 
     @pytest.fixture
     def web_client(self):
-        config = Mock()
-        config.tools = Mock()
-        config.tools.crawl4ai = Mock()
-        config.tools.crawl4ai.timeout = 30
-        return WebClient(config, verbose=False)
+        """Create WebClient instance."""
+        return WebClient(timeout=30, verbose=False)
 
     def test_chunk_with_no_sentences(self, web_client):
         """Test chunk that has no sentences attribute."""
@@ -412,11 +396,8 @@ class TestDynamicEmbeddingDimensions:
 
     @pytest.fixture
     def web_client(self):
-        config = Mock()
-        config.tools = Mock()
-        config.tools.crawl4ai = Mock()
-        config.tools.crawl4ai.timeout = 30
-        return WebClient(config, verbose=False)
+        """Create WebClient instance."""
+        return WebClient(timeout=30, verbose=False)
 
     @pytest.mark.parametrize("dimension", [256, 384, 768, 1024])
     def test_different_embedding_dimensions(self, web_client, dimension):
@@ -476,11 +457,8 @@ class TestPerformance:
 
     @pytest.fixture
     def web_client(self):
-        config = Mock()
-        config.tools = Mock()
-        config.tools.crawl4ai = Mock()
-        config.tools.crawl4ai.timeout = 30
-        return WebClient(config, verbose=False)
+        """Create WebClient instance."""
+        return WebClient(timeout=30, verbose=False)
 
     def test_large_number_of_sentences(self, web_client):
         """Test chunking with many sentences."""

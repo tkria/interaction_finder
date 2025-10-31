@@ -26,30 +26,20 @@ class TestCachePathInitialization:
     """Test for cache path initialization bug found during refactoring."""
 
     def test_cache_accepts_path_objects(self):
-        """Test that URLCache properly handles Path objects from config.abspath()."""
-        # This would have caught the bug where cache expected string but got Path
-        config = Mock()
-        config.output = Mock()
-        config.output.cache = "test_cache"
-        config.abspath = Mock(return_value=Path("test_cache_path"))
-
-        # This should not raise AttributeError: 'Path' object has no attribute 'mkdir'
+        """Test that URLCache properly handles Path objects."""
+        # URLCache now takes cache_dir directly
         with tempfile.TemporaryDirectory() as temp_dir:
-            config.abspath.return_value = Path(temp_dir) / "cache"
-            cache = URLCache(config)
+            cache_dir = Path(temp_dir) / "cache"
+            cache = URLCache(cache_dir)
             assert cache.base_path.exists()
             assert isinstance(cache.base_path, Path)
 
     def test_cache_accepts_string_paths_for_backward_compatibility(self):
-        """Test that URLCache can handle string paths (edge case)."""
-        config = Mock()
-        config.output = Mock()
-        config.output.cache = "test_cache"
-
-        # Test with string return (shouldn't happen with real config, but test anyway)
+        """Test that URLCache can handle string paths."""
+        # URLCache should handle both str and Path objects
         with tempfile.TemporaryDirectory() as temp_dir:
-            config.abspath = Mock(return_value=str(Path(temp_dir) / "cache"))
-            cache = URLCache(config)
+            cache_dir = str(Path(temp_dir) / "cache")
+            cache = URLCache(cache_dir)
             assert cache.base_path.exists()
             assert isinstance(cache.base_path, Path)
 
@@ -61,12 +51,7 @@ class TestDOIExtractionJSONParsing:
         """Test DOI extraction when crawl4ai returns JSON string (original format)."""
         from interaction_finder.fetcher.web_client import WebClient
 
-        config = Mock()
-        config.tools = Mock()
-        config.tools.crawl4ai = Mock()
-        config.tools.crawl4ai.timeout = 30
-
-        client = WebClient(config, verbose=False)
+        client = WebClient(timeout=30, verbose=False)
 
         # Mock crawl4ai result with JSON string format (what actually gets returned)
         result = Mock()
@@ -79,12 +64,7 @@ class TestDOIExtractionJSONParsing:
         """Test DOI extraction when data is already parsed (edge case)."""
         from interaction_finder.fetcher.web_client import WebClient
 
-        config = Mock()
-        config.tools = Mock()
-        config.tools.crawl4ai = Mock()
-        config.tools.crawl4ai.timeout = 30
-
-        client = WebClient(config, verbose=False)
+        client = WebClient(timeout=30, verbose=False)
 
         # Mock result with already parsed dict (fallback case)
         result = Mock()
@@ -97,12 +77,7 @@ class TestDOIExtractionJSONParsing:
         """Test that DOI extraction follows correct field priority."""
         from interaction_finder.fetcher.web_client import WebClient
 
-        config = Mock()
-        config.tools = Mock()
-        config.tools.crawl4ai = Mock()
-        config.tools.crawl4ai.timeout = 30
-
-        client = WebClient(config, verbose=False)
+        client = WebClient(timeout=30, verbose=False)
 
         # Mock result with multiple DOI fields - should prefer doi_meta_pub
         result = Mock()
@@ -123,12 +98,7 @@ class TestDOIExtractionJSONParsing:
         """Test that DOI extraction handles list values correctly."""
         from interaction_finder.fetcher.web_client import WebClient
 
-        config = Mock()
-        config.tools = Mock()
-        config.tools.crawl4ai = Mock()
-        config.tools.crawl4ai.timeout = 30
-
-        client = WebClient(config, verbose=False)
+        client = WebClient(timeout=30, verbose=False)
 
         # Mock result where DOI field contains a list
         result = Mock()
@@ -143,12 +113,7 @@ class TestDOIExtractionJSONParsing:
         """Test that DOI extraction gracefully handles malformed JSON."""
         from interaction_finder.fetcher.web_client import WebClient
 
-        config = Mock()
-        config.tools = Mock()
-        config.tools.crawl4ai = Mock()
-        config.tools.crawl4ai.timeout = 30
-
-        client = WebClient(config, verbose=False)
+        client = WebClient(timeout=30, verbose=False)
 
         # Mock result with malformed JSON
         result = Mock()
@@ -165,12 +130,7 @@ class TestRedirectURLExtraction:
         """Test redirect URL extraction from crawl4ai _results structure."""
         from interaction_finder.fetcher.web_client import WebClient
 
-        config = Mock()
-        config.tools = Mock()
-        config.tools.crawl4ai = Mock()
-        config.tools.crawl4ai.timeout = 30
-
-        client = WebClient(config, verbose=False)
+        client = WebClient(timeout=30, verbose=False)
 
         # Mock crawl4ai result with redirect info in _results
         result = Mock()
@@ -186,12 +146,7 @@ class TestRedirectURLExtraction:
         """Test URL extraction when no redirect occurred."""
         from interaction_finder.fetcher.web_client import WebClient
 
-        config = Mock()
-        config.tools = Mock()
-        config.tools.crawl4ai = Mock()
-        config.tools.crawl4ai.timeout = 30
-
-        client = WebClient(config, verbose=False)
+        client = WebClient(timeout=30, verbose=False)
 
         # Mock result with no redirect - need to mock both result.url and first_result.url
         result = Mock()
@@ -212,12 +167,7 @@ class TestRedirectURLExtraction:
         """Test URL extraction falls back to result.url when _results unavailable."""
         from interaction_finder.fetcher.web_client import WebClient
 
-        config = Mock()
-        config.tools = Mock()
-        config.tools.crawl4ai = Mock()
-        config.tools.crawl4ai.timeout = 30
-
-        client = WebClient(config, verbose=False)
+        client = WebClient(timeout=30, verbose=False)
 
         # Mock result without _results but with url attribute
         result = Mock()
@@ -226,54 +176,6 @@ class TestRedirectURLExtraction:
 
         final_url = client._extract_final_url(result, "https://original.url")
         assert final_url == "https://fallback.url"
-
-
-class TestCLIBackwardCompatibility:
-    """Test for CLI _fetch_multiple method compatibility."""
-
-    @pytest.mark.asyncio
-    async def test_fetch_multiple_method_exists(self):
-        """Test that _fetch_multiple method exists for CLI compatibility."""
-        config = Mock()
-        config.output = Mock()
-        config.output.cache = "test_cache"
-        config.abspath = Mock(return_value=Path("test_cache"))
-        config.tools = Mock()
-        config.tools.crawl4ai = Mock()
-        config.tools.crawl4ai.timeout = 30
-
-        fetcher = PageFetcher(config, show_status=False)
-
-        # This would have caught the missing method error
-        assert hasattr(fetcher, "_fetch_multiple")
-        assert callable(getattr(fetcher, "_fetch_multiple"))
-
-    @pytest.mark.asyncio
-    async def test_fetch_multiple_method_signature(self):
-        """Test that _fetch_multiple has correct method signature."""
-        config = Mock()
-        config.output = Mock()
-        config.output.cache = "test_cache"
-        config.abspath = Mock(return_value=Path("test_cache"))
-        config.tools = Mock()
-        config.tools.crawl4ai = Mock()
-        config.tools.crawl4ai.timeout = 30
-
-        fetcher = PageFetcher(config, show_status=False)
-
-        # Mock the batch_ops.fetch_multiple to avoid actual network calls
-        from unittest.mock import AsyncMock
-
-        fetcher.batch_ops.fetch_multiple = AsyncMock(return_value=["test_result"])
-
-        # Test that we can call it with CLI parameters
-        result = await fetcher._fetch_multiple(
-            ["http://test.url"], "chunks", progress=True, fail_fast=False, retry=False
-        )
-
-        # Should delegate to batch_ops properly
-        fetcher.batch_ops.fetch_multiple.assert_called_once()
-        assert result == ["test_result"]
 
 
 class TestLoggerInstantiation:
@@ -355,30 +257,3 @@ class TestModuleStructureIntegrity:
         assert fetch_urls_with_progress is not None
         assert fetch_urls_concurrent_with_progress is not None
 
-    def test_page_fetcher_has_legacy_methods(self):
-        """Test that PageFetcher maintains legacy method compatibility."""
-        config = Mock()
-        config.output = Mock()
-        config.output.cache = "test_cache"
-        config.abspath = Mock(return_value=Path("test_cache"))
-        config.tools = Mock()
-        config.tools.crawl4ai = Mock()
-        config.tools.crawl4ai.timeout = 30
-
-        fetcher = PageFetcher(config, show_status=False)
-
-        # Test that legacy methods exist (these are used by existing code)
-        legacy_methods = [
-            "_extract_final_url",
-            "_extract_doi",
-            "_refine_article_content",
-            "_is_pdf_url",
-            "_create_chunks",
-            "_fetch_multiple",
-        ]
-
-        for method_name in legacy_methods:
-            assert hasattr(fetcher, method_name), (
-                f"Missing legacy method: {method_name}"
-            )
-            assert callable(getattr(fetcher, method_name))

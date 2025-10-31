@@ -1,14 +1,12 @@
 """High-level PageFetcher interface with eliminated duplication using higher-order functions."""
 
 from dataclasses import dataclass
-from typing import Union, List, Optional, Callable, Any, TYPE_CHECKING, Dict
+from pathlib import Path
+from typing import Union, List, Optional, Callable, Any, Dict
 from .cache import URLCache
 from .web_client import WebClient
 from .batch_operations import BatchOperations
 from .content_processor import ContentProcessor
-
-if TYPE_CHECKING:
-    from ..settings import IfetcherConfig
 
 
 @dataclass
@@ -51,13 +49,27 @@ class PageFetcher:
     """High-level interface for fetching and caching web pages with eliminated boilerplate."""
 
     def __init__(
-        self, config: "IfetcherConfig", show_status: bool = True, verbose: bool = False
+        self,
+        cache_dir: Path | str = "cache",
+        timeout: int = 30,
+        show_status: bool = True,
+        verbose: bool = False,
     ):
-        self.cache = URLCache(config)
-        self.web_client = WebClient(config, verbose)
+        """
+        Initialize PageFetcher.
+
+        Parameters:
+            cache_dir: Directory path for cache storage (default: "cache")
+            timeout: Request timeout in seconds (default: 30)
+            show_status: Show progress indicators (default: True)
+            verbose: Enable verbose logging (default: False)
+        """
+        self.cache = URLCache(cache_dir)
+        self.web_client = WebClient(timeout, verbose)
         self.content_processor = ContentProcessor()
         self.batch_ops = BatchOperations(self.cache, self.web_client, show_status)
-        self.config = config
+        self.cache_dir = Path(cache_dir)
+        self.timeout = timeout
         self.verbose = verbose
 
     # Auto-generate all get_* methods using higher-order functions

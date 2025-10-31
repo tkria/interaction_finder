@@ -30,7 +30,9 @@ class TestBatchProcessingWithFailures:
         config = IfetcherConfig.model_validate(
             {"cache": {"directory": temp_dir}, "tools": {"crawl4ai": {"timeout": 30}}}
         )
-        fetcher = PageFetcher(config, show_status=False)
+        cache_dir = config.abspath(config.output.cache)
+        timeout = config.tools.crawl4ai.timeout
+        fetcher = PageFetcher(cache_dir=cache_dir, timeout=timeout, show_status=False)
 
         yield fetcher, config
 
@@ -207,7 +209,9 @@ class TestComplexFailureScenarios:
         config = IfetcherConfig.model_validate(
             {"cache": {"directory": temp_dir}, "tools": {"crawl4ai": {"timeout": 30}}}
         )
-        fetcher = PageFetcher(config, show_status=False)
+        cache_dir = config.abspath(config.output.cache)
+        timeout = config.tools.crawl4ai.timeout
+        fetcher = PageFetcher(cache_dir=cache_dir, timeout=timeout, show_status=False)
 
         yield fetcher, config
 

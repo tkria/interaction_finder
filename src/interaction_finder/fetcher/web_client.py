@@ -1,11 +1,7 @@
 """Web client for fetching HTML and PDF content."""
 
-import re
-from typing import Dict, Optional, List, TYPE_CHECKING
+from typing import Dict, List
 from rich.console import Console
-
-if TYPE_CHECKING:
-    from ..settings import IfetcherConfig
 
 # Web client constants
 STEALTH_RETRY_THRESHOLD = 3000  # characters of raw markdown
@@ -337,20 +333,22 @@ def _get_granular_logger(status_display=None):
 class WebClient:
     """Low-level web client for fetching HTML and PDF content."""
 
-    def __init__(self, config: "IfetcherConfig", verbose: bool = False):
-        self.config = config
+    def __init__(self, timeout: int = 30, verbose: bool = False):
+        """
+        Initialize web client.
+
+        Parameters:
+            timeout: Request timeout in seconds (default: 30)
+            verbose: Enable verbose logging (default: False)
+        """
+        self.timeout = timeout
         self.verbose = verbose
         self._debug_console = Console(stderr=True) if verbose else None
         self._crawler_configs = self._build_crawler_configs()
 
     def _build_crawler_configs(self) -> Dict[str, any]:
         """Pre-build crawler configurations to avoid repeated construction."""
-        # Handle both real config and mock config safely
-        try:
-            timeout_ms = self.config.tools.crawl4ai.timeout * 1000
-        except (AttributeError, TypeError):
-            # Fallback for mocked configs in tests
-            timeout_ms = 30000
+        timeout_ms = self.timeout * 1000
 
         return {
             "simple_html": self._build_html_crawler_config(timeout_ms, with_js=False),

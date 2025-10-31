@@ -31,20 +31,14 @@ class TestRealNetworkFailures:
     def setup_pagefetcher(self):
         """Set up PageFetcher with temporary cache for integration tests."""
         temp_dir = tempfile.mkdtemp()
-        config = IfetcherConfig.model_validate(
-            {
-                "cache": {"directory": temp_dir},
-                "tools": {
-                    "crawl4ai": {
-                        "timeout": 5,  # Short timeout for failure testing
-                        "max_retries": 1,
-                    }
-                },
-            }
-        )
-        fetcher = PageFetcher(config, show_status=False, verbose=False)
+        cache_dir = Path(temp_dir) / "cache"
 
-        yield fetcher, config
+        # Use short timeout for failure testing
+        fetcher = PageFetcher(
+            cache_dir=cache_dir, timeout=5, show_status=False, verbose=False
+        )
+
+        yield fetcher, cache_dir
 
         # Cleanup
         import shutil
@@ -212,15 +206,14 @@ class TestBatchFailurePatterns:
     def setup_pagefetcher(self):
         """Set up PageFetcher for batch testing."""
         temp_dir = tempfile.mkdtemp()
-        config = IfetcherConfig.model_validate(
-            {
-                "cache": {"directory": temp_dir},
-                "tools": {"crawl4ai": {"timeout": 10, "max_retries": 1}},
-            }
-        )
-        fetcher = PageFetcher(config, show_status=False, verbose=False)
+        cache_dir = Path(temp_dir) / "cache"
 
-        yield fetcher, config
+        # Use timeout of 10 seconds for this test
+        fetcher = PageFetcher(
+            cache_dir=cache_dir, timeout=10, show_status=False, verbose=False
+        )
+
+        yield fetcher, cache_dir
 
         # Cleanup
         import shutil
@@ -306,15 +299,14 @@ class TestFailureRecoveryPatterns:
     def setup_pagefetcher(self):
         """Set up PageFetcher for recovery testing."""
         temp_dir = tempfile.mkdtemp()
-        config = IfetcherConfig.model_validate(
-            {
-                "cache": {"directory": temp_dir},
-                "tools": {"crawl4ai": {"timeout": 8, "max_retries": 1}},
-            }
-        )
-        fetcher = PageFetcher(config, show_status=False, verbose=False)
+        cache_dir = Path(temp_dir) / "cache"
 
-        yield fetcher, config
+        # Use timeout of 8 seconds for this test
+        fetcher = PageFetcher(
+            cache_dir=cache_dir, timeout=8, show_status=False, verbose=False
+        )
+
+        yield fetcher, cache_dir
 
         # Cleanup
         import shutil
