@@ -38,10 +38,10 @@ class TaintAnalysis(NamedTuple):
 def compute_taint(
     source_directory: Path, test_directory: Path, immediate_only: bool = False
 ) -> TaintAnalysis:
-    """Compute taint propagation from modified source files.
+    """Compute taint propagation from modified source and test files.
 
     Taint propagates through the following chain:
-    1. Modified files are initially tainted
+    1. Modified files (source or test) are initially tainted
     2. Symbols defined in tainted files become tainted
     3. Files referencing tainted symbols become tainted
     4. This continues until no new files are tainted (fixed point)
@@ -55,16 +55,19 @@ def compute_taint(
         TaintAnalysis containing all tainted files and symbols
     """
     # Get initially modified files (seeds for taint propagation)
+    # Check both source files and test files
     modified_files = get_modified_files(source_directory, immediate_only=immediate_only)
-    if not modified_files:
+    modified_test_files = get_modified_files(test_directory, immediate_only=False)
+    all_modified_files = modified_files + modified_test_files
+    if not all_modified_files:
         return TaintAnalysis(
             tainted_files=set(), tainted_symbols=set(), initial_modifications=set()
         )
-    # Initialize taint sets
-    tainted_files = set(modified_files)
+    # Initialize taint sets with all modified files (source + test)
+    tainted_files = set(all_modified_files)
     tainted_symbols = set()
     # Extract symbols from initially modified files
-    for file_path in modified_files:
+    for file_path in all_modified_files:
         tainted_symbols.update(get_defined_symbols(file_path))
     # Propagate taint through symbol references until fixed point
     # Use both source and test directories for propagation
@@ -85,7 +88,7 @@ def compute_taint(
     return TaintAnalysis(
         tainted_files=tainted_files,
         tainted_symbols=tainted_symbols,
-        initial_modifications=set(modified_files),
+        initial_modifications=set(all_modified_files),
     )
 
 

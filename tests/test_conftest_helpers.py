@@ -357,6 +357,68 @@ class TestComputeTaint:
             assert result.tainted_symbols == set()
             assert result.initial_modifications == set()
 
+    def test_modified_test_file_taints_itself(self, tmp_path):
+        """Modified test file should be initially tainted."""
+        src_dir = tmp_path / "src"
+        test_dir = tmp_path / "tests"
+        modified_test_file = test_dir / "test_module.py"
+
+        # Mock get_modified_files to return different results based on directory
+        def mock_get_modified(directory, immediate_only=False):
+            if directory == test_dir:
+                return [modified_test_file]
+            return []
+
+        with (
+            patch(
+                "tests.conftest_helpers.get_modified_files",
+                side_effect=mock_get_modified,
+            ),
+            patch(
+                "tests.conftest_helpers.get_defined_symbols", return_value={"test_foo"}
+            ),
+            patch(
+                "tests.conftest_helpers.find_files_referencing_symbols",
+                return_value=set(),
+            ),
+        ):
+            result = compute_taint(src_dir, test_dir)
+            assert modified_test_file in result.tainted_files
+            assert "test_foo" in result.tainted_symbols
+            assert modified_test_file in result.initial_modifications
+
+    def test_modified_test_and_source_files_both_tainted(self, tmp_path):
+        """Both modified test and source files should be initially tainted."""
+        src_dir = tmp_path / "src"
+        test_dir = tmp_path / "tests"
+        modified_source_file = src_dir / "module.py"
+        modified_test_file = test_dir / "test_module.py"
+
+        # Mock get_modified_files to return different results based on directory
+        def mock_get_modified(directory, immediate_only=False):
+            if directory == src_dir:
+                return [modified_source_file]
+            elif directory == test_dir:
+                return [modified_test_file]
+            return []
+
+        with (
+            patch(
+                "tests.conftest_helpers.get_modified_files",
+                side_effect=mock_get_modified,
+            ),
+            patch("tests.conftest_helpers.get_defined_symbols", return_value={"foo"}),
+            patch(
+                "tests.conftest_helpers.find_files_referencing_symbols",
+                return_value=set(),
+            ),
+        ):
+            result = compute_taint(src_dir, test_dir)
+            assert modified_source_file in result.tainted_files
+            assert modified_test_file in result.tainted_files
+            assert modified_source_file in result.initial_modifications
+            assert modified_test_file in result.initial_modifications
+
     def test_modified_file_taints_itself(self, tmp_path):
         """Modified file should be initially tainted."""
         src_dir = tmp_path / "src"
@@ -707,12 +769,21 @@ class TestImmediateOnlyFiltering:
         test_dir = tmp_path / "tests"
         root_file = src_dir / "root.py"
         sub_file = src_dir / "submodule" / "nested.py"
+
+        # Mock get_modified_files to return different results based on directory and immediate_only
+        def mock_get_modified(path, immediate_only=False):
+            if path == test_dir:
+                # No modified test files
+                return []
+            elif path == src_dir:
+                # For source dir, respect immediate_only
+                return [root_file] if immediate_only else [root_file, sub_file]
+            return []
+
         with (
             patch(
                 "tests.conftest_helpers.get_modified_files",
-                side_effect=lambda path, immediate_only=False: (
-                    [root_file] if immediate_only else [root_file, sub_file]
-                ),
+                side_effect=mock_get_modified,
             ),
             patch("tests.conftest_helpers.get_defined_symbols", return_value={"foo"}),
             patch(
