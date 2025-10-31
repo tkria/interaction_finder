@@ -1343,7 +1343,10 @@ class TestFuzzyMatchingExceptions:
 
         assert isinstance(quote, ResourceQuote)
         assert quote.count >= 1
-        assert quote.original_query == "BRCA1 gene mutations causes cancer breast tissue samples"
+        assert (
+            quote.original_query
+            == "BRCA1 gene mutations causes cancer breast tissue samples"
+        )
         assert quote.fuzzy_similarity is not None
         assert quote.fuzzy_similarity >= 0.75
         assert quote.fuzzy_corrected
@@ -1607,11 +1610,11 @@ class TestFuzzyMatchingExceptions:
             text="BRCA1 mutations increase cancer risk.",
         )
 
-        # Resource.quote() doesn't have similarity_threshold parameter
-        # It always does exact matching
+        # Resource.quote() uses fuzzy matching by default (threshold=0.8)
+        # For exact matching, explicitly set similarity_threshold=1.0
         quote = resource.quote("BRCA1 mutations")
         assert isinstance(quote, ResourceQuote)
 
-        # Non-existent quote raises ValueError
+        # Non-existent quote raises ValueError (with exact matching)
         with pytest.raises(ValueError):
-            resource.quote("BRCA2 mutations")
+            resource.quote("BRCA2 mutations", similarity_threshold=1.0)

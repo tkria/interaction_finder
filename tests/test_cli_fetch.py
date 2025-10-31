@@ -426,9 +426,12 @@ class TestRunFetch:
                 config, ["https://example.com/1"], chunk=False, verbose=False
             )
 
-            # Verify PageFetcher created with config
+            # Verify PageFetcher created with extracted config values
             mock_fetcher_class.assert_called_once_with(
-                config, show_status=False, verbose=False
+                cache_dir=tmp_path / "cache",
+                timeout=config.tools.crawl4ai.timeout,
+                show_status=False,
+                verbose=False,
             )
 
             # Verify results
@@ -477,7 +480,10 @@ class TestRunFetch:
 
             # Verify verbose passed to PageFetcher constructor
             mock_fetcher_class.assert_called_once_with(
-                config, show_status=True, verbose=True
+                cache_dir=tmp_path / "cache",
+                timeout=config.tools.crawl4ai.timeout,
+                show_status=True,
+                verbose=True,
             )
 
 
