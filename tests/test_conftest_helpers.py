@@ -1,5 +1,6 @@
 """Tests for conditional test execution helpers with taint propagation."""
 
+import pytest
 import subprocess
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -8,6 +9,7 @@ from tests.conftest_helpers import (
     TaintAnalysis,
     compute_taint,
     find_files_referencing_symbols,
+    get_base_ref,
     get_defined_symbols,
     get_modified_files,
     get_skip_message,
@@ -895,3 +897,159 @@ class TestSkipUnlessTainted:
         # This should be the CORRECT path
         assert src_root_new.exists()
         assert repo_root_new == repo_root
+
+
+class TestTestSince:
+    """Tests for TEST_SINCE environment variable support."""
+
+    def test_get_base_ref_returns_head_by_default(self, monkeypatch):
+        """Should return HEAD when TEST_SINCE is not set."""
+        monkeypatch.delenv("TEST_SINCE", raising=False)
+        result = get_base_ref()
+        assert result == "HEAD"
+
+    def test_get_base_ref_returns_empty_string_as_head(self, monkeypatch):
+        """Should treat empty TEST_SINCE as unset."""
+        monkeypatch.setenv("TEST_SINCE", "")
+        result = get_base_ref()
+        assert result == "HEAD"
+
+    def test_get_base_ref_returns_test_since_value(self, monkeypatch):
+        """Should return TEST_SINCE value when set."""
+        monkeypatch.setenv("TEST_SINCE", "origin/main")
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = Mock(stdout="abc123\n", returncode=0)
+            result = get_base_ref()
+            assert result == "origin/main"
+            # Verify git rev-parse was called for validation
+            mock_run.assert_called_once()
+            args = mock_run.call_args[0][0]
+            assert args[:3] == ["git", "rev-parse", "--verify"]
+            assert args[3] == "origin/main"
+
+    def test_get_base_ref_validates_commit_hash(self, monkeypatch):
+        """Should validate commit hashes."""
+        monkeypatch.setenv("TEST_SINCE", "abc123")
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = Mock(stdout="abc123\n", returncode=0)
+            result = get_base_ref()
+            assert result == "abc123"
+
+    def test_get_base_ref_validates_branch_name(self, monkeypatch):
+        """Should validate branch names."""
+        monkeypatch.setenv("TEST_SINCE", "feature-branch")
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = Mock(stdout="def456\n", returncode=0)
+            result = get_base_ref()
+            assert result == "feature-branch"
+
+    def test_get_base_ref_validates_relative_ref(self, monkeypatch):
+        """Should validate relative refs like HEAD~3."""
+        monkeypatch.setenv("TEST_SINCE", "HEAD~3")
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = Mock(stdout="xyz789\n", returncode=0)
+            result = get_base_ref()
+            assert result == "HEAD~3"
+
+    def test_get_base_ref_validates_remote_ref(self, monkeypatch):
+        """Should validate remote refs like origin/main."""
+        monkeypatch.setenv("TEST_SINCE", "origin/main")
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = Mock(stdout="remote123\n", returncode=0)
+            result = get_base_ref()
+            assert result == "origin/main"
+
+    def test_get_base_ref_raises_on_invalid_ref(self, monkeypatch):
+        """Should raise ValueError for invalid git refs."""
+        monkeypatch.setenv("TEST_SINCE", "nonexistent-ref")
+        with patch("subprocess.run") as mock_run:
+            mock_run.side_effect = subprocess.CalledProcessError(
+                1,
+                ["git", "rev-parse"],
+                stderr="fatal: Needed a single revision\n",
+            )
+            with pytest.raises(
+                ValueError, match="TEST_SINCE='nonexistent-ref' is not a valid git ref"
+            ):
+                get_base_ref()
+
+    def test_get_base_ref_raises_on_git_failure(self, monkeypatch):
+        """Should raise ValueError when git command fails."""
+        monkeypatch.setenv("TEST_SINCE", "some-ref")
+        with patch("subprocess.run", side_effect=FileNotFoundError):
+            with pytest.raises(
+                ValueError, match="Failed to validate TEST_SINCE='some-ref'"
+            ):
+                get_base_ref()
+
+    def test_get_modified_files_uses_test_since(self, tmp_path, monkeypatch):
+        """Should use TEST_SINCE when calling git diff."""
+        monkeypatch.setenv("TEST_SINCE", "origin/main")
+        with (
+            patch("subprocess.run") as mock_run,
+            patch("tests.conftest_helpers.get_base_ref", return_value="origin/main"),
+        ):
+            mock_run.return_value = Mock(stdout="", returncode=0)
+            get_modified_files(tmp_path)
+            # Verify git diff was called with origin/main
+            args = mock_run.call_args[0][0]
+            assert "origin/main" in args
+            assert args[:3] == ["git", "diff", "--name-only"]
+
+    def test_get_modified_files_can_override_base_ref(self, tmp_path):
+        """Should allow explicit base_ref parameter to override TEST_SINCE."""
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = Mock(stdout="", returncode=0)
+            get_modified_files(tmp_path, base_ref="custom-ref")
+            # Verify git diff was called with custom-ref, not TEST_SINCE
+            args = mock_run.call_args[0][0]
+            assert "custom-ref" in args
+
+    def test_test_all_overrides_test_since(self, tmp_path, monkeypatch):
+        """TEST_ALL should take precedence over TEST_SINCE."""
+        monkeypatch.setenv("TEST_ALL", "1")
+        monkeypatch.setenv("TEST_SINCE", "origin/main")
+        # should_run_tests_for_module checks TEST_ALL first
+        result = should_run_tests_for_module(tmp_path)
+        assert result is True
+        # Verify get_base_ref wasn't even called (TEST_ALL short-circuits)
+
+    def test_skip_message_mentions_test_since(self):
+        """Skip message should mention TEST_SINCE as an option."""
+        message = get_skip_message("fetcher")
+        assert "TEST_ALL" in message
+        assert "TEST_SINCE" in message
+
+    def test_compute_taint_uses_test_since(self, tmp_path, monkeypatch):
+        """Taint computation should respect TEST_SINCE."""
+        monkeypatch.setenv("TEST_SINCE", "origin/main")
+        src_dir = tmp_path / "src"
+        test_dir = tmp_path / "tests"
+        modified_file = src_dir / "module.py"
+
+        # Track that get_modified_files was called with correct base_ref
+        calls = []
+
+        def mock_get_modified(directory, immediate_only=False, base_ref=None):
+            # Track the base_ref passed in
+            calls.append(base_ref)
+            if directory == src_dir:
+                return [modified_file]
+            return []
+
+        with (
+            patch("tests.conftest_helpers.get_base_ref", return_value="origin/main"),
+            patch(
+                "tests.conftest_helpers.get_modified_files",
+                side_effect=mock_get_modified,
+            ),
+            patch("tests.conftest_helpers.get_defined_symbols", return_value={"foo"}),
+            patch(
+                "tests.conftest_helpers.find_files_referencing_symbols",
+                return_value=set(),
+            ),
+        ):
+            result = compute_taint(src_dir, test_dir)
+            assert modified_file in result.tainted_files
+            # Verify get_modified_files was called with None (which triggers get_base_ref)
+            assert None in calls

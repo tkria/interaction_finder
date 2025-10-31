@@ -35,6 +35,45 @@ class TaintAnalysis(NamedTuple):
     initial_modifications: set[Path]
 
 
+def get_base_ref() -> str:
+    """Get base git ref for comparison.
+
+    Returns the git ref to compare against when detecting modifications.
+    Checks TEST_SINCE environment variable first, falling back to HEAD.
+
+    Returns:
+        Git ref string (e.g., "HEAD", "origin/main", "abc123", "HEAD~3")
+
+    Raises:
+        ValueError: If TEST_SINCE is set but contains an invalid git ref
+    """
+    test_since = os.environ.get("TEST_SINCE", "").strip()
+    if not test_since:
+        return "HEAD"
+    # Validate that the ref exists using git rev-parse
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--verify", test_since],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=5,
+        )
+        # If successful, return the ref
+        return test_since
+    except subprocess.CalledProcessError as e:
+        # Invalid ref - raise clear error
+        error_msg = e.stderr.strip() if e.stderr else "unknown error"
+        raise ValueError(
+            f"TEST_SINCE={test_since!r} is not a valid git ref: {error_msg}"
+        ) from e
+    except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+        # Git not available or timeout
+        raise ValueError(
+            f"Failed to validate TEST_SINCE={test_since!r}: git command failed"
+        ) from e
+
+
 def compute_taint(
     source_directory: Path, test_directory: Path, immediate_only: bool = False
 ) -> TaintAnalysis:
@@ -45,6 +84,8 @@ def compute_taint(
     2. Symbols defined in tainted files become tainted
     3. Files referencing tainted symbols become tainted
     4. This continues until no new files are tainted (fixed point)
+
+    Modifications are detected using git diff against HEAD (default) or TEST_SINCE if set.
 
     Parameters:
         source_directory: Path — source code directory to track modifications
@@ -110,7 +151,8 @@ def should_run_tests_for_module(module_path: Path) -> bool:
 
     Tests run if:
     1. TEST_ALL environment variable is set, OR
-    2. Any file under the specified module path has uncommitted modifications
+    2. Any file under the specified module path has modifications (compared against
+       HEAD or TEST_SINCE if set)
 
     Parameters:
         module_path: Path — absolute path to the source module directory
@@ -173,22 +215,32 @@ def get_defined_symbols(file_path: Path) -> set[str]:
     return symbols
 
 
-def get_modified_files(base_path: Path, immediate_only: bool = False) -> list[Path]:
+def get_modified_files(
+    base_path: Path, immediate_only: bool = False, base_ref: str | None = None
+) -> list[Path]:
     """Get list of modified Python files in a directory according to git.
 
     Includes both staged and unstaged modifications, but not untracked files.
+    Compares working directory against a base ref (default: HEAD, or TEST_SINCE if set).
 
     Parameters:
         base_path: Path — directory to check for modifications
         immediate_only: bool — if True, only include immediate children (not subdirectories)
+        base_ref: str | None — git ref to compare against; if None, uses get_base_ref()
 
     Returns:
         List of absolute paths to modified .py files
+
+    Raises:
+        ValueError: If base_ref or TEST_SINCE contains an invalid git ref
     """
+    # Determine which ref to compare against
+    if base_ref is None:
+        base_ref = get_base_ref()
     try:
         # Get both staged and unstaged modifications
         result = subprocess.run(
-            ["git", "diff", "--name-only", "HEAD", str(base_path)],
+            ["git", "diff", "--name-only", base_ref, str(base_path)],
             capture_output=True,
             text=True,
             check=True,
@@ -277,6 +329,7 @@ def should_run_tests_based_on_taint(
     Tests run if:
     1. TEST_ALL environment variable is set, OR
     2. Any test file in test_directory is tainted through dependency chains
+       (modifications detected against HEAD or TEST_SINCE if set)
 
     Parameters:
         test_directory: Path — directory containing test files
@@ -327,6 +380,7 @@ def should_run_base_tests(test_directory: Path, source_directory: Path) -> bool:
     Base tests run if:
     1. TEST_ALL environment variable is set, OR
     2. Any immediate child of source_directory (base source files) is tainted
+       (modifications detected against HEAD or TEST_SINCE if set)
 
     Taint can originate from ANYWHERE in the codebase (base files or submodules).
     This allows submodule changes that affect base files to trigger base tests.
@@ -382,8 +436,8 @@ def get_skip_message(module_name: str) -> str:
         Formatted skip message
     """
     return (
-        f"Skipping {module_name} tests (TEST_ALL not set and no tests tainted "
-        f"through dependencies on src/interaction_finder/{module_name}/)"
+        f"Skipping {module_name} tests (TEST_ALL not set, TEST_SINCE not set, "
+        f"and no tests tainted through dependencies on src/interaction_finder/{module_name}/)"
     )
 
 
