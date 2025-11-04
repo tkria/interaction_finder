@@ -15,6 +15,7 @@ from interaction_finder.keywords.models import BridgingTermsOut
 from interaction_finder.keywords.nodes import ExpandQueryNode
 from interaction_finder.keywords.reranker import Reranker
 from interaction_finder.keywords.state import State
+from interaction_finder.resources import ResourcePool
 from interaction_finder.search.backends.pubmed import PubMedBackend
 from interaction_finder.settings import IfetcherConfig
 
@@ -80,6 +81,8 @@ async def run_keyword_research(
                 top_n=kw_config.keybert.top_n,
             ),
         }
+        # Initialize resource pool
+        resource_pool = ResourcePool()
         # Create dependencies
         deps = Deps(
             http_client=http_client,
@@ -87,6 +90,7 @@ async def run_keyword_research(
             search_backend=search_backend,
             reranker=reranker,
             extractors=extractors,
+            resource_pool=resource_pool,
             config={
                 "max_results_per_query": kw_config.max_results_per_query,
                 "max_documents_to_fetch": kw_config.max_documents_to_fetch,

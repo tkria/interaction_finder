@@ -30,9 +30,6 @@ class State:
     selected_results: list[SearchResult] = field(
         default_factory=list
     )  # Results selected for fetching
-    fetched_content: dict[str, str] = field(
-        default_factory=dict
-    )  # URL -> markdown content
     document_summaries: list[DocumentSummaryOut] = field(
         default_factory=list
     )  # All document summaries (cumulative across rounds)

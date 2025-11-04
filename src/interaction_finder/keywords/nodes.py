@@ -13,7 +13,6 @@ from pydantic_ai.usage import RunUsage
 
 from interaction_finder.keywords.agents import (
     document_summarizer_agent,
-    keyword_evaluator_agent,
     query_expander_agent,
     reflector_agent,
     result_selector_agent,
@@ -137,24 +136,36 @@ Select the indices of results that are most likely to be valuable review article
 class FetchDocumentsNode(BaseNode[State, Deps, BridgingTermsOut]):
     """Fetch markdown content for selected results.
 
-    Uses fetcher from deps to retrieve and convert documents.
+    Uses fetcher from deps to retrieve and convert documents. Deduplicates
+    by checking ResourcePool before fetching.
     """
 
     async def run(self, ctx: GraphRunContext[State, Deps]) -> "ExtractKeywordsNode":
-        """Fetch documents and store content."""
+        """Fetch documents and add to resource pool."""
         if not ctx.state.selected_results:
-            # Nothing to fetch
             return FinalizeNode()
-        # Extract URLs
-        urls = [r.url for r in ctx.state.selected_results]
-        # Fetch all documents concurrently
+        # Separate new URLs from already-fetched
+        urls_to_fetch = []
+        resource_ids_map = {}
+        for result in ctx.state.selected_results:
+            if result.url not in ctx.deps.resource_pool:
+                # Register new resource
+                rid = ctx.deps.resource_pool.register(result.url)
+                urls_to_fetch.append((result.url, result.title))
+                resource_ids_map[result.url] = rid
+        # Skip fetching if all URLs already processed
+        if not urls_to_fetch:
+            return ExtractKeywordsNode()
+        # Fetch only new URLs
+        urls = [url for url, _ in urls_to_fetch]
         contents = await ctx.deps.fetcher.get_markdown(
             urls, progress=False, fail_fast=False, retry=False
         )
-        # Store successful fetches
-        for url, content in zip(urls, contents):
-            if content:  # Skip failures
-                ctx.state.fetched_content[url] = content
+        # Add content to resource pool
+        for (url, title), content in zip(urls_to_fetch, contents):
+            if content:
+                rid = resource_ids_map[url]
+                ctx.deps.resource_pool.add_content(rid, title, content)
         return ExtractKeywordsNode()
 
 
@@ -166,24 +177,30 @@ class ExtractKeywordsNode(BaseNode[State, Deps, BridgingTermsOut]):
     """
 
     async def run(self, ctx: GraphRunContext[State, Deps]) -> "EvaluateKeywordsNode":
-        """Extract keywords from all documents."""
-        if not ctx.state.fetched_content:
-            # No content to process
+        """Extract keywords from all documents in resource pool."""
+        resources = ctx.deps.resource_pool.resources
+        if not resources:
             return FinalizeNode()
         max_keywords = ctx.deps.config.get("max_keywords_per_method", 30)
-        # Extract keywords for each document
-        for url, content in ctx.state.fetched_content.items():
+        # Track already-processed URLs to avoid re-extraction
+        already_processed = set(ctx.state.extracted_keywords.keys())
+        # Extract keywords for each resource
+        for resource in resources:
+            if resource.id.url in already_processed:
+                continue
             doc_keywords = []
             # Run all extractors
             for name, extractor in ctx.deps.extractors.items():
                 try:
-                    keywords = extractor.extract(content, max_keywords=max_keywords)
+                    keywords = extractor.extract(
+                        resource.text, max_keywords=max_keywords
+                    )
                     doc_keywords.extend(keywords)
                 except Exception:
                     # Skip extractor if it fails
                     continue
             # Store keywords for this document
-            ctx.state.extracted_keywords[url] = doc_keywords
+            ctx.state.extracted_keywords[resource.id.url] = doc_keywords
         return EvaluateKeywordsNode()
 
 
@@ -200,12 +217,12 @@ class EvaluateKeywordsNode(BaseNode[State, Deps, BridgingTermsOut]):
     async def run(self, ctx: GraphRunContext[State, Deps]) -> "ReflectNode":
         """Evaluate keywords and summarize documents."""
         if not ctx.state.extracted_keywords:
-            # No keywords to evaluate
             return ReflectNode()
         # Process each document
         for url, keywords in ctx.state.extracted_keywords.items():
-            content = ctx.state.fetched_content.get(url, "")
-            if not content:
+            # Get content from resource pool
+            resource = ctx.deps.resource_pool.get(url)
+            if not resource:
                 continue
             # Format keywords for agent
             keywords_text = ", ".join(set(kw.keyword for kw in keywords[:50]))
@@ -213,7 +230,7 @@ class EvaluateKeywordsNode(BaseNode[State, Deps, BridgingTermsOut]):
             summary_prompt = f"""Summarize this document about '{ctx.state.topic}' and identify bridging terms.
 
 Document content:
-{content[:3000]}...
+{resource.text[:3000]}...
 
 Extracted keywords: {keywords_text}
 
@@ -305,5 +322,6 @@ class FinalizeNode(BaseNode[State, Deps, BridgingTermsOut]):
                 total_documents_processed=len(ctx.state.document_summaries),
                 rounds_completed=ctx.state.current_round,
                 coverage_assessment=assessment,
+                resources=ctx.deps.resource_pool,
             )
         )

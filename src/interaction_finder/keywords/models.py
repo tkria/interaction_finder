@@ -5,6 +5,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from interaction_finder.keywords.extractors import ScoredKeyword
+from interaction_finder.resources import ResourcePool
 
 
 class QueryExpansionOut(BaseModel):
@@ -126,4 +127,7 @@ class BridgingTermsOut(BaseModel):
     coverage_assessment: str = Field(
         min_length=50,
         description="Final assessment of coverage and what was discovered",
+    )
+    resources: ResourcePool = Field(
+        description="Complete document pool with all processed content and provenance"
     )
