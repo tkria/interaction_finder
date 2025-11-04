@@ -1,0 +1,104 @@
+"""KeyBERT (BERT-based keyword extraction) backend."""
+
+from typing import List
+
+from keybert import KeyBERT as KeyBERTModel
+
+from interaction_finder.keywords.extractors.base import KeywordExtractor, ScoredKeyword
+
+
+class KeyBERTExtractor(KeywordExtractor):
+    """KeyBERT extractor using BERT embeddings for semantic keyword extraction.
+
+    Uses contextualized embeddings to identify keywords that are semantically
+    similar to the document. Requires sentence-transformers model.
+
+    Parameters:
+        model_name: str — sentence-transformers model name (default: "all-MiniLM-L6-v2")
+        diversity: float — diversity parameter for MMR (0-1, default: 0.5)
+        top_n: int — number of keywords to consider (default: 20)
+    """
+
+    def __init__(
+        self,
+        model_name: str = "all-MiniLM-L6-v2",
+        diversity: float = 0.5,
+        top_n: int = 20,
+    ):
+        """Initialize KeyBERT extractor.
+
+        Parameters:
+            model_name: str — sentence-transformers model name
+            diversity: float — diversity for Maximal Marginal Relevance (0-1)
+            top_n: int — number of candidates to extract
+        """
+        if not 0 <= diversity <= 1:
+            raise ValueError(f"diversity must be in [0, 1], got {diversity}")
+        if top_n < 1:
+            raise ValueError(f"top_n must be >= 1, got {top_n}")
+        self.model_name = model_name
+        self.diversity = diversity
+        self.top_n = top_n
+        # Lazy initialization of model
+        self._model = None
+
+    @property
+    def name(self) -> str:
+        """Return extractor identifier."""
+        return "keybert"
+
+    def _get_model(self) -> KeyBERTModel:
+        """Get or initialize KeyBERT model (lazy loading)."""
+        if self._model is None:
+            self._model = KeyBERTModel(model=self.model_name)
+        return self._model
+
+    def extract(self, text: str, max_keywords: int = 20) -> List[ScoredKeyword]:
+        """Extract keywords using KeyBERT.
+
+        Parameters:
+            text: str — input text
+            max_keywords: int — maximum keywords to return
+
+        Returns:
+            List[ScoredKeyword] — scored keywords, sorted by score descending
+
+        Raises:
+            ValueError — if text is empty or max_keywords < 1
+        """
+        if not text or not text.strip():
+            raise ValueError("Text cannot be empty")
+        if max_keywords < 1:
+            raise ValueError(f"max_keywords must be >= 1, got {max_keywords}")
+        # Get model
+        model = self._get_model()
+        # Extract keywords with MMR for diversity
+        # keyphrase_ngram_range controls phrase length
+        keywords = model.extract_keywords(
+            text,
+            keyphrase_ngram_range=(1, 3),
+            stop_words="english",
+            top_n=min(self.top_n, max_keywords),
+            use_mmr=True,
+            diversity=self.diversity,
+        )
+        # Handle empty results or if keywords is empty
+        if not keywords:
+            return []
+        # Keywords are returned as (keyword, score) tuples
+        # Scores are cosine similarities in [0, 1], with 1 being most similar
+        results = []
+        for keyword, score in keywords:
+            # Scores are already in [0, 1] range
+            results.append(ScoredKeyword(keyword=keyword, score=float(score)))
+        # Sort by score descending (KeyBERT already returns sorted, but be explicit)
+        results.sort(key=lambda x: x.score, reverse=True)
+        return results[:max_keywords]
+
+    def healthy(self) -> bool:
+        """Check if extractor is ready (model can be loaded)."""
+        try:
+            self._get_model()
+            return True
+        except Exception:
+            return False

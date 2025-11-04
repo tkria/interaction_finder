@@ -1185,6 +1185,7 @@ dependencies = [
     { name = "chonkie", extra = ["semantic"] },
     { name = "crawl4ai", extra = ["pdf"] },
     { name = "httpx" },
+    { name = "keybert" },
     { name = "logfire" },
     { name = "playwright-stealth" },
     { name = "pydantic" },
@@ -1215,6 +1216,7 @@ requires-dist = [
     { name = "chonkie", extras = ["semantic"], specifier = ">=1.1.2" },
     { name = "crawl4ai", extras = ["pdf"], specifier = ">=0.7.4" },
     { name = "httpx", specifier = ">=0.28.1" },
+    { name = "keybert", specifier = ">=0.8.0" },
     { name = "logfire", specifier = ">=0.4" },
     { name = "playwright-stealth", specifier = ">=2.0.0" },
     { name = "pydantic", specifier = ">=2.11.7" },
@@ -1393,6 +1395,21 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/19/74/a633ee74eb36c44aa6d1095e7cc5569bebf04342ee146178e2d36600708b/jsonschema_specifications-2025.9.1.tar.gz", hash = "sha256:b540987f239e745613c7a9176f3edb72b832a4ac465cf02712288397832b5e8d", size = 32855, upload-time = "2025-09-08T01:34:59.186Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/41/45/1a4ed80516f02155c51f51e8cedb3c1902296743db0bbc66608a0db2814f/jsonschema_specifications-2025.9.1-py3-none-any.whl", hash = "sha256:98802fee3a11ee76ecaca44429fda8a41bff98b00a0f2838151b113f210cc6fe", size = 18437, upload-time = "2025-09-08T01:34:57.871Z" },
+]
+
+[[package]]
+name = "keybert"
+version = "0.9.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+    { name = "rich" },
+    { name = "scikit-learn" },
+    { name = "sentence-transformers" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/b7/a8/a73003cc0f6a606eb30c9e19a85b5a89bef076e9adcb642aed29e47c693c/keybert-0.9.0.tar.gz", hash = "sha256:eec8ebd37d3d9fa238d7075e727adb993de4f3ed67c94112840e4cc0e55d7657", size = 32235, upload-time = "2025-02-07T08:45:13.187Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/82/07/e2f42a8ec3ff1935debbf2a5255570d22033fca3fe3180d5af99a6c9ee8c/keybert-0.9.0-py3-none-any.whl", hash = "sha256:afa2f300a72f69d279e4482bc85d8b34493b119876dc0818cb4f260466285b36", size = 41364, upload-time = "2025-02-07T08:45:08.093Z" },
 ]
 
 [[package]]
