@@ -440,6 +440,77 @@ def fetch(
         raise typer.Exit(1)
 
 
+@app.command()
+def extract_keywords(
+    topic: str = typer.Argument(help="Research topic to find bridging terms for"),
+    output: Optional[Path] = typer.Option(
+        None, "-o", "--output", help="Output file for results (JSON)"
+    ),
+    max_rounds: Optional[int] = typer.Option(
+        None, "--max-rounds", help="Override maximum search rounds"
+    ),
+    backend: Optional[str] = typer.Option(
+        None, "-b", "--backend", help="Search backend to use"
+    ),
+):
+    """
+    Extract bridging terms for a research topic by analyzing review articles.
+
+    This command performs iterative search, fetch, and keyword extraction to
+    discover "bridging terms" - related concepts that can improve literature
+    search coverage but don't appear in the original topic name.
+
+    Example:
+        interaction-finder extract-keywords "pulmonary arterial hypertension"
+
+        interaction-finder extract-keywords "machine learning" -o keywords.json
+    """
+    try:
+        # Load configuration
+        config_path = None  # Use default config
+        cfg = IfetcherConfig.from_path(config_path) if config_path else IfetcherConfig()
+
+        # Apply overrides if provided
+        if max_rounds:
+            cfg.tools.keywords.max_rounds = max_rounds
+        if backend:
+            cfg.tools.keywords.search_backend = backend
+
+        # Import here to avoid slow imports at CLI startup
+        from interaction_finder.keywords import run_keyword_research
+
+        # Run keyword research
+        console.print(f"\n[bold]Extracting bridging terms for:[/bold] {topic}\n")
+        result = asyncio.run(run_keyword_research(topic, cfg, verbose=True))
+
+        # Display results
+        console.print(
+            f"\n[bold green]✓ Found {len(result.terms)} bridging terms[/bold green]"
+        )
+        console.print(f"Documents processed: {result.total_documents_processed}")
+        console.print(f"Rounds completed: {result.rounds_completed}")
+        console.print(f"\nCoverage: {result.coverage_assessment}\n")
+
+        # Print terms
+        if result.terms:
+            console.print("[bold]Bridging Terms:[/bold]")
+            for term in result.terms:
+                console.print(f"  • {term}")
+        else:
+            console.print("[yellow]No bridging terms found[/yellow]")
+
+        # Save to file if requested
+        if output:
+            output_data = result.model_dump(mode="json")
+            output.write_text(json.dumps(output_data, indent=2))
+            console.print(f"\n[dim]Saved to {output}[/dim]")
+
+    except Exception as e:
+        console.print(f"\n[red]Error:[/red] {e}")
+        console.print_exception()
+        raise typer.Exit(1)
+
+
 def main():
     """Entry point for the CLI."""
     app()
