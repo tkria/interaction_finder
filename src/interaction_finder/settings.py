@@ -73,7 +73,7 @@ class IfetcherConfig(BaseModel):
                 30, ge=5, le=100, description="Maximum keywords per extraction method"
             )
             reranker_model: str = Field(
-                "mixedbread-ai/mxbai-rerank-xsmall-v1",
+                "zeroentropy/zerank-1-small",
                 description="Reranking model name",
             )
             llm_model: str = Field(

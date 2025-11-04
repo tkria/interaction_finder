@@ -15,7 +15,7 @@ from interaction_finder.keywords.models import BridgingTermsOut
 from interaction_finder.keywords.nodes import ExpandQueryNode
 from interaction_finder.keywords.reranker import Reranker
 from interaction_finder.keywords.state import State
-from interaction_finder.search.backends import get_backend
+from interaction_finder.search.backends.pubmed import PubMedBackend
 from interaction_finder.settings import IfetcherConfig
 
 
@@ -53,14 +53,9 @@ async def run_keyword_research(
             show_status=verbose,
             verbose=verbose,
         )
-        # Initialize search backend
-        search_backend = get_backend(
-            kw_config.search_backend,
-            config_dict={
-                "backend": kw_config.search_backend,
-                "max_results": kw_config.max_results_per_query,
-            },
-        )
+        # Initialize search backend (currently only PubMed is supported)
+        # In future, add backend factory to support multiple backends
+        search_backend = PubMedBackend(config={})
         # Initialize reranker
         reranker = Reranker(model_name=kw_config.reranker_model)
         # Initialize extractors

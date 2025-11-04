@@ -15,13 +15,13 @@ class Reranker:
     pairwise scoring.
 
     Parameters:
-        model_name: str — cross-encoder model name (default: mixedbread-ai/mxbai-rerank-xsmall-v1)
+        model_name: str — cross-encoder model name (default: zeroentropy/zerank-1-small)
         batch_size: int — batch size for encoding (default: 32)
     """
 
     def __init__(
         self,
-        model_name: str = "mixedbread-ai/mxbai-rerank-xsmall-v1",
+        model_name: str = "zeroentropy/zerank-1-small",
         batch_size: int = 32,
     ):
         """Initialize reranker with cross-encoder model.

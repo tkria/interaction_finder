@@ -12,7 +12,7 @@ class TestReranker:
     def test_initialization_defaults(self):
         """Test Reranker initializes with correct defaults."""
         reranker = Reranker()
-        assert reranker.model_name == "mixedbread-ai/mxbai-rerank-xsmall-v1"
+        assert reranker.model_name == "zeroentropy/zerank-1-small"
         assert reranker.batch_size == 32
 
     def test_initialization_custom_params(self):
