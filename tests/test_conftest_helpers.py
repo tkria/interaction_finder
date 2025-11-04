@@ -132,6 +132,7 @@ class TestGetModifiedFiles:
     def test_returns_empty_for_no_modifications(self, tmp_path):
         """Should return empty list when no files are modified."""
         with patch("subprocess.run") as mock_run:
+            # Both git diff and git ls-files return empty
             mock_run.return_value = Mock(stdout="", returncode=0)
             result = get_modified_files(tmp_path)
             assert result == []
@@ -139,9 +140,12 @@ class TestGetModifiedFiles:
     def test_filters_python_files_only(self, tmp_path):
         """Should only include .py files in results."""
         with patch("subprocess.run") as mock_run:
-            mock_run.return_value = Mock(
-                stdout="src/foo.py\nsrc/bar.txt\nsrc/baz.py\n", returncode=0
-            )
+            # First call: git diff (modified files including non-Python)
+            # Second call: git ls-files (no untracked files)
+            mock_run.side_effect = [
+                Mock(stdout="src/foo.py\nsrc/bar.txt\nsrc/baz.py\n", returncode=0),
+                Mock(stdout="", returncode=0),
+            ]
             result = get_modified_files(tmp_path)
             assert len(result) == 2
             assert all(str(f).endswith(".py") for f in result)
@@ -161,10 +165,57 @@ class TestGetModifiedFiles:
     def test_makes_relative_paths_absolute(self, tmp_path):
         """Should convert relative paths to absolute."""
         with patch("subprocess.run") as mock_run:
-            mock_run.return_value = Mock(stdout="src/module.py\n", returncode=0)
+            # First call: git diff
+            # Second call: git ls-files (no untracked)
+            mock_run.side_effect = [
+                Mock(stdout="src/module.py\n", returncode=0),
+                Mock(stdout="", returncode=0),
+            ]
             result = get_modified_files(tmp_path)
             assert len(result) == 1
             assert result[0].is_absolute()
+
+    def test_includes_untracked_files(self, tmp_path):
+        """Should include untracked files from git ls-files."""
+        with patch("subprocess.run") as mock_run:
+            # First call: git diff (modified files)
+            # Second call: git ls-files (untracked files)
+            mock_run.side_effect = [
+                Mock(stdout="src/modified.py\n", returncode=0),
+                Mock(stdout="src/untracked.py\n", returncode=0),
+            ]
+            result = get_modified_files(tmp_path)
+            # Should include both modified and untracked files
+            assert len(result) == 2
+            assert any(str(f).endswith("modified.py") for f in result)
+            assert any(str(f).endswith("untracked.py") for f in result)
+
+    def test_untracked_files_without_modifications(self, tmp_path):
+        """Should return untracked files even when no modifications exist."""
+        with patch("subprocess.run") as mock_run:
+            # First call: git diff (no modifications)
+            # Second call: git ls-files (untracked files)
+            mock_run.side_effect = [
+                Mock(stdout="", returncode=0),
+                Mock(stdout="src/new_module.py\nsrc/new_test.py\n", returncode=0),
+            ]
+            result = get_modified_files(tmp_path)
+            # Should include both untracked files
+            assert len(result) == 2
+            assert all(str(f).endswith(".py") for f in result)
+
+    def test_untracked_files_respect_gitignore(self, tmp_path):
+        """Should use --exclude-standard to respect .gitignore."""
+        with patch("subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                Mock(stdout="", returncode=0),
+                Mock(stdout="", returncode=0),
+            ]
+            get_modified_files(tmp_path)
+            # Verify second call uses --exclude-standard
+            second_call_args = mock_run.call_args_list[1][0][0]
+            assert "--exclude-standard" in second_call_args
+            assert "--others" in second_call_args
 
 
 class TestFindFilesReferencingSymbols:
@@ -754,9 +805,17 @@ class TestImmediateOnlyFiltering:
         sub_file = subdir / "nested.py"
         # Mock git to return both files
         with patch("subprocess.run") as mock_run:
-            mock_run.return_value = Mock(
-                stdout=f"{root_file}\n{sub_file}\n", returncode=0
-            )
+            # Each get_modified_files call makes 2 subprocess calls
+            mock_run.side_effect = [
+                # First call to get_modified_files: git diff
+                Mock(stdout=f"{root_file}\n{sub_file}\n", returncode=0),
+                # First call: git ls-files
+                Mock(stdout="", returncode=0),
+                # Second call to get_modified_files: git diff
+                Mock(stdout=f"{root_file}\n{sub_file}\n", returncode=0),
+                # Second call: git ls-files
+                Mock(stdout="", returncode=0),
+            ]
             # With immediate_only=False, both files returned
             result_all = get_modified_files(src_dir, immediate_only=False)
             assert len(result_all) == 2
@@ -991,19 +1050,19 @@ class TestTestSince:
         ):
             mock_run.return_value = Mock(stdout="", returncode=0)
             get_modified_files(tmp_path)
-            # Verify git diff was called with origin/main
-            args = mock_run.call_args[0][0]
-            assert "origin/main" in args
-            assert args[:3] == ["git", "diff", "--name-only"]
+            # Verify git diff was called with origin/main (first call)
+            first_call_args = mock_run.call_args_list[0][0][0]
+            assert "origin/main" in first_call_args
+            assert first_call_args[:3] == ["git", "diff", "--name-only"]
 
     def test_get_modified_files_can_override_base_ref(self, tmp_path):
         """Should allow explicit base_ref parameter to override TEST_SINCE."""
         with patch("subprocess.run") as mock_run:
             mock_run.return_value = Mock(stdout="", returncode=0)
             get_modified_files(tmp_path, base_ref="custom-ref")
-            # Verify git diff was called with custom-ref, not TEST_SINCE
-            args = mock_run.call_args[0][0]
-            assert "custom-ref" in args
+            # Verify git diff was called with custom-ref, not TEST_SINCE (first call)
+            first_call_args = mock_run.call_args_list[0][0][0]
+            assert "custom-ref" in first_call_args
 
     def test_test_all_overrides_test_since(self, tmp_path, monkeypatch):
         """TEST_ALL should take precedence over TEST_SINCE."""

@@ -220,7 +220,7 @@ def get_modified_files(
 ) -> list[Path]:
     """Get list of modified Python files in a directory according to git.
 
-    Includes both staged and unstaged modifications, but not untracked files.
+    Includes staged and unstaged modifications, plus untracked files.
     Compares working directory against a base ref (default: HEAD, or TEST_SINCE if set).
 
     Parameters:
@@ -246,9 +246,21 @@ def get_modified_files(
             check=True,
             timeout=5,
         )
+        # Get untracked files
+        untracked_result = subprocess.run(
+            ["git", "ls-files", "--others", "--exclude-standard", str(base_path)],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=5,
+        )
+        # Combine both outputs
+        all_lines = result.stdout.strip().split(
+            "\n"
+        ) + untracked_result.stdout.strip().split("\n")
         # Parse output and filter for Python files
         modified_files = []
-        for line in result.stdout.strip().split("\n"):
+        for line in all_lines:
             if line and line.endswith(".py"):
                 file_path = Path(line)
                 if file_path.is_absolute():
