@@ -56,6 +56,76 @@ class IfetcherConfig(BaseModel):
             default_factory=Crawl4AI, description="Crawl4AI configuration"
         )
 
+        class Keywords(BaseModel):
+            """Configuration for keyword research module."""
+
+            max_rounds: int = Field(5, ge=1, le=10, description="Maximum search rounds")
+            search_backend: str = Field(
+                "perplexica", description="Search backend to use"
+            )
+            max_results_per_query: int = Field(
+                20, ge=1, le=100, description="Maximum results per search query"
+            )
+            max_documents_to_fetch: int = Field(
+                10, ge=1, le=50, description="Maximum documents to fetch per round"
+            )
+            max_keywords_per_method: int = Field(
+                30, ge=5, le=100, description="Maximum keywords per extraction method"
+            )
+            reranker_model: str = Field(
+                "mixedbread-ai/mxbai-rerank-xsmall-v1",
+                description="Reranking model name",
+            )
+            llm_model: str = Field(
+                "openai:gpt-4o-mini", description="LLM model for agents"
+            )
+
+            class RAKEConfig(BaseModel):
+                min_length: int = Field(1, ge=1, description="Minimum phrase length")
+                max_length: int = Field(4, ge=1, description="Maximum phrase length")
+
+            class YAKEConfig(BaseModel):
+                n_grams: int = Field(3, ge=1, le=5, description="Maximum n-gram size")
+                deduplication_threshold: float = Field(
+                    0.9, ge=0.0, le=1.0, description="Deduplication threshold"
+                )
+                window_size: int = Field(1, ge=1, description="Context window size")
+
+            class TFIDFConfig(BaseModel):
+                max_features: int = Field(50, ge=1, description="Maximum features")
+                ngram_range: tuple[int, int] = Field(
+                    (1, 3), description="N-gram range (min, max)"
+                )
+                min_df: int = Field(1, ge=1, description="Minimum document frequency")
+
+            class KeyBERTConfig(BaseModel):
+                model_name: str = Field(
+                    "all-MiniLM-L6-v2", description="Sentence-transformers model"
+                )
+                diversity: float = Field(
+                    0.5, ge=0.0, le=1.0, description="MMR diversity parameter"
+                )
+                top_n: int = Field(20, ge=1, description="Number of candidates")
+
+            rake: RAKEConfig = Field(
+                default_factory=RAKEConfig, description="RAKE extractor configuration"
+            )
+            yake: YAKEConfig = Field(
+                default_factory=YAKEConfig, description="YAKE extractor configuration"
+            )
+            tfidf: TFIDFConfig = Field(
+                default_factory=TFIDFConfig,
+                description="TF-IDF extractor configuration",
+            )
+            keybert: KeyBERTConfig = Field(
+                default_factory=KeyBERTConfig,
+                description="KeyBERT extractor configuration",
+            )
+
+        keywords: Keywords = Field(
+            default_factory=Keywords, description="Keyword research configuration"
+        )
+
     tools: Tools = Field(
         default_factory=Tools, description="External tools configuration"
     )
