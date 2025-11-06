@@ -5,6 +5,7 @@ from typing import List
 from keybert import KeyBERT as KeyBERTModel
 
 from interaction_finder.keywords.extractors.base import KeywordExtractor, ScoredKeyword
+from interaction_finder.logging import logfire
 
 
 class KeyBERTExtractor(KeywordExtractor):
@@ -82,34 +83,42 @@ class KeyBERTExtractor(KeywordExtractor):
         Raises:
             ValueError — if text is empty or max_keywords < 1
         """
-        if not text or not text.strip():
-            raise ValueError("Text cannot be empty")
-        if max_keywords < 1:
-            raise ValueError(f"max_keywords must be >= 1, got {max_keywords}")
-        # Get model
-        model = self._get_model()
-        # Extract keywords with MMR for diversity
-        # keyphrase_ngram_range controls phrase length
-        keywords = model.extract_keywords(
-            text,
-            keyphrase_ngram_range=(1, 3),
-            stop_words="english",
-            top_n=min(self.top_n, max_keywords),
-            use_mmr=True,
+        with logfire.span(
+            "KeyBERTExtractor.extract",
+            text_length=len(text),
+            max_keywords=max_keywords,
             diversity=self.diversity,
-        )
-        # Handle empty results or if keywords is empty
-        if not keywords:
-            return []
-        # Keywords are returned as (keyword, score) tuples
-        # Scores are cosine similarities in [0, 1], with 1 being most similar
-        results = []
-        for keyword, score in keywords:
-            # Scores are already in [0, 1] range
-            results.append(ScoredKeyword(keyword=keyword, score=float(score)))
-        # Sort by score descending (KeyBERT already returns sorted, but be explicit)
-        results.sort(key=lambda x: x.score, reverse=True)
-        return results[:max_keywords]
+        ):
+            if not text or not text.strip():
+                raise ValueError("Text cannot be empty")
+            if max_keywords < 1:
+                raise ValueError(f"max_keywords must be >= 1, got {max_keywords}")
+            # Get model
+            model = self._get_model()
+            # Extract keywords with MMR for diversity
+            # keyphrase_ngram_range controls phrase length
+            keywords = model.extract_keywords(
+                text,
+                keyphrase_ngram_range=(1, 3),
+                stop_words="english",
+                top_n=min(self.top_n, max_keywords),
+                use_mmr=True,
+                diversity=self.diversity,
+            )
+            # Handle empty results or if keywords is empty
+            if not keywords:
+                logfire.info("KeyBERT extracted 0 keywords")
+                return []
+            # Keywords are returned as (keyword, score) tuples
+            # Scores are cosine similarities in [0, 1], with 1 being most similar
+            results = []
+            for keyword, score in keywords:
+                # Scores are already in [0, 1] range
+                results.append(ScoredKeyword(keyword=keyword, score=float(score)))
+            # Sort by score descending (KeyBERT already returns sorted, but be explicit)
+            results.sort(key=lambda x: x.score, reverse=True)
+            logfire.info(f"KeyBERT extracted {len(results)} keywords")
+            return results[:max_keywords]
 
     def healthy(self) -> bool:
         """Check if extractor is ready (model can be loaded)."""

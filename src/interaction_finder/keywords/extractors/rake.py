@@ -6,6 +6,7 @@ import nltk
 from rake_nltk import Rake
 
 from interaction_finder.keywords.extractors.base import KeywordExtractor, ScoredKeyword
+from interaction_finder.logging import logfire
 
 # Ensure NLTK data is downloaded
 try:
@@ -68,23 +69,28 @@ class RAKEExtractor(KeywordExtractor):
         Raises:
             ValueError — if text is empty or max_keywords < 1
         """
-        if not text or not text.strip():
-            raise ValueError("Text cannot be empty")
-        if max_keywords < 1:
-            raise ValueError(f"max_keywords must be >= 1, got {max_keywords}")
-        # Extract keywords and get scores
-        self._rake.extract_keywords_from_text(text)
-        ranked = self._rake.get_ranked_phrases_with_scores()
-        # Handle empty results
-        if not ranked:
-            return []
-        # Normalize scores to [0, 1] range
-        # RAKE scores are unbounded, so we normalize by dividing by max score
-        max_score = max(score for score, _ in ranked) if ranked else 1.0
-        if max_score == 0:
-            max_score = 1.0  # Avoid division by zero
-        results = []
-        for score, phrase in ranked[:max_keywords]:
-            normalized_score = min(score / max_score, 1.0)
-            results.append(ScoredKeyword(keyword=phrase, score=normalized_score))
-        return results
+        with logfire.span(
+            "RAKEExtractor.extract", text_length=len(text), max_keywords=max_keywords
+        ):
+            if not text or not text.strip():
+                raise ValueError("Text cannot be empty")
+            if max_keywords < 1:
+                raise ValueError(f"max_keywords must be >= 1, got {max_keywords}")
+            # Extract keywords and get scores
+            self._rake.extract_keywords_from_text(text)
+            ranked = self._rake.get_ranked_phrases_with_scores()
+            # Handle empty results
+            if not ranked:
+                logfire.info("RAKE extracted 0 keywords")
+                return []
+            # Normalize scores to [0, 1] range
+            # RAKE scores are unbounded, so we normalize by dividing by max score
+            max_score = max(score for score, _ in ranked) if ranked else 1.0
+            if max_score == 0:
+                max_score = 1.0  # Avoid division by zero
+            results = []
+            for score, phrase in ranked[:max_keywords]:
+                normalized_score = min(score / max_score, 1.0)
+                results.append(ScoredKeyword(keyword=phrase, score=normalized_score))
+            logfire.info(f"RAKE extracted {len(results)} keywords")
+            return results

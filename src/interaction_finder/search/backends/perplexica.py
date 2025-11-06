@@ -16,6 +16,7 @@ except ImportError:
     HTTPX_AVAILABLE = False
     httpx = None  # type: ignore
 
+from interaction_finder.logging import logfire
 from ..models import (
     SearchBackend,
     SearchQuery,
@@ -132,36 +133,56 @@ class PerplexicaBackend(SearchBackend):
 
     async def search(self, query: SearchQuery) -> List[SearchResult]:
         """Perform a search with the given query."""
-        try:
-            request_data = self._build_search_request(query)
-            session = await self._get_session()
-            url = f"{self.base_url}/api/search"
+        with logfire.span(
+            "PerplexicaBackend.search",
+            query=query.query[:100],
+            max_results=query.max_results,
+        ):
+            logfire.info(f"Searching Perplexica: {query.query[:100]}...")
+            try:
+                request_data = self._build_search_request(query)
+                session = await self._get_session()
+                url = f"{self.base_url}/api/search"
 
-            response = await session.post(url, json=request_data)
+                response = await session.post(url, json=request_data)
 
-            # Handle HTTP errors
-            if response.status_code == 500:
-                raise RuntimeError("Perplexica internal server error")
-            elif response.status_code != 200:
+                # Handle HTTP errors
+                if response.status_code == 500:
+                    logfire.error("Perplexica internal server error")
+                    raise RuntimeError("Perplexica internal server error")
+                elif response.status_code != 200:
+                    logfire.error(
+                        f"Perplexica API returned HTTP {response.status_code}"
+                    )
+                    raise RuntimeError(
+                        f"Perplexica API returned HTTP {response.status_code}: {response.text}"
+                    )
+
+                response_data = response.json()
+                results = self._parse_perplexica_response(response_data, query)
+                logfire.info(f"Perplexica search complete: {len(results)} results")
+                return results
+
+            except httpx.TimeoutException:  # type: ignore[misc]
+                logfire.error(f"Perplexica search timed out after {self.timeout}s")
+                raise RuntimeError(f"Perplexica search timed out after {self.timeout}s")
+            except httpx.ConnectError:  # type: ignore[misc]
+                logfire.error(f"Could not connect to Perplexica at {self.base_url}")
                 raise RuntimeError(
-                    f"Perplexica API returned HTTP {response.status_code}: {response.text}"
+                    f"Could not connect to Perplexica at {self.base_url}"
                 )
-
-            response_data = response.json()
-            return self._parse_perplexica_response(response_data, query)
-
-        except httpx.TimeoutException:  # type: ignore[misc]
-            raise RuntimeError(f"Perplexica search timed out after {self.timeout}s")
-        except httpx.ConnectError:  # type: ignore[misc]
-            raise RuntimeError(f"Could not connect to Perplexica at {self.base_url}")
-        except httpx.RequestError as e:  # type: ignore[misc]
-            raise RuntimeError(f"Perplexica network error: {str(e)}")
-        except RuntimeError:
-            # Re-raise runtime errors
-            raise
-        except Exception as e:
-            # Wrap unexpected errors
-            raise RuntimeError(f"Unexpected error during Perplexica search: {str(e)}")
+            except httpx.RequestError as e:  # type: ignore[misc]
+                logfire.error(f"Perplexica network error: {str(e)}")
+                raise RuntimeError(f"Perplexica network error: {str(e)}")
+            except RuntimeError:
+                # Re-raise runtime errors
+                raise
+            except Exception as e:
+                # Wrap unexpected errors
+                logfire.error(f"Unexpected error during Perplexica search: {str(e)}")
+                raise RuntimeError(
+                    f"Unexpected error during Perplexica search: {str(e)}"
+                )
 
     async def _async_health_check(self) -> bool:
         """Check if Perplexica API is available and working (async)."""

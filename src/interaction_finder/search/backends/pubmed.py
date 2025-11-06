@@ -18,6 +18,7 @@ except ImportError:
     HTTPX_AVAILABLE = False
     httpx = None  # type: ignore
 
+from interaction_finder.logging import logfire
 from ..models import (
     SearchBackend,
     SearchQuery,
@@ -283,36 +284,57 @@ class PubMedBackend(SearchBackend):
 
     async def search(self, query: SearchQuery) -> List[SearchResult]:
         """Perform a search with the given query."""
-        try:
-            # Step 1: Search for PMIDs
-            search_result = await self._esearch(query)
-            pmids = search_result["pmids"]
+        with logfire.span(
+            "PubMedBackend.search",
+            query=query.query[:100],
+            max_results=query.max_results,
+        ):
+            logfire.info(f"Searching PubMed: {query.query[:100]}...")
+            try:
+                # Step 1: Search for PMIDs
+                search_result = await self._esearch(query)
+                pmids = search_result["pmids"]
+                total_count = search_result["count"]
+                logfire.info(f"Found {len(pmids)} PMIDs (total matches: {total_count})")
 
-            if not pmids:
-                return []
+                if not pmids:
+                    return []
 
-            # Step 2: Fetch summaries for PMIDs
-            summaries = await self._esummary(pmids)
+                # Step 2: Fetch summaries for PMIDs
+                summaries = await self._esummary(pmids)
+                logfire.info(f"Fetched {len(summaries)} summaries")
 
-            # Step 3: Convert to SearchResult objects
-            results = []
-            for summary in summaries:
-                try:
-                    result = self._convert_pubmed_summary_to_result(summary)
-                    results.append(result)
-                except Exception as e:
-                    # Log conversion error but don't fail the whole search
-                    print(f"Warning: Failed to convert PubMed summary to result: {e}")
-                    continue
+                # Step 3: Convert to SearchResult objects
+                results = []
+                conversion_errors = 0
+                for summary in summaries:
+                    try:
+                        result = self._convert_pubmed_summary_to_result(summary)
+                        results.append(result)
+                    except Exception as e:
+                        # Log conversion error but don't fail the whole search
+                        conversion_errors += 1
+                        logfire.warning(
+                            f"Failed to convert PubMed summary to result: {e}"
+                        )
+                        continue
 
-            return results
+                if conversion_errors > 0:
+                    logfire.warning(
+                        f"Failed to convert {conversion_errors}/{len(summaries)} summaries"
+                    )
 
-        except RuntimeError:
-            # Re-raise runtime errors
-            raise
-        except Exception as e:
-            # Wrap unexpected errors
-            raise RuntimeError(f"Unexpected error during PubMed search: {str(e)}")
+                logfire.info(f"PubMed search complete: {len(results)} results")
+                return results
+
+            except RuntimeError:
+                # Re-raise runtime errors
+                logfire.error("PubMed search failed with RuntimeError")
+                raise
+            except Exception as e:
+                # Wrap unexpected errors
+                logfire.error(f"Unexpected error during PubMed search: {str(e)}")
+                raise RuntimeError(f"Unexpected error during PubMed search: {str(e)}")
 
     async def _async_health_check(self) -> bool:
         """Check if PubMed API is available and working (async)."""

@@ -4,6 +4,7 @@ from typing import List
 
 from sentence_transformers import CrossEncoder
 
+from interaction_finder.logging import logfire
 from interaction_finder.search.models import SearchResult
 
 
@@ -75,47 +76,56 @@ class Reranker:
         Raises:
             ValueError — if query is empty or results is empty
         """
-        if not query or not query.strip():
-            raise ValueError("Query cannot be empty")
-        if not results:
-            raise ValueError("Results cannot be empty")
-        if top_k is not None and top_k < 1:
-            raise ValueError(f"top_k must be >= 1 or None, got {top_k}")
-        # Get model
-        model = self._get_model()
-        # Create query-document pairs
-        # Use title + snippet for each result
-        pairs = []
-        for result in results:
-            doc_text = result.title
-            if result.snippet:
-                doc_text = f"{result.title}. {result.snippet}"
-            pairs.append([query, doc_text])
-        # Compute scores
-        # Use batch_size=1 to avoid padding token issues with some models
-        scores = model.predict(pairs, batch_size=1)
-        # Create new results with updated relevance scores
-        # Scores are logits, we'll normalize to [0, 1] using sigmoid
-        import math
+        with logfire.span(
+            "Reranker.rerank",
+            num_results=len(results),
+            top_k=top_k,
+            model=self.model_name,
+        ):
+            if not query or not query.strip():
+                raise ValueError("Query cannot be empty")
+            if not results:
+                raise ValueError("Results cannot be empty")
+            if top_k is not None and top_k < 1:
+                raise ValueError(f"top_k must be >= 1 or None, got {top_k}")
+            logfire.info(f"Reranking {len(results)} results for query: {query[:50]}...")
+            # Get model
+            model = self._get_model()
+            # Create query-document pairs
+            # Use title + snippet for each result
+            pairs = []
+            for result in results:
+                doc_text = result.title
+                if result.snippet:
+                    doc_text = f"{result.title}. {result.snippet}"
+                pairs.append([query, doc_text])
+            # Compute scores
+            # Use batch_size=1 to avoid padding token issues with some models
+            scores = model.predict(pairs, batch_size=1)
+            # Create new results with updated relevance scores
+            # Scores are logits, we'll normalize to [0, 1] using sigmoid
+            import math
 
-        reranked = []
-        for result, score in zip(results, scores):
-            # Apply sigmoid to convert logit to probability
-            normalized_score = 1.0 / (1.0 + math.exp(-float(score)))
-            # Create new result with updated relevance
-            reranked_result = SearchResult(
-                title=result.title,
-                url=result.url,
-                snippet=result.snippet,
-                relevance=normalized_score,
-            )
-            reranked.append((normalized_score, reranked_result))
-        # Sort by score descending
-        reranked.sort(key=lambda x: x[0], reverse=True)
-        # Return top_k or all
-        if top_k is not None:
-            reranked = reranked[:top_k]
-        return [result for _, result in reranked]
+            reranked = []
+            for result, score in zip(results, scores):
+                # Apply sigmoid to convert logit to probability
+                normalized_score = 1.0 / (1.0 + math.exp(-float(score)))
+                # Create new result with updated relevance
+                reranked_result = SearchResult(
+                    title=result.title,
+                    url=result.url,
+                    snippet=result.snippet,
+                    relevance=normalized_score,
+                )
+                reranked.append((normalized_score, reranked_result))
+            # Sort by score descending
+            reranked.sort(key=lambda x: x[0], reverse=True)
+            # Return top_k or all
+            if top_k is not None:
+                reranked = reranked[:top_k]
+            final_results = [result for _, result in reranked]
+            logfire.info(f"Reranking complete: returned {len(final_results)} results")
+            return final_results
 
     def healthy(self) -> bool:
         """Check if reranker is ready (model can be loaded)."""

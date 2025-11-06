@@ -6,6 +6,7 @@ import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
 
 from interaction_finder.keywords.extractors.base import KeywordExtractor, ScoredKeyword
+from interaction_finder.logging import logfire
 
 
 class TFIDFExtractor(KeywordExtractor):
@@ -67,59 +68,68 @@ class TFIDFExtractor(KeywordExtractor):
         Raises:
             ValueError — if text is empty or max_keywords < 1
         """
-        if not text or not text.strip():
-            raise ValueError("Text cannot be empty")
-        if max_keywords < 1:
-            raise ValueError(f"max_keywords must be >= 1, got {max_keywords}")
-        # Split text into sentences to create pseudo-documents
-        # Simple sentence splitting by period, question mark, exclamation
-        sentences = [
-            s.strip()
-            for s in text.replace("!", ".").replace("?", ".").split(".")
-            if s.strip()
-        ]
-        # Need at least one sentence
-        if not sentences:
-            return []
-        # Handle case where we have only one sentence
-        if len(sentences) == 1:
-            # Split by comma or semicolon to create pseudo-documents
+        with logfire.span(
+            "TFIDFExtractor.extract", text_length=len(text), max_keywords=max_keywords
+        ):
+            if not text or not text.strip():
+                raise ValueError("Text cannot be empty")
+            if max_keywords < 1:
+                raise ValueError(f"max_keywords must be >= 1, got {max_keywords}")
+            # Split text into sentences to create pseudo-documents
+            # Simple sentence splitting by period, question mark, exclamation
             sentences = [
                 s.strip()
-                for s in sentences[0].replace(";", ",").split(",")
+                for s in text.replace("!", ".").replace("?", ".").split(".")
                 if s.strip()
             ]
-        # If still only one document, we can't compute IDF meaningfully
-        # In this case, we'll just use term frequency
-        if len(sentences) == 1:
-            sentences = [text]  # Use original text
-        # Create TF-IDF vectorizer
-        vectorizer = TfidfVectorizer(
-            max_features=self.max_features,
-            ngram_range=self.ngram_range,
-            min_df=min(self.min_df, len(sentences)),  # Adjust for small doc count
-            stop_words="english",
-        )
-        # Fit and transform
-        try:
-            tfidf_matrix = vectorizer.fit_transform(sentences)
-        except ValueError:
-            # No valid terms found (e.g., all stop words)
+            # Need at least one sentence
+            if not sentences:
+                logfire.info("TF-IDF extracted 0 keywords")
+                return []
+            # Handle case where we have only one sentence
+            if len(sentences) == 1:
+                # Split by comma or semicolon to create pseudo-documents
+                sentences = [
+                    s.strip()
+                    for s in sentences[0].replace(";", ",").split(",")
+                    if s.strip()
+                ]
+            # If still only one document, we can't compute IDF meaningfully
+            # In this case, we'll just use term frequency
+            if len(sentences) == 1:
+                sentences = [text]  # Use original text
+            # Create TF-IDF vectorizer
+            vectorizer = TfidfVectorizer(
+                max_features=self.max_features,
+                ngram_range=self.ngram_range,
+                min_df=min(self.min_df, len(sentences)),  # Adjust for small doc count
+                stop_words="english",
+            )
+            # Fit and transform
+            try:
+                tfidf_matrix = vectorizer.fit_transform(sentences)
+            except ValueError:
+                # No valid terms found (e.g., all stop words)
+                logfire.info("TF-IDF extracted 0 keywords (no valid terms)")
+                return []
+            # Get feature names (keywords)
+            feature_names = vectorizer.get_feature_names_out()
+            # Sum TF-IDF scores across all documents for each term
+            scores = np.asarray(tfidf_matrix.sum(axis=0)).flatten()
+            # Create keyword-score pairs
+            keyword_scores = list(zip(feature_names, scores))
+            # Sort by score descending
+            keyword_scores.sort(key=lambda x: x[1], reverse=True)
+            # Normalize scores to [0, 1]
+            if keyword_scores:
+                max_score = keyword_scores[0][1] if keyword_scores[0][1] > 0 else 1.0
+                results = []
+                for keyword, score in keyword_scores[:max_keywords]:
+                    normalized_score = min(score / max_score, 1.0)
+                    results.append(
+                        ScoredKeyword(keyword=keyword, score=normalized_score)
+                    )
+                logfire.info(f"TF-IDF extracted {len(results)} keywords")
+                return results
+            logfire.info("TF-IDF extracted 0 keywords")
             return []
-        # Get feature names (keywords)
-        feature_names = vectorizer.get_feature_names_out()
-        # Sum TF-IDF scores across all documents for each term
-        scores = np.asarray(tfidf_matrix.sum(axis=0)).flatten()
-        # Create keyword-score pairs
-        keyword_scores = list(zip(feature_names, scores))
-        # Sort by score descending
-        keyword_scores.sort(key=lambda x: x[1], reverse=True)
-        # Normalize scores to [0, 1]
-        if keyword_scores:
-            max_score = keyword_scores[0][1] if keyword_scores[0][1] > 0 else 1.0
-            results = []
-            for keyword, score in keyword_scores[:max_keywords]:
-                normalized_score = min(score / max_score, 1.0)
-                results.append(ScoredKeyword(keyword=keyword, score=normalized_score))
-            return results
-        return []

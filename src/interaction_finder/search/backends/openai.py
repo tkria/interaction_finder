@@ -18,6 +18,7 @@ except ImportError:
     HTTPX_AVAILABLE = False
     httpx = None  # type: ignore
 
+from interaction_finder.logging import logfire
 from ..models import (
     SearchBackend,
     SearchQuery,
@@ -237,36 +238,53 @@ class OpenAIBackend(SearchBackend):
 
     async def search(self, query: SearchQuery) -> List[SearchResult]:
         """Perform a search with the given query."""
-        try:
-            request_data = self._build_search_request(query)
-            session = await self._get_session()
-            url = f"{self.base_url}/responses"
+        with logfire.span(
+            "OpenAIBackend.search",
+            query=query.query[:100],
+            max_results=query.max_results,
+            model=self.model,
+        ):
+            logfire.info(f"Searching OpenAI: {query.query[:100]}...")
+            try:
+                request_data = self._build_search_request(query)
+                session = await self._get_session()
+                url = f"{self.base_url}/responses"
 
-            response = await session.post(url, json=request_data)
+                response = await session.post(url, json=request_data)
 
-            # Handle HTTP errors
-            if response.status_code == 401:
-                raise RuntimeError("OpenAI API authentication failed - check API key")
-            elif response.status_code == 429:
-                raise RuntimeError("OpenAI API rate limit exceeded")
-            elif response.status_code != 200:
-                raise RuntimeError(
-                    f"OpenAI API returned HTTP {response.status_code}: {response.text}"
-                )
+                # Handle HTTP errors
+                if response.status_code == 401:
+                    logfire.error("OpenAI API authentication failed")
+                    raise RuntimeError(
+                        "OpenAI API authentication failed - check API key"
+                    )
+                elif response.status_code == 429:
+                    logfire.error("OpenAI API rate limit exceeded")
+                    raise RuntimeError("OpenAI API rate limit exceeded")
+                elif response.status_code != 200:
+                    logfire.error(f"OpenAI API returned HTTP {response.status_code}")
+                    raise RuntimeError(
+                        f"OpenAI API returned HTTP {response.status_code}: {response.text}"
+                    )
 
-            response_data = response.json()
-            return self._parse_openai_response(response_data, query)
+                response_data = response.json()
+                results = self._parse_openai_response(response_data, query)
+                logfire.info(f"OpenAI search complete: {len(results)} results")
+                return results
 
-        except httpx.TimeoutException:  # type: ignore[misc]
-            raise RuntimeError(f"OpenAI search timed out after {self.timeout}s")
-        except httpx.RequestError as e:  # type: ignore[misc]
-            raise RuntimeError(f"OpenAI network error: {str(e)}")
-        except RuntimeError:
-            # Re-raise runtime errors
-            raise
-        except Exception as e:
-            # Wrap unexpected errors
-            raise RuntimeError(f"Unexpected error during OpenAI search: {str(e)}")
+            except httpx.TimeoutException:  # type: ignore[misc]
+                logfire.error(f"OpenAI search timed out after {self.timeout}s")
+                raise RuntimeError(f"OpenAI search timed out after {self.timeout}s")
+            except httpx.RequestError as e:  # type: ignore[misc]
+                logfire.error(f"OpenAI network error: {str(e)}")
+                raise RuntimeError(f"OpenAI network error: {str(e)}")
+            except RuntimeError:
+                # Re-raise runtime errors
+                raise
+            except Exception as e:
+                # Wrap unexpected errors
+                logfire.error(f"Unexpected error during OpenAI search: {str(e)}")
+                raise RuntimeError(f"Unexpected error during OpenAI search: {str(e)}")
 
     async def _async_health_check(self) -> bool:
         """Check if OpenAI API is available and working (async)."""
