@@ -44,9 +44,19 @@ class Reranker:
     def _get_model(self) -> CrossEncoder:
         """Get or initialize CrossEncoder model (lazy loading)."""
         if self._model is None:
-            self._model = CrossEncoder(
-                self.model_name, max_length=512, device=self.device
-            )
+            import torch
+
+            # Set default device to avoid GPU allocation when CPU is requested
+            # This prevents OOM errors on small GPUs when device='cpu' is specified
+            if self.device == "cpu":
+                with torch.device("cpu"):
+                    self._model = CrossEncoder(
+                        self.model_name, max_length=512, device=self.device
+                    )
+            else:
+                self._model = CrossEncoder(
+                    self.model_name, max_length=512, device=self.device
+                )
         return self._model
 
     def rerank(

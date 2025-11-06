@@ -110,6 +110,10 @@ class IfetcherConfig(BaseModel):
                     0.5, ge=0.0, le=1.0, description="MMR diversity parameter"
                 )
                 top_n: int = Field(20, ge=1, description="Number of candidates")
+                device: str | None = Field(
+                    None,
+                    description="Device for KeyBERT model ('cpu', 'cuda', or None for auto)",
+                )
 
             rake: RAKEConfig = Field(
                 default_factory=RAKEConfig, description="RAKE extractor configuration"

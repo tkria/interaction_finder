@@ -17,6 +17,7 @@ class KeyBERTExtractor(KeywordExtractor):
         model_name: str — sentence-transformers model name (default: "all-MiniLM-L6-v2")
         diversity: float — diversity parameter for MMR (0-1, default: 0.5)
         top_n: int — number of keywords to consider (default: 20)
+        device: str | None — device to run model on ('cpu', 'cuda', or None for auto)
     """
 
     def __init__(
@@ -24,6 +25,7 @@ class KeyBERTExtractor(KeywordExtractor):
         model_name: str = "all-MiniLM-L6-v2",
         diversity: float = 0.5,
         top_n: int = 20,
+        device: str | None = None,
     ):
         """Initialize KeyBERT extractor.
 
@@ -31,6 +33,7 @@ class KeyBERTExtractor(KeywordExtractor):
             model_name: str — sentence-transformers model name
             diversity: float — diversity for Maximal Marginal Relevance (0-1)
             top_n: int — number of candidates to extract
+            device: str | None — device to run model on ('cpu', 'cuda', or None for auto-select)
         """
         if not 0 <= diversity <= 1:
             raise ValueError(f"diversity must be in [0, 1], got {diversity}")
@@ -39,6 +42,7 @@ class KeyBERTExtractor(KeywordExtractor):
         self.model_name = model_name
         self.diversity = diversity
         self.top_n = top_n
+        self.device = device
         # Lazy initialization of model
         self._model = None
 
@@ -50,7 +54,19 @@ class KeyBERTExtractor(KeywordExtractor):
     def _get_model(self) -> KeyBERTModel:
         """Get or initialize KeyBERT model (lazy loading)."""
         if self._model is None:
-            self._model = KeyBERTModel(model=self.model_name)
+            from sentence_transformers import SentenceTransformer
+            import torch
+
+            # Set default device to avoid GPU allocation when CPU is requested
+            # This prevents OOM errors on small GPUs when device='cpu' is specified
+            if self.device == "cpu":
+                with torch.device("cpu"):
+                    st_model = SentenceTransformer(self.model_name, device=self.device)
+                    self._model = KeyBERTModel(model=st_model)
+            else:
+                # For GPU or auto-detect, let SentenceTransformer handle device
+                st_model = SentenceTransformer(self.model_name, device=self.device)
+                self._model = KeyBERTModel(model=st_model)
         return self._model
 
     def extract(self, text: str, max_keywords: int = 20) -> List[ScoredKeyword]:

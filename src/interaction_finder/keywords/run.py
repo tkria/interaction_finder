@@ -81,6 +81,7 @@ async def run_keyword_research(
                 model_name=kw_config.keybert.model_name,
                 diversity=kw_config.keybert.diversity,
                 top_n=kw_config.keybert.top_n,
+                device=kw_config.keybert.device,
             ),
         }
         # Initialize resource pool
