@@ -129,16 +129,20 @@ class Outer:
 class TestGetModifiedFiles:
     """Tests for git diff-based modified file detection."""
 
-    def test_returns_empty_for_no_modifications(self, tmp_path):
+    def test_returns_empty_for_no_modifications(self, tmp_path, monkeypatch):
         """Should return empty list when no files are modified."""
+        # Clear TEST_SINCE to avoid validation call
+        monkeypatch.delenv("TEST_SINCE", raising=False)
         with patch("subprocess.run") as mock_run:
             # Both git diff and git ls-files return empty
             mock_run.return_value = Mock(stdout="", returncode=0)
             result = get_modified_files(tmp_path)
             assert result == []
 
-    def test_filters_python_files_only(self, tmp_path):
+    def test_filters_python_files_only(self, tmp_path, monkeypatch):
         """Should only include .py files in results."""
+        # Clear TEST_SINCE to avoid validation call
+        monkeypatch.delenv("TEST_SINCE", raising=False)
         with patch("subprocess.run") as mock_run:
             # First call: git diff (modified files including non-Python)
             # Second call: git ls-files (no untracked files)
@@ -150,20 +154,26 @@ class TestGetModifiedFiles:
             assert len(result) == 2
             assert all(str(f).endswith(".py") for f in result)
 
-    def test_handles_git_command_failure(self, tmp_path):
+    def test_handles_git_command_failure(self, tmp_path, monkeypatch):
         """Should return empty list if git command fails."""
+        # Clear TEST_SINCE to avoid validation raising ValueError
+        monkeypatch.delenv("TEST_SINCE", raising=False)
         with patch("subprocess.run", side_effect=subprocess.SubprocessError):
             result = get_modified_files(tmp_path)
             assert result == []
 
-    def test_handles_missing_git(self, tmp_path):
+    def test_handles_missing_git(self, tmp_path, monkeypatch):
         """Should return empty list if git is not available."""
+        # Clear TEST_SINCE to avoid validation raising ValueError
+        monkeypatch.delenv("TEST_SINCE", raising=False)
         with patch("subprocess.run", side_effect=FileNotFoundError):
             result = get_modified_files(tmp_path)
             assert result == []
 
-    def test_makes_relative_paths_absolute(self, tmp_path):
+    def test_makes_relative_paths_absolute(self, tmp_path, monkeypatch):
         """Should convert relative paths to absolute."""
+        # Clear TEST_SINCE to avoid validation call
+        monkeypatch.delenv("TEST_SINCE", raising=False)
         with patch("subprocess.run") as mock_run:
             # First call: git diff
             # Second call: git ls-files (no untracked)
@@ -175,8 +185,10 @@ class TestGetModifiedFiles:
             assert len(result) == 1
             assert result[0].is_absolute()
 
-    def test_includes_untracked_files(self, tmp_path):
+    def test_includes_untracked_files(self, tmp_path, monkeypatch):
         """Should include untracked files from git ls-files."""
+        # Clear TEST_SINCE to avoid validation call
+        monkeypatch.delenv("TEST_SINCE", raising=False)
         with patch("subprocess.run") as mock_run:
             # First call: git diff (modified files)
             # Second call: git ls-files (untracked files)
@@ -190,8 +202,10 @@ class TestGetModifiedFiles:
             assert any(str(f).endswith("modified.py") for f in result)
             assert any(str(f).endswith("untracked.py") for f in result)
 
-    def test_untracked_files_without_modifications(self, tmp_path):
+    def test_untracked_files_without_modifications(self, tmp_path, monkeypatch):
         """Should return untracked files even when no modifications exist."""
+        # Clear TEST_SINCE to avoid validation call
+        monkeypatch.delenv("TEST_SINCE", raising=False)
         with patch("subprocess.run") as mock_run:
             # First call: git diff (no modifications)
             # Second call: git ls-files (untracked files)
@@ -204,8 +218,10 @@ class TestGetModifiedFiles:
             assert len(result) == 2
             assert all(str(f).endswith(".py") for f in result)
 
-    def test_untracked_files_respect_gitignore(self, tmp_path):
+    def test_untracked_files_respect_gitignore(self, tmp_path, monkeypatch):
         """Should use --exclude-standard to respect .gitignore."""
+        # Clear TEST_SINCE to avoid validation call
+        monkeypatch.delenv("TEST_SINCE", raising=False)
         with patch("subprocess.run") as mock_run:
             mock_run.side_effect = [
                 Mock(stdout="", returncode=0),
@@ -797,8 +813,10 @@ class TestShouldRunBaseTests:
 class TestImmediateOnlyFiltering:
     """Tests for immediate_only parameter (base pseudo-module support)."""
 
-    def test_immediate_only_excludes_subdirectories(self, tmp_path):
+    def test_immediate_only_excludes_subdirectories(self, tmp_path, monkeypatch):
         """Should only include immediate children when immediate_only=True."""
+        # Clear TEST_SINCE to avoid validation call
+        monkeypatch.delenv("TEST_SINCE", raising=False)
         src_dir = tmp_path / "src"
         subdir = src_dir / "submodule"
         root_file = src_dir / "root.py"
