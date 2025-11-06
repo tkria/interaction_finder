@@ -20,6 +20,7 @@ from interaction_finder.keywords.agents import (
 )
 from interaction_finder.keywords.deps import Deps
 from interaction_finder.keywords.models import BridgingTermsOut
+from interaction_finder.keywords.normalization import normalize_term_for_deduplication
 from interaction_finder.keywords.state import State
 from interaction_finder.search.models import SearchQuery
 
@@ -370,17 +371,48 @@ class FinalizeNode(BaseNode[State, Deps, BridgingTermsOut]):
         with logfire.span(
             "FinalizeNode", num_summaries=len(ctx.state.document_summaries)
         ):
-            # Collect all bridging terms from summaries
-            all_terms = set()
+            # Collect all bridging terms with advanced normalization for deduplication
+            # Normalize using: abbreviation stripping, text normalization, lemmatization, suffix stripping
+            # Track both normalized keys and original terms (preserving first occurrence)
+            terms_by_normalized = {}
             for summary in ctx.state.document_summaries:
-                all_terms.update(summary.bridging_terms)
-            # Sort alphabetically
-            final_terms = sorted(all_terms)
+                for term in summary.bridging_terms:
+                    normalized_key = normalize_term_for_deduplication(term)
+                    # Keep first occurrence (preserves original casing and formatting)
+                    if normalized_key not in terms_by_normalized:
+                        terms_by_normalized[normalized_key] = term
+            all_terms = list(terms_by_normalized.values())
+            # Handle empty results
+            if not all_terms:
+                logfire.info("No bridging terms found")
+                return End(
+                    BridgingTermsOut(
+                        terms=[],
+                        scores=[],
+                        total_documents_processed=len(ctx.state.document_summaries),
+                        rounds_completed=ctx.state.current_round,
+                        coverage_assessment=(
+                            f"Completed {ctx.state.current_round} search round(s). "
+                            f"Processed {len(ctx.state.document_summaries)} documents. "
+                            f"No bridging terms identified."
+                        ),
+                        resources=ctx.deps.resource_pool,
+                    )
+                )
+            # Rerank terms by semantic similarity to topic
+            logfire.info(
+                f"Reranking {len(all_terms)} bridging terms by topic relevance"
+            )
+            scored_terms = ctx.deps.reranker.rerank_terms(ctx.state.topic, all_terms)
+            # Extract terms and scores
+            final_terms = [term for term, _ in scored_terms]
+            final_scores = [score for _, score in scored_terms]
             # Create final assessment
             assessment = (
                 f"Completed {ctx.state.current_round} search round(s). "
                 f"Processed {len(ctx.state.document_summaries)} documents. "
-                f"Identified {len(final_terms)} unique bridging terms."
+                f"Identified {len(final_terms)} unique bridging terms, "
+                f"ranked by semantic relevance to topic."
             )
             logfire.info(
                 f"Finalized: {len(final_terms)} bridging terms from {len(ctx.state.document_summaries)} documents"
@@ -389,6 +421,7 @@ class FinalizeNode(BaseNode[State, Deps, BridgingTermsOut]):
             return End(
                 BridgingTermsOut(
                     terms=final_terms,
+                    scores=final_scores,
                     total_documents_processed=len(ctx.state.document_summaries),
                     rounds_completed=ctx.state.current_round,
                     coverage_assessment=assessment,
