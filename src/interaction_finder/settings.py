@@ -72,6 +72,12 @@ class IfetcherConfig(BaseModel):
             max_keywords_per_method: int = Field(
                 30, ge=5, le=100, description="Maximum keywords per extraction method"
             )
+            max_keywords_for_llm: int = Field(
+                50,
+                ge=10,
+                le=100,
+                description="Maximum keywords to show LLM after deduplication and reranking",
+            )
             reranker_model: str = Field(
                 "zeroentropy/zerank-1-small",
                 description="Reranking model name",

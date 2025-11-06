@@ -26,20 +26,25 @@ from interaction_finder.keywords.state import State
 from interaction_finder.search.models import SearchQuery
 
 
-def _clean_keywords_for_display(
-    keywords: list[ScoredKeyword], max_keywords: int = 30
+def _clean_and_rerank_keywords_for_display(
+    keywords: list[ScoredKeyword],
+    topic: str,
+    reranker,
+    max_keywords: int = 50,
 ) -> str:
-    """Remove obvious noise from keywords before LLM evaluation.
+    """Clean, deduplicate, and rerank keywords by topic similarity.
 
-    Filters out extraction artifacts like figure numbers, copyright notices,
-    and formatting marks. Selects top keywords by score after filtering.
+    Filters noise, deduplicates variants, then reranks by semantic similarity
+    to the target topic. Returns top-ranked keywords with scores for LLM review.
 
     Parameters:
-        keywords: list[ScoredKeyword] — keywords to clean
-        max_keywords: int — maximum number of keywords to return (default: 30)
+        keywords: list[ScoredKeyword] — keywords from all extraction methods
+        topic: str — target research topic
+        reranker — reranker instance with rerank_terms method
+        max_keywords: int — maximum keywords to return (default: 50)
 
     Returns:
-        str — comma-separated cleaned keywords
+        str — formatted keyword list with similarity scores
     """
     import re
 
@@ -48,9 +53,9 @@ def _clean_keywords_for_display(
         r"^(figure|fig|table)\b",
         r"^[*#\d\s.()]+$",
     ]
-
-    cleaned = []
-    for kw in keywords[:50]:  # Consider top 50 by score
+    # Deduplicate using normalization (keep highest-scoring variant)
+    terms_by_normalized = {}
+    for kw in keywords:
         keyword = kw.keyword.strip()
         # Skip very short/long
         if len(keyword) < 3 or len(keyword) > 80:
@@ -58,9 +63,22 @@ def _clean_keywords_for_display(
         # Skip if matches noise
         if any(re.search(p, keyword, re.IGNORECASE) for p in noise_patterns):
             continue
-        cleaned.append(keyword)
-
-    return ", ".join(cleaned[:max_keywords])
+        # Deduplicate
+        normalized_key = normalize_term_for_deduplication(keyword)
+        if (
+            normalized_key not in terms_by_normalized
+            or kw.score > terms_by_normalized[normalized_key][1]
+        ):
+            terms_by_normalized[normalized_key] = (keyword, kw.score)
+    # Extract unique terms
+    unique_terms = [kw for kw, _ in terms_by_normalized.values()]
+    if not unique_terms:
+        return "(no keywords extracted)"
+    # Rerank by semantic similarity to topic
+    reranked = reranker.rerank_terms(topic, unique_terms, top_k=max_keywords)
+    # Return just the terms (already ranked by relevance)
+    terms_only = [term for term, _ in reranked]
+    return ", ".join(terms_only)
 
 
 @dataclass
@@ -327,28 +345,49 @@ class EvaluateKeywordsNode(BaseNode[State, Deps, BridgingTermsOut]):
                 resource = ctx.deps.resource_pool.get(url)
                 if not resource:
                     continue
-                # Clean keywords for display to LLM
-                keywords_text = _clean_keywords_for_display(keywords)
+                # Clean, deduplicate, and rerank keywords for LLM review
+                max_keywords_for_llm = ctx.deps.config.get("max_keywords_for_llm", 50)
+                keywords_text = _clean_and_rerank_keywords_for_display(
+                    keywords, ctx.state.topic, ctx.deps.reranker, max_keywords_for_llm
+                )
                 # Get document context length from config
                 context_chars = ctx.deps.config.get("document_context_chars", 12000)
-                # Summarize document
-                summary_prompt = f"""Summarize this document and identify bridging terms.
+                # Summarize document with strict filtering instructions
+                summary_prompt = f"""Review this document and identify HIGH-QUALITY bridging terms.
 
 **Target topic:** {ctx.state.topic}
 
-Document content:
+**Document content:**
 {resource.text[:context_chars]}
 
-Extracted keywords: {keywords_text}
+**Extracted keywords (ranked by relevance to topic):**
+{keywords_text}
 
 ---
 
-Provide:
-1. Summary: What does this document contribute to understanding the target topic?
-2. Related research areas: What other areas connect to the target topic?
-3. Bridging terms: 5-15 terms that would help us find more results related to the target topic
+**Your task:**
+1. Summary: Concisely describe what this document contributes to understanding the target topic
+2. Related research areas: List research areas that connect to the target topic
+3. Bridging terms: Identify 5-10 HIGH-QUALITY bridging terms, using the extracted keywords as guidance
 
-IMPORTANT: Bridging terms should help us find more results related to the target topic: {ctx.state.topic}. Do not include the target topic itself or obvious variants."""
+**BRIDGING TERM SELECTION CRITERIA:**
+
+✓ **INCLUDE terms that:**
+  - Are directly and centrally related to "{ctx.state.topic}"
+  - Represent specific mechanisms, pathways, genes, or entities relevant to the topic
+  - Would appear in titles/abstracts of highly relevant papers about the topic
+  - Use established scientific terminology (not generic descriptions)
+
+✗ **EXCLUDE terms that:**
+  - Are the target topic itself or trivial variants
+  - Are overly generic ("genetic factors", "molecular mechanisms", "risk factors", "clinical outcomes")
+  - Primarily relate to subtopics mentioned in the document rather than the main topic
+  - Are methodological unless highly specific to the topic
+  - Are descriptive phrases (prefer concise technical terms)
+
+**Quality test:** For each term, ask "Would searching [term] + {ctx.state.topic} find highly relevant papers?" If uncertain, exclude it.
+
+Focus on precision over coverage—select fewer, higher-quality terms."""
                 usage = RunUsage()
                 summary_result = await document_summarizer_agent.run(
                     summary_prompt, deps=ctx.deps, usage=usage
