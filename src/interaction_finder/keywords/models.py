@@ -118,7 +118,10 @@ class BridgingTermsOut(BaseModel):
     """
 
     terms: list[str] = Field(
-        description="Unique bridging terms discovered, sorted alphabetically"
+        description="Unique bridging terms discovered, sorted by relevance to topic (descending)"
+    )
+    scores: list[float] = Field(
+        description="Relevance scores for each term (0-1, higher is more relevant)"
     )
     total_documents_processed: int = Field(
         ge=0, description="Total number of documents analyzed"
