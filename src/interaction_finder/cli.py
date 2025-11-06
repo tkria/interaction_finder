@@ -491,11 +491,11 @@ def extract_keywords(
         console.print(f"Rounds completed: {result.rounds_completed}")
         console.print(f"\nCoverage: {result.coverage_assessment}\n")
 
-        # Print terms
+        # Print terms with similarity scores
         if result.terms:
             console.print("[bold]Bridging Terms:[/bold]")
-            for term in result.terms:
-                console.print(f"  • {term}")
+            for term, score in zip(result.terms, result.scores):
+                console.print(f" [dim]{score:5.2f}[/dim] • {term}")
         else:
             console.print("[yellow]No bridging terms found[/yellow]")
 
