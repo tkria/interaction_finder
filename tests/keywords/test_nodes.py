@@ -21,6 +21,27 @@ from interaction_finder.keywords.models import DocumentSummaryOut
 from interaction_finder.resources import ResourcePool
 
 
+@pytest.fixture
+def mock_deps():
+    """Create mock Deps for testing concurrent extraction."""
+    # Create mock extractors
+    extractors = {
+        "rake": Mock(name="rake"),
+        "yake": Mock(name="yake"),
+        "tfidf": Mock(name="tfidf"),
+        "keybert": Mock(name="keybert"),
+    }
+    return Deps(
+        http_client=Mock(),
+        fetcher=Mock(),
+        search_backend=Mock(),
+        reranker=Mock(),
+        extractors=extractors,
+        resource_pool=ResourcePool(),
+        config={},
+    )
+
+
 class TestNodeStructure:
     """Test node structure and configuration."""
 
@@ -361,3 +382,205 @@ class TestFinalizeNode:
         # Verify original casing preserved (first occurrences)
         assert "Genetic risk factor" in called_terms
         assert "BMP signaling pathway" in called_terms
+
+
+class TestConcurrentExtraction:
+    """Test concurrent keyword extraction with multiple resources and extractors."""
+
+    @pytest.mark.asyncio
+    async def test_extract_keywords_concurrent_resources(self, mock_deps):
+        """Test parallel extraction across multiple resources."""
+        from interaction_finder.keywords.extractors.base import ScoredKeyword
+
+        # Create multiple resources using ResourcePool
+        for i in range(5):
+            rid = mock_deps.resource_pool.register(f"http://example.com/doc{i}")
+            mock_deps.resource_pool.add_content(
+                rid,
+                f"Document {i}",
+                f"This is document {i} with unique content about topic {i}.",
+            )
+        # Configure extractors to return predictable results
+        for name, extractor in mock_deps.extractors.items():
+            extractor.extract = Mock(
+                side_effect=lambda text, max_keywords, n=name: [
+                    ScoredKeyword(keyword=f"{n}_keyword_{i}", score=0.9 - i * 0.1)
+                    for i in range(3)
+                ]
+            )
+        # Create state and context
+        state = State(topic="test topic", max_rounds=1)
+        ctx = GraphRunContext(state=state, deps=mock_deps)
+        # Run ExtractKeywordsNode
+        node = ExtractKeywordsNode()
+        await node.run(ctx)
+        # Verify all resources were processed
+        assert len(ctx.state.extracted_keywords) == 5
+        # Verify each resource has keywords from all extractors
+        for url in ctx.state.extracted_keywords:
+            keywords = ctx.state.extracted_keywords[url]
+            # Should have keywords from all extractors (3 keywords × 4 extractors = 12)
+            assert len(keywords) == 12
+
+    @pytest.mark.asyncio
+    async def test_extract_keywords_concurrent_extractors(self, mock_deps):
+        """Test parallel execution of extractors within single resource."""
+        import time
+        from interaction_finder.keywords.extractors.base import ScoredKeyword
+
+        # Create single resource using ResourcePool
+        rid = mock_deps.resource_pool.register("http://example.com/doc")
+        mock_deps.resource_pool.add_content(
+            rid,
+            "Test Document",
+            "This is a test document with some content.",
+        )
+        # Track execution timing to verify parallelism
+        execution_times = []
+
+        def slow_extract(text, max_keywords):
+            """Simulate CPU-bound extraction with delay."""
+            start = time.time()
+            time.sleep(0.1)  # Simulate work
+            duration = time.time() - start
+            execution_times.append(duration)
+            return [ScoredKeyword(keyword="test", score=0.9)]
+
+        # Configure all extractors with slow extraction
+        for extractor in mock_deps.extractors.values():
+            extractor.extract = Mock(side_effect=slow_extract)
+        # Create state and context
+        state = State(topic="test topic", max_rounds=1)
+        ctx = GraphRunContext(state=state, deps=mock_deps)
+        # Run ExtractKeywordsNode and measure total time
+        start = time.time()
+        node = ExtractKeywordsNode()
+        await node.run(ctx)
+        total_time = time.time() - start
+        # Verify extractors ran concurrently (total time < sum of individual times)
+        # With 4 extractors × 0.1s each = 0.4s sequential, but should be ~0.1s parallel
+        assert total_time < 0.3  # Allow overhead, but much less than 0.4s sequential
+        # Verify all extractors were called
+        assert len(execution_times) == 4
+
+    @pytest.mark.asyncio
+    async def test_extract_keywords_error_handling(self, mock_deps):
+        """Test error handling during concurrent extraction."""
+        from interaction_finder.keywords.extractors.base import ScoredKeyword
+
+        # Create resource using ResourcePool
+        rid = mock_deps.resource_pool.register("http://example.com/doc")
+        mock_deps.resource_pool.add_content(
+            rid,
+            "Test Document",
+            "This is a test document.",
+        )
+        # Configure some extractors to fail, others to succeed
+        extractors = list(mock_deps.extractors.items())
+        extractors[0][1].extract = Mock(side_effect=ValueError("Extraction failed"))
+        extractors[1][1].extract = Mock(
+            return_value=[ScoredKeyword(keyword="success1", score=0.9)]
+        )
+        extractors[2][1].extract = Mock(side_effect=RuntimeError("Another failure"))
+        extractors[3][1].extract = Mock(
+            return_value=[ScoredKeyword(keyword="success2", score=0.8)]
+        )
+        # Create state and context
+        state = State(topic="test topic", max_rounds=1)
+        ctx = GraphRunContext(state=state, deps=mock_deps)
+        # Run ExtractKeywordsNode
+        node = ExtractKeywordsNode()
+        await node.run(ctx)
+        # Verify successful extractors produced results
+        keywords = ctx.state.extracted_keywords["http://example.com/doc"]
+        assert len(keywords) == 2
+        assert keywords[0].keyword == "success1"
+        assert keywords[1].keyword == "success2"
+
+    @pytest.mark.asyncio
+    async def test_extract_keywords_no_race_conditions(self, mock_deps):
+        """Test that concurrent extraction doesn't cause data corruption."""
+        from interaction_finder.keywords.extractors.base import ScoredKeyword
+
+        # Create many resources to stress-test concurrency using ResourcePool
+        for i in range(20):
+            rid = mock_deps.resource_pool.register(f"http://example.com/doc{i}")
+            mock_deps.resource_pool.add_content(
+                rid,
+                f"Document {i}",
+                f"Content for document {i}",
+            )
+        # Configure extractors with unique keywords per call
+        call_counter = {"count": 0}
+
+        def unique_extract(text, max_keywords):
+            """Return unique keywords based on call order."""
+            call_id = call_counter["count"]
+            call_counter["count"] += 1
+            return [
+                ScoredKeyword(keyword=f"keyword_{call_id}_{i}", score=0.9)
+                for i in range(2)
+            ]
+
+        for extractor in mock_deps.extractors.values():
+            extractor.extract = Mock(side_effect=unique_extract)
+        # Create state and context
+        state = State(topic="test topic", max_rounds=1)
+        ctx = GraphRunContext(state=state, deps=mock_deps)
+        # Run ExtractKeywordsNode
+        node = ExtractKeywordsNode()
+        await node.run(ctx)
+        # Verify all resources processed without corruption
+        assert len(ctx.state.extracted_keywords) == 20
+        # Verify each resource has correct number of keywords
+        for url, keywords in ctx.state.extracted_keywords.items():
+            assert len(keywords) == 8  # 2 keywords × 4 extractors
+        # Verify all keywords are unique (no race condition duplicates)
+        all_keywords = []
+        for keywords in ctx.state.extracted_keywords.values():
+            all_keywords.extend([kw.keyword for kw in keywords])
+        assert len(all_keywords) == len(set(all_keywords))  # All unique
+
+    @pytest.mark.asyncio
+    async def test_extract_keywords_skip_already_processed(self, mock_deps):
+        """Test that already-processed resources are skipped."""
+        from interaction_finder.keywords.extractors.base import ScoredKeyword
+
+        # Create resources using ResourcePool
+        for i in range(3):
+            rid = mock_deps.resource_pool.register(f"http://example.com/doc{i}")
+            mock_deps.resource_pool.add_content(
+                rid,
+                f"Document {i}",
+                f"Content {i}",
+            )
+        # Pre-populate state with one already-processed resource
+        state = State(topic="test topic", max_rounds=1)
+        state.extracted_keywords["http://example.com/doc1"] = [
+            ScoredKeyword(keyword="already_processed", score=0.9)
+        ]
+        # Configure extractors
+        for extractor in mock_deps.extractors.values():
+            extractor.extract = Mock(
+                return_value=[ScoredKeyword(keyword="new_keyword", score=0.8)]
+            )
+        # Create context and run
+        ctx = GraphRunContext(state=state, deps=mock_deps)
+        node = ExtractKeywordsNode()
+        await node.run(ctx)
+        # Verify only 2 new resources were processed (doc0 and doc2)
+        assert len(ctx.state.extracted_keywords) == 3
+        # Verify doc1 still has original keywords
+        assert (
+            ctx.state.extracted_keywords["http://example.com/doc1"][0].keyword
+            == "already_processed"
+        )
+        # Verify doc0 and doc2 have new keywords
+        assert all(
+            kw.keyword == "new_keyword"
+            for kw in ctx.state.extracted_keywords["http://example.com/doc0"]
+        )
+        assert all(
+            kw.keyword == "new_keyword"
+            for kw in ctx.state.extracted_keywords["http://example.com/doc2"]
+        )

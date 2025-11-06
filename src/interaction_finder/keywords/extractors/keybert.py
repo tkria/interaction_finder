@@ -1,5 +1,6 @@
 """KeyBERT (BERT-based keyword extraction) backend."""
 
+import threading
 from typing import List
 
 from keybert import KeyBERT as KeyBERTModel
@@ -44,8 +45,9 @@ class KeyBERTExtractor(KeywordExtractor):
         self.diversity = diversity
         self.top_n = top_n
         self.device = device
-        # Lazy initialization of model
+        # Lazy initialization of model with thread-safe lock
         self._model = None
+        self._model_lock = threading.Lock()
 
     @property
     def name(self) -> str:
@@ -53,21 +55,28 @@ class KeyBERTExtractor(KeywordExtractor):
         return "keybert"
 
     def _get_model(self) -> KeyBERTModel:
-        """Get or initialize KeyBERT model (lazy loading)."""
+        """Get or initialize KeyBERT model (lazy loading, thread-safe)."""
         if self._model is None:
-            from sentence_transformers import SentenceTransformer
-            import torch
+            with self._model_lock:
+                # Double-check pattern: another thread may have initialized while waiting
+                if self._model is None:
+                    from sentence_transformers import SentenceTransformer
+                    import torch
 
-            # Set default device to avoid GPU allocation when CPU is requested
-            # This prevents OOM errors on small GPUs when device='cpu' is specified
-            if self.device == "cpu":
-                with torch.device("cpu"):
-                    st_model = SentenceTransformer(self.model_name, device=self.device)
-                    self._model = KeyBERTModel(model=st_model)
-            else:
-                # For GPU or auto-detect, let SentenceTransformer handle device
-                st_model = SentenceTransformer(self.model_name, device=self.device)
-                self._model = KeyBERTModel(model=st_model)
+                    # Set default device to avoid GPU allocation when CPU is requested
+                    # This prevents OOM errors on small GPUs when device='cpu' is specified
+                    if self.device == "cpu":
+                        with torch.device("cpu"):
+                            st_model = SentenceTransformer(
+                                self.model_name, device=self.device
+                            )
+                            self._model = KeyBERTModel(model=st_model)
+                    else:
+                        # For GPU or auto-detect, let SentenceTransformer handle device
+                        st_model = SentenceTransformer(
+                            self.model_name, device=self.device
+                        )
+                        self._model = KeyBERTModel(model=st_model)
         return self._model
 
     def extract(self, text: str, max_keywords: int = 20) -> List[ScoredKeyword]:

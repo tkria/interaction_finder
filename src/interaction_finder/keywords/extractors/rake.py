@@ -49,7 +49,6 @@ class RAKEExtractor(KeywordExtractor):
             )
         self.min_length = min_length
         self.max_length = max_length
-        self._rake = Rake(min_length=min_length, max_length=max_length)
 
     @property
     def name(self) -> str:
@@ -73,9 +72,11 @@ class RAKEExtractor(KeywordExtractor):
             raise ValueError("Text cannot be empty")
         if max_keywords < 1:
             raise ValueError(f"max_keywords must be >= 1, got {max_keywords}")
+        # Create fresh Rake instance for thread safety (avoids shared mutable state)
+        rake = Rake(min_length=self.min_length, max_length=self.max_length)
         # Extract keywords and get scores
-        self._rake.extract_keywords_from_text(text)
-        ranked = self._rake.get_ranked_phrases_with_scores()
+        rake.extract_keywords_from_text(text)
+        ranked = rake.get_ranked_phrases_with_scores()
         # Handle empty results
         if not ranked:
             logfire.info("RAKE: no keywords extracted from text", text_length=len(text))

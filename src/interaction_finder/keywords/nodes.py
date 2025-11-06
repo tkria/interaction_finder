@@ -5,6 +5,7 @@ return type annotations. All branching and looping happens in nodes;
 agents only produce typed data.
 """
 
+import asyncio
 from dataclasses import dataclass
 from typing import Union
 
@@ -267,15 +268,66 @@ class FetchDocumentsNode(BaseNode[State, Deps, BridgingTermsOut]):
             return ExtractKeywordsNode()
 
 
+async def _extract_keywords_async(extractor, text: str, max_keywords: int):
+    """Run single extractor in thread pool (extractors are CPU-bound).
+
+    Parameters:
+        extractor — extractor instance with extract() method
+        text: str — document text
+        max_keywords: int — maximum keywords per extractor
+
+    Returns:
+        list[ScoredKeyword] — extracted keywords, or empty list on error
+    """
+    try:
+        # Run CPU-bound extraction in thread pool to avoid blocking event loop
+        return await asyncio.to_thread(extractor.extract, text, max_keywords)
+    except Exception as e:
+        # Return error info for caller to log
+        return e
+
+
+async def _extract_from_resource(resource, extractors: dict, max_keywords: int):
+    """Extract keywords from single resource using all extractors (parallel).
+
+    Parameters:
+        resource — resource with .id.url, .title, .text attributes
+        extractors: dict — {name: extractor} mapping
+        max_keywords: int — maximum keywords per extractor
+
+    Returns:
+        tuple[str, list[ScoredKeyword], list[tuple[str, Exception]]] —
+            (url, combined_keywords, failed_extractors)
+    """
+    # Run all extractors in parallel for this resource
+    tasks = [
+        _extract_keywords_async(extractor, resource.text, max_keywords)
+        for extractor in extractors.values()
+    ]
+    results = await asyncio.gather(*tasks)
+    # Separate successful extractions from failures
+    doc_keywords = []
+    failed = []
+    for (name, _), result in zip(extractors.items(), results):
+        if isinstance(result, Exception):
+            failed.append((name, result))
+        else:
+            doc_keywords.extend(result)
+    return (resource.id.url, resource.title, doc_keywords, failed)
+
+
 @dataclass
 class ExtractKeywordsNode(BaseNode[State, Deps, BridgingTermsOut]):
     """Extract keywords from all fetched documents using multiple methods.
 
-    Runs all extractors (RAKE, YAKE, TF-IDF, KeyBERT) on each document.
+    Runs all extractors (RAKE, YAKE, TF-IDF, KeyBERT) concurrently on each
+    document, with two-level parallelism:
+    - Resource-level: process multiple documents in parallel
+    - Extractor-level: run all extractors on each document in parallel
     """
 
     async def run(self, ctx: GraphRunContext[State, Deps]) -> "EvaluateKeywordsNode":
-        """Extract keywords from all documents in resource pool."""
+        """Extract keywords from all documents in resource pool (parallel)."""
         resources = ctx.deps.resource_pool.resources
         with logfire.span("ExtractKeywordsNode", num_resources=len(resources)):
             if not resources:
@@ -290,27 +342,24 @@ class ExtractKeywordsNode(BaseNode[State, Deps, BridgingTermsOut]):
                     "No resources to extract keywords from, skipping to finalization"
                 )
                 return FinalizeNode()
-            # Extract keywords for each resource
-            for resource in new_resources:
-                doc_keywords = []
-                # Run all extractors
-                for name, extractor in ctx.deps.extractors.items():
-                    try:
-                        keywords = extractor.extract(
-                            resource.text, max_keywords=max_keywords
-                        )
-                        doc_keywords.extend(keywords)
-                    except Exception as e:
-                        logfire.warning(
-                            f"Extractor {name} failed for document",
-                            extractor=name,
-                            url=resource.id.url,
-                            title=resource.title[:60],
-                            error=str(e),
-                        )
-                        continue
-                # Store keywords for this document
-                ctx.state.extracted_keywords[resource.id.url] = doc_keywords
+            # Extract keywords in parallel: both resources AND extractors within each resource
+            tasks = [
+                _extract_from_resource(resource, ctx.deps.extractors, max_keywords)
+                for resource in new_resources
+            ]
+            results = await asyncio.gather(*tasks)
+            # Process results and log any failures
+            for url, title, doc_keywords, failed in results:
+                ctx.state.extracted_keywords[url] = doc_keywords
+                # Log any extractor failures
+                for name, error in failed:
+                    logfire.warning(
+                        f"Extractor {name} failed for document",
+                        extractor=name,
+                        url=url,
+                        title=title[:60],
+                        error=str(error),
+                    )
             total_keywords = sum(
                 len(kws) for kws in ctx.state.extracted_keywords.values()
             )
