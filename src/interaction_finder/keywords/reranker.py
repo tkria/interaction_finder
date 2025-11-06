@@ -127,6 +127,57 @@ class Reranker:
             logfire.info(f"Reranking complete: returned {len(final_results)} results")
             return final_results
 
+    def rerank_terms(
+        self, query: str, terms: List[str], top_k: int | None = None
+    ) -> List[tuple[str, float]]:
+        """Rerank terms by semantic similarity to query.
+
+        Parameters:
+            query: str — search query (typically the research topic)
+            terms: List[str] — terms to rerank
+            top_k: int | None — return only top k terms (None = all)
+
+        Returns:
+            List[tuple[str, float]] — (term, score) tuples sorted by score descending
+
+        Raises:
+            ValueError — if query is empty or terms is empty
+        """
+        with logfire.span(
+            "Reranker.rerank_terms",
+            num_terms=len(terms),
+            top_k=top_k,
+            model=self.model_name,
+        ):
+            if not query or not query.strip():
+                raise ValueError("Query cannot be empty")
+            if not terms:
+                raise ValueError("Terms cannot be empty")
+            if top_k is not None and top_k < 1:
+                raise ValueError(f"top_k must be >= 1 or None, got {top_k}")
+            logfire.info(f"Reranking {len(terms)} terms for query: {query[:50]}...")
+            # Get model
+            model = self._get_model()
+            # Create query-term pairs
+            pairs = [[query, term] for term in terms]
+            # Compute scores
+            scores = model.predict(pairs, batch_size=1)
+            # Normalize scores using sigmoid
+            import math
+
+            scored_terms = []
+            for term, score in zip(terms, scores):
+                # Apply sigmoid to convert logit to probability
+                normalized_score = 1.0 / (1.0 + math.exp(-float(score)))
+                scored_terms.append((term, normalized_score))
+            # Sort by score descending
+            scored_terms.sort(key=lambda x: x[1], reverse=True)
+            # Return top_k or all
+            if top_k is not None:
+                scored_terms = scored_terms[:top_k]
+            logfire.info(f"Reranking complete: returned {len(scored_terms)} terms")
+            return scored_terms
+
     def healthy(self) -> bool:
         """Check if reranker is ready (model can be loaded)."""
         try:

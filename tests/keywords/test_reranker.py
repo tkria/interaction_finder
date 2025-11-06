@@ -202,3 +202,82 @@ class TestReranker:
         assert reranker.healthy() is True
         # Model should now be loaded
         assert reranker._model is not None
+
+    @pytest.mark.slow
+    def test_rerank_terms_basic(self, cpu_reranker):
+        """Test reranking terms by relevance to query."""
+        reranker = cpu_reranker
+        query = "machine learning neural networks"
+        terms = [
+            "cooking techniques",
+            "deep learning",
+            "supervised learning",
+            "gardening tips",
+            "reinforcement learning",
+        ]
+        # Rerank terms
+        scored_terms = reranker.rerank_terms(query, terms)
+        # Check output format
+        assert len(scored_terms) == len(terms)
+        assert all(isinstance(t, tuple) for t in scored_terms)
+        assert all(len(t) == 2 for t in scored_terms)
+        # Unpack terms and scores
+        result_terms = [term for term, _ in scored_terms]
+        result_scores = [score for _, score in scored_terms]
+        # All terms should be present
+        assert set(result_terms) == set(terms)
+        # Scores should be in [0, 1] range
+        assert all(0 <= score <= 1 for score in result_scores)
+        # Scores should be sorted descending
+        assert result_scores == sorted(result_scores, reverse=True)
+        # Verify reranking produces different ordering (not just identity)
+        assert result_terms != terms
+
+    @pytest.mark.slow
+    def test_rerank_terms_with_top_k(self, cpu_reranker):
+        """Test rerank_terms respects top_k parameter."""
+        reranker = cpu_reranker
+        query = "machine learning"
+        terms = [f"term_{i}" for i in range(10)]
+        # Rerank with top_k=3
+        scored_terms = reranker.rerank_terms(query, terms, top_k=3)
+        assert len(scored_terms) == 3
+        # All should have scores in [0, 1]
+        assert all(0 <= score <= 1 for _, score in scored_terms)
+        # Scores should be descending
+        scores = [score for _, score in scored_terms]
+        assert scores == sorted(scores, reverse=True)
+
+    def test_rerank_terms_empty_query_raises(self, cpu_reranker):
+        """Test rerank_terms raises on empty query."""
+        reranker = cpu_reranker
+        terms = ["term1", "term2"]
+        with pytest.raises(ValueError, match="Query cannot be empty"):
+            reranker.rerank_terms("", terms)
+        with pytest.raises(ValueError, match="Query cannot be empty"):
+            reranker.rerank_terms("   ", terms)
+
+    def test_rerank_terms_empty_terms_raises(self, cpu_reranker):
+        """Test rerank_terms raises on empty terms list."""
+        reranker = cpu_reranker
+        with pytest.raises(ValueError, match="Terms cannot be empty"):
+            reranker.rerank_terms("test query", [])
+
+    def test_rerank_terms_invalid_top_k(self, cpu_reranker):
+        """Test rerank_terms raises on invalid top_k."""
+        reranker = cpu_reranker
+        terms = ["term1", "term2"]
+        with pytest.raises(ValueError, match="top_k must be >= 1"):
+            reranker.rerank_terms("test query", terms, top_k=0)
+
+    @pytest.mark.slow
+    def test_rerank_terms_single_term(self, cpu_reranker):
+        """Test rerank_terms with single term."""
+        reranker = cpu_reranker
+        query = "test"
+        terms = ["single_term"]
+        scored_terms = reranker.rerank_terms(query, terms)
+        assert len(scored_terms) == 1
+        term, score = scored_terms[0]
+        assert term == "single_term"
+        assert 0 <= score <= 1
