@@ -77,7 +77,7 @@ class DocumentSummaryOut(BaseModel):
     """
 
     summary: str = Field(
-        min_length=50, max_length=500, description="Concise summary of document content"
+        min_length=50, max_length=750, description="Concise summary of document content"
     )
     related_areas: list[str] = Field(
         description="Research areas related to topic worth investigating further"
