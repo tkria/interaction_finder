@@ -1124,9 +1124,10 @@ class ResourcePool(BaseModel):
             ValueError: If URL already exists in pool
         """
         # Check if URL already registered
+        url_plain = urlunparse(urlparse(url)._replace(fragment=""))
         for resource_id in self.resource_map.keys():
-            if resource_id.url == url:
-                raise ValueError(f"Resource with url {url} already exists")
+            if resource_id.url == url_plain:
+                raise ValueError(f"Resource with url {url_plain} already exists")
 
         # Generate new ResourceId using map size as counter
         counter = len(self.resource_map) + 1
