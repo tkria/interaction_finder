@@ -1,8 +1,9 @@
-"""Pytest configuration for keywords tests."""
+"""Pytest configuration for keywords tests with taint-based conditional execution."""
 
 import os
 
 import pytest
+from tests.conftest_helpers import skip_unless_tainted
 
 
 def has_openai_key() -> bool:
@@ -24,8 +25,19 @@ def pytest_configure(config):
     )
 
 
+# Create the taint-based hook from skip_unless_tainted
+_taint_based_hook = skip_unless_tainted("keywords")
+
+
 def pytest_collection_modifyitems(config, items):
-    """Skip tests requiring OpenAI if real API key not available."""
+    """Apply both taint-based skipping and OpenAI key checking.
+
+    First applies taint-based conditional execution, then overlays
+    OpenAI API key checks for tests marked with requires_openai.
+    """
+    # Apply taint-based skipping first
+    _taint_based_hook(config, items)
+    # Then apply OpenAI key checking on top
     # Check if we're using the dummy key
     key = os.getenv("OPENAI_API_KEY", "")
     if key and not key.startswith("sk-test-dummy"):
