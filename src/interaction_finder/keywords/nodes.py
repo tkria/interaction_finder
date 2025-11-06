@@ -368,26 +368,27 @@ class EvaluateKeywordsNode(BaseNode[State, Deps, BridgingTermsOut]):
 **Your task:**
 1. Summary: Concisely describe what this document contributes to understanding the target topic
 2. Related research areas: List research areas that connect to the target topic
-3. Bridging terms: Identify 5-10 HIGH-QUALITY bridging terms, using the extracted keywords as guidance
+3. Bridging terms: Identify 5-10 HIGH-QUALITY bridging terms
 
-**BRIDGING TERM SELECTION CRITERIA:**
+The extracted keywords above are suggestions—you may use them directly, combine them, or identify better terms from the document content.
 
-✓ **INCLUDE terms that:**
-  - Are directly and centrally related to "{ctx.state.topic}"
-  - Represent specific mechanisms, pathways, genes, or entities relevant to the topic
-  - Would appear in titles/abstracts of highly relevant papers about the topic
-  - Use established scientific terminology (not generic descriptions)
+**BRIDGING TERM REQUIREMENTS:**
 
-✗ **EXCLUDE terms that:**
-  - Are the target topic itself or trivial variants
-  - Are overly generic ("genetic factors", "molecular mechanisms", "risk factors", "clinical outcomes")
-  - Primarily relate to subtopics mentioned in the document rather than the main topic
-  - Are methodological unless highly specific to the topic
-  - Are descriptive phrases (prefer concise technical terms)
+Each bridging term must:
+  - Be a specific concept, mechanism, pathway, gene, protein, or biological entity
+  - Be directly relevant to "{ctx.state.topic}" (not to tangential topics mentioned in the document)
+  - Use precise scientific terminology (e.g., "BMPR2 gene" not "genetic mutations")
+  - Be a term that commonly appears in scientific literature about the target topic
 
-**Quality test:** For each term, ask "Would searching [term] + {ctx.state.topic} find highly relevant papers?" If uncertain, exclude it.
+**EXCLUDE:**
+  - The target topic itself or obvious rewordings
+  - Generic research terms: "genetic factors", "molecular mechanisms", "risk factors", "clinical outcomes", "biomarkers", "pathogenesis"
+  - Methodological terms: "genome-wide association studies", "next-generation sequencing", "statistical analysis"
+  - Multi-word descriptive phrases: prefer concise established terms (e.g., "endothelial dysfunction" not "dysfunction of endothelial cells")
 
-Focus on precision over coverage—select fewer, higher-quality terms."""
+**Test:** For each term, ask "Would this term appear frequently in papers specifically about {ctx.state.topic}?" If no, exclude it.
+
+Select fewer, higher-quality terms rather than reaching for quantity."""
                 usage = RunUsage()
                 summary_result = await document_summarizer_agent.run(
                     summary_prompt, deps=ctx.deps, usage=usage
