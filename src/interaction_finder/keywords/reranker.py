@@ -17,30 +17,36 @@ class Reranker:
     Parameters:
         model_name: str — cross-encoder model name (default: zeroentropy/zerank-1-small)
         batch_size: int — batch size for encoding (default: 32)
+        device: str | None — device to run model on ('cpu', 'cuda', or None for auto)
     """
 
     def __init__(
         self,
         model_name: str = "zeroentropy/zerank-1-small",
         batch_size: int = 32,
+        device: str | None = None,
     ):
         """Initialize reranker with cross-encoder model.
 
         Parameters:
             model_name: str — cross-encoder model for reranking
             batch_size: int — batch size for processing
+            device: str | None — device to run model on ('cpu', 'cuda', or None for auto-select)
         """
         if batch_size < 1:
             raise ValueError(f"batch_size must be >= 1, got {batch_size}")
         self.model_name = model_name
         self.batch_size = batch_size
+        self.device = device
         # Lazy initialization
         self._model = None
 
     def _get_model(self) -> CrossEncoder:
         """Get or initialize CrossEncoder model (lazy loading)."""
         if self._model is None:
-            self._model = CrossEncoder(self.model_name, max_length=512)
+            self._model = CrossEncoder(
+                self.model_name, max_length=512, device=self.device
+            )
         return self._model
 
     def rerank(

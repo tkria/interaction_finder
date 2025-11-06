@@ -76,6 +76,10 @@ class IfetcherConfig(BaseModel):
                 "zeroentropy/zerank-1-small",
                 description="Reranking model name",
             )
+            reranker_device: str | None = Field(
+                None,
+                description="Device for reranker model ('cpu', 'cuda', or None for auto)",
+            )
             llm_model: str = Field(
                 "openai:gpt-4o-mini", description="LLM model for agents"
             )

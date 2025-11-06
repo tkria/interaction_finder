@@ -21,6 +21,15 @@ class TestReranker:
         assert reranker.model_name == "custom-model"
         assert reranker.batch_size == 16
 
+    def test_initialization_with_device(self):
+        """Test Reranker initialization with device parameter."""
+        reranker_cpu = Reranker(device="cpu")
+        assert reranker_cpu.device == "cpu"
+        reranker_cuda = Reranker(device="cuda")
+        assert reranker_cuda.device == "cuda"
+        reranker_auto = Reranker(device=None)
+        assert reranker_auto.device is None
+
     def test_initialization_invalid_batch_size(self):
         """Test Reranker rejects invalid batch_size."""
         with pytest.raises(ValueError, match="batch_size must be >= 1"):
