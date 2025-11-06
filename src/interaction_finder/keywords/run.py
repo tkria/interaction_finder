@@ -49,7 +49,6 @@ async def run_keyword_research(
         topic=topic,
         max_rounds=config.tools.keywords.max_rounds,
     ):
-        logfire.info(f"Starting keyword research for topic: {topic}")
         # Extract configuration
         kw_config = config.tools.keywords
         # Create async HTTP client
@@ -91,9 +90,6 @@ async def run_keyword_research(
                     device=kw_config.keybert.device,
                 ),
             }
-            logfire.info(
-                f"Initialized {len(extractors)} extractors: {list(extractors.keys())}"
-            )
             # Initialize resource pool
             resource_pool = ResourcePool()
             # Create dependencies
@@ -114,11 +110,8 @@ async def run_keyword_research(
             state = State(topic=topic, max_rounds=kw_config.max_rounds)
             # Run graph
             result = await graph.run(ExpandQueryNode(), state=state, deps=deps)
-            # Log completion
             logfire.info(
-                f"Keyword research completed: {len(result.output.terms)} bridging terms found, "
-                f"{result.output.total_documents_processed} documents processed, "
-                f"{result.output.rounds_completed} rounds"
+                f"Completed: {len(result.output.terms)} bridging terms from {result.output.total_documents_processed} documents in {result.output.rounds_completed} rounds",
+                terms=result.output.terms,
             )
-            # Return output
             return result.output

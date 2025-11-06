@@ -123,12 +123,15 @@ class TestBridgingTermsOut:
         resource_pool = ResourcePool()
         model = BridgingTermsOut(
             terms=["term1", "term2", "term3"],
+            scores=[0.9, 0.8, 0.7],
             total_documents_processed=5,
             rounds_completed=2,
             coverage_assessment="Found comprehensive coverage of topic with 3 bridging terms",
             resources=resource_pool,
         )
         assert len(model.terms) == 3
+        assert len(model.scores) == 3
+        assert model.scores == [0.9, 0.8, 0.7]
         assert model.total_documents_processed == 5
         assert model.rounds_completed == 2
         assert model.resources == resource_pool
@@ -138,6 +141,7 @@ class TestBridgingTermsOut:
         with pytest.raises(ValidationError):
             BridgingTermsOut(
                 terms=[],
+                scores=[],
                 total_documents_processed=-1,
                 rounds_completed=1,
                 coverage_assessment="Assessment text here",
@@ -149,6 +153,7 @@ class TestBridgingTermsOut:
         with pytest.raises(ValidationError):
             BridgingTermsOut(
                 terms=[],
+                scores=[],
                 total_documents_processed=0,
                 rounds_completed=0,
                 coverage_assessment="Assessment text here",

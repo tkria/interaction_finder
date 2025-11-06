@@ -42,9 +42,6 @@ class ExpandQueryNode(BaseNode[State, Deps, BridgingTermsOut]):
         ):
             # Increment round counter
             ctx.state.current_round += 1
-            logfire.info(
-                f"Expanding queries for round {ctx.state.current_round}: {ctx.state.topic}"
-            )
             # Use query expander agent
             usage = RunUsage()
             result = await query_expander_agent.run(
@@ -54,7 +51,11 @@ class ExpandQueryNode(BaseNode[State, Deps, BridgingTermsOut]):
             )
             # Store queries in state
             ctx.state.search_queries = result.output.queries
-            logfire.info(f"Generated {len(result.output.queries)} search queries")
+            logfire.info(
+                f"Generated {len(result.output.queries)} queries for round {ctx.state.current_round}",
+                queries=result.output.queries,
+                reasoning=result.output.reasoning[:200],
+            )
             return SearchNode()
 
 
@@ -121,8 +122,7 @@ class SelectResultsNode(BaseNode[State, Deps, BridgingTermsOut]):
             "SelectResultsNode", num_results=len(ctx.state.all_search_results)
         ):
             if not ctx.state.all_search_results:
-                logfire.info("No results available, skipping to finalization")
-                # No results available, skip to finalization
+                logfire.info("No search results available, skipping to finalization")
                 return FinalizeNode()
             # Prepare context for agent
             results_context = "\n\n".join(
@@ -150,7 +150,11 @@ Select the indices of results that are most likely to be valuable review article
                 for i in selected_indices
                 if i < len(ctx.state.all_search_results)
             ]
-            logfire.info(f"Selected {len(ctx.state.selected_results)} results to fetch")
+            logfire.info(
+                f"Selected {len(ctx.state.selected_results)} results from {len(ctx.state.all_search_results)} available",
+                selected_titles=[r.title[:60] for r in ctx.state.selected_results],
+                reasoning=result.output.reasoning[:200],
+            )
             return FetchDocumentsNode()
 
 
@@ -181,23 +185,28 @@ class FetchDocumentsNode(BaseNode[State, Deps, BridgingTermsOut]):
                     resource_ids_map[result.url] = rid
             # Skip fetching if all URLs already processed
             if not urls_to_fetch:
-                logfire.info("All URLs already fetched, skipping to extraction")
+                logfire.info(
+                    f"All {len(ctx.state.selected_results)} documents cached, proceeding to extraction"
+                )
                 return ExtractKeywordsNode()
-            logfire.info(f"Fetching {len(urls_to_fetch)} new documents")
             # Fetch only new URLs
             urls = [url for url, _ in urls_to_fetch]
             contents = await ctx.deps.fetcher.get_markdown(
                 urls, progress=False, fail_fast=False, retry=False
             )
-            # Add content to resource pool
+            # Add content to resource pool and track failures
             fetched_count = 0
+            failed_count = 0
             for (url, title), content in zip(urls_to_fetch, contents):
                 if content:
                     rid = resource_ids_map[url]
                     ctx.deps.resource_pool.add_content(rid, title, content)
                     fetched_count += 1
+                else:
+                    failed_count += 1
+            cached_count = len(ctx.state.selected_results) - len(urls_to_fetch)
             logfire.info(
-                f"Successfully fetched {fetched_count}/{len(urls_to_fetch)} documents"
+                f"Fetched {fetched_count}/{len(urls_to_fetch)} new documents ({cached_count} from cache, {failed_count} failed)"
             )
             return ExtractKeywordsNode()
 
@@ -220,10 +229,11 @@ class ExtractKeywordsNode(BaseNode[State, Deps, BridgingTermsOut]):
             # Track already-processed URLs to avoid re-extraction
             already_processed = set(ctx.state.extracted_keywords.keys())
             new_resources = [r for r in resources if r.id.url not in already_processed]
-            logfire.info(
-                f"Extracting keywords from {len(new_resources)} new documents "
-                f"({len(already_processed)} already processed)"
-            )
+            if not new_resources and not already_processed:
+                logfire.info(
+                    "No resources to extract keywords from, skipping to finalization"
+                )
+                return FinalizeNode()
             # Extract keywords for each resource
             for resource in new_resources:
                 doc_keywords = []
@@ -236,7 +246,11 @@ class ExtractKeywordsNode(BaseNode[State, Deps, BridgingTermsOut]):
                         doc_keywords.extend(keywords)
                     except Exception as e:
                         logfire.warning(
-                            f"Extractor {name} failed for {resource.id.url}: {e}"
+                            f"Extractor {name} failed for document",
+                            extractor=name,
+                            url=resource.id.url,
+                            title=resource.title[:60],
+                            error=str(e),
                         )
                         continue
                 # Store keywords for this document
@@ -244,7 +258,9 @@ class ExtractKeywordsNode(BaseNode[State, Deps, BridgingTermsOut]):
             total_keywords = sum(
                 len(kws) for kws in ctx.state.extracted_keywords.values()
             )
-            logfire.info(f"Extracted {total_keywords} total keywords")
+            logfire.info(
+                f"Extracted {total_keywords} keywords from {len(new_resources)} new documents ({len(already_processed)} previously processed)"
+            )
             return EvaluateKeywordsNode()
 
 
@@ -266,10 +282,8 @@ class EvaluateKeywordsNode(BaseNode[State, Deps, BridgingTermsOut]):
             if not ctx.state.extracted_keywords:
                 logfire.info("No extracted keywords, skipping to reflection")
                 return ReflectNode()
-            logfire.info(
-                f"Evaluating keywords for {len(ctx.state.extracted_keywords)} documents"
-            )
             # Process each document
+            total_bridging = 0
             for url, keywords in ctx.state.extracted_keywords.items():
                 # Get content from resource pool
                 resource = ctx.deps.resource_pool.get(url)
@@ -292,7 +306,10 @@ Provide a summary, related research areas, and bridging terms that would help fi
                 )
                 # Store summary
                 ctx.state.document_summaries.append(summary_result.output)
-            logfire.info(f"Generated {len(ctx.state.document_summaries)} summaries")
+                total_bridging += len(summary_result.output.bridging_terms)
+            logfire.info(
+                f"Generated {len(ctx.state.document_summaries)} summaries with {total_bridging} bridging terms total"
+            )
             return ReflectNode()
 
 
@@ -316,16 +333,12 @@ class ReflectNode(BaseNode[State, Deps, BridgingTermsOut]):
         ):
             # Check iteration limit
             if ctx.state.current_round >= ctx.state.max_rounds:
-                logfire.info(f"Reached max rounds ({ctx.state.max_rounds}), finalizing")
+                logfire.info(f"Max rounds reached ({ctx.state.max_rounds}), finalizing")
                 return FinalizeNode()
             # Check if we have any summaries
             if not ctx.state.document_summaries:
-                logfire.info("No document summaries, finalizing")
-                # No documents processed, stop
+                logfire.info("No document summaries available, finalizing")
                 return FinalizeNode()
-            logfire.info(
-                f"Reflecting on {len(ctx.state.document_summaries)} documents in round {ctx.state.current_round}"
-            )
             # Prepare summaries for agent
             summaries_text = "\n\n".join(
                 [
@@ -351,11 +364,14 @@ Decide whether coverage is sufficient (stop) or more searches are needed (contin
             result = await reflector_agent.run(prompt, deps=ctx.deps, usage=usage)
             # Make decision
             decision = result.output.decision
-            logfire.info(f"Reflection decision: {decision}")
+            logfire.info(
+                f"Reflection: {decision} after round {ctx.state.current_round}",
+                decision=decision,
+                reasoning=result.output.reasoning,
+                new_search_angles=result.output.new_search_angles,
+            )
             if decision == "stop":
                 return FinalizeNode()
-            # Continue with new search angles
-            # Note: In a full implementation, we'd use new_search_angles to guide the next ExpandQuery
             return ExpandQueryNode()
 
 
@@ -384,7 +400,7 @@ class FinalizeNode(BaseNode[State, Deps, BridgingTermsOut]):
             all_terms = list(terms_by_normalized.values())
             # Handle empty results
             if not all_terms:
-                logfire.info("No bridging terms found")
+                logfire.info("No bridging terms found after deduplication")
                 return End(
                     BridgingTermsOut(
                         terms=[],
@@ -400,9 +416,6 @@ class FinalizeNode(BaseNode[State, Deps, BridgingTermsOut]):
                     )
                 )
             # Rerank terms by semantic similarity to topic
-            logfire.info(
-                f"Reranking {len(all_terms)} bridging terms by topic relevance"
-            )
             scored_terms = ctx.deps.reranker.rerank_terms(ctx.state.topic, all_terms)
             # Extract terms and scores
             final_terms = [term for term, _ in scored_terms]
@@ -415,7 +428,10 @@ class FinalizeNode(BaseNode[State, Deps, BridgingTermsOut]):
                 f"ranked by semantic relevance to topic."
             )
             logfire.info(
-                f"Finalized: {len(final_terms)} bridging terms from {len(ctx.state.document_summaries)} documents"
+                f"Finalized: {len(final_terms)} bridging terms from {len(ctx.state.document_summaries)} documents",
+                top_5=[
+                    (t, f"{s:.3f}") for t, s in zip(final_terms[:5], final_scores[:5])
+                ],
             )
             # Return final result
             return End(

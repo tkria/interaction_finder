@@ -63,40 +63,37 @@ class YAKEExtractor(KeywordExtractor):
         Raises:
             ValueError — if text is empty or max_keywords < 1
         """
-        with logfire.span(
-            "YAKEExtractor.extract",
-            text_length=len(text),
-            max_keywords=max_keywords,
-            n_grams=self.n_grams,
-        ):
-            if not text or not text.strip():
-                raise ValueError("Text cannot be empty")
-            if max_keywords < 1:
-                raise ValueError(f"max_keywords must be >= 1, got {max_keywords}")
-            # Create YAKE extractor instance
-            # YAKE scores are lower=better, so we'll need to invert them
-            kw_extractor = yake_lib.KeywordExtractor(
-                lan="en",
-                n=self.n_grams,
-                dedupLim=self.deduplication_threshold,
-                dedupFunc="seqm",
-                windowsSize=self.window_size,
-                top=max_keywords,
-            )
-            # Extract keywords
-            keywords = kw_extractor.extract_keywords(text)
-            # Handle empty results
-            if not keywords:
-                logfire.info("YAKE extracted 0 keywords")
-                return []
-            # YAKE scores are inverted (lower is better), so we convert to higher=better
-            # and normalize to [0, 1]
-            # We use 1 / (1 + score) to convert, which maps [0, inf) -> (0, 1]
-            results = []
-            for phrase, score in keywords:
-                normalized_score = 1.0 / (1.0 + score)
-                results.append(ScoredKeyword(keyword=phrase, score=normalized_score))
-            # Sort by score descending
-            results.sort(key=lambda x: x.score, reverse=True)
-            logfire.info(f"YAKE extracted {len(results)} keywords")
-            return results
+        if not text or not text.strip():
+            raise ValueError("Text cannot be empty")
+        if max_keywords < 1:
+            raise ValueError(f"max_keywords must be >= 1, got {max_keywords}")
+        # Create YAKE extractor instance
+        # YAKE scores are lower=better, so we'll need to invert them
+        kw_extractor = yake_lib.KeywordExtractor(
+            lan="en",
+            n=self.n_grams,
+            dedupLim=self.deduplication_threshold,
+            dedupFunc="seqm",
+            windowsSize=self.window_size,
+            top=max_keywords,
+        )
+        # Extract keywords
+        keywords = kw_extractor.extract_keywords(text)
+        # Handle empty results
+        if not keywords:
+            logfire.info("YAKE: no keywords extracted from text", text_length=len(text))
+            return []
+        # YAKE scores are inverted (lower is better), so we convert to higher=better
+        # and normalize to [0, 1]
+        # We use 1 / (1 + score) to convert, which maps [0, inf) -> (0, 1]
+        results = []
+        for phrase, score in keywords:
+            normalized_score = 1.0 / (1.0 + score)
+            results.append(ScoredKeyword(keyword=phrase, score=normalized_score))
+        # Sort by score descending
+        results.sort(key=lambda x: x.score, reverse=True)
+        logfire.info(
+            f"YAKE: extracted {len(results)} keywords",
+            top_3=[kw.keyword for kw in results[:3]],
+        )
+        return results
