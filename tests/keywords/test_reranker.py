@@ -6,6 +6,12 @@ from interaction_finder.keywords.reranker import Reranker
 from interaction_finder.search.models import SearchResult
 
 
+@pytest.fixture
+def cpu_reranker():
+    """Reranker instance configured to use CPU (avoids GPU OOM in tests)."""
+    return Reranker(device="cpu")
+
+
 class TestReranker:
     """Test suite for semantic reranker."""
 
@@ -36,9 +42,9 @@ class TestReranker:
             Reranker(batch_size=0)
 
     @pytest.mark.slow
-    def test_rerank_basic_results(self):
+    def test_rerank_basic_results(self, cpu_reranker):
         """Test reranking improves relevance ordering."""
-        reranker = Reranker()
+        reranker = cpu_reranker
         query = "machine learning neural networks"
         # Create results with varying relevance
         results = [
@@ -75,9 +81,9 @@ class TestReranker:
         original_urls = {r.url for r in results}
         assert reranked_urls == original_urls
 
-    def test_rerank_empty_query_raises(self):
+    def test_rerank_empty_query_raises(self, cpu_reranker):
         """Test reranking raises on empty query."""
-        reranker = Reranker()
+        reranker = cpu_reranker
         results = [
             SearchResult(title="Test", url="http://example.com", snippet="Test snippet")
         ]
@@ -86,15 +92,15 @@ class TestReranker:
         with pytest.raises(ValueError, match="Query cannot be empty"):
             reranker.rerank("   ", results)
 
-    def test_rerank_empty_results_raises(self):
+    def test_rerank_empty_results_raises(self, cpu_reranker):
         """Test reranking raises on empty results."""
-        reranker = Reranker()
+        reranker = cpu_reranker
         with pytest.raises(ValueError, match="Results cannot be empty"):
             reranker.rerank("test query", [])
 
-    def test_rerank_invalid_top_k(self):
+    def test_rerank_invalid_top_k(self, cpu_reranker):
         """Test reranking raises on invalid top_k."""
-        reranker = Reranker()
+        reranker = cpu_reranker
         results = [
             SearchResult(title="Test", url="http://example.com", snippet="Test snippet")
         ]
@@ -102,9 +108,9 @@ class TestReranker:
             reranker.rerank("test query", results, top_k=0)
 
     @pytest.mark.slow
-    def test_rerank_with_top_k(self):
+    def test_rerank_with_top_k(self, cpu_reranker):
         """Test reranking respects top_k parameter."""
-        reranker = Reranker()
+        reranker = cpu_reranker
         query = "machine learning"
         results = [
             SearchResult(
@@ -121,9 +127,9 @@ class TestReranker:
         assert all(r.relevance is not None for r in reranked)
 
     @pytest.mark.slow
-    def test_rerank_handles_missing_snippets(self):
+    def test_rerank_handles_missing_snippets(self, cpu_reranker):
         """Test reranking handles results without snippets."""
-        reranker = Reranker()
+        reranker = cpu_reranker
         query = "test query"
         results = [
             SearchResult(title="Article 1", url="http://example.com/1", snippet=None),
@@ -138,9 +144,9 @@ class TestReranker:
         assert len(reranked) == 2
 
     @pytest.mark.slow
-    def test_rerank_single_result(self):
+    def test_rerank_single_result(self, cpu_reranker):
         """Test reranking with single result."""
-        reranker = Reranker()
+        reranker = cpu_reranker
         query = "test"
         results = [
             SearchResult(
@@ -153,9 +159,9 @@ class TestReranker:
         assert 0 <= reranked[0].relevance <= 1
 
     @pytest.mark.slow
-    def test_score_normalization(self):
+    def test_score_normalization(self, cpu_reranker):
         """Test that scores are properly normalized to [0, 1]."""
-        reranker = Reranker()
+        reranker = cpu_reranker
         query = "machine learning algorithms"
         results = [
             SearchResult(
@@ -176,9 +182,9 @@ class TestReranker:
         assert reranked[0].relevance > reranked[1].relevance
 
     @pytest.mark.slow
-    def test_lazy_model_loading(self):
+    def test_lazy_model_loading(self, cpu_reranker):
         """Test that model is loaded lazily on first use."""
-        reranker = Reranker()
+        reranker = cpu_reranker
         # Model should be None before first rerank
         assert reranker._model is None
         # After rerank, model should be loaded
@@ -189,9 +195,9 @@ class TestReranker:
         assert reranker._model is not None
 
     @pytest.mark.slow
-    def test_healthy_check(self):
+    def test_healthy_check(self, cpu_reranker):
         """Test Reranker health check loads model successfully."""
-        reranker = Reranker()
+        reranker = cpu_reranker
         # Should be able to load model
         assert reranker.healthy() is True
         # Model should now be loaded
