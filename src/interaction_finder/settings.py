@@ -83,6 +83,12 @@ class IfetcherConfig(BaseModel):
             llm_model: str = Field(
                 "openai:gpt-4o-mini", description="LLM model for agents"
             )
+            document_context_chars: int = Field(
+                12000,
+                ge=1000,
+                le=50000,
+                description="Number of characters from document to send to LLM for evaluation",
+            )
 
             class RAKEConfig(BaseModel):
                 min_length: int = Field(1, ge=1, description="Minimum phrase length")

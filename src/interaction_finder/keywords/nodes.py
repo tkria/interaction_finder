@@ -19,10 +19,48 @@ from interaction_finder.keywords.agents import (
     result_selector_agent,
 )
 from interaction_finder.keywords.deps import Deps
+from interaction_finder.keywords.extractors.base import ScoredKeyword
 from interaction_finder.keywords.models import BridgingTermsOut
 from interaction_finder.keywords.normalization import normalize_term_for_deduplication
 from interaction_finder.keywords.state import State
 from interaction_finder.search.models import SearchQuery
+
+
+def _clean_keywords_for_display(
+    keywords: list[ScoredKeyword], max_keywords: int = 30
+) -> str:
+    """Remove obvious noise from keywords before LLM evaluation.
+
+    Filters out extraction artifacts like figure numbers, copyright notices,
+    and formatting marks. Selects top keywords by score after filtering.
+
+    Parameters:
+        keywords: list[ScoredKeyword] — keywords to clean
+        max_keywords: int — maximum number of keywords to return (default: 30)
+
+    Returns:
+        str — comma-separated cleaned keywords
+    """
+    import re
+
+    noise_patterns = [
+        r"copyright|©|disclaimer",
+        r"^(figure|fig|table)\b",
+        r"^[*#\d\s.()]+$",
+    ]
+
+    cleaned = []
+    for kw in keywords[:50]:  # Consider top 50 by score
+        keyword = kw.keyword.strip()
+        # Skip very short/long
+        if len(keyword) < 3 or len(keyword) > 80:
+            continue
+        # Skip if matches noise
+        if any(re.search(p, keyword, re.IGNORECASE) for p in noise_patterns):
+            continue
+        cleaned.append(keyword)
+
+    return ", ".join(cleaned[:max_keywords])
 
 
 @dataclass
@@ -289,17 +327,28 @@ class EvaluateKeywordsNode(BaseNode[State, Deps, BridgingTermsOut]):
                 resource = ctx.deps.resource_pool.get(url)
                 if not resource:
                     continue
-                # Format keywords for agent
-                keywords_text = ", ".join(set(kw.keyword for kw in keywords[:50]))
+                # Clean keywords for display to LLM
+                keywords_text = _clean_keywords_for_display(keywords)
+                # Get document context length from config
+                context_chars = ctx.deps.config.get("document_context_chars", 12000)
                 # Summarize document
-                summary_prompt = f"""Summarize this document about '{ctx.state.topic}' and identify bridging terms.
+                summary_prompt = f"""Summarize this document and identify bridging terms.
+
+**Target topic:** {ctx.state.topic}
 
 Document content:
-{resource.text[:3000]}...
+{resource.text[:context_chars]}
 
 Extracted keywords: {keywords_text}
 
-Provide a summary, related research areas, and bridging terms that would help find related literature."""
+---
+
+Provide:
+1. Summary: What does this document contribute to understanding the target topic?
+2. Related research areas: What other areas connect to the target topic?
+3. Bridging terms: 5-15 terms that would help us find more results related to the target topic
+
+IMPORTANT: Bridging terms should help us find more results related to the target topic: {ctx.state.topic}. Do not include the target topic itself or obvious variants."""
                 usage = RunUsage()
                 summary_result = await document_summarizer_agent.run(
                     summary_prompt, deps=ctx.deps, usage=usage

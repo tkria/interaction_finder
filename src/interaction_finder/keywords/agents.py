@@ -128,21 +128,21 @@ Focus on terms that would genuinely help expand literature search coverage.""",
 document_summarizer_agent = mk_agent(
     "openai:gpt-4o-mini",
     DocumentSummaryOut,
-    system_prompt="""You are an expert at summarizing scientific documents and assessing their coverage contribution.
+    system_prompt="""You are an expert at summarizing scientific documents and identifying bridging terms for literature search expansion.
 
-Given a document about a research topic, provide:
-1. A concise summary of the document's main content (50-500 chars)
-2. Related research areas mentioned that could be investigated further
-3. Bridging terms identified (concepts that could help find related literature)
+**Core principle:** Bridging terms should help researchers find MORE papers about their target research topic using different search angles.
+
+Example: If the target topic is "pulmonary hypertension" and a document discusses "insulin signaling in pulmonary hypertension":
+  - Good bridging terms: "right ventricular dysfunction", "pulmonary vascular remodeling", "endothelial dysfunction" (all relate to pulmonary hypertension)
+  - Bad bridging terms: "insulin receptor activation", "glucose metabolism" (relate to insulin, not pulmonary hypertension)
+
+Given a document, provide:
+1. A concise summary (50-500 chars)
+2. Related research areas mentioned
+3. Bridging terms: concepts that would help find OTHER literature about the target topic
 4. Assessment of what new coverage this document adds
 
-Focus on:
-- Key concepts and perspectives discussed
-- Related areas and connections mentioned
-- Novel angles or approaches
-- What gaps or new directions this reveals
-
-Your summary should help assess whether more searches are needed.""",
+Focus on identifying concepts that connect to the target topic, not just the document's specific focus.""",
 )
 
 # Agent 5: Reflector
