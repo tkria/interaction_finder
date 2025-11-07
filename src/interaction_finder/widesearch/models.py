@@ -21,7 +21,7 @@ class SubjectGoalsOut(BaseModel):
     goals: list[str] = Field(
         ...,
         min_length=3,
-        max_length=15,
+        max_length=20,
         description="Subject areas and research domains to cover during search",
     )
     reasoning: str = Field(
@@ -41,7 +41,7 @@ class QueryGenerationOut(BaseModel):
     queries: list[str] = Field(
         ...,
         min_length=1,
-        max_length=10,
+        max_length=15,
         description="Search queries targeting unsatisfied subject goals",
     )
     reasoning: str = Field(

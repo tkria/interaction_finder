@@ -85,15 +85,18 @@ def get_goal_planner_agent(model_name: str = "openai:gpt-4o-mini") -> Agent:
 
 Your task is to identify subject areas and research domains that should be covered to ensure comprehensive literature discovery on a given topic.
 
-Guidelines:
-- Consider the core topic and its direct applications
-- Identify related methodologies, techniques, and approaches
+Guidelines for Comprehensive Coverage:
+- Consider the core topic and its direct applications (basic and clinical research)
+- Identify related methodologies, techniques, and approaches (experimental, computational, clinical)
 - Think about adjacent research areas and intersecting domains
-- Consider both theoretical foundations and practical applications
+- Consider both theoretical foundations (mechanisms, pathways) and practical applications (diagnostics, therapeutics)
 - Include areas that might use different terminology for similar concepts
-- Aim for 5-10 well-defined subject goals that span the research landscape
+- Consider different research perspectives: molecular, cellular, systems-level, clinical, translational
+- Think broadly about what researchers in this field study: genetics, epigenetics, signaling, metabolism, imaging, biomarkers
+- Include both well-established areas and emerging/novel research directions
+- Aim for 8-15 well-defined subject goals that span the research landscape
 
-Your goals should guide query generation to ensure diverse, comprehensive coverage without drifting into irrelevance.""",
+Be ambitious about coverage - it's better to identify more goals that guide thorough exploration than to miss important research areas. Your goals should guide query generation to ensure diverse, comprehensive coverage without drifting into irrelevance.""",
         )
     return _agent_cache[cache_key]
 
@@ -121,16 +124,43 @@ Your task is to create diverse, targeted search queries that will find relevant 
 - A list of keyphrases to incorporate
 - Subject goals to target (unsatisfied areas needing coverage)
 
-Guidelines:
-- Generate 2-5 queries per round, prioritizing quality over quantity
+Core Strategy - Generate Queries at MULTIPLE COMPLEXITY LEVELS:
+
+1. BROAD queries (1-2 main concepts, 3-6 words):
+   - Simple combinations of core concepts
+   - High-level domain terms
+   - Example: "pulmonary hypertension genetics"
+   - These cast a wide net and ensure baseline coverage
+
+2. MEDIUM queries (2-3 concepts, 6-10 words):
+   - Combine specific mechanisms with conditions
+   - Balance specificity and breadth
+   - Example: "BMPR2 mutations pulmonary arterial hypertension"
+   - These target specific but well-documented areas
+
+3. FOCUSED queries (3+ concepts, 10-15 words):
+   - Highly specific research questions
+   - Combine multiple mechanisms, pathways, or contexts
+   - Example: "endothelial dysfunction inflammatory cytokines pulmonary arterial hypertension"
+   - These find specialized literature
+
+4. NON-TOPIC queries (without main topic terms):
+   - Use gene names, pathways, or mechanisms alone
+   - Example: "BMPR2 signaling endothelial dysfunction"
+   - These find papers that may not explicitly mention the condition but discuss relevant biology
+
+Query Generation Guidelines:
+- Generate 5-10 queries per round (aim higher when many goals are unsatisfied)
+- Include queries from ALL complexity levels above (don't only generate focused queries)
+- Prioritize breadth: cast a wide net before diving deep
 - Target unsatisfied subject goals explicitly
-- Incorporate provided keyphrases naturally into queries
+- Incorporate provided keyphrases naturally but don't force all keyphrases into every query
 - Use variations in terminology, synonyms, and related concepts
-- Balance specificity (to stay relevant) with breadth (to find diverse results)
-- Consider different angles: methodologies, applications, reviews, comparisons
+- Consider different angles: methodologies, applications, reviews, comparisons, case studies
+- Both include AND exclude the main topic terms across different queries
 - Avoid redundancy with previous queries
 
-Your queries should be suitable for academic search engines (PubMed, Google Scholar, etc.) and find papers that advance coverage of unsatisfied subject goals.""",
+Your queries should be suitable for academic search engines (PubMed, Google Scholar, etc.) and find papers that advance coverage of unsatisfied subject goals while maximizing the total number of diverse, relevant results.""",
         )
     return _agent_cache[cache_key]
 
@@ -206,13 +236,20 @@ Evaluation criteria:
 - Consider the quality and diversity of results found so far
 - Balance comprehensiveness with diminishing returns
 
-Decision guidelines:
-- Continue if major subject goals remain unsatisfied and more searching likely helps
+Decision guidelines for WHEN TO CONTINUE:
+- Continue if ANY major subject goals remain unsatisfied
 - Continue if new important areas were discovered that warrant exploration
-- Stop if subject goals are well-covered and additional searching unlikely to add value
-- Stop if results are becoming repetitive or quality is declining
-- Be decisive - avoid unnecessary additional rounds once good coverage is achieved
+- Continue if fewer than 50-75 unique results have been collected (aim for comprehensive coverage)
+- Continue if recent rounds are still finding diverse, non-repetitive results
+- Continue if the variety of result types is limited (e.g., only reviews, or only focused studies)
+- Favor thoroughness - it's better to do one extra round than to stop prematurely
 
-Your decision will determine whether the search continues or produces final output.""",
+Decision guidelines for WHEN TO STOP:
+- Stop if nearly all subject goals are well-covered AND sufficient result volume has been achieved
+- Stop if results are becoming highly repetitive across multiple rounds with little new content
+- Stop if the last 2 rounds added minimal new diverse results despite different queries
+- Stop if we've reached the maximum configured search rounds
+
+IMPORTANT: Require strong evidence before stopping. "Adequate coverage" is not sufficient - aim for "comprehensive coverage" with diverse result types and sufficient volume (aim for 50+ unique results for most research topics). Be thorough rather than conservative.""",
         )
     return _agent_cache[cache_key]

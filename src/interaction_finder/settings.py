@@ -151,20 +151,20 @@ class IfetcherConfig(BaseModel):
 
             enabled: bool = Field(True, description="Enable widesearch functionality")
             max_rounds: int = Field(
-                5, ge=1, le=10, description="Maximum search rounds before stopping"
+                8, ge=1, le=15, description="Maximum search rounds before stopping"
             )
             enable_reranking: bool = Field(
                 True,
                 description="Enable semantic reranking of search results (if False, pass all results to LLM)",
             )
             rerank_top_k: int = Field(
-                20,
+                50,
                 ge=1,
-                le=100,
+                le=200,
                 description="Number of top results to keep after reranking (only used if enable_reranking=True)",
             )
             results_per_query: int = Field(
-                50, ge=1, le=200, description="Maximum results to fetch per query"
+                100, ge=1, le=300, description="Maximum results to fetch per query"
             )
             reranker_model: str = Field(
                 "zeroentropy/zerank-1-small",
