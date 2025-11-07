@@ -661,6 +661,157 @@ def widesearch(
         raise typer.Exit(1)
 
 
+@app.command()
+def extract(
+    checkpoint_file: Path = typer.Argument(
+        help="Path to widesearch checkpoint JSON file"
+    ),
+    topic: str = typer.Argument(help="Research topic for extraction context"),
+    entity_types: List[str] = typer.Option(
+        ...,
+        "--entity-type",
+        "-e",
+        help="Entity types to extract (can specify multiple)",
+    ),
+    output: Optional[Path] = typer.Option(
+        None, "-o", "--output", help="Output file for extraction results (JSON)"
+    ),
+    mode: Optional[str] = typer.Option(
+        None, "-m", "--mode", help="Configuration mode to use"
+    ),
+    config: Optional[str] = typer.Option(None, "-c", "--config", help="Config file"),
+    verbose: bool = typer.Option(False, "-v", "--verbose", help="Verbose output"),
+    overrides: List[str] = typer.Option(
+        [], "-O", "--override", help="Config overrides"
+    ),
+):
+    """
+    Extract entity-entity associations from widesearch results.
+
+    Takes a widesearch checkpoint JSON file and runs the extraction pipeline
+    to identify and validate associations between entities with comprehensive
+    quote-level provenance tracking. Automatically fetches missing content.
+
+    Example:
+        interaction-finder extract searches.json "diabetes" -e gene -e disease -o results.json
+
+        interaction-finder extract pah-searches.json "PAH genetics" -e gene -e protein -o pah-pairs.json
+    """
+    try:
+        # Get effective options
+        config_path, verbose, overrides = get_options_with_fallback(
+            config, verbose, overrides
+        )
+        # Load config
+        cfg = load_config(config_path, overrides, mode)
+        # Validate checkpoint file exists
+        if not checkpoint_file.exists():
+            raise FileNotFoundError(f"Checkpoint file not found: {checkpoint_file}")
+        # Load and validate checkpoint
+        from interaction_finder.widesearch.models import WidesearchCheckpoint
+        from pydantic import ValidationError
+
+        checkpoint_data = json.loads(checkpoint_file.read_text())
+        checkpoint = WidesearchCheckpoint.model_validate(checkpoint_data)
+        # Display checkpoint info
+        console.print(f"\n[bold]Loading checkpoint:[/bold] {checkpoint_file.name}")
+        console.print(f"Topic: {checkpoint.topic}")
+        console.print(f"Results: {len(checkpoint.results)}")
+        console.print(f"Queries executed: {len(checkpoint.queries)}")
+        console.print(f"Resources in pool: {len(checkpoint.resources.resource_map)}")
+        # Check if content needs to be fetched
+        resources_with_content = sum(
+            1 for r in checkpoint.resources.resource_map.values() if r is not None
+        )
+        resources_without_content = (
+            len(checkpoint.resources.resource_map) - resources_with_content
+        )
+        if resources_without_content > 0:
+            from interaction_finder.widesearch import fetch_and_populate_results
+
+            console.print(
+                f"\n[bold]Fetching content for {resources_without_content} resources...[/bold]"
+            )
+            fetch_stats = asyncio.run(fetch_and_populate_results(checkpoint, cfg))
+            console.print(
+                f"[green]✓[/green] Fetched {fetch_stats['fetched']}/{fetch_stats['total']} "
+                f"({fetch_stats['cached']} cached, {fetch_stats['failed']} failed)"
+            )
+            resources_with_content = sum(
+                1 for r in checkpoint.resources.resource_map.values() if r is not None
+            )
+        # Run extraction
+        console.print(
+            f"\n[bold]Running extraction:[/bold] {topic} (types: {', '.join(entity_types)})"
+        )
+        console.print(f"Processing {resources_with_content} resources with content\n")
+        from interaction_finder.extraction import run_extraction
+
+        result = asyncio.run(
+            run_extraction(
+                topic=topic,
+                target_entity_types=entity_types,
+                resource_pool=checkpoint.resources,
+                config={},  # TODO: pass relevant config
+            )
+        )
+        # Display results summary
+        console.print("\n[bold green]✓ Extraction completed[/bold green]")
+        console.print(f"Resources processed: {result.metadata.resource_count}")
+        console.print(f"Entities found: {result.metadata.total_entities_found}")
+        console.print(f"Pairs found: {result.metadata.total_pairs_found}")
+        console.print(
+            f"[green]Pairs accepted:[/green] {result.metadata.pairs_accepted}"
+        )
+        console.print(f"Pairs rejected: {result.metadata.pairs_rejected}")
+        console.print(
+            f"Quote validation: {result.metadata.quotes_validated} validated, "
+            f"{result.metadata.quotes_failed} failed"
+        )
+        # Show sample of accepted pairs
+        if result.accepted_pairs:
+            console.print("\n[bold]Sample accepted pairs:[/bold]")
+            for pair in result.accepted_pairs[:5]:
+                console.print(
+                    f"  • {pair.entity1} ({pair.entity1_type}) "
+                    f"[dim]{pair.relationship_type}[/dim] "
+                    f"{pair.entity2} ({pair.entity2_type})"
+                )
+                console.print(
+                    f"    Evidence: {len(pair.all_quotes)} quotes, "
+                    f"{len(pair.assessments)} assessments, "
+                    f"confidence: {pair.final_judgment.confidence}"
+                )
+            if len(result.accepted_pairs) > 5:
+                console.print(f"  ... and {len(result.accepted_pairs) - 5} more")
+        # Save to file if requested
+        if output:
+            output_data = result.model_dump(mode="json")
+            output.write_text(json.dumps(output_data, indent=2))
+            console.print(f"\n[dim]Saved results to {output}[/dim]")
+        else:
+            console.print("\n[dim]Use -o/--output to save results to a file[/dim]")
+
+    except FileNotFoundError as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+    except (json.JSONDecodeError, ValidationError) as e:
+        console.print(f"[red]Invalid checkpoint file:[/red] {e}")
+        if verbose:
+            console.print_exception()
+        raise typer.Exit(1)
+    except ValueError as e:
+        console.print(f"[red]Error:[/red] {e}")
+        if verbose:
+            console.print_exception()
+        raise typer.Exit(1)
+    except Exception as e:
+        console.print(f"\n[red]Error:[/red] {e}")
+        if verbose:
+            console.print_exception()
+        raise typer.Exit(1)
+
+
 def main():
     """Entry point for the CLI."""
     app()
