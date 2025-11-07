@@ -63,11 +63,27 @@ def mk_agent(
     )
 
 
-# Agent 1: Query Expander
-query_expander_agent = mk_agent(
-    "openai:gpt-4o-mini",
-    QueryExpansionOut,
-    system_prompt="""You are an expert at generating search queries for finding review articles and comprehensive summaries.
+# Cached agent instances by (agent_type, model_name)
+_agent_cache: dict[tuple[str, str], Agent] = {}
+
+
+def get_query_expander_agent(model_name: str = "openai:gpt-4o-mini") -> Agent:
+    """Get or create query expander agent.
+
+    Lazy initialization with per-model caching.
+
+    Parameters:
+        model_name: Model identifier
+
+    Returns:
+        Configured Agent instance
+    """
+    cache_key = ("query_expander", model_name)
+    if cache_key not in _agent_cache:
+        _agent_cache[cache_key] = mk_agent(
+            model_name,
+            QueryExpansionOut,
+            system_prompt="""You are an expert at generating search queries for finding review articles and comprehensive summaries.
 
 Your goal is to create queries that will find review articles, meta-analyses, and comprehensive summaries about the given topic. These articles should discuss the topic broadly and mention related concepts that could serve as "bridging terms" for literature search.
 
@@ -79,13 +95,27 @@ Guidelines:
 - Generate 1-5 queries, prioritizing quality over quantity
 
 Focus on finding articles that will help identify bridging terms: related concepts, alternative approaches, and connected research areas that don't appear in the original topic name.""",
-)
+        )
+    return _agent_cache[cache_key]
 
-# Agent 2: Result Selector
-result_selector_agent = mk_agent(
-    "openai:gpt-4o-mini",
-    ResultSelectionOut,
-    system_prompt="""You are an expert at identifying review articles and comprehensive summaries from search results.
+
+def get_result_selector_agent(model_name: str = "openai:gpt-4o-mini") -> Agent:
+    """Get or create result selector agent.
+
+    Lazy initialization with per-model caching.
+
+    Parameters:
+        model_name: Model identifier
+
+    Returns:
+        Configured Agent instance
+    """
+    cache_key = ("result_selector", model_name)
+    if cache_key not in _agent_cache:
+        _agent_cache[cache_key] = mk_agent(
+            model_name,
+            ResultSelectionOut,
+            system_prompt="""You are an expert at identifying review articles and comprehensive summaries from search results.
 
 Your task is to select which search results are most likely to be valuable review articles that will help identify bridging terms. Review the titles and snippets to make your selection.
 
@@ -97,13 +127,27 @@ Selection criteria:
 - Look for articles that discuss related areas and connections
 
 Return the indices of results to fetch, ordered by priority (most valuable first). Typical selections are 5-10 results, but adjust based on quality.""",
-)
+        )
+    return _agent_cache[cache_key]
 
-# Agent 3: Keyword Evaluator
-keyword_evaluator_agent = mk_agent(
-    "openai:gpt-4o-mini",
-    KeywordEvaluationOut,
-    system_prompt="""You are an expert at identifying useful bridging terms for literature search.
+
+def get_keyword_evaluator_agent(model_name: str = "openai:gpt-4o-mini") -> Agent:
+    """Get or create keyword evaluator agent.
+
+    Lazy initialization with per-model caching.
+
+    Parameters:
+        model_name: Model identifier
+
+    Returns:
+        Configured Agent instance
+    """
+    cache_key = ("keyword_evaluator", model_name)
+    if cache_key not in _agent_cache:
+        _agent_cache[cache_key] = mk_agent(
+            model_name,
+            KeywordEvaluationOut,
+            system_prompt="""You are an expert at identifying useful bridging terms for literature search.
 
 Given a document about a topic and keywords extracted by various algorithms, your job is to:
 1. Identify which keywords would be useful as "bridging terms" for finding related literature
@@ -122,13 +166,27 @@ Avoid selecting:
 - Acronyms without clear meaning
 
 Focus on terms that would genuinely help expand literature search coverage.""",
-)
+        )
+    return _agent_cache[cache_key]
 
-# Agent 4: Document Summarizer (combined with keyword evaluation)
-document_summarizer_agent = mk_agent(
-    "openai:gpt-4o-mini",
-    DocumentSummaryOut,
-    system_prompt="""You are an expert at summarizing scientific documents and identifying bridging terms for literature search expansion.
+
+def get_document_summarizer_agent(model_name: str = "openai:gpt-4o-mini") -> Agent:
+    """Get or create document summarizer agent.
+
+    Lazy initialization with per-model caching.
+
+    Parameters:
+        model_name: Model identifier
+
+    Returns:
+        Configured Agent instance
+    """
+    cache_key = ("document_summarizer", model_name)
+    if cache_key not in _agent_cache:
+        _agent_cache[cache_key] = mk_agent(
+            model_name,
+            DocumentSummaryOut,
+            system_prompt="""You are an expert at summarizing scientific documents and identifying bridging terms for literature search expansion.
 
 **Core principle:** Bridging terms should help researchers find MORE papers about their target research topic using different search angles.
 
@@ -143,13 +201,27 @@ Given a document, provide:
 4. Assessment of what new coverage this document adds
 
 Focus on identifying concepts that connect to the target topic, not just the document's specific focus.""",
-)
+        )
+    return _agent_cache[cache_key]
 
-# Agent 5: Reflector
-reflector_agent = mk_agent(
-    "openai:gpt-4o-mini",
-    ReflectionOut,
-    system_prompt="""You are an expert at assessing literature search coverage and deciding when sufficient coverage has been achieved.
+
+def get_reflector_agent(model_name: str = "openai:gpt-4o-mini") -> Agent:
+    """Get or create reflector agent.
+
+    Lazy initialization with per-model caching.
+
+    Parameters:
+        model_name: Model identifier
+
+    Returns:
+        Configured Agent instance
+    """
+    cache_key = ("reflector", model_name)
+    if cache_key not in _agent_cache:
+        _agent_cache[cache_key] = mk_agent(
+            model_name,
+            ReflectionOut,
+            system_prompt="""You are an expert at assessing literature search coverage and deciding when sufficient coverage has been achieved.
 
 Given summaries of all documents processed so far, decide whether to continue searching or stop.
 
@@ -168,4 +240,5 @@ Decision criteria for STOP:
 If continuing, suggest new search angles based on gaps identified in the coverage so far.
 
 Be thoughtful but not overly perfectionistic. The goal is reasonable coverage, not exhaustive coverage.""",
-)
+        )
+    return _agent_cache[cache_key]

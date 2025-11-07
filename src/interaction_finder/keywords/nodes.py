@@ -14,10 +14,10 @@ from pydantic_ai.usage import RunUsage
 
 from interaction_finder.logging import logfire
 from interaction_finder.keywords.agents import (
-    document_summarizer_agent,
-    query_expander_agent,
-    reflector_agent,
-    result_selector_agent,
+    get_document_summarizer_agent,
+    get_query_expander_agent,
+    get_reflector_agent,
+    get_result_selector_agent,
 )
 from interaction_finder.keywords.deps import Deps
 from interaction_finder.keywords.extractors.base import ScoredKeyword
@@ -25,6 +25,40 @@ from interaction_finder.keywords.models import BridgingTermsOut
 from interaction_finder.keywords.normalization import normalize_term_for_deduplication
 from interaction_finder.keywords.state import State
 from interaction_finder.search.models import SearchQuery
+
+
+def _get_keywords_model(config: dict) -> str:
+    """Resolve keywords agent model from config.
+
+    Tries in order:
+    1. config["agents"]["keywords"].llm
+    2. config["tools"]["keywords"]["llm_model"]
+    3. Default: "openai:gpt-4o-mini"
+
+    Parameters:
+        config: Configuration dict
+
+    Returns:
+        Model name string
+    """
+    # Try structured agents config
+    agents = config.get("agents", {})
+    if isinstance(agents, dict) and "keywords" in agents:
+        agent_spec = agents["keywords"]
+        if hasattr(agent_spec, "llm") and agent_spec.llm:
+            return agent_spec.llm
+        elif isinstance(agent_spec, dict) and "llm" in agent_spec and agent_spec["llm"]:
+            return agent_spec["llm"]
+
+    # Try tools.keywords.llm_model
+    tools = config.get("tools", {})
+    if isinstance(tools, dict):
+        keywords_cfg = tools.get("keywords", {})
+        if isinstance(keywords_cfg, dict) and "llm_model" in keywords_cfg:
+            return keywords_cfg["llm_model"]
+
+    # Default
+    return "openai:gpt-4o-mini"
 
 
 def _clean_and_rerank_keywords_for_display(
@@ -197,8 +231,11 @@ Search Results:
 
 Select the indices of results that are most likely to be valuable review articles."""
             # Use result selector agent
+            model_name = _get_keywords_model(ctx.deps.config)
             usage = RunUsage()
-            result = await result_selector_agent.run(prompt, deps=ctx.deps, usage=usage)
+            result = await get_result_selector_agent(model_name).run(
+                prompt, deps=ctx.deps, usage=usage
+            )
             # Get selected results
             max_to_fetch = ctx.deps.config.get("max_documents_to_fetch", 10)
             selected_indices = result.output.selected_indices[:max_to_fetch]
@@ -438,8 +475,9 @@ Each bridging term must:
 **Test:** For each term, ask "Would this term appear frequently in papers specifically about {ctx.state.topic}?" If no, exclude it.
 
 Select fewer, higher-quality terms rather than reaching for quantity."""
+                model_name = _get_keywords_model(ctx.deps.config)
                 usage = RunUsage()
-                summary_result = await document_summarizer_agent.run(
+                summary_result = await get_document_summarizer_agent(model_name).run(
                     summary_prompt, deps=ctx.deps, usage=usage
                 )
                 # Store summary
@@ -498,8 +536,11 @@ Document Summaries:
 
 Decide whether coverage is sufficient (stop) or more searches are needed (continue)."""
             # Use reflector agent
+            model_name = _get_keywords_model(ctx.deps.config)
             usage = RunUsage()
-            result = await reflector_agent.run(prompt, deps=ctx.deps, usage=usage)
+            result = await get_reflector_agent(model_name).run(
+                prompt, deps=ctx.deps, usage=usage
+            )
             # Make decision
             decision = result.output.decision
             logfire.info(
