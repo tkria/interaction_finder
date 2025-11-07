@@ -12,10 +12,10 @@ from interaction_finder.widesearch import (
     run_widesearch_with_checkpoint,
 )
 from interaction_finder.widesearch.agents import (
-    goal_planner_agent,
-    query_generator_agent,
-    reflector_agent,
-    result_selector_agent,
+    get_goal_planner_agent,
+    get_query_generator_agent,
+    get_reflector_agent,
+    get_result_selector_agent,
 )
 
 
@@ -67,10 +67,10 @@ async def test_run_widesearch_basic(test_config):
     test_model = TestModel()
 
     with (
-        goal_planner_agent.override(model=test_model),
-        query_generator_agent.override(model=test_model),
-        result_selector_agent.override(model=test_model),
-        reflector_agent.override(model=test_model),
+        get_goal_planner_agent.override(model=test_model),
+        get_query_generator_agent.override(model=test_model),
+        get_result_selector_agent.override(model=test_model),
+        get_reflector_agent.override(model=test_model),
     ):
         results = await run_widesearch(
             topic="diabetes treatment",
@@ -104,10 +104,10 @@ async def test_run_widesearch_with_existing_pool(test_config):
     existing_pool.register("https://example.com/existing")
 
     with (
-        goal_planner_agent.override(model=test_model),
-        query_generator_agent.override(model=test_model),
-        result_selector_agent.override(model=test_model),
-        reflector_agent.override(model=test_model),
+        get_goal_planner_agent.override(model=test_model),
+        get_query_generator_agent.override(model=test_model),
+        get_result_selector_agent.override(model=test_model),
+        get_reflector_agent.override(model=test_model),
     ):
         results = await run_widesearch(
             topic="test topic",
@@ -138,10 +138,10 @@ async def test_run_widesearch_disable_reranking():
     test_model = TestModel()
 
     with (
-        goal_planner_agent.override(model=test_model),
-        query_generator_agent.override(model=test_model),
-        result_selector_agent.override(model=test_model),
-        reflector_agent.override(model=test_model),
+        get_goal_planner_agent.override(model=test_model),
+        get_query_generator_agent.override(model=test_model),
+        get_result_selector_agent.override(model=test_model),
+        get_reflector_agent.override(model=test_model),
     ):
         results = await run_widesearch(
             topic="test topic",
@@ -169,10 +169,10 @@ async def test_run_widesearch_custom_max_rounds(test_config):
     test_model = TestModel()
 
     with (
-        goal_planner_agent.override(model=test_model),
-        query_generator_agent.override(model=test_model),
-        result_selector_agent.override(model=test_model),
-        reflector_agent.override(model=test_model),
+        get_goal_planner_agent.override(model=test_model),
+        get_query_generator_agent.override(model=test_model),
+        get_result_selector_agent.override(model=test_model),
+        get_reflector_agent.override(model=test_model),
     ):
         results = await run_widesearch(
             topic="test topic",

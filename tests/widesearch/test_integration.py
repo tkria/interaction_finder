@@ -10,10 +10,10 @@ from interaction_finder.resources import ResourcePool
 from interaction_finder.search.models import SearchBackend, SearchQuery, SearchResult
 from interaction_finder.widesearch import Deps, State, graph
 from interaction_finder.widesearch.agents import (
-    goal_planner_agent,
-    query_generator_agent,
-    reflector_agent,
-    result_selector_agent,
+    get_goal_planner_agent,
+    get_query_generator_agent,
+    get_reflector_agent,
+    get_result_selector_agent,
 )
 from interaction_finder.widesearch.nodes import PlanGoalsNode
 from interaction_finder.widesearch.reranker import Reranker
@@ -84,10 +84,10 @@ async def test_full_pipeline_single_round():
 
     # Override agents with test model
     with (
-        goal_planner_agent.override(model=test_model),
-        query_generator_agent.override(model=test_model),
-        result_selector_agent.override(model=test_model),
-        reflector_agent.override(model=test_model),
+        get_goal_planner_agent.override(model=test_model),
+        get_query_generator_agent.override(model=test_model),
+        get_result_selector_agent.override(model=test_model),
+        get_reflector_agent.override(model=test_model),
     ):
         async with httpx.AsyncClient() as client:
             deps = Deps(
@@ -137,10 +137,10 @@ async def test_pipeline_reaches_max_rounds():
     test_model = TestModel()
 
     with (
-        goal_planner_agent.override(model=test_model),
-        query_generator_agent.override(model=test_model),
-        result_selector_agent.override(model=test_model),
-        reflector_agent.override(model=test_model),
+        get_goal_planner_agent.override(model=test_model),
+        get_query_generator_agent.override(model=test_model),
+        get_result_selector_agent.override(model=test_model),
+        get_reflector_agent.override(model=test_model),
     ):
         async with httpx.AsyncClient() as client:
             deps = Deps(
@@ -177,10 +177,10 @@ async def test_pipeline_handles_no_results():
     test_model = TestModel()
 
     with (
-        goal_planner_agent.override(model=test_model),
-        query_generator_agent.override(model=test_model),
-        result_selector_agent.override(model=test_model),
-        reflector_agent.override(model=test_model),
+        get_goal_planner_agent.override(model=test_model),
+        get_query_generator_agent.override(model=test_model),
+        get_result_selector_agent.override(model=test_model),
+        get_reflector_agent.override(model=test_model),
     ):
         async with httpx.AsyncClient() as client:
             deps = Deps(
@@ -225,10 +225,10 @@ async def test_pipeline_without_reranking():
     test_model = TestModel()
 
     with (
-        goal_planner_agent.override(model=test_model),
-        query_generator_agent.override(model=test_model),
-        result_selector_agent.override(model=test_model),
-        reflector_agent.override(model=test_model),
+        get_goal_planner_agent.override(model=test_model),
+        get_query_generator_agent.override(model=test_model),
+        get_result_selector_agent.override(model=test_model),
+        get_reflector_agent.override(model=test_model),
     ):
         async with httpx.AsyncClient() as client:
             deps = Deps(
@@ -275,10 +275,10 @@ async def test_resource_pool_registration():
     test_model = TestModel()
 
     with (
-        goal_planner_agent.override(model=test_model),
-        query_generator_agent.override(model=test_model),
-        result_selector_agent.override(model=test_model),
-        reflector_agent.override(model=test_model),
+        get_goal_planner_agent.override(model=test_model),
+        get_query_generator_agent.override(model=test_model),
+        get_result_selector_agent.override(model=test_model),
+        get_reflector_agent.override(model=test_model),
     ):
         async with httpx.AsyncClient() as client:
             deps = Deps(
