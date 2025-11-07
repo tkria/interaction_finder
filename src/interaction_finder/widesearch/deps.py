@@ -24,6 +24,6 @@ class Deps:
 
     http_client: httpx.AsyncClient  # HTTP client for API calls
     search_backend: SearchBackend  # Search backend (PubMed, Perplexica, OpenAI)
-    reranker: Reranker | None  # Semantic reranker for search results (None if disabled)
+    reranker: Reranker  # Semantic reranker for search results
     resource_pool: ResourcePool  # Document pool with URL normalization
     config: dict[str, Any]  # Configuration dictionary (widesearch settings)

@@ -1114,7 +1114,6 @@ def _validate_resource_pool(obj):
     - Direct list: [{url, title?, text?, chunks?, id?}, ...]
     - Wrapped dict: {"resources": [{...}]}
     - ResourcePool instance: passed through
-    - Legacy dict: {"resource_map": {...}}
     """
     if isinstance(obj, ResourcePool):
         return obj
@@ -1128,13 +1127,6 @@ def _validate_resource_pool(obj):
         # Wrapped format
         if "resources" in obj and isinstance(obj["resources"], list):
             resources_list = obj["resources"]
-        # Legacy format - will be handled by default validation
-        elif "resource_map" in obj:
-            try:
-                # Try creating empty pool for legacy format
-                return ResourcePool()
-            except Exception:
-                return ResourcePool()
 
     if resources_list is not None:
         pool = ResourcePool()

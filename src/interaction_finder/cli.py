@@ -511,6 +511,140 @@ def extract_keywords(
         raise typer.Exit(1)
 
 
+@app.command()
+def widesearch(
+    keywords_file: Path = typer.Argument(
+        help="Path to keywords JSON file from extract-keywords command"
+    ),
+    topic: str = typer.Argument(help="Research topic being investigated"),
+    output: Optional[Path] = typer.Option(
+        None, "-o", "--output", help="Output file for checkpoint (JSON)"
+    ),
+    backend: Optional[str] = typer.Option(
+        None,
+        "-b",
+        "--backend",
+        help="Search backend to use (pubmed, perplexica, openai)",
+    ),
+    max_rounds: Optional[int] = typer.Option(
+        None, "--max-rounds", help="Override maximum search rounds"
+    ),
+    enable_reranking: Optional[bool] = typer.Option(
+        None, "--rerank/--no-rerank", help="Enable/disable semantic reranking"
+    ),
+    mode: Optional[str] = typer.Option(
+        None, "-m", "--mode", help="Configuration mode to use"
+    ),
+    config: Optional[str] = typer.Option(None, "-c", "--config", help="Config file"),
+    verbose: bool = typer.Option(False, "-v", "--verbose", help="Verbose output"),
+    overrides: List[str] = typer.Option(
+        [], "-O", "--override", help="Config overrides"
+    ),
+):
+    """
+    Execute widesearch using keywords from extract-keywords command.
+
+    Performs iterative query expansion and search using provided keyphrases,
+    saving complete checkpoint (results, queries, resource pool) to JSON.
+    The checkpoint format enables downstream processing and search resumption.
+
+    Example:
+        interaction-finder widesearch keywords.json "diabetes" -o results.json
+
+        interaction-finder widesearch keywords.json "cancer" -b perplexica -o out.json
+    """
+    try:
+        # Get effective options
+        config_path, verbose, overrides = get_options_with_fallback(
+            config, verbose, overrides
+        )
+        # Load config
+        cfg = load_config(config_path, overrides, mode)
+        # Validate keywords file exists
+        if not keywords_file.exists():
+            raise FileNotFoundError(f"Keywords file not found: {keywords_file}")
+        # Parse keywords JSON
+        from interaction_finder.keywords.models import BridgingTermsOut
+        from pydantic import ValidationError
+
+        keywords_data = json.loads(keywords_file.read_text())
+        bridging_terms = BridgingTermsOut.model_validate(keywords_data)
+        keyphrases = bridging_terms.terms
+        # Apply CLI overrides to config
+        if max_rounds is not None:
+            cfg.tools.widesearch.max_rounds = max_rounds
+        if enable_reranking is not None:
+            cfg.tools.widesearch.enable_reranking = enable_reranking
+        # Determine backend
+        backend_name = backend if backend else cfg.tools.widesearch.search_backend
+        # Import backends and create mapping
+        from interaction_finder.search.backends.openai import OpenAIBackend
+        from interaction_finder.search.backends.perplexica import PerplexicaBackend
+        from interaction_finder.search.backends.pubmed import PubMedBackend
+
+        BACKENDS = {
+            "pubmed": PubMedBackend,
+            "perplexica": PerplexicaBackend,
+            "openai": OpenAIBackend,
+        }
+        # Instantiate backend
+        backend_class = BACKENDS.get(backend_name)
+        if not backend_class:
+            valid = ", ".join(BACKENDS.keys())
+            raise ValueError(f"Unknown backend '{backend_name}'. Valid: {valid}")
+        search_backend = backend_class(config={})
+        # Import widesearch entrypoint
+        from interaction_finder.widesearch import run_widesearch_with_checkpoint
+
+        # Display start message
+        console.print(f"\n[bold]Running widesearch for:[/bold] {topic}")
+        console.print(f"Using {len(keyphrases)} keyphrases from {keywords_file.name}")
+        # Show resource pool info if present
+        resource_count = len(bridging_terms.resources.resource_map)
+        if resource_count > 0:
+            console.print(f"Starting with {resource_count} existing resources in pool")
+        console.print()
+        # Run widesearch with checkpoint, passing the resource pool
+        checkpoint = asyncio.run(
+            run_widesearch_with_checkpoint(
+                topic=topic,
+                keyphrases=keyphrases,
+                search_backend=search_backend,
+                resource_pool=bridging_terms.resources,
+                config=cfg,
+                max_rounds=max_rounds,
+                enable_reranking=enable_reranking,
+            )
+        )
+        # Display results summary
+        console.print(f"\n[bold green]✓ Widesearch completed[/bold green]")
+        console.print(f"Rounds: {checkpoint.rounds_completed}")
+        console.print(f"Queries executed: {len(checkpoint.queries)}")
+        console.print(f"Unique results: {len(checkpoint.results)}")
+        # Save to file if requested
+        if output:
+            checkpoint_data = checkpoint.model_dump(mode="json")
+            output.write_text(json.dumps(checkpoint_data, indent=2))
+            console.print(f"\n[dim]Saved checkpoint to {output}[/dim]")
+
+    except FileNotFoundError as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+    except (json.JSONDecodeError, ValidationError) as e:
+        console.print(f"[red]Invalid keywords file:[/red] {e}")
+        if verbose:
+            console.print_exception()
+        raise typer.Exit(1)
+    except ValueError as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+    except Exception as e:
+        console.print(f"\n[red]Error:[/red] {e}")
+        if verbose:
+            console.print_exception()
+        raise typer.Exit(1)
+
+
 def main():
     """Entry point for the CLI."""
     app()

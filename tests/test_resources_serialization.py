@@ -154,18 +154,6 @@ def test_size_savings():
     assert savings_percent > 5  # At least 5% savings
 
 
-def test_backward_compatibility_with_legacy_format():
-    """Test that legacy resource_map format is handled gracefully."""
-    # Legacy format with stringified ResourceId keys (can't be deserialized fully)
-    legacy_data = {"resource_map": {"id='1_abc' url='https://example.com'": None}}
-
-    # Should not crash, but return empty pool
-    pool = ResourcePool.model_validate(legacy_data)
-    assert isinstance(pool, ResourcePool)
-    # Legacy format with serialization issues returns empty pool
-    assert len(pool.resource_map) == 0
-
-
 def test_explicit_id_field_for_non_standard_counter():
     """Test that id field is included when counter doesn't match position."""
     # Create pool but simulate non-standard counter

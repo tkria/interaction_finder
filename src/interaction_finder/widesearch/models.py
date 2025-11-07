@@ -7,6 +7,9 @@ clear intent specification.
 
 from pydantic import BaseModel, Field
 
+from interaction_finder.resources import ResourcePool
+from interaction_finder.search.models import SearchResult
+
 
 class SubjectGoalsOut(BaseModel):
     """Output model for goal planning agent.
@@ -94,4 +97,34 @@ class ReflectionOut(BaseModel):
         ...,
         min_length=100,
         description="Detailed explanation of coverage assessment and decision",
+    )
+
+
+class WidesearchCheckpoint(BaseModel):
+    """Complete widesearch checkpoint for resumable/downstream processing.
+
+    Contains all state from a widesearch session including results, queries,
+    query-to-URL mappings, and the complete resource pool with document content.
+    This checkpoint format enables downstream processes to resume or extend
+    searches while preserving full provenance.
+    """
+
+    results: list[SearchResult] = Field(
+        description="Unique search results selected during the widesearch session"
+    )
+    queries: list[str] = Field(
+        description="All search queries executed across all rounds (cumulative)"
+    )
+    query_results: dict[str, list[str]] = Field(
+        description="Mapping from each query to the list of selected URL strings"
+    )
+    resources: ResourcePool = Field(
+        description="Complete document pool with content and provenance tracking"
+    )
+    topic: str = Field(description="Original research topic being investigated")
+    keyphrases: list[str] = Field(
+        description="Keyphrases that were incorporated into query generation"
+    )
+    rounds_completed: int = Field(
+        ge=0, description="Number of search rounds completed before termination"
     )

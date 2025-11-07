@@ -46,7 +46,4 @@ class State:
     selected_results: dict[str, list[str]] = field(
         default_factory=dict
     )  # query -> list[url] mapping
-    selected_search_results: dict[str, SearchResult] = field(
-        default_factory=dict
-    )  # url -> SearchResult mapping for preserving metadata
     should_continue: bool = True  # Early stopping flag (set by Reflect)
