@@ -89,11 +89,15 @@ async def run_widesearch(
     if resource_pool is None:
         resource_pool = ResourcePool()
 
-    # Create reranker
-    reranker = Reranker(
-        model_name=ws_config.reranker_model,
-        device=ws_config.reranker_device,
-    )
+    # Create reranker only if reranking is enabled
+    # This avoids loading the model when not needed and allows running
+    # without torch/sentence-transformers dependencies
+    reranker = None
+    if pipeline_config["enable_reranking"]:
+        reranker = Reranker(
+            model_name=ws_config.reranker_model,
+            device=ws_config.reranker_device,
+        )
 
     # Handle HTTP client
     own_client = http_client is None

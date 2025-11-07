@@ -172,10 +172,10 @@ class RerankNode(BaseNode[State, Deps, list[SearchResult]]):
                 logfire.info("No results to rerank, skipping")
                 return SelectResultsNode()
 
-            # Check if reranking is enabled
+            # Check if reranking is enabled and reranker is available
             enable_reranking = ctx.deps.config.get("enable_reranking", True)
 
-            if not enable_reranking:
+            if not enable_reranking or ctx.deps.reranker is None:
                 logfire.info(
                     f"Reranking disabled, passing {len(ctx.state.current_results)} results unchanged"
                 )
@@ -245,6 +245,8 @@ Select the most relevant results and summarize what subject areas they cover."""
                 if 0 <= idx < len(ctx.state.current_results):
                     search_result = ctx.state.current_results[idx]
                     selected_urls.append(search_result.url)
+                    # Store full SearchResult for metadata preservation
+                    ctx.state.selected_search_results[search_result.url] = search_result
                     # Register URL with resource pool (may raise ValueError if duplicate)
                     try:
                         ctx.deps.resource_pool.register(search_result.url)
@@ -293,13 +295,14 @@ class ReflectNode(BaseNode[State, Deps, list[SearchResult]]):
             # Check if we've reached max_rounds
             if ctx.state.current_round >= ctx.state.max_rounds:
                 logfire.info(f"Reached max_rounds ({ctx.state.max_rounds}), stopping")
-                # Return all unique results collected
+                # Return all unique results collected, preserving metadata
                 all_registered = [
                     url for urls in ctx.state.selected_results.values() for url in urls
                 ]
                 unique_urls = list(set(all_registered))
+                # Retrieve full SearchResult objects from state
                 final_results = [
-                    SearchResult(title="", url=url, snippet=None) for url in unique_urls
+                    ctx.state.selected_search_results[url] for url in unique_urls
                 ]
                 return End(final_results)
 
@@ -361,13 +364,14 @@ Evaluate coverage and decide whether to continue searching or stop."""
             if result.output.should_continue:
                 return GenerateQueriesNode()
             else:
-                # Return all unique results collected
+                # Return all unique results collected, preserving metadata
                 all_registered = [
                     url for urls in ctx.state.selected_results.values() for url in urls
                 ]
                 unique_urls = list(set(all_registered))
+                # Retrieve full SearchResult objects from state
                 final_results = [
-                    SearchResult(title="", url=url, snippet=None) for url in unique_urls
+                    ctx.state.selected_search_results[url] for url in unique_urls
                 ]
                 logfire.info(
                     f"Search complete: collected {len(unique_urls)} unique URLs across {ctx.state.current_round} rounds"
