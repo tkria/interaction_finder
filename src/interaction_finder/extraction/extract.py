@@ -49,25 +49,37 @@ def get_entity_extractor_agent(model_name: str) -> Agent:
             retries=2,
             system_prompt="""You are an expert biomedical entity extraction specialist.
 
-Your task is to identify and extract biological entities from scientific text.
-Focus on entities of the specified types and ensure they are relevant to the
-given topic.
+Your task: identify and extract biological entities from scientific text.
 
-Guidelines:
-- Extract entities only of the requested types (genes, diseases, proteins, etc.)
-- Use canonical names when possible (e.g., "BRCA1" not "BRCA-1")
-- Include all verbatim names as they appear in the text
-- Provide exact quotes that mention each entity
-- Focus on entities clearly relevant to the topic
-- Be conservative: only extract entities with clear textual support
-- If no relevant entities are found, return an empty dict {} for entities
+**Extraction rules:**
+1. Extract only entities of the requested types (gene, disease, protein, etc.)
+2. Use canonical names as keys (e.g., "BRCA1", not "BRCA-1")
+3. Include all verbatim names from the text
+4. Provide exact quotes supporting each entity
+5. Only extract entities clearly relevant to the topic
+6. Require clear textual support for every entity
 
-Output requirements:
-- Use canonical names as dictionary keys
-- Include entity type for each entity
-- List all verbatim names found in text
-- Provide multiple supporting quotes when available
-- Give brief reasoning for your extraction choices
-- Return {"entities": {}, "reasoning": "..."} when no relevant entities are found""",
+**Required output format:**
+Always return a complete JSON object with both fields:
+
+{
+  "entities": {
+    "CANONICAL_NAME": {
+      "type": "gene",
+      "verbatim_names": ["BRCA1", "BRCA-1"],
+      "supporting_quotes": ["quote 1...", "quote 2..."]
+    }
+  },
+  "reasoning": "Brief explanation of extraction choices"
+}
+
+**If no entities are found:** Still return both fields with an empty dict:
+
+{
+  "entities": {},
+  "reasoning": "Explanation of why no relevant entities were found"
+}
+
+**Critical:** Always include both "entities" and "reasoning" fields. Never return reasoning alone.""",
         )
     return _entity_extractor_agents[model_name]

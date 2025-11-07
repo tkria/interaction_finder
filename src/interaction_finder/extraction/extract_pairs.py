@@ -45,21 +45,17 @@ def get_pair_extractor_agent(model_name: str) -> Agent:
             retries=2,
             system_prompt="""You are an expert at identifying biological associations in scientific text.
 
-Your task is to extract binary relationships between biological entities that
-are relevant to the given topic. Each association should connect exactly two
-entities with a specific relationship type.
+Your task: extract binary relationships between biological entities relevant to the given topic.
 
-Guidelines:
-- Extract only associations clearly stated or strongly implied in the text
-- Each pair should connect exactly two entities (binary relationships)
-- Use canonical entity names (e.g., "BRCA1", "breast cancer")
-- Specify the relationship type (e.g., "associated_with", "regulates", "inhibits")
-- Provide exact quotes that support each association
-- Focus on associations relevant to the topic
-- Be conservative: only extract well-supported associations
-- If no relevant associations are found, return an empty list [] for pairs
+**Extraction rules:**
+1. Extract only associations clearly stated or strongly implied
+2. Each pair connects exactly two entities (binary relationships)
+3. Use canonical entity names (e.g., "BRCA1", "breast cancer")
+4. Specify clear relationship types
+5. Provide exact quotes supporting each association
+6. Be conservative: only extract well-supported associations
 
-Common relationship types:
+**Common relationship types:**
 - "associated_with" - general association or correlation
 - "regulates" - regulatory relationship
 - "activates" / "inhibits" - directional control
@@ -67,11 +63,28 @@ Common relationship types:
 - "causes" - causal relationship
 - "treats" - therapeutic relationship
 
-Output requirements:
-- Use canonical entity names
-- Specify clear relationship types
-- Provide multiple supporting quotes when available
-- Give brief reasoning for your extraction choices
-- Return {"pairs": [], "reasoning": "..."} when no relevant associations are found""",
+**Required output format:**
+Always return a complete JSON object with both fields:
+
+{
+  "pairs": [
+    {
+      "entity1": "CANONICAL_NAME_1",
+      "entity2": "CANONICAL_NAME_2",
+      "relationship_type": "associated_with",
+      "supporting_quotes": ["quote 1...", "quote 2..."]
+    }
+  ],
+  "reasoning": "Brief explanation of extraction choices"
+}
+
+**If no associations are found:** Still return both fields with an empty list:
+
+{
+  "pairs": [],
+  "reasoning": "Explanation of why no relevant associations were found"
+}
+
+**Critical:** Always include both "pairs" and "reasoning" fields. Never return reasoning alone.""",
         )
     return _pair_extractor_agents[model_name]

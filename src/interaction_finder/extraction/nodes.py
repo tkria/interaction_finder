@@ -31,7 +31,7 @@ from interaction_finder.extraction.models import (
 )
 from interaction_finder.extraction.state import State
 from interaction_finder.logging import logfire
-from interaction_finder.resources import Resource, ResourceQuote
+from interaction_finder.resources import Resource
 
 
 @dataclass
@@ -103,7 +103,7 @@ class ExtractFromDocumentsNode(BaseNode[State, Deps, ExtractionResult]):
         with logfire.span("process_resource", resource_url=resource.id.url):
             usage = RunUsage()
 
-            # Build prompts
+            # Build prompts - keep focused and structured
             entity_types_str = ", ".join(ctx.state.target_entity_types)
             entity_prompt = f"""Extract entities from this document relevant to: {ctx.state.topic}
 
@@ -115,7 +115,9 @@ class ExtractFromDocumentsNode(BaseNode[State, Deps, ExtractionResult]):
 {resource.text[:15000]}
 
 Extract all entities of the specified types that are relevant to the topic.
-Use canonical names and provide exact quotes."""
+Use canonical names and provide exact quotes.
+
+Return a JSON object with both "entities" and "reasoning" fields."""
 
             pair_prompt = f"""Extract associations from this document relevant to: {ctx.state.topic}
 
@@ -128,39 +130,57 @@ Extract binary entity-entity associations relevant to the topic.
 Use canonical entity names and provide exact quotes supporting each association."""
 
             # Extract entities using configured extraction model
-            entity_result = await get_entity_extractor_agent(
-                ctx.deps.extraction_model
-            ).run(entity_prompt, deps=ctx.deps, usage=usage)
+            try:
+                entity_result = await get_entity_extractor_agent(
+                    ctx.deps.extraction_model
+                ).run(entity_prompt, deps=ctx.deps, usage=usage)
+            except Exception as e:
+                ctx.deps.logger.error(
+                    f"Entity extraction failed for {resource.id.url}: {type(e).__name__}: {e}"
+                )
+                # Continue without entities from this resource
+                entity_result = None
 
             # Extract pairs using configured extraction model
-            pair_result = await get_pair_extractor_agent(ctx.deps.extraction_model).run(
-                pair_prompt, deps=ctx.deps, usage=usage
-            )
+            try:
+                pair_result = await get_pair_extractor_agent(
+                    ctx.deps.extraction_model
+                ).run(pair_prompt, deps=ctx.deps, usage=usage)
+            except Exception as e:
+                ctx.deps.logger.error(
+                    f"Pair extraction failed for {resource.id.url}: {type(e).__name__}: {e}"
+                )
+                # Continue without pairs from this resource
+                pair_result = None
 
             # Convert entities to EntityMention with ResourceQuotes
             entities_dict = {}
-            for canonical_name, entity_info in entity_result.output.entities.items():
-                # Convert quote strings to ResourceQuotes
-                quotes = []
-                for quote_str in entity_info.supporting_quotes:
-                    try:
-                        quote = resource.quote(quote_str)
-                        quotes.append(quote)
-                        ctx.state.quotes_validated += 1
-                    except Exception as e:
-                        ctx.state.quotes_failed += 1
-                        ctx.deps.logger.warning(
-                            f"Failed to validate entity quote for '{canonical_name}' "
-                            f"in {resource.id.url}: {type(e).__name__}: {e}"
-                        )
+            if entity_result is not None:
+                for (
+                    canonical_name,
+                    entity_info,
+                ) in entity_result.output.entities.items():
+                    # Convert quote strings to ResourceQuotes
+                    quotes = []
+                    for quote_str in entity_info.supporting_quotes:
+                        try:
+                            quote = resource.quote(quote_str)
+                            quotes.append(quote)
+                            ctx.state.quotes_validated += 1
+                        except Exception as e:
+                            ctx.state.quotes_failed += 1
+                            ctx.deps.logger.warning(
+                                f"Failed to validate entity quote for '{canonical_name}' "
+                                f"in {resource.id.url}: {type(e).__name__}: {e}"
+                            )
 
-                if quotes:  # Only store entity if we have valid quotes
-                    entities_dict[canonical_name] = EntityMention(
-                        canonical_name=canonical_name,
-                        entity_type=entity_info.entity_type,
-                        verbatim_names=entity_info.verbatim_names,
-                        quotes=quotes,
-                    )
+                    if quotes:  # Only store entity if we have valid quotes
+                        entities_dict[canonical_name] = EntityMention(
+                            canonical_name=canonical_name,
+                            entity_type=entity_info.entity_type,
+                            verbatim_names=entity_info.verbatim_names,
+                            quotes=quotes,
+                        )
 
             # Store entities for this resource
             if entities_dict:
@@ -168,31 +188,32 @@ Use canonical entity names and provide exact quotes supporting each association.
 
             # Convert pairs to PairMention with ResourceQuotes
             pairs_list = []
-            for pair_info in pair_result.output.pairs:
-                # Convert quote strings to ResourceQuotes
-                quotes = []
-                for quote_str in pair_info.supporting_quotes:
-                    try:
-                        quote = resource.quote(quote_str)
-                        quotes.append(quote)
-                        ctx.state.quotes_validated += 1
-                    except Exception as e:
-                        ctx.state.quotes_failed += 1
-                        ctx.deps.logger.warning(
-                            f"Failed to validate pair quote for "
-                            f"'{pair_info.entity1}-{pair_info.entity2}' "
-                            f"in {resource.id.url}: {type(e).__name__}: {e}"
-                        )
+            if pair_result is not None:
+                for pair_info in pair_result.output.pairs:
+                    # Convert quote strings to ResourceQuotes
+                    quotes = []
+                    for quote_str in pair_info.supporting_quotes:
+                        try:
+                            quote = resource.quote(quote_str)
+                            quotes.append(quote)
+                            ctx.state.quotes_validated += 1
+                        except Exception as e:
+                            ctx.state.quotes_failed += 1
+                            ctx.deps.logger.warning(
+                                f"Failed to validate pair quote for "
+                                f"'{pair_info.entity1}-{pair_info.entity2}' "
+                                f"in {resource.id.url}: {type(e).__name__}: {e}"
+                            )
 
-                if quotes:  # Only store pair if we have valid quotes
-                    pairs_list.append(
-                        PairMention(
-                            entity1=pair_info.entity1,
-                            entity2=pair_info.entity2,
-                            relationship_type=pair_info.relationship_type,
-                            quotes=quotes,
+                    if quotes:  # Only store pair if we have valid quotes
+                        pairs_list.append(
+                            PairMention(
+                                entity1=pair_info.entity1,
+                                entity2=pair_info.entity2,
+                                relationship_type=pair_info.relationship_type,
+                                quotes=quotes,
+                            )
                         )
-                    )
 
             # Store pairs for this resource
             if pairs_list:
