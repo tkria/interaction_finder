@@ -13,7 +13,7 @@ for storage in State.
 from dataclasses import dataclass
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from interaction_finder.resources import ResourceId, ResourceQuote
 
@@ -120,8 +120,10 @@ class EntityInfo(BaseModel):
     This is converted to EntityMention after quote validation.
     """
 
+    model_config = ConfigDict(populate_by_name=True)
+
     entity_type: str = Field(
-        description='Entity type (e.g., "gene", "disease", "protein")'
+        alias="type", description='Entity type (e.g., "gene", "disease", "protein")'
     )
     verbatim_names: list[str] = Field(
         description="Names as they appear in the text", min_length=1

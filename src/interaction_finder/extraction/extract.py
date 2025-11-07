@@ -60,12 +60,14 @@ Guidelines:
 - Provide exact quotes that mention each entity
 - Focus on entities clearly relevant to the topic
 - Be conservative: only extract entities with clear textual support
+- If no relevant entities are found, return an empty dict {} for entities
 
 Output requirements:
 - Use canonical names as dictionary keys
 - Include entity type for each entity
 - List all verbatim names found in text
 - Provide multiple supporting quotes when available
-- Give brief reasoning for your extraction choices""",
+- Give brief reasoning for your extraction choices
+- Return {"entities": {}, "reasoning": "..."} when no relevant entities are found""",
         )
     return _entity_extractor_agents[model_name]

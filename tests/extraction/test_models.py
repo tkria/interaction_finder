@@ -49,6 +49,31 @@ class TestEntityInfo:
                 entity_type="gene", verbatim_names=["BRCA1"], supporting_quotes=[]
             )
 
+    def test_accepts_type_alias(self):
+        """Test that 'type' alias works for entity_type field.
+
+        This ensures LLM responses using 'type' are accepted.
+        """
+        # LLM response using 'type' instead of 'entity_type'
+        info = EntityInfo(
+            type="gene",
+            verbatim_names=["BRCA1"],
+            supporting_quotes=["BRCA1 is a tumor suppressor gene."],
+        )
+        assert info.entity_type == "gene"
+
+    def test_accepts_entity_type_field_name(self):
+        """Test that 'entity_type' field name still works.
+
+        This ensures backward compatibility.
+        """
+        info = EntityInfo(
+            entity_type="disease",
+            verbatim_names=["cancer"],
+            supporting_quotes=["The patient has cancer."],
+        )
+        assert info.entity_type == "disease"
+
 
 class TestEntityExtractionOut:
     """Tests for EntityExtractionOut model."""
@@ -72,6 +97,18 @@ class TestEntityExtractionOut:
         """Test that reasoning must be at least 20 characters."""
         with pytest.raises(ValidationError):
             EntityExtractionOut(entities={}, reasoning="Too short")
+
+    def test_empty_entities_with_valid_reasoning(self):
+        """Test that empty entities dict is valid when no relevant entities found.
+
+        This is the expected LLM response when no relevant entities exist.
+        """
+        output = EntityExtractionOut(
+            entities={},
+            reasoning="No entities of the specified types were found relevant to the topic.",
+        )
+        assert output.entities == {}
+        assert len(output.reasoning) >= 20
 
 
 class TestPairInfo:
@@ -117,6 +154,18 @@ class TestPairExtractionOut:
             reasoning="Found clear association between BRCA1 and breast cancer.",
         )
         assert len(output.pairs) == 1
+        assert len(output.reasoning) >= 20
+
+    def test_empty_pairs_with_valid_reasoning(self):
+        """Test that empty pairs list is valid when no relevant associations found.
+
+        This is the expected LLM response when no relevant associations exist.
+        """
+        output = PairExtractionOut(
+            pairs=[],
+            reasoning="No relevant associations between entities were found in the text.",
+        )
+        assert output.pairs == []
         assert len(output.reasoning) >= 20
 
 

@@ -57,6 +57,7 @@ Guidelines:
 - Provide exact quotes that support each association
 - Focus on associations relevant to the topic
 - Be conservative: only extract well-supported associations
+- If no relevant associations are found, return an empty list [] for pairs
 
 Common relationship types:
 - "associated_with" - general association or correlation
@@ -70,6 +71,7 @@ Output requirements:
 - Use canonical entity names
 - Specify clear relationship types
 - Provide multiple supporting quotes when available
-- Give brief reasoning for your extraction choices""",
+- Give brief reasoning for your extraction choices
+- Return {"pairs": [], "reasoning": "..."} when no relevant associations are found""",
         )
     return _pair_extractor_agents[model_name]
