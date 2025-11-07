@@ -83,11 +83,12 @@ async def test_full_pipeline_single_round():
     test_model = TestModel()
 
     # Override agents with test model
+    model_name = "openai:gpt-4o-mini"
     with (
-        get_goal_planner_agent().override(model=test_model),
-        get_query_generator_agent().override(model=test_model),
-        get_result_selector_agent().override(model=test_model),
-        get_reflector_agent().override(model=test_model),
+        get_goal_planner_agent(model_name).override(model=test_model),
+        get_query_generator_agent(model_name).override(model=test_model),
+        get_result_selector_agent(model_name).override(model=test_model),
+        get_reflector_agent(model_name).override(model=test_model),
     ):
         async with httpx.AsyncClient() as client:
             deps = Deps(
@@ -98,6 +99,7 @@ async def test_full_pipeline_single_round():
                 config={
                     "results_per_query": 50,
                     "rerank_top_k": 20,
+                    "llm_model": "openai:gpt-4o-mini",
                 },
             )
 
@@ -136,11 +138,12 @@ async def test_pipeline_reaches_max_rounds():
 
     test_model = TestModel()
 
+    model_name = "openai:gpt-4o-mini"
     with (
-        get_goal_planner_agent().override(model=test_model),
-        get_query_generator_agent().override(model=test_model),
-        get_result_selector_agent().override(model=test_model),
-        get_reflector_agent().override(model=test_model),
+        get_goal_planner_agent(model_name).override(model=test_model),
+        get_query_generator_agent(model_name).override(model=test_model),
+        get_result_selector_agent(model_name).override(model=test_model),
+        get_reflector_agent(model_name).override(model=test_model),
     ):
         async with httpx.AsyncClient() as client:
             deps = Deps(
@@ -151,6 +154,7 @@ async def test_pipeline_reaches_max_rounds():
                 config={
                     "results_per_query": 50,
                     "rerank_top_k": 20,
+                    "llm_model": "openai:gpt-4o-mini",
                 },
             )
 
@@ -176,11 +180,12 @@ async def test_pipeline_handles_no_results():
 
     test_model = TestModel()
 
+    model_name = "openai:gpt-4o-mini"
     with (
-        get_goal_planner_agent().override(model=test_model),
-        get_query_generator_agent().override(model=test_model),
-        get_result_selector_agent().override(model=test_model),
-        get_reflector_agent().override(model=test_model),
+        get_goal_planner_agent(model_name).override(model=test_model),
+        get_query_generator_agent(model_name).override(model=test_model),
+        get_result_selector_agent(model_name).override(model=test_model),
+        get_reflector_agent(model_name).override(model=test_model),
     ):
         async with httpx.AsyncClient() as client:
             deps = Deps(
@@ -191,6 +196,7 @@ async def test_pipeline_handles_no_results():
                 config={
                     "results_per_query": 50,
                     "rerank_top_k": 20,
+                    "llm_model": "openai:gpt-4o-mini",
                 },
             )
 
@@ -224,11 +230,12 @@ async def test_pipeline_without_reranking():
 
     test_model = TestModel()
 
+    model_name = "openai:gpt-4o-mini"
     with (
-        get_goal_planner_agent().override(model=test_model),
-        get_query_generator_agent().override(model=test_model),
-        get_result_selector_agent().override(model=test_model),
-        get_reflector_agent().override(model=test_model),
+        get_goal_planner_agent(model_name).override(model=test_model),
+        get_query_generator_agent(model_name).override(model=test_model),
+        get_result_selector_agent(model_name).override(model=test_model),
+        get_reflector_agent(model_name).override(model=test_model),
     ):
         async with httpx.AsyncClient() as client:
             deps = Deps(
@@ -239,6 +246,7 @@ async def test_pipeline_without_reranking():
                 config={
                     "results_per_query": 50,
                     "enable_reranking": False,  # Disable reranking
+                    "llm_model": "openai:gpt-4o-mini",
                 },
             )
 
@@ -274,11 +282,12 @@ async def test_resource_pool_registration():
 
     test_model = TestModel()
 
+    model_name = "openai:gpt-4o-mini"
     with (
-        get_goal_planner_agent().override(model=test_model),
-        get_query_generator_agent().override(model=test_model),
-        get_result_selector_agent().override(model=test_model),
-        get_reflector_agent().override(model=test_model),
+        get_goal_planner_agent(model_name).override(model=test_model),
+        get_query_generator_agent(model_name).override(model=test_model),
+        get_result_selector_agent(model_name).override(model=test_model),
+        get_reflector_agent(model_name).override(model=test_model),
     ):
         async with httpx.AsyncClient() as client:
             deps = Deps(
@@ -289,6 +298,7 @@ async def test_resource_pool_registration():
                 config={
                     "results_per_query": 50,
                     "rerank_top_k": 20,
+                    "llm_model": "openai:gpt-4o-mini",
                 },
             )
 

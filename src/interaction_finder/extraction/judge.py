@@ -25,7 +25,7 @@ def resolve_model(model_name: str):
 _final_judge_agents: dict[str, Agent] = {}
 
 
-def get_final_judge_agent(model_name: str = "openai:gpt-4o") -> Agent:
+def get_final_judge_agent(model_name: str) -> Agent:
     """Get or create final judge agent instance.
 
     Lazy initialization to avoid requiring API keys at import time.

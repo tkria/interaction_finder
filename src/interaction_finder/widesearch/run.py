@@ -81,6 +81,7 @@ async def run_widesearch(
             if enable_reranking is not None
             else ws_config.enable_reranking
         ),
+        "llm_model": ws_config.llm_model,
     }
 
     # Determine max_rounds
@@ -192,6 +193,7 @@ async def run_widesearch_with_checkpoint(
             if enable_reranking is not None
             else ws_config.enable_reranking
         ),
+        "llm_model": ws_config.llm_model,
     }
 
     # Determine max_rounds

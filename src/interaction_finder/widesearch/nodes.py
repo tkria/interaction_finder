@@ -39,12 +39,13 @@ class PlanGoalsNode(BaseNode[State, Deps, list[SearchResult]]):
 
             # Use goal planner agent
             usage = RunUsage()
+            model_name = ctx.deps.config["llm_model"]
             prompt = f"""Research topic: {ctx.state.topic}
 
 Keyphrases available: {", ".join(ctx.state.keyphrases)}
 
 Identify subject areas and research domains that should be covered to ensure comprehensive literature discovery."""
-            result = await get_goal_planner_agent().run(
+            result = await get_goal_planner_agent(model_name).run(
                 prompt, deps=ctx.deps, usage=usage
             )
 
@@ -100,7 +101,8 @@ Generate search queries that target unsatisfied subject goals and incorporate th
 
             # Use query generator agent
             usage = RunUsage()
-            result = await get_query_generator_agent().run(
+            model_name = ctx.deps.config["llm_model"]
+            result = await get_query_generator_agent(model_name).run(
                 prompt, deps=ctx.deps, usage=usage
             )
 
@@ -240,7 +242,8 @@ Select the most relevant results and summarize what subject areas they cover."""
 
             # Use result selector agent
             usage = RunUsage()
-            result = await get_result_selector_agent().run(
+            model_name = ctx.deps.config["llm_model"]
+            result = await get_result_selector_agent(model_name).run(
                 prompt, deps=ctx.deps, usage=usage
             )
 
@@ -337,7 +340,10 @@ Evaluate coverage and decide whether to continue searching or stop."""
 
             # Use reflector agent
             usage = RunUsage()
-            result = await get_reflector_agent().run(prompt, deps=ctx.deps, usage=usage)
+            model_name = ctx.deps.config["llm_model"]
+            result = await get_reflector_agent(model_name).run(
+                prompt, deps=ctx.deps, usage=usage
+            )
 
             # Update satisfied goals
             ctx.state.satisfied_goals.extend(result.output.satisfied_goals)

@@ -25,7 +25,7 @@ def resolve_model(model_name: str):
 _entity_assessor_agents: dict[str, Agent] = {}
 
 
-def get_entity_assessor_agent(model_name: str = "openai:gpt-4o-mini") -> Agent:
+def get_entity_assessor_agent(model_name: str) -> Agent:
     """Get or create entity assessor agent instance.
 
     Lazy initialization to avoid requiring API keys at import time.

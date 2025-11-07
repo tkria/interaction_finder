@@ -174,6 +174,9 @@ class IfetcherConfig(BaseModel):
                 None,
                 description="Device for reranker model ('cpu', 'cuda', or None for auto)",
             )
+            llm_model: str = Field(
+                "openai:gpt-4o-mini", description="LLM model for agents"
+            )
             search_backend: str = Field("pubmed", description="Search backend to use")
 
         widesearch: Widesearch = Field(

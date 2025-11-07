@@ -53,12 +53,13 @@ async def test_extraction_pipeline_with_mocked_agents():
     # Use TestModel for all agents
     test_model = TestModel()
 
+    model_name = "openai:gpt-4o-mini"
     with (
-        get_entity_extractor_agent().override(model=test_model),
-        get_pair_extractor_agent().override(model=test_model),
-        get_entity_assessor_agent().override(model=test_model),
-        get_pair_assessor_agent().override(model=test_model),
-        get_final_judge_agent().override(model=test_model),
+        get_entity_extractor_agent(model_name).override(model=test_model),
+        get_pair_extractor_agent(model_name).override(model=test_model),
+        get_entity_assessor_agent(model_name).override(model=test_model),
+        get_pair_assessor_agent(model_name).override(model=test_model),
+        get_final_judge_agent(model_name).override(model=test_model),
     ):
         result = await run_extraction(
             topic="BRCA1 and breast cancer",
@@ -97,12 +98,13 @@ async def test_quote_validation_failures_logged():
 
     test_model = TestModel()
 
+    model_name = "openai:gpt-4o-mini"
     with (
-        get_entity_extractor_agent().override(model=test_model),
-        get_pair_extractor_agent().override(model=test_model),
-        get_entity_assessor_agent().override(model=test_model),
-        get_pair_assessor_agent().override(model=test_model),
-        get_final_judge_agent().override(model=test_model),
+        get_entity_extractor_agent(model_name).override(model=test_model),
+        get_pair_extractor_agent(model_name).override(model=test_model),
+        get_entity_assessor_agent(model_name).override(model=test_model),
+        get_pair_assessor_agent(model_name).override(model=test_model),
+        get_final_judge_agent(model_name).override(model=test_model),
     ):
         result = await run_extraction(
             topic="test",
@@ -132,12 +134,13 @@ async def test_multiple_resources_processed():
 
     test_model = TestModel()
 
+    model_name = "openai:gpt-4o-mini"
     with (
-        get_entity_extractor_agent().override(model=test_model),
-        get_pair_extractor_agent().override(model=test_model),
-        get_entity_assessor_agent().override(model=test_model),
-        get_pair_assessor_agent().override(model=test_model),
-        get_final_judge_agent().override(model=test_model),
+        get_entity_extractor_agent(model_name).override(model=test_model),
+        get_pair_extractor_agent(model_name).override(model=test_model),
+        get_entity_assessor_agent(model_name).override(model=test_model),
+        get_pair_assessor_agent(model_name).override(model=test_model),
+        get_final_judge_agent(model_name).override(model=test_model),
     ):
         result = await run_extraction(
             topic="BRCA1 and breast cancer",
@@ -168,12 +171,13 @@ async def test_entity_assessments_influence_pair_judgments():
 
     test_model = TestModel()
 
+    model_name = "openai:gpt-4o-mini"
     with (
-        get_entity_extractor_agent().override(model=test_model),
-        get_pair_extractor_agent().override(model=test_model),
-        get_entity_assessor_agent().override(model=test_model),
-        get_pair_assessor_agent().override(model=test_model),
-        get_final_judge_agent().override(model=test_model),
+        get_entity_extractor_agent(model_name).override(model=test_model),
+        get_pair_extractor_agent(model_name).override(model=test_model),
+        get_entity_assessor_agent(model_name).override(model=test_model),
+        get_pair_assessor_agent(model_name).override(model=test_model),
+        get_final_judge_agent(model_name).override(model=test_model),
     ):
         # Import the graph to access state after running
         from interaction_finder.extraction.graph import graph

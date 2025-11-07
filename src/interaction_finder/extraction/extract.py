@@ -29,7 +29,7 @@ def resolve_model(model_name: str):
 _entity_extractor_agents: dict[str, Agent] = {}
 
 
-def get_entity_extractor_agent(model_name: str = "openai:gpt-4o-mini") -> Agent:
+def get_entity_extractor_agent(model_name: str) -> Agent:
     """Get or create entity extractor agent instance.
 
     Lazy initialization to avoid requiring API keys at import time.

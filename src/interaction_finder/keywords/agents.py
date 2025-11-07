@@ -67,7 +67,7 @@ def mk_agent(
 _agent_cache: dict[tuple[str, str], Agent] = {}
 
 
-def get_query_expander_agent(model_name: str = "openai:gpt-4o-mini") -> Agent:
+def get_query_expander_agent(model_name: str) -> Agent:
     """Get or create query expander agent.
 
     Lazy initialization with per-model caching.
@@ -99,7 +99,7 @@ Focus on finding articles that will help identify bridging terms: related concep
     return _agent_cache[cache_key]
 
 
-def get_result_selector_agent(model_name: str = "openai:gpt-4o-mini") -> Agent:
+def get_result_selector_agent(model_name: str) -> Agent:
     """Get or create result selector agent.
 
     Lazy initialization with per-model caching.
@@ -131,7 +131,7 @@ Return the indices of results to fetch, ordered by priority (most valuable first
     return _agent_cache[cache_key]
 
 
-def get_keyword_evaluator_agent(model_name: str = "openai:gpt-4o-mini") -> Agent:
+def get_keyword_evaluator_agent(model_name: str) -> Agent:
     """Get or create keyword evaluator agent.
 
     Lazy initialization with per-model caching.
@@ -170,7 +170,7 @@ Focus on terms that would genuinely help expand literature search coverage.""",
     return _agent_cache[cache_key]
 
 
-def get_document_summarizer_agent(model_name: str = "openai:gpt-4o-mini") -> Agent:
+def get_document_summarizer_agent(model_name: str) -> Agent:
     """Get or create document summarizer agent.
 
     Lazy initialization with per-model caching.
@@ -205,7 +205,7 @@ Focus on identifying concepts that connect to the target topic, not just the doc
     return _agent_cache[cache_key]
 
 
-def get_reflector_agent(model_name: str = "openai:gpt-4o-mini") -> Agent:
+def get_reflector_agent(model_name: str) -> Agent:
     """Get or create reflector agent.
 
     Lazy initialization with per-model caching.

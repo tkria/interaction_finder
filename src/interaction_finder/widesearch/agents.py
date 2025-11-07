@@ -69,7 +69,7 @@ def mk_agent(
 _agent_cache: dict[tuple[str, str], Agent] = {}
 
 
-def get_goal_planner_agent(model_name: str = "openai:gpt-4o-mini") -> Agent:
+def get_goal_planner_agent(model_name: str) -> Agent:
     """Get or create goal planner agent.
 
     Lazy initialization with per-model caching.
@@ -105,7 +105,7 @@ Be ambitious about coverage - it's better to identify more goals that guide thor
     return _agent_cache[cache_key]
 
 
-def get_query_generator_agent(model_name: str = "openai:gpt-4o-mini") -> Agent:
+def get_query_generator_agent(model_name: str) -> Agent:
     """Get or create query generator agent.
 
     Lazy initialization with per-model caching.
@@ -176,7 +176,7 @@ IMPORTANT: Return ALL queries in a single structured response. Do not create mul
     return _agent_cache[cache_key]
 
 
-def get_result_selector_agent(model_name: str = "openai:gpt-4o-mini") -> Agent:
+def get_result_selector_agent(model_name: str) -> Agent:
     """Get or create result selector agent.
 
     Lazy initialization with per-model caching.
@@ -214,7 +214,7 @@ Your selection and summary will guide the reflection process to determine if mor
     return _agent_cache[cache_key]
 
 
-def get_reflector_agent(model_name: str = "openai:gpt-4o-mini") -> Agent:
+def get_reflector_agent(model_name: str) -> Agent:
     """Get or create reflector agent.
 
     Lazy initialization with per-model caching.

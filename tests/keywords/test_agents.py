@@ -37,7 +37,7 @@ class TestQueryExpanderAgent:
     async def test_agent_returns_query_expansion(self, mock_deps):
         """Test agent returns QueryExpansionOut structure."""
         # Get the agent instance and override with TestModel
-        agent = get_query_expander_agent()
+        agent = get_query_expander_agent("openai:gpt-4o-mini")
         test_model = TestModel()
         with agent.override(model=test_model):
             result = await agent.run("pulmonary arterial hypertension", deps=mock_deps)
@@ -49,7 +49,7 @@ class TestQueryExpanderAgent:
     def test_agent_has_correct_output_type(self):
         """Test agent is configured with correct output type."""
         # Get the agent instance and check output_type
-        agent = get_query_expander_agent()
+        agent = get_query_expander_agent("openai:gpt-4o-mini")
         assert hasattr(agent, "_output_type")
 
 
@@ -59,7 +59,7 @@ class TestResultSelectorAgent:
     @pytest.mark.asyncio
     async def test_agent_returns_result_selection(self, mock_deps):
         """Test agent returns ResultSelectionOut structure."""
-        agent = get_result_selector_agent()
+        agent = get_result_selector_agent("openai:gpt-4o-mini")
         test_model = TestModel()
         with agent.override(model=test_model):
             # Simulate providing search results context
@@ -78,7 +78,7 @@ class TestKeywordEvaluatorAgent:
     @pytest.mark.asyncio
     async def test_agent_returns_keyword_evaluation(self, mock_deps):
         """Test agent returns KeywordEvaluationOut structure."""
-        agent = get_keyword_evaluator_agent()
+        agent = get_keyword_evaluator_agent("openai:gpt-4o-mini")
         test_model = TestModel()
         with agent.override(model=test_model):
             result = await agent.run(
@@ -96,7 +96,7 @@ class TestDocumentSummarizerAgent:
     @pytest.mark.asyncio
     async def test_agent_returns_document_summary(self, mock_deps):
         """Test agent returns DocumentSummaryOut structure."""
-        agent = get_document_summarizer_agent()
+        agent = get_document_summarizer_agent("openai:gpt-4o-mini")
         test_model = TestModel()
         with agent.override(model=test_model):
             result = await agent.run(
@@ -116,7 +116,7 @@ class TestReflectorAgent:
     @pytest.mark.asyncio
     async def test_agent_returns_reflection(self, mock_deps):
         """Test agent returns ReflectionOut structure."""
-        agent = get_reflector_agent()
+        agent = get_reflector_agent("openai:gpt-4o-mini")
         test_model = TestModel()
         with agent.override(model=test_model):
             result = await agent.run(
@@ -143,7 +143,7 @@ class TestAgentConfiguration:
         ]
         for factory in agent_factories:
             # Get the agent instance from the factory
-            agent = factory()
+            agent = factory("openai:gpt-4o-mini")
             # Agents should have system prompts configured
             assert agent._system_prompts is not None
             assert len(agent._system_prompts) > 0  # Has prompts
@@ -159,5 +159,5 @@ class TestAgentConfiguration:
         ]
         for factory in agent_factories:
             # Get the agent instance from the factory
-            agent = factory()
+            agent = factory("openai:gpt-4o-mini")
             assert agent._deps_type == Deps

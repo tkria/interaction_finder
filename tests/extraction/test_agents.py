@@ -26,7 +26,7 @@ class TestEntityExtractorAgent:
 
     def test_agent_configuration(self):
         """Test agent has correct configuration."""
-        agent = get_entity_extractor_agent()
+        agent = get_entity_extractor_agent("openai:gpt-4o-mini")
         assert agent._deps_type == Deps
         # Note: pydantic-ai agents don't expose output_type directly
         assert agent._system_prompts is not None
@@ -35,7 +35,7 @@ class TestEntityExtractorAgent:
     async def test_agent_returns_correct_type(self):
         """Test agent returns EntityExtractionOut."""
         test_model = TestModel()
-        agent = get_entity_extractor_agent()
+        agent = get_entity_extractor_agent("openai:gpt-4o-mini")
         with agent.override(model=test_model):
             result = await agent.run(
                 "Extract entities from: BRCA1 is associated with breast cancer.",
@@ -51,7 +51,7 @@ class TestPairExtractorAgent:
 
     def test_agent_configuration(self):
         """Test agent has correct configuration."""
-        agent = get_pair_extractor_agent()
+        agent = get_pair_extractor_agent("openai:gpt-4o-mini")
         assert agent._deps_type == Deps
         assert agent._system_prompts is not None
 
@@ -59,7 +59,7 @@ class TestPairExtractorAgent:
     async def test_agent_returns_correct_type(self):
         """Test agent returns PairExtractionOut."""
         test_model = TestModel()
-        agent = get_pair_extractor_agent()
+        agent = get_pair_extractor_agent("openai:gpt-4o-mini")
         with agent.override(model=test_model):
             result = await agent.run(
                 "Extract pairs from: BRCA1 is associated with breast cancer.", deps=None
@@ -74,7 +74,7 @@ class TestEntityAssessorAgent:
 
     def test_agent_configuration(self):
         """Test agent has correct configuration."""
-        agent = get_entity_assessor_agent()
+        agent = get_entity_assessor_agent("openai:gpt-4o-mini")
         assert agent._deps_type == Deps
         assert agent._system_prompts is not None
 
@@ -82,7 +82,7 @@ class TestEntityAssessorAgent:
     async def test_agent_returns_correct_type(self):
         """Test agent returns EntityEvidenceAssessment."""
         test_model = TestModel()
-        agent = get_entity_assessor_agent()
+        agent = get_entity_assessor_agent("openai:gpt-4o-mini")
         with agent.override(model=test_model):
             result = await agent.run(
                 "Assess: BRCA1 mentioned in context of breast cancer.", deps=None
@@ -98,7 +98,7 @@ class TestPairAssessorAgent:
 
     def test_agent_configuration(self):
         """Test agent has correct configuration."""
-        agent = get_pair_assessor_agent()
+        agent = get_pair_assessor_agent("openai:gpt-4o-mini")
         assert agent._deps_type == Deps
         assert agent._system_prompts is not None
 
@@ -106,7 +106,7 @@ class TestPairAssessorAgent:
     async def test_agent_returns_correct_type(self):
         """Test agent returns PairEvidenceAssessment."""
         test_model = TestModel()
-        agent = get_pair_assessor_agent()
+        agent = get_pair_assessor_agent("openai:gpt-4o-mini")
         with agent.override(model=test_model):
             result = await agent.run(
                 "Assess: BRCA1 associated with breast cancer.", deps=None
@@ -122,7 +122,7 @@ class TestFinalJudgeAgent:
 
     def test_agent_configuration(self):
         """Test agent has correct configuration."""
-        agent = get_final_judge_agent()
+        agent = get_final_judge_agent("openai:gpt-4o-mini")
         assert agent._deps_type == Deps
         assert agent._system_prompts is not None
 
@@ -130,7 +130,7 @@ class TestFinalJudgeAgent:
     async def test_agent_returns_correct_type(self):
         """Test agent returns FinalJudgmentOut."""
         test_model = TestModel()
-        agent = get_final_judge_agent()
+        agent = get_final_judge_agent("openai:gpt-4o-mini")
         with agent.override(model=test_model):
             result = await agent.run(
                 "Judge: BRCA1-breast cancer association across documents.", deps=None

@@ -68,11 +68,12 @@ async def test_run_widesearch_basic(test_config):
     test_model = TestModel()
 
     # Call factory functions to get agent instances, then override
+    model_name = "openai:gpt-4o-mini"
     with (
-        get_goal_planner_agent().override(model=test_model),
-        get_query_generator_agent().override(model=test_model),
-        get_result_selector_agent().override(model=test_model),
-        get_reflector_agent().override(model=test_model),
+        get_goal_planner_agent(model_name).override(model=test_model),
+        get_query_generator_agent(model_name).override(model=test_model),
+        get_result_selector_agent(model_name).override(model=test_model),
+        get_reflector_agent(model_name).override(model=test_model),
     ):
         results = await run_widesearch(
             topic="diabetes treatment",
@@ -105,11 +106,12 @@ async def test_run_widesearch_with_existing_pool(test_config):
     existing_pool = ResourcePool()
     existing_pool.register("https://example.com/existing")
 
+    model_name = "openai:gpt-4o-mini"
     with (
-        get_goal_planner_agent().override(model=test_model),
-        get_query_generator_agent().override(model=test_model),
-        get_result_selector_agent().override(model=test_model),
-        get_reflector_agent().override(model=test_model),
+        get_goal_planner_agent(model_name).override(model=test_model),
+        get_query_generator_agent(model_name).override(model=test_model),
+        get_result_selector_agent(model_name).override(model=test_model),
+        get_reflector_agent(model_name).override(model=test_model),
     ):
         results = await run_widesearch(
             topic="test topic",
@@ -139,11 +141,12 @@ async def test_run_widesearch_disable_reranking():
     backend = MockSearchBackend(results=mock_results)
     test_model = TestModel()
 
+    model_name = "openai:gpt-4o-mini"
     with (
-        get_goal_planner_agent().override(model=test_model),
-        get_query_generator_agent().override(model=test_model),
-        get_result_selector_agent().override(model=test_model),
-        get_reflector_agent().override(model=test_model),
+        get_goal_planner_agent(model_name).override(model=test_model),
+        get_query_generator_agent(model_name).override(model=test_model),
+        get_result_selector_agent(model_name).override(model=test_model),
+        get_reflector_agent(model_name).override(model=test_model),
     ):
         results = await run_widesearch(
             topic="test topic",
@@ -170,11 +173,12 @@ async def test_run_widesearch_custom_max_rounds(test_config):
     backend = MockSearchBackend(results=mock_results)
     test_model = TestModel()
 
+    model_name = "openai:gpt-4o-mini"
     with (
-        get_goal_planner_agent().override(model=test_model),
-        get_query_generator_agent().override(model=test_model),
-        get_result_selector_agent().override(model=test_model),
-        get_reflector_agent().override(model=test_model),
+        get_goal_planner_agent(model_name).override(model=test_model),
+        get_query_generator_agent(model_name).override(model=test_model),
+        get_result_selector_agent(model_name).override(model=test_model),
+        get_reflector_agent(model_name).override(model=test_model),
     ):
         results = await run_widesearch(
             topic="test topic",
@@ -206,11 +210,12 @@ async def test_run_widesearch_with_checkpoint_basic(test_config):
     backend = MockSearchBackend(results=mock_results)
     test_model = TestModel()
 
+    model_name = "openai:gpt-4o-mini"
     with (
-        get_goal_planner_agent().override(model=test_model),
-        get_query_generator_agent().override(model=test_model),
-        get_result_selector_agent().override(model=test_model),
-        get_reflector_agent().override(model=test_model),
+        get_goal_planner_agent(model_name).override(model=test_model),
+        get_query_generator_agent(model_name).override(model=test_model),
+        get_result_selector_agent(model_name).override(model=test_model),
+        get_reflector_agent(model_name).override(model=test_model),
     ):
         checkpoint = await run_widesearch_with_checkpoint(
             topic="diabetes treatment",
@@ -248,11 +253,12 @@ async def test_checkpoint_serialization(test_config):
     backend = MockSearchBackend(results=mock_results)
     test_model = TestModel()
 
+    model_name = "openai:gpt-4o-mini"
     with (
-        get_goal_planner_agent().override(model=test_model),
-        get_query_generator_agent().override(model=test_model),
-        get_result_selector_agent().override(model=test_model),
-        get_reflector_agent().override(model=test_model),
+        get_goal_planner_agent(model_name).override(model=test_model),
+        get_query_generator_agent(model_name).override(model=test_model),
+        get_result_selector_agent(model_name).override(model=test_model),
+        get_reflector_agent(model_name).override(model=test_model),
     ):
         checkpoint = await run_widesearch_with_checkpoint(
             topic="test topic",
@@ -308,11 +314,12 @@ async def test_checkpoint_contains_all_data(test_config):
     backend = MockSearchBackend(results=mock_results)
     test_model = TestModel()
 
+    model_name = "openai:gpt-4o-mini"
     with (
-        get_goal_planner_agent().override(model=test_model),
-        get_query_generator_agent().override(model=test_model),
-        get_result_selector_agent().override(model=test_model),
-        get_reflector_agent().override(model=test_model),
+        get_goal_planner_agent(model_name).override(model=test_model),
+        get_query_generator_agent(model_name).override(model=test_model),
+        get_result_selector_agent(model_name).override(model=test_model),
+        get_reflector_agent(model_name).override(model=test_model),
     ):
         checkpoint = await run_widesearch_with_checkpoint(
             topic="test topic",
@@ -349,11 +356,12 @@ async def test_checkpoint_backward_compatibility(test_config):
     backend = MockSearchBackend(results=mock_results)
     test_model = TestModel()
 
+    model_name = "openai:gpt-4o-mini"
     with (
-        get_goal_planner_agent().override(model=test_model),
-        get_query_generator_agent().override(model=test_model),
-        get_result_selector_agent().override(model=test_model),
-        get_reflector_agent().override(model=test_model),
+        get_goal_planner_agent(model_name).override(model=test_model),
+        get_query_generator_agent(model_name).override(model=test_model),
+        get_result_selector_agent(model_name).override(model=test_model),
+        get_reflector_agent(model_name).override(model=test_model),
     ):
         # Original function should still return list[SearchResult]
         results = await run_widesearch(
