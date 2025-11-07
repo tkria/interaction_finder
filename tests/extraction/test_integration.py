@@ -185,7 +185,12 @@ async def test_entity_assessments_influence_pair_judgments():
         from interaction_finder.extraction.state import State
         from interaction_finder.extraction.deps import Deps
 
-        deps = Deps(resource_pool=pool, config={}, logger=logging.getLogger(__name__))
+        deps = Deps(
+            resource_pool=pool,
+            extraction_model="openai:gpt-4o-mini",
+            judge_model="openai:gpt-4o",
+            logger=logging.getLogger(__name__),
+        )
 
         state = State(
             topic="BRCA1 and breast cancer", target_entity_types=["gene", "disease"]

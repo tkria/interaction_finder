@@ -6,7 +6,6 @@ and passed to agents via ctx.deps.
 
 import logging
 from dataclasses import dataclass
-from typing import Any
 
 from interaction_finder.resources import ResourcePool
 
@@ -17,10 +16,12 @@ class Deps:
 
     Attributes:
         resource_pool: Document storage with provenance tracking
-        config: Configuration dict with model names and thresholds
+        extraction_model: LLM model for entity and pair extraction/assessment
+        judge_model: LLM model for final judgment on pairs
         logger: Logger for warnings and debugging
     """
 
     resource_pool: ResourcePool
-    config: dict[str, Any]
+    extraction_model: str
+    judge_model: str
     logger: logging.Logger

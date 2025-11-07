@@ -34,40 +34,6 @@ from interaction_finder.logging import logfire
 from interaction_finder.resources import Resource, ResourceQuote
 
 
-def _get_agent_model(config: dict, agent_name: str, default: str) -> str:
-    """Resolve agent model from config with multiple fallback strategies.
-
-    Tries in order:
-    1. config["agents"][agent_name].llm (structured AgentSpec)
-    2. config[f"{agent_name}_model"] (flat key like "extraction_model")
-    3. default parameter
-
-    Parameters:
-        config: Configuration dictionary from ctx.deps.config
-        agent_name: Agent name (e.g., "extraction", "judge")
-        default: Default model if nothing configured
-
-    Returns:
-        Model name string (e.g., "openai:gpt-4o-mini")
-    """
-    # Try structured agents config first
-    agents = config.get("agents", {})
-    if isinstance(agents, dict) and agent_name in agents:
-        agent_spec = agents[agent_name]
-        if hasattr(agent_spec, "llm") and agent_spec.llm:
-            return agent_spec.llm
-        elif isinstance(agent_spec, dict) and "llm" in agent_spec and agent_spec["llm"]:
-            return agent_spec["llm"]
-
-    # Fall back to flat config key
-    flat_key = f"{agent_name}_model"
-    if flat_key in config:
-        return config[flat_key]
-
-    # Use default
-    return default
-
-
 @dataclass
 class ExtractFromDocumentsNode(BaseNode[State, Deps, ExtractionResult]):
     """Extract entities and pairs from all resources in parallel.
@@ -161,17 +127,13 @@ Use canonical names and provide exact quotes."""
 Extract binary entity-entity associations relevant to the topic.
 Use canonical entity names and provide exact quotes supporting each association."""
 
-            # Get model name from config
-            model_name = _get_agent_model(
-                ctx.deps.config, "extraction", "openai:gpt-4o-mini"
-            )
-            # Extract entities
-            entity_result = await get_entity_extractor_agent(model_name).run(
-                entity_prompt, deps=ctx.deps, usage=usage
-            )
+            # Extract entities using configured extraction model
+            entity_result = await get_entity_extractor_agent(
+                ctx.deps.extraction_model
+            ).run(entity_prompt, deps=ctx.deps, usage=usage)
 
-            # Extract pairs
-            pair_result = await get_pair_extractor_agent(model_name).run(
+            # Extract pairs using configured extraction model
+            pair_result = await get_pair_extractor_agent(ctx.deps.extraction_model).run(
                 pair_prompt, deps=ctx.deps, usage=usage
             )
 
@@ -293,12 +255,8 @@ class AssessEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
 Evaluate how strongly these quotes support the entity's relevance to the topic.
 Reference specific quote indices in your assessment."""
 
-            # Get model name from config
-            model_name = _get_agent_model(
-                ctx.deps.config, "extraction", "openai:gpt-4o-mini"
-            )
-            # Call assessment agent
-            result = await get_entity_assessor_agent(model_name).run(
+            # Call assessment agent using configured extraction model
+            result = await get_entity_assessor_agent(ctx.deps.extraction_model).run(
                 prompt, deps=ctx.deps, usage=usage
             )
 
@@ -414,12 +372,8 @@ Evaluate how strongly these quotes support the validity of this association.
 Consider both the relevance of the individual entities and the strength of their relationship.
 Reference specific quote indices in your assessment."""
 
-            # Get model name from config
-            model_name = _get_agent_model(
-                ctx.deps.config, "extraction", "openai:gpt-4o-mini"
-            )
-            # Call assessment agent
-            result = await get_pair_assessor_agent(model_name).run(
+            # Call assessment agent using configured extraction model
+            result = await get_pair_assessor_agent(ctx.deps.extraction_model).run(
                 prompt, deps=ctx.deps, usage=usage
             )
 
@@ -574,12 +528,9 @@ and your confidence level. Consider:
 2. The relevance of both entities to the topic
 3. The quality and quantity of supporting quotes"""
 
-                # Get judge model from config (may use stronger model)
-                judge_model = _get_agent_model(
-                    ctx.deps.config, "judge", "openai:gpt-4o"
-                )
+                # Call final judge agent using configured judge model
                 usage = RunUsage()
-                result = await get_final_judge_agent(judge_model).run(
+                result = await get_final_judge_agent(ctx.deps.judge_model).run(
                     prompt, deps=ctx.deps, usage=usage
                 )
 

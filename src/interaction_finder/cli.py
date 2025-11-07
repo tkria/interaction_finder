@@ -753,12 +753,27 @@ def extract(
         console.print(f"Processing {resources_with_content} resources with content\n")
         from interaction_finder.extraction import run_extraction
 
+        # Resolve model names from config
+        extraction_model = "openai:gpt-4o-mini"  # default
+        judge_model = "openai:gpt-4o"  # default
+
+        if hasattr(cfg, "agents") and cfg.agents:
+            # Try agents.extraction.llm first
+            if "extraction" in cfg.agents and hasattr(cfg.agents["extraction"], "llm"):
+                if cfg.agents["extraction"].llm:
+                    extraction_model = cfg.agents["extraction"].llm
+            # Try agents.judge.llm for judge model
+            if "judge" in cfg.agents and hasattr(cfg.agents["judge"], "llm"):
+                if cfg.agents["judge"].llm:
+                    judge_model = cfg.agents["judge"].llm
+
         result = asyncio.run(
             run_extraction(
                 topic=topic,
                 target_entity_types=entity_types,
                 resource_pool=checkpoint.resources,
-                config={},  # TODO: pass relevant config
+                extraction_model=extraction_model,
+                judge_model=judge_model,
             )
         )
         # Display results summary
