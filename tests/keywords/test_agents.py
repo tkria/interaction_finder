@@ -36,12 +36,11 @@ class TestQueryExpanderAgent:
     @pytest.mark.asyncio
     async def test_agent_returns_query_expansion(self, mock_deps):
         """Test agent returns QueryExpansionOut structure."""
-        # Override with TestModel
+        # Get the agent instance and override with TestModel
+        agent = get_query_expander_agent()
         test_model = TestModel()
-        with get_query_expander_agent.override(model=test_model):
-            result = await get_query_expander_agent.run(
-                "pulmonary arterial hypertension", deps=mock_deps
-            )
+        with agent.override(model=test_model):
+            result = await agent.run("pulmonary arterial hypertension", deps=mock_deps)
             # TestModel generates valid data matching the schema
             assert isinstance(result.output, QueryExpansionOut)
             assert isinstance(result.output.queries, list)
@@ -49,8 +48,9 @@ class TestQueryExpanderAgent:
 
     def test_agent_has_correct_output_type(self):
         """Test agent is configured with correct output type."""
-        # Agent should have output_type configured
-        assert hasattr(get_query_expander_agent, "_output_type")
+        # Get the agent instance and check output_type
+        agent = get_query_expander_agent()
+        assert hasattr(agent, "_output_type")
 
 
 class TestResultSelectorAgent:
@@ -59,10 +59,11 @@ class TestResultSelectorAgent:
     @pytest.mark.asyncio
     async def test_agent_returns_result_selection(self, mock_deps):
         """Test agent returns ResultSelectionOut structure."""
+        agent = get_result_selector_agent()
         test_model = TestModel()
-        with get_result_selector_agent.override(model=test_model):
+        with agent.override(model=test_model):
             # Simulate providing search results context
-            result = await get_result_selector_agent.run(
+            result = await agent.run(
                 "Select results about machine learning",
                 deps=mock_deps,
             )
@@ -77,9 +78,10 @@ class TestKeywordEvaluatorAgent:
     @pytest.mark.asyncio
     async def test_agent_returns_keyword_evaluation(self, mock_deps):
         """Test agent returns KeywordEvaluationOut structure."""
+        agent = get_keyword_evaluator_agent()
         test_model = TestModel()
-        with get_keyword_evaluator_agent.override(model=test_model):
-            result = await get_keyword_evaluator_agent.run(
+        with agent.override(model=test_model):
+            result = await agent.run(
                 "Evaluate these keywords: term1, term2, term3",
                 deps=mock_deps,
             )
@@ -94,9 +96,10 @@ class TestDocumentSummarizerAgent:
     @pytest.mark.asyncio
     async def test_agent_returns_document_summary(self, mock_deps):
         """Test agent returns DocumentSummaryOut structure."""
+        agent = get_document_summarizer_agent()
         test_model = TestModel()
-        with get_document_summarizer_agent.override(model=test_model):
-            result = await get_document_summarizer_agent.run(
+        with agent.override(model=test_model):
+            result = await agent.run(
                 "Summarize this document about machine learning",
                 deps=mock_deps,
             )
@@ -113,9 +116,10 @@ class TestReflectorAgent:
     @pytest.mark.asyncio
     async def test_agent_returns_reflection(self, mock_deps):
         """Test agent returns ReflectionOut structure."""
+        agent = get_reflector_agent()
         test_model = TestModel()
-        with get_reflector_agent.override(model=test_model):
-            result = await get_reflector_agent.run(
+        with agent.override(model=test_model):
+            result = await agent.run(
                 "Review coverage and decide whether to continue",
                 deps=mock_deps,
             )
@@ -130,26 +134,30 @@ class TestAgentConfiguration:
 
     def test_all_agents_have_system_prompts(self):
         """Test all agents are configured with system prompts."""
-        agents = [
+        agent_factories = [
             get_query_expander_agent,
             get_result_selector_agent,
             get_keyword_evaluator_agent,
             get_document_summarizer_agent,
             get_reflector_agent,
         ]
-        for agent in agents:
+        for factory in agent_factories:
+            # Get the agent instance from the factory
+            agent = factory()
             # Agents should have system prompts configured
             assert agent._system_prompts is not None
             assert len(agent._system_prompts) > 0  # Has prompts
 
     def test_all_agents_have_deps_type(self):
         """Test all agents are configured with Deps type."""
-        agents = [
+        agent_factories = [
             get_query_expander_agent,
             get_result_selector_agent,
             get_keyword_evaluator_agent,
             get_document_summarizer_agent,
             get_reflector_agent,
         ]
-        for agent in agents:
+        for factory in agent_factories:
+            # Get the agent instance from the factory
+            agent = factory()
             assert agent._deps_type == Deps
