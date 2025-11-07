@@ -61,12 +61,27 @@ def mk_agent(
     )
 
 
-# Agent 1: Goal Planner
-# Plans subject areas that should be covered during the search session
-goal_planner_agent = mk_agent(
-    "openai:gpt-4o-mini",  # Will be overridden by config in production
-    SubjectGoalsOut,
-    system_prompt="""You are an expert research strategist planning comprehensive literature searches.
+# Cached agent instances by (agent_type, model_name)
+_agent_cache: dict[tuple[str, str], Agent] = {}
+
+
+def get_goal_planner_agent(model_name: str = "openai:gpt-4o-mini") -> Agent:
+    """Get or create goal planner agent.
+
+    Lazy initialization with per-model caching.
+
+    Parameters:
+        model_name: Model identifier
+
+    Returns:
+        Configured Agent instance
+    """
+    cache_key = ("goal_planner", model_name)
+    if cache_key not in _agent_cache:
+        _agent_cache[cache_key] = mk_agent(
+            model_name,
+            SubjectGoalsOut,
+            system_prompt="""You are an expert research strategist planning comprehensive literature searches.
 
 Your task is to identify subject areas and research domains that should be covered to ensure comprehensive literature discovery on a given topic.
 
@@ -79,14 +94,27 @@ Guidelines:
 - Aim for 5-10 well-defined subject goals that span the research landscape
 
 Your goals should guide query generation to ensure diverse, comprehensive coverage without drifting into irrelevance.""",
-)
+        )
+    return _agent_cache[cache_key]
 
-# Agent 2: Query Generator
-# Generates diverse queries targeting unsatisfied subject goals
-query_generator_agent = mk_agent(
-    "openai:gpt-4o-mini",
-    QueryGenerationOut,
-    system_prompt="""You are an expert at generating search queries for academic literature discovery.
+
+def get_query_generator_agent(model_name: str = "openai:gpt-4o-mini") -> Agent:
+    """Get or create query generator agent.
+
+    Lazy initialization with per-model caching.
+
+    Parameters:
+        model_name: Model identifier
+
+    Returns:
+        Configured Agent instance
+    """
+    cache_key = ("query_generator", model_name)
+    if cache_key not in _agent_cache:
+        _agent_cache[cache_key] = mk_agent(
+            model_name,
+            QueryGenerationOut,
+            system_prompt="""You are an expert at generating search queries for academic literature discovery.
 
 Your task is to create diverse, targeted search queries that will find relevant papers and articles. You will be given:
 - A research topic
@@ -103,14 +131,27 @@ Guidelines:
 - Avoid redundancy with previous queries
 
 Your queries should be suitable for academic search engines (PubMed, Google Scholar, etc.) and find papers that advance coverage of unsatisfied subject goals.""",
-)
+        )
+    return _agent_cache[cache_key]
 
-# Agent 3: Result Selector
-# Selects relevant results and summarizes covered topics
-result_selector_agent = mk_agent(
-    "openai:gpt-4o-mini",
-    ResultSelectionOut,
-    system_prompt="""You are an expert at evaluating search results for relevance and coverage.
+
+def get_result_selector_agent(model_name: str = "openai:gpt-4o-mini") -> Agent:
+    """Get or create result selector agent.
+
+    Lazy initialization with per-model caching.
+
+    Parameters:
+        model_name: Model identifier
+
+    Returns:
+        Configured Agent instance
+    """
+    cache_key = ("result_selector", model_name)
+    if cache_key not in _agent_cache:
+        _agent_cache[cache_key] = mk_agent(
+            model_name,
+            ResultSelectionOut,
+            system_prompt="""You are an expert at evaluating search results for relevance and coverage.
 
 Your task is to select which search results are most relevant to the research topic and summarize what subject areas they cover.
 
@@ -128,14 +169,27 @@ Coverage summary requirements:
 - Be specific about what aspects of the topic these results address
 
 Your selection and summary will guide the reflection process to determine if more searching is needed.""",
-)
+        )
+    return _agent_cache[cache_key]
 
-# Agent 4: Reflector
-# Evaluates coverage and decides whether to continue searching
-reflector_agent = mk_agent(
-    "openai:gpt-4o-mini",
-    ReflectionOut,
-    system_prompt="""You are an expert at evaluating literature search coverage and deciding when sufficient breadth has been achieved.
+
+def get_reflector_agent(model_name: str = "openai:gpt-4o-mini") -> Agent:
+    """Get or create reflector agent.
+
+    Lazy initialization with per-model caching.
+
+    Parameters:
+        model_name: Model identifier
+
+    Returns:
+        Configured Agent instance
+    """
+    cache_key = ("reflector", model_name)
+    if cache_key not in _agent_cache:
+        _agent_cache[cache_key] = mk_agent(
+            model_name,
+            ReflectionOut,
+            system_prompt="""You are an expert at evaluating literature search coverage and deciding when sufficient breadth has been achieved.
 
 Your task is to reflect on search results collected so far and decide whether to continue searching or stop.
 
@@ -160,4 +214,5 @@ Decision guidelines:
 - Be decisive - avoid unnecessary additional rounds once good coverage is achieved
 
 Your decision will determine whether the search continues or produces final output.""",
-)
+        )
+    return _agent_cache[cache_key]

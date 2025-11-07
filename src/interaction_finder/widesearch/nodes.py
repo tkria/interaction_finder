@@ -14,10 +14,10 @@ from pydantic_ai.usage import RunUsage
 from interaction_finder.logging import logfire
 from interaction_finder.search.models import SearchQuery, SearchResult
 from interaction_finder.widesearch.agents import (
-    goal_planner_agent,
-    query_generator_agent,
-    reflector_agent,
-    result_selector_agent,
+    get_goal_planner_agent,
+    get_query_generator_agent,
+    get_reflector_agent,
+    get_result_selector_agent,
 )
 from interaction_finder.widesearch.deps import Deps
 from interaction_finder.widesearch.state import State
@@ -44,7 +44,7 @@ class PlanGoalsNode(BaseNode[State, Deps, list[SearchResult]]):
 Keyphrases available: {", ".join(ctx.state.keyphrases)}
 
 Identify subject areas and research domains that should be covered to ensure comprehensive literature discovery."""
-            result = await goal_planner_agent.run(prompt, deps=ctx.deps, usage=usage)
+            result = await get_goal_planner_agent().run(prompt, deps=ctx.deps, usage=usage)
 
             # Store goals in state
             ctx.state.subject_goals = result.output.goals
@@ -62,7 +62,7 @@ Identify subject areas and research domains that should be covered to ensure com
 class GenerateQueriesNode(BaseNode[State, Deps, list[SearchResult]]):
     """Generate search queries targeting unsatisfied subject goals.
 
-    Uses query_generator_agent to create diverse queries that target
+    Uses get_query_generator_agent to create diverse queries that target
     unsatisfied subject goals and incorporate provided keyphrases.
     """
 
@@ -98,7 +98,7 @@ Generate search queries that target unsatisfied subject goals and incorporate th
 
             # Use query generator agent
             usage = RunUsage()
-            result = await query_generator_agent.run(prompt, deps=ctx.deps, usage=usage)
+            result = await get_query_generator_agent.run(prompt, deps=ctx.deps, usage=usage)
 
             # Store queries in state
             ctx.state.current_queries = result.output.queries
@@ -199,7 +199,7 @@ class RerankNode(BaseNode[State, Deps, list[SearchResult]]):
 class SelectResultsNode(BaseNode[State, Deps, list[SearchResult]]):
     """Select which search results to fetch and register with ResourcePool.
 
-    Uses result_selector_agent to choose the most promising results and
+    Uses get_result_selector_agent to choose the most promising results and
     summarize what subject areas they cover. Registers selected URLs with
     the ResourcePool.
     """
@@ -236,7 +236,7 @@ Select the most relevant results and summarize what subject areas they cover."""
 
             # Use result selector agent
             usage = RunUsage()
-            result = await result_selector_agent.run(prompt, deps=ctx.deps, usage=usage)
+            result = await get_result_selector_agent.run(prompt, deps=ctx.deps, usage=usage)
 
             # Register selected results with ResourcePool
             selected_urls = []
@@ -276,7 +276,7 @@ Select the most relevant results and summarize what subject areas they cover."""
 class ReflectNode(BaseNode[State, Deps, list[SearchResult]]):
     """Reflect on search coverage and decide whether to continue.
 
-    Uses reflector_agent to evaluate coverage, update satisfied goals,
+    Uses get_reflector_agent to evaluate coverage, update satisfied goals,
     identify new goals, and decide whether to perform another search round
     or stop. Enforces max_rounds limit.
     """
@@ -331,7 +331,7 @@ Evaluate coverage and decide whether to continue searching or stop."""
 
             # Use reflector agent
             usage = RunUsage()
-            result = await reflector_agent.run(prompt, deps=ctx.deps, usage=usage)
+            result = await get_reflector_agent.run(prompt, deps=ctx.deps, usage=usage)
 
             # Update satisfied goals
             ctx.state.satisfied_goals.extend(result.output.satisfied_goals)
