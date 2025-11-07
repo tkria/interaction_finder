@@ -12,11 +12,14 @@ Public API:
     - Deps: External service dependencies
     - graph: Assembled Pydantic Graph for execution
     - Reranker: Semantic reranker for search results
+    - WidesearchProgress: Live progress display for search operations
+    - DummyProgress: No-op progress counter for disabled display
 """
 
 from interaction_finder.widesearch.deps import Deps
 from interaction_finder.widesearch.graph import graph
 from interaction_finder.widesearch.models import WidesearchCheckpoint
+from interaction_finder.widesearch.progress import DummyProgress, WidesearchProgress
 from interaction_finder.widesearch.reranker import Reranker
 from interaction_finder.widesearch.run import (
     fetch_and_populate_results,
@@ -34,4 +37,6 @@ __all__ = [
     "Deps",
     "graph",
     "Reranker",
+    "WidesearchProgress",
+    "DummyProgress",
 ]

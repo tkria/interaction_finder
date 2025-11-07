@@ -31,6 +31,7 @@ async def run_widesearch(
     max_rounds: int | None = None,
     enable_reranking: bool | None = None,
     http_client: httpx.AsyncClient | None = None,
+    progress: Any | None = None,
 ) -> list[SearchResult]:
     """Run widesearch pipeline with convenient defaults.
 
@@ -47,6 +48,7 @@ async def run_widesearch(
         max_rounds: int | None — override max_rounds from config
         enable_reranking: bool | None — override enable_reranking from config
         http_client: httpx.AsyncClient | None — HTTP client (creates temporary if None)
+        progress: Any | None — optional progress counter for live display
 
     Returns:
         list[SearchResult] — unique results with URLs selected during search
@@ -112,6 +114,7 @@ async def run_widesearch(
             reranker=reranker,
             resource_pool=resource_pool,
             config=pipeline_config,
+            progress=progress,
         )
 
         # Create initial state
@@ -142,6 +145,7 @@ async def run_widesearch_with_checkpoint(
     max_rounds: int | None = None,
     enable_reranking: bool | None = None,
     http_client: httpx.AsyncClient | None = None,
+    progress: Any | None = None,
 ) -> WidesearchCheckpoint:
     """Run widesearch pipeline and return complete checkpoint.
 
@@ -159,6 +163,7 @@ async def run_widesearch_with_checkpoint(
         max_rounds: int | None — override max_rounds from config
         enable_reranking: bool | None — override enable_reranking from config
         http_client: httpx.AsyncClient | None — HTTP client (creates temporary if None)
+        progress: Any | None — optional progress counter for live display
 
     Returns:
         WidesearchCheckpoint — complete checkpoint with results, queries, and resource pool
@@ -226,6 +231,7 @@ async def run_widesearch_with_checkpoint(
             reranker=reranker,
             resource_pool=resource_pool,
             config=pipeline_config,
+            progress=progress,
         )
 
         # Create initial state

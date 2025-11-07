@@ -5,13 +5,22 @@ Instantiated once per pipeline run and passed to all nodes/agents.
 """
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 
 import httpx
 
 from interaction_finder.resources import ResourcePool
 from interaction_finder.search.models import SearchBackend
 from interaction_finder.widesearch.reranker import Reranker
+
+
+class ProgressProtocol(Protocol):
+    """Protocol for progress counters."""
+
+    def increment_searches(self, count: int = 1) -> None: ...
+    def add_results(self, count: int) -> None: ...
+    def add_selected(self, count: int) -> None: ...
+    def set_round(self, current: int, max_rounds: int) -> None: ...
 
 
 @dataclass
@@ -27,3 +36,4 @@ class Deps:
     reranker: Reranker  # Semantic reranker for search results
     resource_pool: ResourcePool  # Document pool with URL normalization
     config: dict[str, Any]  # Configuration dictionary (widesearch settings)
+    progress: ProgressProtocol | None = None  # Optional progress counter

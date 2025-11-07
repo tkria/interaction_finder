@@ -80,6 +80,12 @@ class GenerateQueriesNode(BaseNode[State, Deps, list[SearchResult]]):
             # Increment round counter
             ctx.state.current_round += 1
 
+            # Update progress display with round info
+            if ctx.deps.progress:
+                ctx.deps.progress.set_round(
+                    ctx.state.current_round, ctx.state.max_rounds
+                )
+
             logfire.info(
                 f"Starting round {ctx.state.current_round}/{ctx.state.max_rounds}"
             )
@@ -145,6 +151,11 @@ class SearchNode(BaseNode[State, Deps, list[SearchResult]]):
                 )
                 results = await ctx.deps.search_backend.search(query)
                 all_results.extend(results)
+
+                # Update progress display
+                if ctx.deps.progress:
+                    ctx.deps.progress.increment_searches()
+                    ctx.deps.progress.add_results(len(results))
 
             # Store in state
             ctx.state.current_results = all_results
@@ -261,6 +272,10 @@ Select the most relevant results and summarize what subject areas they cover."""
                     except ValueError:
                         # URL already registered, skip
                         pass
+
+            # Update progress display with selected count
+            if ctx.deps.progress:
+                ctx.deps.progress.add_selected(len(result.output.selected_indices))
 
             # Track selected URLs per query
             for query in ctx.state.current_queries:

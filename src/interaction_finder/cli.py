@@ -608,18 +608,24 @@ def widesearch(
         if resource_count > 0:
             console.print(f"Starting with {resource_count} existing resources in pool")
         console.print()
+        # Create progress display
+        from interaction_finder.widesearch.progress import WidesearchProgress
+
+        progress_counter = WidesearchProgress()
         # Run widesearch with checkpoint, passing the resource pool
-        checkpoint = asyncio.run(
-            run_widesearch_with_checkpoint(
-                topic=topic,
-                keyphrases=keyphrases,
-                search_backend=search_backend,
-                resource_pool=bridging_terms.resources,
-                config=cfg,
-                max_rounds=max_rounds,
-                enable_reranking=enable_reranking,
+        with progress_counter:
+            checkpoint = asyncio.run(
+                run_widesearch_with_checkpoint(
+                    topic=topic,
+                    keyphrases=keyphrases,
+                    search_backend=search_backend,
+                    resource_pool=bridging_terms.resources,
+                    config=cfg,
+                    max_rounds=max_rounds,
+                    enable_reranking=enable_reranking,
+                    progress=progress_counter,
+                )
             )
-        )
         # Display results summary
         console.print("\n[bold green]✓ Widesearch completed[/bold green]")
         console.print(f"Rounds: {checkpoint.rounds_completed}")
