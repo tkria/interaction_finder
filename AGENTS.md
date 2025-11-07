@@ -4,224 +4,319 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**interaction-finder** is a Python tool for automated extraction of biological interactions (gene-disease, protein-protein, cell-biomarker) from scientific literature using AI-driven graph workflows. Built for research benchmarking of biomedical relation extraction approaches with comprehensive provenance tracking and resource management.
+**interaction-finder** is a Python tool for automated discovery of biological associations from scientific literature using AI-driven pipelines. The system implements a multi-stage workflow: keyword extraction → wide search → entity extraction, with comprehensive provenance tracking, semantic clustering, and flexible search backends.
 
 ## Development Commands
 
 **Virtual Environment**: This project uses `uv` for dependency management:
 ```bash
-# Run code with dependencies
-uv run python -m interaction_finder.cli
+# Run CLI with dependencies
+uv run interaction-finder --help
 
 # Run tests
 uv run pytest
 
 # Run specific test file
-uv run pytest tests/test_fetcher.py
+uv run pytest tests/extraction/test_graph.py
 
-# Run tests with verbose output
-uv run pytest -v
+# Run tests with verbose output and exclude slow tests
+uv run pytest -v -m "not slow"
+
+# Run tests excluding integration tests
+uv run pytest -m "not integration"
+
+# Type checking (if configured)
+uv run pyright
 
 # Install dependencies after changes
 uv sync
 ```
 
-**CLI Usage**:
+**Primary Workflow**: Three-stage pipeline for literature discovery and extraction:
+
 ```bash
-# Primary workflow: extract interactions from training data
-uv run interaction-finder extract -t BRCA1
+# Stage 1: Extract bridging terms (keywords) from review articles
+uv run interaction-finder extract-keywords "pulmonary arterial hypertension" -o keywords.json
 
-# Extract from custom source
-uv run interaction-finder extract --source urls.txt -t diabetes
+# Stage 2: Wide search using extracted keywords
+uv run interaction-finder widesearch keywords.json "pulmonary arterial hypertension" -o searches.json
 
-# Fetch content only (no extraction)
-uv run interaction-finder extract -t BRCA1 --fetch-only
+# Stage 3: Extract entity associations from search results
+uv run interaction-finder extract searches.json "PAH genetics" -e gene -e disease -o results.json
+```
 
-# Show available terms
-uv run interaction-finder terms
+**Additional Commands**:
+```bash
+# Fetch and cache web content
+uv run interaction-finder fetch https://example.com
+uv run interaction-finder fetch --input urls.txt --chunk
 
 # Configuration management
 uv run interaction-finder config info
-uv run interaction-finder config edit
 uv run interaction-finder config validate
 
-# Dry run to preview processing
-uv run interaction-finder extract -t BRCA1 --dry-run --verbose
+# List available terms (from training data)
+uv run interaction-finder terms
 
-# Reverse search with investigation logging
-uv run interaction-finder reverse-search --known resources.jsonl --investigation-log investigation.jsonl
+# Use configuration modes
+uv run interaction-finder widesearch keywords.json "topic" -m development
+
+# Override configuration values
+uv run interaction-finder extract searches.json "topic" -e gene -O agents.llm=openai:gpt-4o
 ```
 
-**Investigation Logging for Reverse Search**:
-
-Investigation logging provides detailed insights into the reverse search pipeline, recording every stage of query generation, search execution, and resource matching. This is invaluable for debugging search strategies, analyzing coverage patterns, and understanding why certain resources were found or missed.
-
-Enable investigation logging with the `--investigation-log` flag:
-```bash
-# Basic usage
-uv run interaction-finder reverse-search --known resources.jsonl --investigation-log investigation.jsonl
-
-# With verbose output to see warnings
-uv run interaction-finder reverse-search --known resources.jsonl --investigation-log investigation.jsonl -v
-```
-
-**Log Format**: JSON Lines (one JSON object per line), with each entry containing:
-- `session_id`: Unique identifier linking all entries from a single search session
-- `stage`: Pipeline stage (session_start, content_fetch, query_generation, search_execution, matching, session_end)
-- `timestamp`: ISO 8601 timestamp
-- Stage-specific data (queries, results, match details, etc.)
-
-**Analysis Examples** (using jq):
-```bash
-# View all generated queries
-jq -r 'select(.stage == "query_generation") | .final_query' investigation.jsonl
-
-# Count matches by method
-jq 'select(.stage == "matching") | .match_details[].match_method' investigation.jsonl | sort | uniq -c
-
-# Find resources that weren't matched
-jq 'select(.stage == "matching") | .match_details[] | select(.matched == false) | .resource.url' investigation.jsonl
-
-# View session summary
-jq 'select(.stage == "session_end")' investigation.jsonl
-
-# Check query coverage evolution
-jq 'select(.stage == "query_generation") | {query_index, cumulative_coverage}' investigation.jsonl
-
-# Analyze why specific resource was found
-jq 'select(.stage == "matching") | .match_details[] | select(.resource.pmid == "12345678")' investigation.jsonl
-```
-
-**Log Stages**:
-- `session_start`: Initial configuration, target resources, backend selection
-- `content_fetch`: Resource content retrieval timing and statistics
-- `query_generation`: Generated query, contributing resources, coverage progress
-- `search_execution`: Query execution timing, result counts, backend response
-- `matching`: Resource matching attempts, methods tried, final outcomes
-- `session_end`: Final metrics, coverage, stopping reason, total time
-
-**Error Handling**: Investigation logging failures are non-fatal—if logging encounters errors (disk full, permissions, etc.), the search continues and warnings are printed (with `-v` flag). This ensures logging never blocks your actual search work flow.
+**Search Backend Options**:
+The system supports multiple search backends configured via `--backend` flag:
+- `pubmed` - NCBI PubMed search (biomedical literature)
+- `perplexica` - Local Perplexica instance (web search)
+- `openai` - OpenAI web search API
 
 ## Architecture Overview
 
-### Core Components
+### Core Package Structure
 
-**Package Structure**: The main package is at `src/interaction_finder/` with key modules:
-- `models.py` - Core `Term` data model with name, kind, and attributes
-- `settings.py` - TOML-based configuration with Pydantic validation  
-- `term_parser.py` - Parser for `"term # &attr=value"` syntax
-- `agents.py` - Legacy AI agents (deprecated in favor of extraction graphs)
-- `cli.py` - Typer-based CLI with extract, terms, and config subcommands
-- `resources.py` - Resource management with comprehensive provenance tracking
-- `settings_editor.py` - Interactive configuration editor
-- `fetcher.py` - High-level PageFetcher and URLCache for web content
+```
+src/interaction_finder/
+├── models.py           # Core Term data model
+├── settings.py         # TOML-based configuration with Pydantic validation
+├── term_parser.py      # Parser for "term # &attr=value" syntax
+├── resources.py        # Resource management with comprehensive provenance tracking
+├── cli.py              # Typer-based CLI interface
+├── cli_fetch.py        # Fetch command implementation
+├── fetcher/            # Web content fetching and caching
+│   ├── page_fetcher.py        # High-level async web content fetcher
+│   ├── cache.py               # File-based URL caching system
+│   ├── web_client.py          # HTTP client with session management
+│   ├── content_processor.py   # Content conversion and chunking
+│   └── batch_operations.py    # Concurrent URL processing
+├── keywords/           # Bridging terms extraction pipeline
+│   ├── extractors/            # Keyword extraction algorithms (YAKE, RAKE, TF-IDF)
+│   ├── graph.py               # Pydantic graph workflow
+│   ├── nodes.py               # Individual processing nodes
+│   ├── agents.py              # LLM agents for keyword assessment
+│   ├── reranker.py            # Semantic reranking
+│   └── run.py                 # Main entrypoint
+├── widesearch/         # Query expansion and literature discovery
+│   ├── graph.py               # Pydantic graph workflow
+│   ├── nodes.py               # Query generation and reflection nodes
+│   ├── reranker.py            # Semantic result reranking
+│   ├── progress.py            # Live progress display
+│   └── run.py                 # Main entrypoint with checkpoint support
+├── extraction/         # Entity-entity association extraction
+│   ├── core/                  # Core extraction logic (entities, pairs, quotes)
+│   ├── graph.py               # Pydantic graph workflow
+│   ├── nodes.py               # Extraction, assessment, and judgment nodes
+│   ├── agents.py              # LLM agents for extraction
+│   └── run.py                 # Main entrypoint
+└── search/             # Search backends abstraction
+    ├── models.py              # SearchBackend, SearchQuery, SearchResult
+    └── backends/              # PubMed, Perplexica, OpenAI implementations
+```
 
-**Extraction Graph Packages**: AI-driven extraction workflows:
-- `extraction_graph/` - Original graph-based extraction system
-- `extraction_graph_v2/` - Simplified and optimized extraction pipeline
-  - `run.py` - Main pipeline orchestration and URL processing
-  - `nodes.py` - Individual processing nodes (ExtractEntities, AssessIndividually, etc.)
-  - `state.py` - Shared state management across pipeline stages
-  - `models.py` - Pydantic models for extraction results and provenance
-  - `agents.py` - Pydantic-AI agents for LLM interactions
-  - `deps.py` - Dependency injection for external services
+### Three-Stage Pipeline
+
+**Stage 1: Keyword Extraction** (`keywords/`)
+- Searches for review articles on a topic
+- Extracts candidate keywords using multiple algorithms (YAKE, RAKE, TF-IDF)
+- Uses LLM to assess and filter keywords for relevance
+- Outputs: List of "bridging terms" + ResourcePool with fetched content
+
+**Stage 2: Wide Search** (`widesearch/`)
+- Takes bridging terms and generates diverse search queries
+- Executes searches across selected backend (PubMed/Perplexica/OpenAI)
+- Uses LLM reflection to determine coverage and stop condition
+- Optional semantic reranking for result quality
+- Outputs: WidesearchCheckpoint (queries, results, resource pool)
+
+**Stage 3: Entity Extraction** (`extraction/`)
+- Fetches full text for search results
+- Extracts entities of specified types from documents
+- Identifies entity pairs with relationship evidence
+- Assesses each pair with multi-stage LLM evaluation
+- Validates quotes and provenance chains
+- Outputs: ExtractionResult (accepted/rejected pairs with full provenance)
 
 ### Key Design Patterns
 
-**Graph-Based Processing**: Extraction workflows built as directed graphs with nodes for entity extraction, assessment, and pair formation.
+**Pydantic AI Graphs**: All three stages implemented as Pydantic AI graphs with nodes for LLM calls, data processing, and control flow.
 
-**Resource Pool Management**: Centralized document management with `ResourcePool` for tracking content and provenance.
+**Resource Pool Pattern**: Centralized document management with `ResourcePool` tracking all fetched content, metadata, and provenance across pipeline stages.
 
-**Async-First Processing**: Built for async/await to handle concurrent LLM calls and web fetching efficiently.
+**Checkpoint-Based Workflow**: Each stage outputs a complete checkpoint (JSON) enabling resumption, inspection, and stage-by-stage processing.
 
 **File-Based Caching**: URLCache uses base36 hashed filenames with multiple content types per URL (`.html`, `.pdf`, `.md`, `.chunks`, `.doi`, `.redir`).
 
-**Content Standardization**: All inputs converted to Markdown before LLM processing for consistency.
+**Content Standardization**: All inputs converted to Markdown before LLM processing for consistency. PDFs handled via crawl4ai.
 
-**Flexible Configuration**: TOML files with dotted-key overrides and relative path resolution, plus interactive config editor.
+**Async-First Processing**: Built for async/await to handle concurrent LLM calls and web fetching efficiently.
 
-**Pydantic Boundaries**: Type safety and validation at all system boundaries (config, models, results).
+**Flexible Configuration**: TOML files with dotted-key overrides (`-O agents.llm=...`) and mode support (`-m development`).
 
-**Quote-Level Provenance**: Every extracted entity and pair includes supporting quotes from source documents.
+**Quote-Level Provenance**: Every extracted entity and pair includes supporting quotes from source documents with validation.
 
 ## Configuration System
 
 Configuration loaded from TOML files with Pydantic validation:
 
 ```python
-# Load config
+from interaction_finder import IfetcherConfig
+
+# Load config from standard locations or specified path
 config = IfetcherConfig.from_path("config.toml")
+config = IfetcherConfig.from_path("config.toml", mode="development")
+
+# Apply overrides programmatically
+overrides = {"agents.llm": "openai:gpt-4o"}
+config = IfetcherConfig.from_path("config.toml", overrides=overrides)
+
+# Resolve paths relative to config file
 path = config.abspath("training_data/{term}.jsonl", term="BRCA1")
 ```
 
-**Configuration locations checked automatically**:
+**Configuration locations checked automatically** (in order):
 1. `config.toml`
-2. `interaction_finder.toml` 
+2. `interaction_finder.toml`
 3. `.interaction_finder.toml`
 
-**Configuration modes and overrides**:
-```bash
-# Use specific mode from config file
-uv run interaction-finder extract -t BRCA1 -m development
-
-# Override specific settings
-uv run interaction-finder extract -t BRCA1 -O agents.llm=openai:gpt-4o
-
-# Interactive configuration editor
-uv run interaction-finder config edit
-```
+**Key configuration sections**:
+- `tools.search` - Search backend configuration (PubMed, Perplexica, OpenAI)
+- `tools.keywords` - Keyword extraction parameters (algorithms, LLM model, max rounds)
+- `tools.widesearch` - Wide search parameters (max rounds, reranking, backends)
+- `tools.reverse_search` - Reverse search configuration (query construction, clustering)
+- `agents.*` - LLM agent specifications for each pipeline stage
+- `output.*` - Cache paths and output locations
 
 ## Testing Strategy
 
 **Test Structure**:
-- `tests/test_*.py` - Core module tests (agents, models, settings, term_parser, resources)
+- `tests/test_*.py` - Core module tests (models, settings, term_parser, resources)
 - `tests/fetcher/` - Comprehensive PageFetcher and URLCache testing
   - `test_page_fetcher.py`, `test_cache.py` - Core functionality with mock HTTP servers
   - `test_failure_*.py` - Error handling and retry mechanisms
   - `test_regression.py` - Comprehensive regression tests for refactoring
-- `tests/extraction_v2/` - Extraction graph pipeline testing
-  - `test_run.py`, `test_nodes.py` - Pipeline orchestration and individual nodes
+- `tests/keywords/` - Keyword extraction pipeline testing
+  - `test_graph.py`, `test_nodes.py` - Pipeline orchestration and nodes
+  - `test_agents.py` - LLM agents for keyword assessment
+  - `extractors/` - Tests for YAKE, RAKE, TF-IDF extractors
+- `tests/widesearch/` - Wide search pipeline testing
+  - `test_run.py`, `test_integration.py` - End-to-end workflows
+  - `test_reranker.py` - Semantic reranking
+  - `test_progress.py` - Progress display components
+- `tests/extraction/` - Entity extraction pipeline testing
+  - `test_graph.py`, `test_nodes.py` - Pipeline orchestration
   - `test_integration.py` - End-to-end extraction workflows
-  - `test_agents.py`, `test_models.py` - Pydantic-AI agents and data models
+  - `test_agents.py`, `test_models.py` - LLM agents and data models
+- `tests/search/backends/` - Search backend implementations
 
-**Testing Approach**: Mock HTTP servers for web fetching tests, async test patterns, pytest fixtures for temporary directories, comprehensive integration tests for extraction pipelines.
+**Testing Approach**: Mock HTTP servers for web fetching, async test patterns with pytest-asyncio, fixtures for temporary directories, comprehensive integration tests with dirty-equals for flexible assertions.
+
+**Test Markers**:
+```bash
+# Skip slow tests (large LLM calls, network operations)
+pytest -m "not slow"
+
+# Skip integration tests (end-to-end workflows)
+pytest -m "not integration"
+```
 
 ## Development Patterns
 
-**Import Structure**: Main exports via `__init__.py`:
+**Import Structure**: Main exports via `__init__.py` for clean API:
 ```python
-from interaction_finder import PageFetcher, URLCache, IfetcherConfig, extraction_graph
+from interaction_finder import PageFetcher, URLCache, IfetcherConfig
+from interaction_finder.keywords import run_keyword_research
+from interaction_finder.widesearch import run_widesearch_with_checkpoint
+from interaction_finder.extraction import run_extraction
 ```
 
 **Error Handling**: Custom error types with rich display methods, complete error context including operation, entities, and remediation suggestions.
 
-**CLI Error Display**: Grouped error reporting with --verbose flag for full tracebacks, fail-fast options for development.
+**CLI Error Display**: Grouped error reporting with `--verbose` flag for full tracebacks.
 
 **Cache Management**: Automatic cache status checking, retry mechanisms for failed URLs, concurrent fetching with Rich progress displays.
 
-**Resource Management**: Comprehensive resource tracking with `ResourcePool`, `ResourceId`, and `ResourceQuote` for complete provenance chains.
+**Resource Pool Management**: All pipeline stages share a `ResourcePool` that accumulates content, tracks provenance, and enables quote validation.
 
-**Pipeline Orchestration**: Extraction graphs with state management, dependency injection, and incremental result saving.
+**Graph-Based Pipelines**: Each major workflow (keywords, widesearch, extraction) implemented as a Pydantic AI graph with explicit state management and dependency injection.
+
+**Progress Displays**: Live progress counters using Rich for all long-running operations with granular status updates.
+
+## Pipeline Data Flow
+
+**Keyword Extraction → Wide Search → Entity Extraction**:
+
+1. **Keyword Extraction Output** (`BridgingTermsOut`):
+   - `terms: List[str]` - Bridging terms found
+   - `scores: List[float]` - Relevance scores
+   - `resources: ResourcePool` - Review articles processed
+
+2. **Wide Search Output** (`WidesearchCheckpoint`):
+   - `topic: str` - Research topic
+   - `queries: List[str]` - All queries executed
+   - `results: List[SearchResult]` - Unique search results
+   - `resources: ResourcePool` - Accumulated from keywords + new results
+   - `rounds_completed: int` - Number of search rounds
+
+3. **Entity Extraction Output** (`ExtractionResult`):
+   - `accepted_pairs: List[PairWithProvenance]` - Validated associations
+   - `rejected_pairs: List[PairWithProvenance]` - Rejected associations
+   - `metadata: ExtractionMetadata` - Summary statistics
+
+**Checkpoint Files**: All intermediate outputs are JSON files enabling:
+- Resumption of failed runs
+- Stage-by-stage processing
+- Manual inspection and debugging
+- External analysis (jq, pandas, etc.)
 
 ## Extension Points
 
-- **New Extraction Nodes**: Add nodes to `extraction_graph_v2/nodes.py` following existing patterns
-- **Content Sources**: Extend URLCache file extensions or add crawl4ai configurations  
-- **CLI Commands**: Add new subcommands to `cli.py` using Typer
-- **Chunking Strategies**: Customize chonkie RecursiveChunker parameters in PageFetcher
-- **Progress Displays**: Customize Rich progress bars for different use cases
-- **Agent Models**: Configure different LLM providers in `extraction_graph_v2/agents.py`
-- **Resource Types**: Extend `ResourcePool` for new content types and provenance tracking
+**New Search Backends**: Implement `SearchBackend` abstract class in `search/backends/`:
+```python
+class MyBackend(SearchBackend):
+    async def search(self, query: SearchQuery) -> List[SearchResult]:
+        # Implementation
+```
 
-## Current Architecture Focus
+**New Keyword Extractors**: Implement `KeywordExtractor` interface in `keywords/extractors/`:
+```python
+class MyExtractor(KeywordExtractor):
+    def extract_keywords(self, text: str, n: int = 30) -> List[ScoredKeyword]:
+        # Implementation
+```
 
-**Primary Pipeline**: The system now uses `extraction_graph_v2` as the main extraction pipeline, featuring:
-- Simplified single-group processing
-- Three-phase workflow: entity extraction → assessment → pair formation
-- Comprehensive quote-level provenance tracking
-- Pydantic-AI integration for structured LLM interactions
-- Rich CLI with dry-run previews and incremental progress saves
+**Custom Graph Nodes**: Add new nodes to pipeline graphs following existing patterns in `*/nodes.py`.
 
-**Development Priority**: The v2 extraction graph represents the current architectural direction, while v1 extraction graph and legacy agents are maintained for compatibility.
+**Custom LLM Agents**: Define new Pydantic AI agents in `*/agents.py` for specialized tasks.
 
-The architecture prioritizes research iteration speed through comprehensive caching, async concurrency, configuration flexibility, and complete provenance tracking for expensive LLM operations.
+**Content Processors**: Extend `ContentProcessor` in `fetcher/content_processor.py` for new content types.
+
+**CLI Commands**: Add new Typer commands to `cli.py` following existing command patterns.
+
+**Configuration Extensions**: Add new sections to TOML config and update `settings.py` Pydantic models.
+
+## Key Dependencies
+
+- **pydantic / pydantic-ai** - Data validation, LLM agents, graph workflows
+- **crawl4ai** - Advanced web scraping with PDF support
+- **chonkie** - Semantic text chunking
+- **httpx** - Async HTTP client
+- **typer / rich** - CLI framework and terminal formatting
+- **sentence-transformers** - Semantic similarity and reranking
+- **yake / rake-nltk / scikit-learn** - Keyword extraction algorithms
+- **tomli / tomli-w** - TOML configuration parsing
+
+## Current Development Focus
+
+The system is in active development with all three pipeline stages functional:
+
+**Working**:
+- Complete three-stage pipeline (keywords → widesearch → extraction)
+- Multiple search backends (PubMed, Perplexica, OpenAI)
+- Comprehensive web content fetching and caching
+- Semantic reranking and clustering
+- Quote-level provenance tracking
+- Checkpoint-based workflow with resumption
+- Rich CLI with progress displays
+- Extensive test coverage
+
+**Architecture Direction**: The system prioritizes research iteration speed through comprehensive caching, checkpoint-based workflows, async concurrency, and complete provenance tracking for expensive LLM operations. Each pipeline stage can be run independently or as part of the full workflow.
