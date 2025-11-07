@@ -35,7 +35,7 @@ class TestSubjectGoalsOut:
         """Test maximum goals constraint."""
         with pytest.raises(ValidationError):
             SubjectGoalsOut(
-                goals=[f"goal_{i}" for i in range(20)],  # Too many
+                goals=[f"goal_{i}" for i in range(21)],  # Too many (max is 20)
                 reasoning="This should fail",
             )
 
@@ -44,7 +44,7 @@ class TestSubjectGoalsOut:
         with pytest.raises(ValidationError):
             SubjectGoalsOut(
                 goals=["a", "b", "c"],
-                reasoning="short",  # Too short
+                reasoning="short",  # Too short (< 50 chars)
             )
 
 
@@ -71,9 +71,16 @@ class TestQueryGenerationOut:
         """Test maximum queries constraint."""
         with pytest.raises(ValidationError):
             QueryGenerationOut(
-                queries=[f"query {i}" for i in range(15)],  # Too many
+                queries=[f"query {i}" for i in range(16)],  # Too many (max is 15)
                 reasoning="This should fail",
             )
+
+    def test_reasoning_optional(self):
+        """Test reasoning field is optional."""
+        output = QueryGenerationOut(
+            queries=["diabetes treatment", "insulin resistance mechanisms"],
+        )
+        assert output.reasoning == ""
 
 
 class TestResultSelectionOut:

@@ -45,8 +45,7 @@ class QueryGenerationOut(BaseModel):
         description="Search queries targeting unsatisfied subject goals",
     )
     reasoning: str = Field(
-        ...,
-        min_length=50,
+        default="",
         description="Explanation of query generation strategy and targeting",
     )
 
@@ -68,8 +67,7 @@ class ResultSelectionOut(BaseModel):
         description="Summary of subject areas and topics covered by selected results",
     )
     reasoning: str = Field(
-        ...,
-        min_length=50,
+        default="",
         description="Explanation of selection criteria and decisions",
     )
 
