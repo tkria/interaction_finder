@@ -25,12 +25,29 @@ def resolve_model(model_name: str):
     return model_name
 
 
-entity_extractor_agent = Agent(
-    model=resolve_model("openai:gpt-4o-mini"),
-    deps_type=Deps,
-    output_type=EntityExtractionOut,
-    retries=2,
-    system_prompt="""You are an expert biomedical entity extraction specialist.
+# Cached agent instances by model name
+_entity_extractor_agents: dict[str, Agent] = {}
+
+
+def get_entity_extractor_agent(model_name: str = "openai:gpt-4o-mini") -> Agent:
+    """Get or create entity extractor agent instance.
+
+    Lazy initialization to avoid requiring API keys at import time.
+    Caches agents per model name for reuse.
+
+    Parameters:
+        model_name: Model identifier (e.g., "openai:gpt-4o-mini")
+
+    Returns:
+        Configured Agent instance
+    """
+    if model_name not in _entity_extractor_agents:
+        _entity_extractor_agents[model_name] = Agent(
+            model=resolve_model(model_name),
+            deps_type=Deps,
+            output_type=EntityExtractionOut,
+            retries=2,
+            system_prompt="""You are an expert biomedical entity extraction specialist.
 
 Your task is to identify and extract biological entities from scientific text.
 Focus on entities of the specified types and ensure they are relevant to the
@@ -50,4 +67,5 @@ Output requirements:
 - List all verbatim names found in text
 - Provide multiple supporting quotes when available
 - Give brief reasoning for your extraction choices""",
-)
+        )
+    return _entity_extractor_agents[model_name]

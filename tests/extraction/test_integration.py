@@ -9,11 +9,11 @@ import pytest
 from pydantic_ai.models.test import TestModel
 
 from interaction_finder.extraction import run_extraction
-from interaction_finder.extraction.assess_entity import entity_assessor_agent
-from interaction_finder.extraction.assess_pair import pair_assessor_agent
-from interaction_finder.extraction.extract import entity_extractor_agent
-from interaction_finder.extraction.extract_pairs import pair_extractor_agent
-from interaction_finder.extraction.judge import final_judge_agent
+from interaction_finder.extraction.assess_entity import get_entity_assessor_agent
+from interaction_finder.extraction.assess_pair import get_pair_assessor_agent
+from interaction_finder.extraction.extract import get_entity_extractor_agent
+from interaction_finder.extraction.extract_pairs import get_pair_extractor_agent
+from interaction_finder.extraction.judge import get_final_judge_agent
 from interaction_finder.resources import ResourcePool
 
 
@@ -54,11 +54,11 @@ async def test_extraction_pipeline_with_mocked_agents():
     test_model = TestModel()
 
     with (
-        entity_extractor_agent.override(model=test_model),
-        pair_extractor_agent.override(model=test_model),
-        entity_assessor_agent.override(model=test_model),
-        pair_assessor_agent.override(model=test_model),
-        final_judge_agent.override(model=test_model),
+        get_entity_extractor_agent().override(model=test_model),
+        get_pair_extractor_agent().override(model=test_model),
+        get_entity_assessor_agent().override(model=test_model),
+        get_pair_assessor_agent().override(model=test_model),
+        get_final_judge_agent().override(model=test_model),
     ):
         result = await run_extraction(
             topic="BRCA1 and breast cancer",
@@ -98,11 +98,11 @@ async def test_quote_validation_failures_logged():
     test_model = TestModel()
 
     with (
-        entity_extractor_agent.override(model=test_model),
-        pair_extractor_agent.override(model=test_model),
-        entity_assessor_agent.override(model=test_model),
-        pair_assessor_agent.override(model=test_model),
-        final_judge_agent.override(model=test_model),
+        get_entity_extractor_agent().override(model=test_model),
+        get_pair_extractor_agent().override(model=test_model),
+        get_entity_assessor_agent().override(model=test_model),
+        get_pair_assessor_agent().override(model=test_model),
+        get_final_judge_agent().override(model=test_model),
     ):
         result = await run_extraction(
             topic="test",
@@ -133,11 +133,11 @@ async def test_multiple_resources_processed():
     test_model = TestModel()
 
     with (
-        entity_extractor_agent.override(model=test_model),
-        pair_extractor_agent.override(model=test_model),
-        entity_assessor_agent.override(model=test_model),
-        pair_assessor_agent.override(model=test_model),
-        final_judge_agent.override(model=test_model),
+        get_entity_extractor_agent().override(model=test_model),
+        get_pair_extractor_agent().override(model=test_model),
+        get_entity_assessor_agent().override(model=test_model),
+        get_pair_assessor_agent().override(model=test_model),
+        get_final_judge_agent().override(model=test_model),
     ):
         result = await run_extraction(
             topic="BRCA1 and breast cancer",
@@ -169,11 +169,11 @@ async def test_entity_assessments_influence_pair_judgments():
     test_model = TestModel()
 
     with (
-        entity_extractor_agent.override(model=test_model),
-        pair_extractor_agent.override(model=test_model),
-        entity_assessor_agent.override(model=test_model),
-        pair_assessor_agent.override(model=test_model),
-        final_judge_agent.override(model=test_model),
+        get_entity_extractor_agent().override(model=test_model),
+        get_pair_extractor_agent().override(model=test_model),
+        get_entity_assessor_agent().override(model=test_model),
+        get_pair_assessor_agent().override(model=test_model),
+        get_final_judge_agent().override(model=test_model),
     ):
         # Import the graph to access state after running
         from interaction_finder.extraction.graph import graph

@@ -21,12 +21,29 @@ def resolve_model(model_name: str):
     return model_name
 
 
-pair_extractor_agent = Agent(
-    model=resolve_model("openai:gpt-4o-mini"),
-    deps_type=Deps,
-    output_type=PairExtractionOut,
-    retries=2,
-    system_prompt="""You are an expert at identifying biological associations in scientific text.
+# Cached agent instances by model name
+_pair_extractor_agents: dict[str, Agent] = {}
+
+
+def get_pair_extractor_agent(model_name: str = "openai:gpt-4o-mini") -> Agent:
+    """Get or create pair extractor agent instance.
+
+    Lazy initialization to avoid requiring API keys at import time.
+    Caches agents per model name for reuse.
+
+    Parameters:
+        model_name: Model identifier (e.g., "openai:gpt-4o-mini")
+
+    Returns:
+        Configured Agent instance
+    """
+    if model_name not in _pair_extractor_agents:
+        _pair_extractor_agents[model_name] = Agent(
+            model=resolve_model(model_name),
+            deps_type=Deps,
+            output_type=PairExtractionOut,
+            retries=2,
+            system_prompt="""You are an expert at identifying biological associations in scientific text.
 
 Your task is to extract binary relationships between biological entities that
 are relevant to the given topic. Each association should connect exactly two
@@ -54,4 +71,5 @@ Output requirements:
 - Specify clear relationship types
 - Provide multiple supporting quotes when available
 - Give brief reasoning for your extraction choices""",
-)
+        )
+    return _pair_extractor_agents[model_name]

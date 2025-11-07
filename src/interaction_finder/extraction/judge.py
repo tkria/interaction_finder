@@ -21,12 +21,29 @@ def resolve_model(model_name: str):
     return model_name
 
 
-final_judge_agent = Agent(
-    model=resolve_model("openai:gpt-4o"),
-    deps_type=Deps,
-    output_type=FinalJudgmentOut,
-    retries=2,
-    system_prompt="""You are an expert scientific reviewer synthesizing evidence across multiple documents.
+# Cached agent instances by model name
+_final_judge_agents: dict[str, Agent] = {}
+
+
+def get_final_judge_agent(model_name: str = "openai:gpt-4o") -> Agent:
+    """Get or create final judge agent instance.
+
+    Lazy initialization to avoid requiring API keys at import time.
+    Caches agents per model name for reuse.
+
+    Parameters:
+        model_name: Model identifier (e.g., "openai:gpt-4o")
+
+    Returns:
+        Configured Agent instance
+    """
+    if model_name not in _final_judge_agents:
+        _final_judge_agents[model_name] = Agent(
+            model=resolve_model(model_name),
+            deps_type=Deps,
+            output_type=FinalJudgmentOut,
+            retries=2,
+            system_prompt="""You are an expert scientific reviewer synthesizing evidence across multiple documents.
 
 Your task is to make a final judgment on whether an entity-entity association
 is valid based on evidence from multiple sources. You will receive:
@@ -67,4 +84,5 @@ Output requirements:
 - Provide detailed rationale referencing specific evidence
 - Acknowledge contradictions or limitations
 - Explain what tipped the balance of judgment""",
-)
+        )
+    return _final_judge_agents[model_name]

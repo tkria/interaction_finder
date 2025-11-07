@@ -12,12 +12,12 @@ from typing import Union
 from pydantic_ai.usage import RunUsage
 from pydantic_graph import BaseNode, End, GraphRunContext
 
-from interaction_finder.extraction.assess_entity import entity_assessor_agent
-from interaction_finder.extraction.assess_pair import pair_assessor_agent
+from interaction_finder.extraction.assess_entity import get_entity_assessor_agent
+from interaction_finder.extraction.assess_pair import get_pair_assessor_agent
 from interaction_finder.extraction.deps import Deps
-from interaction_finder.extraction.extract import entity_extractor_agent
-from interaction_finder.extraction.extract_pairs import pair_extractor_agent
-from interaction_finder.extraction.judge import final_judge_agent
+from interaction_finder.extraction.extract import get_entity_extractor_agent
+from interaction_finder.extraction.extract_pairs import get_pair_extractor_agent
+from interaction_finder.extraction.judge import get_final_judge_agent
 from interaction_finder.extraction.models import (
     EntityAssessment,
     EntityMention,
@@ -127,13 +127,15 @@ Use canonical names and provide exact quotes."""
 Extract binary entity-entity associations relevant to the topic.
 Use canonical entity names and provide exact quotes supporting each association."""
 
+            # Get model name from config (with fallback to default)
+            model_name = ctx.deps.config.get("extraction_model", "openai:gpt-4o-mini")
             # Extract entities
-            entity_result = await entity_extractor_agent.run(
+            entity_result = await get_entity_extractor_agent(model_name).run(
                 entity_prompt, deps=ctx.deps, usage=usage
             )
 
             # Extract pairs
-            pair_result = await pair_extractor_agent.run(
+            pair_result = await get_pair_extractor_agent(model_name).run(
                 pair_prompt, deps=ctx.deps, usage=usage
             )
 
@@ -255,8 +257,12 @@ class AssessEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
 Evaluate how strongly these quotes support the entity's relevance to the topic.
 Reference specific quote indices in your assessment."""
 
+            # Get model name from config
+            model_name = ctx.deps.config.get("extraction_model", "openai:gpt-4o-mini")
             # Call assessment agent
-            result = await entity_assessor_agent.run(prompt, deps=ctx.deps, usage=usage)
+            result = await get_entity_assessor_agent(model_name).run(
+                prompt, deps=ctx.deps, usage=usage
+            )
 
             # Extract referenced quotes
             referenced_quotes = [
@@ -370,8 +376,12 @@ Evaluate how strongly these quotes support the validity of this association.
 Consider both the relevance of the individual entities and the strength of their relationship.
 Reference specific quote indices in your assessment."""
 
+            # Get model name from config
+            model_name = ctx.deps.config.get("extraction_model", "openai:gpt-4o-mini")
             # Call assessment agent
-            result = await pair_assessor_agent.run(prompt, deps=ctx.deps, usage=usage)
+            result = await get_pair_assessor_agent(model_name).run(
+                prompt, deps=ctx.deps, usage=usage
+            )
 
             # Extract referenced quotes
             referenced_quotes = [
@@ -524,8 +534,12 @@ and your confidence level. Consider:
 2. The relevance of both entities to the topic
 3. The quality and quantity of supporting quotes"""
 
+                # Get judge model from config (may use stronger model)
+                judge_model = ctx.deps.config.get("judge_model", "openai:gpt-4o")
                 usage = RunUsage()
-                result = await final_judge_agent.run(prompt, deps=ctx.deps, usage=usage)
+                result = await get_final_judge_agent(judge_model).run(
+                    prompt, deps=ctx.deps, usage=usage
+                )
 
                 judgment = FinalJudgment(
                     accepted=result.output.accepted,

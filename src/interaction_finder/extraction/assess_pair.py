@@ -21,12 +21,29 @@ def resolve_model(model_name: str):
     return model_name
 
 
-pair_assessor_agent = Agent(
-    model=resolve_model("openai:gpt-4o-mini"),
-    deps_type=Deps,
-    output_type=PairEvidenceAssessment,
-    retries=2,
-    system_prompt="""You are an expert at evaluating evidence for biological associations in scientific text.
+# Cached agent instances by model name
+_pair_assessor_agents: dict[str, Agent] = {}
+
+
+def get_pair_assessor_agent(model_name: str = "openai:gpt-4o-mini") -> Agent:
+    """Get or create pair assessor agent instance.
+
+    Lazy initialization to avoid requiring API keys at import time.
+    Caches agents per model name for reuse.
+
+    Parameters:
+        model_name: Model identifier (e.g., "openai:gpt-4o-mini")
+
+    Returns:
+        Configured Agent instance
+    """
+    if model_name not in _pair_assessor_agents:
+        _pair_assessor_agents[model_name] = Agent(
+            model=resolve_model(model_name),
+            deps_type=Deps,
+            output_type=PairEvidenceAssessment,
+            retries=2,
+            system_prompt="""You are an expert at evaluating evidence for biological associations in scientific text.
 
 Your task is to assess whether the provided quotes from a single document
 support the validity of a specific entity-entity association.
@@ -59,4 +76,5 @@ Output requirements:
 - Reference specific quote indices that support your assessment
 - Consider both pair-specific quotes and relevant entity mentions
 - Be honest about limitations or ambiguities in the evidence""",
-)
+        )
+    return _pair_assessor_agents[model_name]

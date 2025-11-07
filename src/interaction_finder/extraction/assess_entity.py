@@ -21,12 +21,29 @@ def resolve_model(model_name: str):
     return model_name
 
 
-entity_assessor_agent = Agent(
-    model=resolve_model("openai:gpt-4o-mini"),
-    deps_type=Deps,
-    output_type=EntityEvidenceAssessment,
-    retries=2,
-    system_prompt="""You are an expert at evaluating the strength of evidence in scientific text.
+# Cached agent instances by model name
+_entity_assessor_agents: dict[str, Agent] = {}
+
+
+def get_entity_assessor_agent(model_name: str = "openai:gpt-4o-mini") -> Agent:
+    """Get or create entity assessor agent instance.
+
+    Lazy initialization to avoid requiring API keys at import time.
+    Caches agents per model name for reuse.
+
+    Parameters:
+        model_name: Model identifier (e.g., "openai:gpt-4o-mini")
+
+    Returns:
+        Configured Agent instance
+    """
+    if model_name not in _entity_assessor_agents:
+        _entity_assessor_agents[model_name] = Agent(
+            model=resolve_model(model_name),
+            deps_type=Deps,
+            output_type=EntityEvidenceAssessment,
+            retries=2,
+            system_prompt="""You are an expert at evaluating the strength of evidence in scientific text.
 
 Your task is to assess whether the provided quotes from a single document
 support the relevance of a specific entity to the given topic.
@@ -55,4 +72,5 @@ Output requirements:
 - Provide detailed rationale explaining your rating
 - Reference specific quote indices that support your assessment
 - Be honest about limitations or ambiguities in the evidence""",
-)
+        )
+    return _entity_assessor_agents[model_name]
