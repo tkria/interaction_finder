@@ -8,6 +8,8 @@ from typing import Any
 
 import httpx
 
+from interaction_finder.fetcher import PageFetcher
+from interaction_finder.logging import logfire
 from interaction_finder.resources import ResourcePool
 from interaction_finder.search.models import SearchBackend, SearchResult
 from interaction_finder.settings import IfetcherConfig
@@ -251,3 +253,57 @@ async def run_widesearch_with_checkpoint(
         # Clean up HTTP client if we created it
         if own_client and http_client is not None:
             await http_client.aclose()
+
+
+async def fetch_and_populate_results(
+    checkpoint: WidesearchCheckpoint,
+    config: IfetcherConfig,
+) -> dict[str, int]:
+    """Fetch content for selected results and add to ResourcePool.
+
+    Parameters:
+        checkpoint: WidesearchCheckpoint — results and resource pool to populate
+        config: IfetcherConfig — configuration with cache directory
+
+    Returns:
+        dict[str, int] — statistics: total, fetched, cached, failed
+    """
+    fetcher = PageFetcher(
+        cache_dir=config.abspath(config.output.cache), show_status=False
+    )
+
+    # Identify URLs needing content
+    urls_to_fetch = []
+    for result in checkpoint.results:
+        rid = checkpoint.resources._find_resource_id(result.url)
+        if rid is None:
+            rid = checkpoint.resources.register(result.url)
+        if checkpoint.resources.get(rid) is None:
+            urls_to_fetch.append((result.url, result.title, rid))
+
+    if not urls_to_fetch:
+        return {
+            "total": len(checkpoint.results),
+            "fetched": 0,
+            "cached": len(checkpoint.results),
+            "failed": 0,
+        }
+
+    # Fetch and populate
+    urls = [url for url, _, _ in urls_to_fetch]
+    contents = await fetcher.get_markdown(urls, progress=False, fail_fast=False)
+
+    fetched = 0
+    for (url, title, rid), content in zip(urls_to_fetch, contents):
+        if content:
+            checkpoint.resources.add_content(rid, title, content)
+            fetched += 1
+        else:
+            logfire.warning(f"Failed to fetch content for {url}")
+
+    return {
+        "total": len(checkpoint.results),
+        "fetched": fetched,
+        "cached": len(checkpoint.results) - len(urls_to_fetch),
+        "failed": len(urls_to_fetch) - fetched,
+    }

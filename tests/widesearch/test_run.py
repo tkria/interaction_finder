@@ -8,6 +8,7 @@ from interaction_finder.search.models import SearchBackend, SearchQuery, SearchR
 from interaction_finder.settings import IfetcherConfig
 from interaction_finder.widesearch import (
     WidesearchCheckpoint,
+    fetch_and_populate_results,
     run_widesearch,
     run_widesearch_with_checkpoint,
 )
@@ -367,3 +368,170 @@ async def test_checkpoint_backward_compatibility(test_config):
         assert isinstance(results, list)
         assert not isinstance(results, WidesearchCheckpoint)
         assert all(isinstance(r, SearchResult) for r in results)
+
+
+@pytest.mark.asyncio
+async def test_fetch_and_populate_results_basic(test_config, tmp_path):
+    """Test fetch_and_populate_results fetches and populates ResourcePool."""
+    from unittest.mock import AsyncMock, patch
+
+    # Create checkpoint with results
+    results = [
+        SearchResult(title="Paper 1", url="https://example.com/1", snippet="snippet 1"),
+        SearchResult(title="Paper 2", url="https://example.com/2", snippet="snippet 2"),
+    ]
+    checkpoint = WidesearchCheckpoint(
+        results=results,
+        queries=["query1"],
+        query_results={"query1": ["https://example.com/1", "https://example.com/2"]},
+        resources=ResourcePool(),
+        topic="test topic",
+        keyphrases=["keyword"],
+        rounds_completed=1,
+    )
+
+    # Configure test config with temp cache dir
+    test_config.output.cache = str(tmp_path / "cache")
+
+    # Mock PageFetcher.get_markdown to return mock content
+    mock_content = ["# Paper 1 content", "# Paper 2 content"]
+
+    with patch(
+        "interaction_finder.widesearch.run.PageFetcher.get_markdown",
+        new_callable=AsyncMock,
+    ) as mock_get_markdown:
+        mock_get_markdown.return_value = mock_content
+
+        # Run fetch_and_populate_results
+        stats = await fetch_and_populate_results(checkpoint, test_config)
+
+        # Verify stats
+        assert stats["total"] == 2
+        assert stats["fetched"] == 2
+        assert stats["cached"] == 0
+        assert stats["failed"] == 0
+
+        # Verify resources were added to pool
+        assert len(checkpoint.resources.resource_map) == 2
+        # Verify content was added
+        for url in ["https://example.com/1", "https://example.com/2"]:
+            resource = checkpoint.resources.get(url)
+            assert resource is not None
+            assert resource.text is not None
+
+
+@pytest.mark.asyncio
+async def test_fetch_and_populate_results_with_existing_content(test_config, tmp_path):
+    """Test fetch_and_populate_results skips already-fetched content."""
+    from unittest.mock import AsyncMock, patch
+
+    # Create resource pool with one URL already having content
+    pool = ResourcePool()
+    rid1 = pool.register("https://example.com/1")
+    pool.add_content(rid1, "Paper 1", "# Existing content")
+    pool.register("https://example.com/2")  # No content yet
+
+    results = [
+        SearchResult(title="Paper 1", url="https://example.com/1", snippet="snippet 1"),
+        SearchResult(title="Paper 2", url="https://example.com/2", snippet="snippet 2"),
+    ]
+    checkpoint = WidesearchCheckpoint(
+        results=results,
+        queries=["query1"],
+        query_results={"query1": ["https://example.com/1", "https://example.com/2"]},
+        resources=pool,
+        topic="test topic",
+        keyphrases=["keyword"],
+        rounds_completed=1,
+    )
+
+    test_config.output.cache = str(tmp_path / "cache")
+
+    # Mock PageFetcher to return content only for URL 2
+    with patch(
+        "interaction_finder.widesearch.run.PageFetcher.get_markdown",
+        new_callable=AsyncMock,
+    ) as mock_get_markdown:
+        mock_get_markdown.return_value = ["# Paper 2 content"]
+
+        stats = await fetch_and_populate_results(checkpoint, test_config)
+
+        # Should only fetch URL 2
+        assert stats["total"] == 2
+        assert stats["fetched"] == 1
+        assert stats["cached"] == 1
+        assert stats["failed"] == 0
+
+        # Verify URL 1 still has original content
+        resource1 = checkpoint.resources.get("https://example.com/1")
+        assert resource1.text == "# Existing content"
+
+
+@pytest.mark.asyncio
+async def test_fetch_and_populate_results_handles_failures(test_config, tmp_path):
+    """Test fetch_and_populate_results handles fetch failures gracefully."""
+    from unittest.mock import AsyncMock, patch
+
+    results = [
+        SearchResult(title="Paper 1", url="https://example.com/1", snippet="snippet 1"),
+        SearchResult(title="Paper 2", url="https://example.com/2", snippet="snippet 2"),
+    ]
+    checkpoint = WidesearchCheckpoint(
+        results=results,
+        queries=["query1"],
+        query_results={"query1": ["https://example.com/1", "https://example.com/2"]},
+        resources=ResourcePool(),
+        topic="test topic",
+        keyphrases=["keyword"],
+        rounds_completed=1,
+    )
+
+    test_config.output.cache = str(tmp_path / "cache")
+
+    # Mock PageFetcher to return content for first URL, None for second (failed)
+    with patch(
+        "interaction_finder.widesearch.run.PageFetcher.get_markdown",
+        new_callable=AsyncMock,
+    ) as mock_get_markdown:
+        mock_get_markdown.return_value = ["# Paper 1 content", None]
+
+        stats = await fetch_and_populate_results(checkpoint, test_config)
+
+        # Should have 1 success, 1 failure
+        assert stats["total"] == 2
+        assert stats["fetched"] == 1
+        assert stats["cached"] == 0
+        assert stats["failed"] == 1
+
+        # Verify successful URL has content
+        resource1 = checkpoint.resources.get("https://example.com/1")
+        assert resource1 is not None
+        assert resource1.text == "# Paper 1 content"
+
+        # Failed URL should still be registered but without content
+        resource2 = checkpoint.resources.get("https://example.com/2")
+        assert resource2 is None  # No content added
+
+
+@pytest.mark.asyncio
+async def test_fetch_and_populate_results_empty_checkpoint(test_config, tmp_path):
+    """Test fetch_and_populate_results handles empty results gracefully."""
+    checkpoint = WidesearchCheckpoint(
+        results=[],
+        queries=["query1"],
+        query_results={},
+        resources=ResourcePool(),
+        topic="test topic",
+        keyphrases=["keyword"],
+        rounds_completed=1,
+    )
+
+    test_config.output.cache = str(tmp_path / "cache")
+
+    stats = await fetch_and_populate_results(checkpoint, test_config)
+
+    # Should return all zeros
+    assert stats["total"] == 0
+    assert stats["fetched"] == 0
+    assert stats["cached"] == 0
+    assert stats["failed"] == 0

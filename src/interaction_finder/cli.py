@@ -17,7 +17,6 @@ from rich.console import Console
 from rich.table import Table
 
 from .settings import IfetcherConfig
-from .term_parser import parse_term_line
 from . import cli_fetch
 
 app = typer.Typer(
@@ -532,6 +531,9 @@ def widesearch(
     enable_reranking: Optional[bool] = typer.Option(
         None, "--rerank/--no-rerank", help="Enable/disable semantic reranking"
     ),
+    fetch: bool = typer.Option(
+        False, "--fetch", help="Fetch and cache content for all selected results"
+    ),
     mode: Optional[str] = typer.Option(
         None, "-m", "--mode", help="Configuration mode to use"
     ),
@@ -552,6 +554,8 @@ def widesearch(
         interaction-finder widesearch keywords.json "diabetes" -o results.json
 
         interaction-finder widesearch keywords.json "cancer" -b perplexica -o out.json
+
+        interaction-finder widesearch keywords.json "diabetes" --fetch -o results.json
     """
     try:
         # Get effective options
@@ -617,10 +621,22 @@ def widesearch(
             )
         )
         # Display results summary
-        console.print(f"\n[bold green]✓ Widesearch completed[/bold green]")
+        console.print("\n[bold green]✓ Widesearch completed[/bold green]")
         console.print(f"Rounds: {checkpoint.rounds_completed}")
         console.print(f"Queries executed: {len(checkpoint.queries)}")
         console.print(f"Unique results: {len(checkpoint.results)}")
+        # Fetch content if requested
+        if fetch:
+            from interaction_finder.widesearch import fetch_and_populate_results
+
+            console.print(
+                f"\n[bold]Fetching content for {len(checkpoint.results)} results...[/bold]"
+            )
+            fetch_stats = asyncio.run(fetch_and_populate_results(checkpoint, cfg))
+            console.print(
+                f"[green]✓[/green] Fetched {fetch_stats['fetched']}/{fetch_stats['total']} "
+                f"({fetch_stats['cached']} cached, {fetch_stats['failed']} failed)"
+            )
         # Save to file if requested
         if output:
             checkpoint_data = checkpoint.model_dump(mode="json")
