@@ -316,6 +316,73 @@ async def _extract_from_resource(resource, extractors: dict, max_keywords: int):
     return (resource.id.url, resource.title, doc_keywords, failed)
 
 
+async def _summarize_document(url: str, keywords: list, ctx):
+    """Summarize single document and extract bridging terms.
+
+    Parameters:
+        url: str — document URL
+        keywords: list[ScoredKeyword] — extracted keywords
+        ctx — GraphRunContext with state and deps
+
+    Returns:
+        DocumentSummaryOut — summary with bridging terms
+    """
+    # Get content from resource pool
+    resource = ctx.deps.resource_pool.get(url)
+    if not resource:
+        # Return None to indicate skip (caller will filter)
+        return None
+    # Clean, deduplicate, and rerank keywords for LLM review
+    max_keywords_for_llm = ctx.deps.config.get("max_keywords_for_llm", 50)
+    keywords_text = _clean_and_rerank_keywords_for_display(
+        keywords, ctx.state.topic, ctx.deps.reranker, max_keywords_for_llm
+    )
+    # Get document context length from config
+    context_chars = ctx.deps.config.get("document_context_chars", 12000)
+    # Summarize document with strict filtering instructions
+    summary_prompt = f"""Review this document and identify HIGH-QUALITY bridging terms.
+
+**Target topic:** {ctx.state.topic}
+
+**Document content:**
+{resource.text[:context_chars]}
+
+**Extracted keywords (ranked by relevance to topic):**
+{keywords_text}
+
+---
+
+**Your task:**
+1. Summary: Concisely describe what this document contributes to understanding the target topic
+2. Related research areas: List research areas that connect to the target topic
+3. Bridging terms: Identify 5-10 HIGH-QUALITY bridging terms
+
+The extracted keywords above are suggestions—you may use them directly, combine them, or identify better terms from the document content.
+
+**BRIDGING TERM REQUIREMENTS:**
+
+Each bridging term must:
+  - Be a specific concept, mechanism, pathway, gene, protein, or biological entity
+  - Be directly relevant to "{ctx.state.topic}" (not to tangential topics mentioned in the document)
+  - Use precise scientific terminology (e.g., "BMPR2 gene" not "genetic mutations")
+  - Be a term that commonly appears in scientific literature about the target topic
+
+**EXCLUDE:**
+  - The target topic itself or obvious rewordings
+  - Generic research terms: "genetic factors", "molecular mechanisms", "risk factors", "clinical outcomes", "biomarkers", "pathogenesis"
+  - Methodological terms: "genome-wide association studies", "next-generation sequencing", "statistical analysis"
+  - Multi-word descriptive phrases: prefer concise established terms (e.g., "endothelial dysfunction" not "dysfunction of endothelial cells")
+
+**Test:** For each term, ask "Would this term appear frequently in papers specifically about {ctx.state.topic}?" If no, exclude it.
+
+Select fewer, higher-quality terms rather than reaching for quantity."""
+    usage = RunUsage()
+    summary_result = await document_summarizer_agent.run(
+        summary_prompt, deps=ctx.deps, usage=usage
+    )
+    return summary_result.output
+
+
 @dataclass
 class ExtractKeywordsNode(BaseNode[State, Deps, BridgingTermsOut]):
     """Extract keywords from all fetched documents using multiple methods.
@@ -371,82 +438,38 @@ class ExtractKeywordsNode(BaseNode[State, Deps, BridgingTermsOut]):
 
 @dataclass
 class EvaluateKeywordsNode(BaseNode[State, Deps, BridgingTermsOut]):
-    """Evaluate keywords and summarize each document.
+    """Evaluate keywords and summarize each document (parallel).
 
-    Uses keyword_evaluator_agent and document_summarizer_agent to:
+    Uses document_summarizer_agent to:
     1. Identify useful bridging terms
     2. Summarize document content
     3. Assess coverage contribution
+
+    All documents are processed in parallel for maximum throughput.
     """
 
     async def run(self, ctx: GraphRunContext[State, Deps]) -> "ReflectNode":
-        """Evaluate keywords and summarize documents."""
+        """Evaluate keywords and summarize documents (parallel)."""
         with logfire.span(
             "EvaluateKeywordsNode", num_docs=len(ctx.state.extracted_keywords)
         ):
             if not ctx.state.extracted_keywords:
                 logfire.info("No extracted keywords, skipping to reflection")
                 return ReflectNode()
-            # Process each document
-            total_bridging = 0
-            for url, keywords in ctx.state.extracted_keywords.items():
-                # Get content from resource pool
-                resource = ctx.deps.resource_pool.get(url)
-                if not resource:
-                    continue
-                # Clean, deduplicate, and rerank keywords for LLM review
-                max_keywords_for_llm = ctx.deps.config.get("max_keywords_for_llm", 50)
-                keywords_text = _clean_and_rerank_keywords_for_display(
-                    keywords, ctx.state.topic, ctx.deps.reranker, max_keywords_for_llm
-                )
-                # Get document context length from config
-                context_chars = ctx.deps.config.get("document_context_chars", 12000)
-                # Summarize document with strict filtering instructions
-                summary_prompt = f"""Review this document and identify HIGH-QUALITY bridging terms.
-
-**Target topic:** {ctx.state.topic}
-
-**Document content:**
-{resource.text[:context_chars]}
-
-**Extracted keywords (ranked by relevance to topic):**
-{keywords_text}
-
----
-
-**Your task:**
-1. Summary: Concisely describe what this document contributes to understanding the target topic
-2. Related research areas: List research areas that connect to the target topic
-3. Bridging terms: Identify 5-10 HIGH-QUALITY bridging terms
-
-The extracted keywords above are suggestions—you may use them directly, combine them, or identify better terms from the document content.
-
-**BRIDGING TERM REQUIREMENTS:**
-
-Each bridging term must:
-  - Be a specific concept, mechanism, pathway, gene, protein, or biological entity
-  - Be directly relevant to "{ctx.state.topic}" (not to tangential topics mentioned in the document)
-  - Use precise scientific terminology (e.g., "BMPR2 gene" not "genetic mutations")
-  - Be a term that commonly appears in scientific literature about the target topic
-
-**EXCLUDE:**
-  - The target topic itself or obvious rewordings
-  - Generic research terms: "genetic factors", "molecular mechanisms", "risk factors", "clinical outcomes", "biomarkers", "pathogenesis"
-  - Methodological terms: "genome-wide association studies", "next-generation sequencing", "statistical analysis"
-  - Multi-word descriptive phrases: prefer concise established terms (e.g., "endothelial dysfunction" not "dysfunction of endothelial cells")
-
-**Test:** For each term, ask "Would this term appear frequently in papers specifically about {ctx.state.topic}?" If no, exclude it.
-
-Select fewer, higher-quality terms rather than reaching for quantity."""
-                usage = RunUsage()
-                summary_result = await document_summarizer_agent.run(
-                    summary_prompt, deps=ctx.deps, usage=usage
-                )
-                # Store summary
-                ctx.state.document_summaries.append(summary_result.output)
-                total_bridging += len(summary_result.output.bridging_terms)
+            # Create tasks for all documents (parallel processing)
+            tasks = [
+                _summarize_document(url, keywords, ctx)
+                for url, keywords in ctx.state.extracted_keywords.items()
+            ]
+            # Execute all summarization tasks in parallel
+            results = await asyncio.gather(*tasks)
+            # Filter out None results (skipped documents) and add to state
+            summaries = [r for r in results if r is not None]
+            ctx.state.document_summaries.extend(summaries)
+            # Calculate stats
+            total_bridging = sum(len(s.bridging_terms) for s in summaries)
             logfire.info(
-                f"Generated {len(ctx.state.document_summaries)} summaries with {total_bridging} bridging terms total"
+                f"Generated {len(summaries)} summaries with {total_bridging} bridging terms total"
             )
             return ReflectNode()
 
