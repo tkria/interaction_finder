@@ -146,6 +146,40 @@ class IfetcherConfig(BaseModel):
             default_factory=Keywords, description="Keyword research configuration"
         )
 
+        class Widesearch(BaseModel):
+            """Configuration for widesearch query expansion module."""
+
+            enabled: bool = Field(True, description="Enable widesearch functionality")
+            max_rounds: int = Field(
+                5, ge=1, le=10, description="Maximum search rounds before stopping"
+            )
+            enable_reranking: bool = Field(
+                True,
+                description="Enable semantic reranking of search results (if False, pass all results to LLM)",
+            )
+            rerank_top_k: int = Field(
+                20,
+                ge=1,
+                le=100,
+                description="Number of top results to keep after reranking (only used if enable_reranking=True)",
+            )
+            results_per_query: int = Field(
+                50, ge=1, le=200, description="Maximum results to fetch per query"
+            )
+            reranker_model: str = Field(
+                "zeroentropy/zerank-1-small",
+                description="Reranking model name",
+            )
+            reranker_device: str | None = Field(
+                None,
+                description="Device for reranker model ('cpu', 'cuda', or None for auto)",
+            )
+            search_backend: str = Field("pubmed", description="Search backend to use")
+
+        widesearch: Widesearch = Field(
+            default_factory=Widesearch, description="Widesearch configuration"
+        )
+
     tools: Tools = Field(
         default_factory=Tools, description="External tools configuration"
     )
