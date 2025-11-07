@@ -15,7 +15,14 @@ from dataclasses import dataclass
 from enum import Enum
 from difflib import SequenceMatcher
 from typing import List, Optional, Tuple, Union, TYPE_CHECKING
-from pydantic import BaseModel, Field, field_validator, ValidationInfo
+from pydantic import (
+    BaseModel,
+    Field,
+    field_validator,
+    ValidationInfo,
+    model_serializer,
+)
+from pydantic_core import core_schema
 from rapidfuzz import fuzz
 
 if TYPE_CHECKING:
@@ -1100,6 +1107,64 @@ class Resource(BaseModel):
         return None
 
 
+def _validate_resource_pool(obj):
+    """Validator for ResourcePool that handles list/dict formats before Pydantic validation.
+
+    Accepts:
+    - Direct list: [{url, title?, text?, chunks?, id?}, ...]
+    - Wrapped dict: {"resources": [{...}]}
+    - ResourcePool instance: passed through
+    - Legacy dict: {"resource_map": {...}}
+    """
+    if isinstance(obj, ResourcePool):
+        return obj
+
+    resources_list = None
+
+    if isinstance(obj, list):
+        # Direct list format
+        resources_list = obj
+    elif isinstance(obj, dict):
+        # Wrapped format
+        if "resources" in obj and isinstance(obj["resources"], list):
+            resources_list = obj["resources"]
+        # Legacy format - will be handled by default validation
+        elif "resource_map" in obj:
+            try:
+                # Try creating empty pool for legacy format
+                return ResourcePool()
+            except Exception:
+                return ResourcePool()
+
+    if resources_list is not None:
+        pool = ResourcePool()
+        for idx, entry in enumerate(resources_list, start=1):
+            # Determine counter
+            if "id" in entry:
+                counter = int(entry["id"].split("_")[0])
+            else:
+                counter = idx
+
+            # Reconstruct ResourceId
+            resource_id = ResourceId(url=entry["url"], counter=counter)
+
+            # Add to map
+            if "text" in entry and "title" in entry:
+                resource = Resource(
+                    id=resource_id,
+                    title=entry["title"],
+                    text=entry["text"],
+                    chunks=entry.get("chunks", []),
+                )
+                pool.resource_map[resource_id] = resource
+            else:
+                pool.resource_map[resource_id] = None
+        return pool
+
+    # Fallback to object as-is for default Pydantic handling
+    return obj
+
+
 class ResourcePool(BaseModel):
     """
     Collection of document resources with separate ID registration and content storage.
@@ -1109,6 +1174,18 @@ class ResourcePool(BaseModel):
     """
 
     resource_map: dict[ResourceId, Optional[Resource]] = Field(default_factory=dict)
+
+    @classmethod
+    def __get_pydantic_core_schema__(cls, source_type, handler):
+        """Custom schema that applies validator before default validation."""
+        # Get the default schema for ResourcePool
+        python_schema = handler(source_type)
+
+        # Wrap it with our custom validator
+        return core_schema.no_info_before_validator_function(
+            _validate_resource_pool,
+            python_schema,
+        )
 
     def register(self, url: str) -> ResourceId:
         """
@@ -1277,6 +1354,53 @@ class ResourcePool(BaseModel):
         total_resources = len(self.resource_map)
         loaded_resources = len(self.resources)
         return f"ResourcePool({loaded_resources}/{total_resources} resources loaded)"
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, serializer, info):
+        """Custom serializer that converts resource_map to a list format.
+
+        Serializes as list of dicts with structure:
+        [{url: str, title?: str, text?: str, chunks?: [...], id?: str}]
+
+        Resources are serialized in counter order (sorted by counter extracted from ID).
+        The id field is only included if it doesn't match the expected pattern
+        (counter = list index + 1). This makes the common case more compact.
+
+        Resources with None content only include url (and id if non-standard).
+        """
+        if info.mode == "json":
+            # Sort resources by counter (extracted from ID) for predictable ordering
+            sorted_items = sorted(
+                self.resource_map.items(),
+                key=lambda item: int(item[0].id.split("_")[0]),
+            )
+
+            resources_list = []
+            for idx, (resource_id, resource) in enumerate(sorted_items, start=1):
+                entry = {"url": resource_id.url}
+
+                # Only include content fields if resource is not None
+                if resource is not None:
+                    entry["title"] = resource.title
+                    entry["text"] = resource.text
+                    entry["chunks"] = resource.chunks
+
+                # Only include id if it doesn't match expected pattern
+                # Expected pattern: "{counter}_{hash}" where counter = idx
+                expected_counter = idx
+                actual_counter = int(resource_id.id.split("_")[0])
+                if actual_counter != expected_counter:
+                    # Non-standard counter, must include full ID
+                    entry["id"] = resource_id.id
+
+                resources_list.append(entry)
+
+            # Return just the list, not wrapped in {"resources": ...}
+            # When serialized as a field, Pydantic will handle the field name
+            return resources_list
+        else:
+            # For non-JSON modes, use default serialization
+            return serializer(self)
 
 
 class ResourceQuote(BaseModel):
