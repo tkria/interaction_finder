@@ -9,6 +9,7 @@ from typing import Type
 
 from pydantic import BaseModel
 from pydantic_ai import Agent
+from pydantic_ai.settings import ModelSettings
 
 from interaction_finder.widesearch.deps import Deps
 from interaction_finder.widesearch.models import (
@@ -41,6 +42,7 @@ def mk_agent(
     output: Type[BaseModel],
     *,
     system_prompt: str,
+    model_settings: ModelSettings | None = None,
 ) -> Agent[Deps, BaseModel]:
     """Create an agent with consistent configuration.
 
@@ -48,6 +50,7 @@ def mk_agent(
         model_name: str — model to use (e.g., "openai:gpt-4o-mini")
         output: Type[BaseModel] — Pydantic model for structured output
         system_prompt: str — role-specific system prompt
+        model_settings: ModelSettings | None — optional model-specific settings
 
     Returns:
         Configured Agent instance
@@ -58,6 +61,7 @@ def mk_agent(
         output_type=output,
         retries=2,
         system_prompt=system_prompt,
+        model_settings=model_settings,
     )
 
 
@@ -106,6 +110,11 @@ def get_query_generator_agent(model_name: str = "openai:gpt-4o-mini") -> Agent:
 
     Lazy initialization with per-model caching.
 
+    Note: Parallel tool calls are disabled because we want a single cohesive
+    set of queries rather than multiple independent query generation attempts.
+    With parallel_tool_calls=True, the LLM may make multiple final_result calls
+    but only the first is captured.
+
     Parameters:
         model_name: Model identifier
 
@@ -117,6 +126,7 @@ def get_query_generator_agent(model_name: str = "openai:gpt-4o-mini") -> Agent:
         _agent_cache[cache_key] = mk_agent(
             model_name,
             QueryGenerationOut,
+            model_settings=ModelSettings(parallel_tool_calls=False),
             system_prompt="""You are an expert at generating search queries for academic literature discovery.
 
 Your task is to create diverse, targeted search queries that will find relevant papers and articles. You will be given:
@@ -151,7 +161,8 @@ Core Strategy - Generate Queries at MULTIPLE COMPLEXITY LEVELS:
 
 Query Generation Guidelines:
 - Generate 5-10 queries per round (aim higher when many goals are unsatisfied)
-- Include queries from ALL complexity levels above (don't only generate focused queries)
+- Include queries from ALL complexity levels above in a SINGLE response (don't only generate focused queries)
+- Mix broad, medium, focused, and non-topic queries together in your output
 - Prioritize breadth: cast a wide net before diving deep
 - Target unsatisfied subject goals explicitly
 - Incorporate provided keyphrases naturally but don't force all keyphrases into every query
@@ -160,7 +171,7 @@ Query Generation Guidelines:
 - Both include AND exclude the main topic terms across different queries
 - Avoid redundancy with previous queries
 
-Your queries should be suitable for academic search engines (PubMed, Google Scholar, etc.) and find papers that advance coverage of unsatisfied subject goals while maximizing the total number of diverse, relevant results.""",
+IMPORTANT: Return ALL queries in a single structured response. Do not create multiple separate responses for different complexity levels.""",
         )
     return _agent_cache[cache_key]
 
