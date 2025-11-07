@@ -44,7 +44,9 @@ class PlanGoalsNode(BaseNode[State, Deps, list[SearchResult]]):
 Keyphrases available: {", ".join(ctx.state.keyphrases)}
 
 Identify subject areas and research domains that should be covered to ensure comprehensive literature discovery."""
-            result = await get_goal_planner_agent().run(prompt, deps=ctx.deps, usage=usage)
+            result = await get_goal_planner_agent().run(
+                prompt, deps=ctx.deps, usage=usage
+            )
 
             # Store goals in state
             ctx.state.subject_goals = result.output.goals
@@ -98,7 +100,9 @@ Generate search queries that target unsatisfied subject goals and incorporate th
 
             # Use query generator agent
             usage = RunUsage()
-            result = await get_query_generator_agent.run(prompt, deps=ctx.deps, usage=usage)
+            result = await get_query_generator_agent().run(
+                prompt, deps=ctx.deps, usage=usage
+            )
 
             # Store queries in state
             ctx.state.current_queries = result.output.queries
@@ -236,7 +240,9 @@ Select the most relevant results and summarize what subject areas they cover."""
 
             # Use result selector agent
             usage = RunUsage()
-            result = await get_result_selector_agent.run(prompt, deps=ctx.deps, usage=usage)
+            result = await get_result_selector_agent().run(
+                prompt, deps=ctx.deps, usage=usage
+            )
 
             # Register selected results with ResourcePool
             selected_urls = []
@@ -331,7 +337,7 @@ Evaluate coverage and decide whether to continue searching or stop."""
 
             # Use reflector agent
             usage = RunUsage()
-            result = await get_reflector_agent.run(prompt, deps=ctx.deps, usage=usage)
+            result = await get_reflector_agent().run(prompt, deps=ctx.deps, usage=usage)
 
             # Update satisfied goals
             ctx.state.satisfied_goals.extend(result.output.satisfied_goals)
