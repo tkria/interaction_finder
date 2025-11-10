@@ -4,6 +4,7 @@ Extracts binary entity-entity associations from document text with supporting qu
 """
 
 from pydantic_ai import Agent
+from pydantic_ai.settings import ModelSettings
 
 from interaction_finder.extraction.deps import Deps
 from interaction_finder.extraction.models import PairExtractionOut
@@ -43,6 +44,7 @@ def get_pair_extractor_agent(model_name: str) -> Agent:
             deps_type=Deps,
             output_type=PairExtractionOut,
             retries=2,
+            model_settings=ModelSettings(parallel_tool_calls=False),
             system_prompt="""You are an expert at identifying biological associations in scientific text.
 
 Your task: extract binary relationships between biological entities relevant to the given topic.

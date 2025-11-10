@@ -4,6 +4,7 @@ Makes cross-document judgments on pair validity by synthesizing evidence from al
 """
 
 from pydantic_ai import Agent
+from pydantic_ai.settings import ModelSettings
 
 from interaction_finder.extraction.deps import Deps
 from interaction_finder.extraction.models import FinalJudgmentOut
@@ -43,6 +44,7 @@ def get_final_judge_agent(model_name: str) -> Agent:
             deps_type=Deps,
             output_type=FinalJudgmentOut,
             retries=2,
+            model_settings=ModelSettings(parallel_tool_calls=False),
             system_prompt="""You are an expert scientific reviewer synthesizing evidence across multiple documents.
 
 Your task is to make a final judgment on whether an entity-entity association

@@ -4,6 +4,7 @@ Extracts entities of specified types from document text with supporting quotes.
 """
 
 from pydantic_ai import Agent
+from pydantic_ai.settings import ModelSettings
 
 from interaction_finder.extraction.deps import Deps
 from interaction_finder.extraction.models import EntityExtractionOut
@@ -47,6 +48,7 @@ def get_entity_extractor_agent(model_name: str) -> Agent:
             deps_type=Deps,
             output_type=EntityExtractionOut,
             retries=2,
+            model_settings=ModelSettings(parallel_tool_calls=False),
             system_prompt="""You are an expert biomedical entity extraction specialist.
 
 Your task: identify and extract biological entities from scientific text.

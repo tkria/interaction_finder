@@ -4,6 +4,7 @@ Assesses the strength of evidence for a pair's validity in a single document.
 """
 
 from pydantic_ai import Agent
+from pydantic_ai.settings import ModelSettings
 
 from interaction_finder.extraction.deps import Deps
 from interaction_finder.extraction.models import PairEvidenceAssessment
@@ -43,6 +44,7 @@ def get_pair_assessor_agent(model_name: str) -> Agent:
             deps_type=Deps,
             output_type=PairEvidenceAssessment,
             retries=2,
+            model_settings=ModelSettings(parallel_tool_calls=False),
             system_prompt="""You are an expert at evaluating evidence for biological associations in scientific text.
 
 Your task is to assess whether the provided quotes from a single document
