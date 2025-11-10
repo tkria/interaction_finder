@@ -298,3 +298,97 @@ class TestRealWorldScenarios:
         assert (
             config.resolve_agent_config("extraction", "any").llm == "extraction-model"
         )
+
+
+class TestGPT5ModelResolution:
+    """Test GPT-5 model resolution with reasoning effort."""
+
+    def test_gpt5_basic_model(self):
+        """Test basic GPT-5 model without reasoning effort."""
+        from interaction_finder.agent_config import _resolve_gpt5_model
+        from pydantic_ai.models.openai import OpenAIResponsesModel
+
+        model, settings = _resolve_gpt5_model("openai:gpt-5-mini")
+        assert isinstance(model, OpenAIResponsesModel)
+        assert model.model_name == "gpt-5-mini"
+        assert settings is None
+
+    def test_gpt5_with_low_reasoning(self):
+        """Test GPT-5 model with low reasoning effort."""
+        from interaction_finder.agent_config import _resolve_gpt5_model
+        from pydantic_ai.models.openai import OpenAIResponsesModel
+
+        model, settings = _resolve_gpt5_model("openai:gpt-5/low")
+        assert isinstance(model, OpenAIResponsesModel)
+        assert model.model_name == "gpt-5"
+        assert settings is not None
+        assert settings["openai_reasoning_effort"] == "low"
+
+    def test_gpt5_with_medium_reasoning(self):
+        """Test GPT-5 model with medium reasoning effort."""
+        from interaction_finder.agent_config import _resolve_gpt5_model
+
+        model, settings = _resolve_gpt5_model("openai:gpt-5-mini/medium")
+        assert settings["openai_reasoning_effort"] == "medium"
+
+    def test_gpt5_with_high_reasoning(self):
+        """Test GPT-5 model with high reasoning effort."""
+        from interaction_finder.agent_config import _resolve_gpt5_model
+
+        model, settings = _resolve_gpt5_model("openai:gpt-5-nano/high")
+        assert settings["openai_reasoning_effort"] == "high"
+
+    def test_non_gpt5_model_passthrough(self):
+        """Test that non-GPT-5 models pass through unchanged."""
+        from interaction_finder.agent_config import _resolve_gpt5_model
+
+        model, settings = _resolve_gpt5_model("openai:gpt-4o-mini")
+        assert model == "openai:gpt-4o-mini"
+        assert settings is None
+
+    def test_gpt5_agent_creation(self):
+        """Test creating an agent with GPT-5 model from config."""
+        from pydantic import BaseModel
+        from interaction_finder.agent_config import clear_agent_cache, get_agent
+
+        class TestOut(BaseModel):
+            result: str
+
+        class TestDeps:
+            pass
+
+        clear_agent_cache()
+        config = IfetcherConfig(agents={"_": {"llm": "openai:gpt-5-mini"}})
+        agent = get_agent(
+            config, "test_module", "test_agent", TestOut, TestDeps, "Test prompt"
+        )
+        # Verify agent was created with GPT-5 model
+        from pydantic_ai.models.openai import OpenAIResponsesModel
+
+        assert isinstance(agent.model, OpenAIResponsesModel)
+        assert agent.model.model_name == "gpt-5-mini"
+
+    def test_gpt5_agent_with_reasoning_effort(self):
+        """Test creating an agent with GPT-5 and reasoning effort."""
+        from pydantic import BaseModel
+        from interaction_finder.agent_config import clear_agent_cache, get_agent
+
+        class TestOut(BaseModel):
+            result: str
+
+        class TestDeps:
+            pass
+
+        clear_agent_cache()
+        config = IfetcherConfig(agents={"_": {"llm": "openai:gpt-5/high"}})
+        agent = get_agent(
+            config, "test_module", "test_agent", TestOut, TestDeps, "Test prompt"
+        )
+        # Verify agent has reasoning effort in model_settings
+        assert agent.model_settings is not None
+        if isinstance(agent.model_settings, dict):
+            assert agent.model_settings.get("openai_reasoning_effort") == "high"
+        else:
+            assert (
+                getattr(agent.model_settings, "openai_reasoning_effort", None) == "high"
+            )
