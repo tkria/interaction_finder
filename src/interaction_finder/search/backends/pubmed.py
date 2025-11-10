@@ -3,10 +3,18 @@ PubMed search backend using NCBI E-utilities API.
 
 This module provides a SearchBackend implementation for querying PubMed/MEDLINE
 using the NCBI E-utilities web API. It handles rate limiting, query formatting,
-and result parsing.
+result parsing, and automatic retry with exponential backoff for rate limit errors.
+
+Rate Limit Handling:
+- Proactive rate limiting: Enforces configurable requests/second before each API call
+- Reactive retry logic: On HTTP 429 errors, retries with exponential backoff
+- Backoff strategy: Initial 1s delay, doubles each retry (1s, 2s, 4s), capped at 60s
+- Max retries: 3 attempts (configurable via MAX_RETRIES constant)
+- Jitter: ±20% randomness to avoid thundering herd
 """
 
 import asyncio
+import random
 import xml.etree.ElementTree as ET
 from typing import Dict, Any, List, Optional
 
@@ -24,6 +32,12 @@ from ..models import (
     SearchQuery,
     SearchResult,
 )
+
+# Retry configuration constants
+MAX_RETRIES = 3
+INITIAL_BACKOFF_SECONDS = 1.0
+MAX_BACKOFF_SECONDS = 60.0
+BACKOFF_JITTER_FRACTION = 0.2
 
 
 class PubMedBackend(SearchBackend):
@@ -47,6 +61,15 @@ class PubMedBackend(SearchBackend):
         self.retmode = config.get("retmode", "xml")
         self.use_mesh = config.get("use_mesh", True)
 
+        # Inform about API key benefits
+        if not self.api_key:
+            logfire.info(
+                "PubMed API key not configured. "
+                "Using default rate limit of 3 req/sec. "
+                "With an API key, you can increase to 10 req/sec. "
+                "Get your free key at: https://www.ncbi.nlm.nih.gov/account/settings/"
+            )
+
         # Rate limiting
         self._last_request_time = 0.0
         self._request_lock = asyncio.Lock()
@@ -68,15 +91,49 @@ class PubMedBackend(SearchBackend):
     async def _enforce_rate_limit(self) -> None:
         """Enforce rate limiting for API requests."""
         async with self._request_lock:
-            now = asyncio.get_event_loop().time()
-            time_since_last = now - self._last_request_time
-            min_interval = 1.0 / self.rate_limit
-
-            if time_since_last < min_interval:
-                sleep_time = min_interval - time_since_last
+            elapsed = asyncio.get_event_loop().time() - self._last_request_time
+            if sleep_time := max(0, 1.0 / self.rate_limit - elapsed):
                 await asyncio.sleep(sleep_time)
-
             self._last_request_time = asyncio.get_event_loop().time()
+
+    def _calculate_backoff(self, attempt: int) -> float:
+        """Calculate exponential backoff with jitter: 1s, 2s, 4s (±20%)."""
+        backoff = min(INITIAL_BACKOFF_SECONDS * (2**attempt), MAX_BACKOFF_SECONDS)
+        jitter = backoff * BACKOFF_JITTER_FRACTION * (2 * random.random() - 1)
+        return backoff + jitter
+
+    async def _request_with_retry(
+        self, url: str, params: Dict[str, Any], use_post: bool
+    ) -> str:
+        """Execute HTTP request with rate limiting and retry on 429 errors."""
+        for attempt in range(MAX_RETRIES + 1):
+            await self._enforce_rate_limit()
+            session = await self._get_session()
+            response = (
+                await session.post(url, data=params)
+                if use_post
+                else await session.get(url, params=params)
+            )
+
+            if response.status_code == 200:
+                return response.text
+
+            if response.status_code == 429 and attempt < MAX_RETRIES:
+                backoff = self._calculate_backoff(attempt)
+                logfire.warning(
+                    f"PubMed rate limit (429), retry {attempt + 1}/{MAX_RETRIES} "
+                    f"after {backoff:.1f}s"
+                )
+                await asyncio.sleep(backoff)
+                continue
+
+            # Rate limit exhausted or other HTTP error
+            error_msg = (
+                f"rate limit exceeded after {MAX_RETRIES} retries"
+                if response.status_code == 429
+                else f"HTTP {response.status_code}: {response.text}"
+            )
+            raise RuntimeError(f"PubMed API error: {error_msg}")
 
     def _build_search_params(self, query: SearchQuery) -> Dict[str, str]:
         """Build parameters for ESearch request."""
@@ -85,48 +142,23 @@ class PubMedBackend(SearchBackend):
             "term": query.query,
             "retmax": str(query.max_results),
             "retmode": "xml",
-            "usehistory": "y",  # Use history for large result sets
+            "usehistory": "y",
         }
-
-        # Add email and API key if provided
         if self.email:
             params["email"] = self.email
         if self.api_key:
             params["api_key"] = self.api_key
-
         return params
 
     async def _esearch(self, query: SearchQuery) -> Dict[str, Any]:
-        """Perform ESearch to get PMIDs."""
-        await self._enforce_rate_limit()
-
+        """Perform ESearch to get PMIDs with retry on rate limit errors."""
         params = self._build_search_params(query)
         url = f"{self.base_url}/esearch.fcgi"
-
-        session = await self._get_session()
-
-        # Use POST for long queries to avoid URI length limits
-        query_length = len(params.get("term", ""))
-        use_post = query_length > 2000
+        use_post = len(params.get("term", "")) > 2000
 
         try:
-            if use_post:
-                # Use POST with form data for long queries
-                response = await session.post(url, data=params)
-            else:
-                # Use GET for short queries
-                response = await session.get(url, params=params)
-
-            if response.status_code == 429:
-                raise RuntimeError("PubMed rate limit exceeded")
-            elif response.status_code != 200:
-                raise RuntimeError(
-                    f"PubMed API returned HTTP {response.status_code}: {response.text}"
-                )
-
-            content = response.text
-            return self._parse_esearch_response(content)
-
+            response_text = await self._request_with_retry(url, params, use_post)
+            return self._parse_esearch_response(response_text)
         except httpx.TimeoutException:  # type: ignore[misc]
             raise RuntimeError(
                 f"PubMed search request timed out for query: {query.query}"
@@ -173,44 +205,22 @@ class PubMedBackend(SearchBackend):
             raise RuntimeError(f"Failed to parse PubMed search response: {str(e)}")
 
     async def _esummary(self, pmids: List[str]) -> List[Dict[str, Any]]:
-        """Fetch summaries for PMIDs using ESummary."""
+        """Fetch summaries for PMIDs using ESummary with retry on rate limit errors."""
         if not pmids:
             return []
 
-        await self._enforce_rate_limit()
-
         params = {"db": "pubmed", "id": ",".join(pmids), "retmode": "xml"}
-
         if self.email:
             params["email"] = self.email
         if self.api_key:
             params["api_key"] = self.api_key
 
         url = f"{self.base_url}/esummary.fcgi"
-        session = await self._get_session()
-
-        # Use POST for many PMIDs to avoid URI length limits
-        id_list_length = len(params["id"])
-        use_post = id_list_length > 2000 or len(pmids) > 200
+        use_post = len(params["id"]) > 2000 or len(pmids) > 200
 
         try:
-            if use_post:
-                # Use POST with form data for long PMID lists
-                response = await session.post(url, data=params)
-            else:
-                # Use GET for short PMID lists
-                response = await session.get(url, params=params)
-
-            if response.status_code == 429:
-                raise RuntimeError("PubMed rate limit exceeded")
-            elif response.status_code != 200:
-                raise RuntimeError(
-                    f"PubMed API returned HTTP {response.status_code}: {response.text}"
-                )
-
-            content = response.text
-            return self._parse_esummary_response(content)
-
+            response_text = await self._request_with_retry(url, params, use_post)
+            return self._parse_esummary_response(response_text)
         except httpx.TimeoutException:  # type: ignore[misc]
             raise RuntimeError("PubMed summary request timed out")
         except httpx.RequestError as e:  # type: ignore[misc]

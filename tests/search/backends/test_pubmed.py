@@ -14,10 +14,9 @@ Tests cover:
 
 import asyncio
 import pytest
-from unittest.mock import Mock, AsyncMock, patch, MagicMock
+from unittest.mock import Mock, AsyncMock, patch
 from pathlib import Path
 import sys
-import xml.etree.ElementTree as ET
 
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / "src"))
@@ -152,6 +151,27 @@ class TestPubMedBackendInitialization:
             with pytest.raises(RuntimeError, match="httpx is required"):
                 PubMedBackend()
 
+    def test_api_key_info_message_when_not_configured(self):
+        """Test that informational message is logged when API key is missing."""
+        with patch("interaction_finder.search.backends.pubmed.logfire") as mock_logfire:
+            PubMedBackend()
+
+            # Should log info message about API key
+            mock_logfire.info.assert_called_once()
+            call_args = mock_logfire.info.call_args[0][0]
+            assert "API key not configured" in call_args
+            assert "3 req/sec" in call_args
+            assert "10 req/sec" in call_args
+            assert "https://www.ncbi.nlm.nih.gov/account/settings/" in call_args
+
+    def test_no_api_key_message_when_configured(self):
+        """Test that no message is logged when API key is present."""
+        with patch("interaction_finder.search.backends.pubmed.logfire") as mock_logfire:
+            PubMedBackend({"api_key": "test_key"})
+
+            # Should not log info message
+            mock_logfire.info.assert_not_called()
+
 
 class TestSessionManagement:
     """Test HTTP session management and cleanup."""
@@ -271,8 +291,6 @@ class TestRateLimiting:
         """Test that rate limiting delays requests appropriately."""
         pubmed_backend.rate_limit = 2.0  # 2 requests per second
 
-        start_time = asyncio.get_event_loop().time()
-
         # First request should be immediate
         await pubmed_backend._enforce_rate_limit()
         first_time = asyncio.get_event_loop().time()
@@ -304,6 +322,151 @@ class TestRateLimiting:
         actual_time = end_time - start_time
 
         assert actual_time >= min_time * 0.9  # Allow 10% tolerance
+
+
+class TestRetryBehavior:
+    """Test retry logic with exponential backoff."""
+
+    @pytest.mark.asyncio
+    async def test_esearch_succeeds_after_one_retry(self, pubmed_backend):
+        """Test that ESearch succeeds on second attempt after 429."""
+        query = SearchQuery(query="covid", max_results=10)
+
+        # First response: 429, second response: success
+        mock_429_response = AsyncMock()
+        mock_429_response.status_code = 429
+
+        mock_success_response = AsyncMock()
+        mock_success_response.status_code = 200
+        mock_success_response.text = ESEARCH_SUCCESS_XML
+
+        with patch.object(pubmed_backend, "_get_session") as mock_get_session:
+            mock_session = AsyncMock()
+            mock_session.get = AsyncMock(
+                side_effect=[mock_429_response, mock_success_response]
+            )
+            mock_get_session.return_value = mock_session
+
+            # Should succeed after one retry
+            result = await pubmed_backend._esearch(query)
+
+            # Verify success
+            assert result["count"] == 2
+            assert len(result["pmids"]) == 2
+            # Verify it made 2 attempts
+            assert mock_session.get.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_esummary_succeeds_after_one_retry(self, pubmed_backend):
+        """Test that ESummary succeeds on second attempt after 429."""
+        pmids = ["12345678", "87654321"]
+
+        # First response: 429, second response: success
+        mock_429_response = AsyncMock()
+        mock_429_response.status_code = 429
+
+        mock_success_response = AsyncMock()
+        mock_success_response.status_code = 200
+        mock_success_response.text = ESUMMARY_SUCCESS_XML
+
+        with patch.object(pubmed_backend, "_get_session") as mock_get_session:
+            mock_session = AsyncMock()
+            mock_session.get = AsyncMock(
+                side_effect=[mock_429_response, mock_success_response]
+            )
+            mock_get_session.return_value = mock_session
+
+            # Should succeed after one retry
+            result = await pubmed_backend._esummary(pmids)
+
+            # Verify success
+            assert len(result) == 2
+            assert result[0]["pmid"] == "12345678"
+            # Verify it made 2 attempts
+            assert mock_session.get.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_retry_uses_backoff(self, pubmed_backend):
+        """Test that retries use exponential backoff with proper timing."""
+        from interaction_finder.search.backends.pubmed import INITIAL_BACKOFF_SECONDS
+
+        query = SearchQuery(query="covid", max_results=10)
+
+        # Always return 429 to trigger all retries
+        mock_response = AsyncMock()
+        mock_response.status_code = 429
+
+        with patch.object(pubmed_backend, "_get_session") as mock_get_session:
+            mock_session = AsyncMock()
+            mock_session.get = AsyncMock(return_value=mock_response)
+            mock_get_session.return_value = mock_session
+
+            start_time = asyncio.get_event_loop().time()
+
+            # Should fail after all retries
+            with pytest.raises(RuntimeError, match="rate limit exceeded"):
+                await pubmed_backend._esearch(query)
+
+            end_time = asyncio.get_event_loop().time()
+            elapsed = end_time - start_time
+
+            # Should have slept for approximately: 1s + 2s + 4s = 7s (with jitter)
+            # Allow generous tolerance due to jitter and test timing
+            min_expected_backoff = INITIAL_BACKOFF_SECONDS * (1 + 2 + 4) * 0.7
+            assert elapsed >= min_expected_backoff
+
+    @pytest.mark.asyncio
+    async def test_backoff_calculation(self, pubmed_backend):
+        """Test backoff calculation increases exponentially."""
+        from interaction_finder.search.backends.pubmed import (
+            MAX_BACKOFF_SECONDS,
+        )
+
+        # First attempt (attempt 0)
+        backoff_0 = pubmed_backend._calculate_backoff(0)
+        # Should be ~1s with jitter
+        assert 0.8 <= backoff_0 <= 1.5
+
+        # Second attempt (attempt 1)
+        backoff_1 = pubmed_backend._calculate_backoff(1)
+        # Should be ~2s with jitter
+        assert 1.6 <= backoff_1 <= 2.5
+
+        # Third attempt (attempt 2)
+        backoff_2 = pubmed_backend._calculate_backoff(2)
+        # Should be ~4s with jitter
+        assert 3.2 <= backoff_2 <= 5.0
+
+        # Verify exponential growth (accounting for jitter)
+        assert backoff_1 > backoff_0
+        assert backoff_2 > backoff_1
+
+        # Test that very large attempts are capped at MAX_BACKOFF_SECONDS
+        backoff_large = pubmed_backend._calculate_backoff(10)
+        # Should be capped at 60s with jitter
+        assert backoff_large <= MAX_BACKOFF_SECONDS * 1.3
+
+    @pytest.mark.asyncio
+    async def test_non_429_errors_do_not_retry(self, pubmed_backend):
+        """Test that non-429 HTTP errors fail immediately without retry."""
+        query = SearchQuery(query="covid", max_results=10)
+
+        # Return 500 error
+        mock_response = AsyncMock()
+        mock_response.status_code = 500
+        mock_response.text = "Internal Server Error"
+
+        with patch.object(pubmed_backend, "_get_session") as mock_get_session:
+            mock_session = AsyncMock()
+            mock_session.get = AsyncMock(return_value=mock_response)
+            mock_get_session.return_value = mock_session
+
+            # Should fail immediately without retry
+            with pytest.raises(RuntimeError, match="HTTP 500"):
+                await pubmed_backend._esearch(query)
+
+            # Verify it only attempted once
+            assert mock_session.get.call_count == 1
 
 
 class TestBuildSearchParams:
@@ -521,8 +684,10 @@ class TestESearchAPI:
             mock_session.post.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_esearch_rate_limit_error(self, pubmed_backend):
-        """Test ESearch handles 429 rate limit response."""
+    async def test_esearch_rate_limit_retries_then_fails(self, pubmed_backend):
+        """Test ESearch retries on 429 and fails after MAX_RETRIES attempts."""
+        from interaction_finder.search.backends.pubmed import MAX_RETRIES
+
         query = SearchQuery(query="covid", max_results=10)
 
         mock_response = AsyncMock()
@@ -533,8 +698,14 @@ class TestESearchAPI:
             mock_session.get = AsyncMock(return_value=mock_response)
             mock_get_session.return_value = mock_session
 
-            with pytest.raises(RuntimeError, match="rate limit exceeded"):
+            # Should retry MAX_RETRIES times then fail
+            with pytest.raises(
+                RuntimeError, match=f"rate limit exceeded after {MAX_RETRIES} retries"
+            ):
                 await pubmed_backend._esearch(query)
+
+            # Verify it attempted MAX_RETRIES + 1 times (initial + retries)
+            assert mock_session.get.call_count == MAX_RETRIES + 1
 
     @pytest.mark.asyncio
     async def test_esearch_http_error(self, pubmed_backend):
@@ -623,7 +794,7 @@ class TestESummaryAPI:
             mock_session.post = AsyncMock(return_value=mock_response)
             mock_get_session.return_value = mock_session
 
-            summaries = await pubmed_backend._esummary(pmids)
+            await pubmed_backend._esummary(pmids)
 
             mock_session.post.assert_called_once()
 
@@ -634,8 +805,10 @@ class TestESummaryAPI:
         assert summaries == []
 
     @pytest.mark.asyncio
-    async def test_esummary_rate_limit_error(self, pubmed_backend):
-        """Test ESummary handles 429 rate limit response."""
+    async def test_esummary_rate_limit_retries_then_fails(self, pubmed_backend):
+        """Test ESummary retries on 429 and fails after MAX_RETRIES attempts."""
+        from interaction_finder.search.backends.pubmed import MAX_RETRIES
+
         pmids = ["12345678"]
 
         mock_response = AsyncMock()
@@ -646,8 +819,14 @@ class TestESummaryAPI:
             mock_session.get = AsyncMock(return_value=mock_response)
             mock_get_session.return_value = mock_session
 
-            with pytest.raises(RuntimeError, match="rate limit exceeded"):
+            # Should retry MAX_RETRIES times then fail
+            with pytest.raises(
+                RuntimeError, match=f"rate limit exceeded after {MAX_RETRIES} retries"
+            ):
                 await pubmed_backend._esummary(pmids)
+
+            # Verify it attempted MAX_RETRIES + 1 times (initial + retries)
+            assert mock_session.get.call_count == MAX_RETRIES + 1
 
     @pytest.mark.asyncio
     async def test_esummary_timeout(self, pubmed_backend):
