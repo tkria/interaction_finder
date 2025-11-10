@@ -1,8 +1,7 @@
-"""Pydantic-AI agents for widesearch pipeline.
+"""System prompts and agent factory functions for widesearch pipeline.
 
-Each agent has a specific role in the pipeline and returns structured
-Pydantic models. Agents are configured with appropriate system prompts
-and output types.
+System prompts are defined as module constants and agents are created
+via factory functions that delegate to the centralized get_agent().
 """
 
 from pydantic_ai import Agent
@@ -18,23 +17,7 @@ from interaction_finder.widesearch.models import (
     SubjectGoalsOut,
 )
 
-
-def get_goal_planner_agent(config: IfetcherConfig) -> Agent:
-    """Get or create goal planner agent.
-
-    Parameters:
-        config: Configuration object with agent settings
-
-    Returns:
-        Configured Agent instance
-    """
-    return get_agent(
-        config,
-        "widesearch",
-        "goal_planner",
-        SubjectGoalsOut,
-        Deps,
-        """You are an expert research strategist planning comprehensive literature searches.
+GOAL_PLANNER_PROMPT = """You are an expert research strategist planning comprehensive literature searches.
 
 Your task is to identify subject areas and research domains that should be covered to ensure comprehensive literature discovery on a given topic.
 
@@ -49,26 +32,9 @@ Guidelines for Comprehensive Coverage:
 - Include both well-established areas and emerging/novel research directions
 - Aim for 8-15 well-defined subject goals that span the research landscape
 
-Be ambitious about coverage - it's better to identify more goals that guide thorough exploration than to miss important research areas. Your goals should guide query generation to ensure diverse, comprehensive coverage without drifting into irrelevance.""",
-    )
+Be ambitious about coverage - it's better to identify more goals that guide thorough exploration than to miss important research areas. Your goals should guide query generation to ensure diverse, comprehensive coverage without drifting into irrelevance."""
 
-
-def get_query_generator_agent(config: IfetcherConfig) -> Agent:
-    """Get or create query generator agent.
-
-    Parameters:
-        config: Configuration object with agent settings
-
-    Returns:
-        Configured Agent instance
-    """
-    return get_agent(
-        config,
-        "widesearch",
-        "query_generator",
-        QueryGenerationOut,
-        Deps,
-        """You are an expert at generating search queries for academic literature discovery.
+QUERY_GENERATOR_PROMPT = """You are an expert at generating search queries for academic literature discovery.
 
 Your task is to create diverse, targeted search queries that will find relevant papers and articles. You will be given:
 - A research topic
@@ -112,27 +78,9 @@ Query Generation Guidelines:
 - Both include AND exclude the main topic terms across different queries
 - Avoid redundancy with previous queries
 
-IMPORTANT: Return ALL queries in a single structured response. Do not create multiple separate responses for different complexity levels.""",
-        default_model_settings=ModelSettings(parallel_tool_calls=False),
-    )
+IMPORTANT: Return ALL queries in a single structured response. Do not create multiple separate responses for different complexity levels."""
 
-
-def get_result_selector_agent(config: IfetcherConfig) -> Agent:
-    """Get or create result selector agent.
-
-    Parameters:
-        config: Configuration object with agent settings
-
-    Returns:
-        Configured Agent instance
-    """
-    return get_agent(
-        config,
-        "widesearch",
-        "result_selector",
-        ResultSelectionOut,
-        Deps,
-        """You are an expert at evaluating search results for relevance and coverage.
+RESULT_SELECTOR_PROMPT = """You are an expert at evaluating search results for relevance and coverage.
 
 Your task is to select which search results are most relevant to the research topic and summarize what subject areas they cover.
 
@@ -149,26 +97,9 @@ Coverage summary requirements:
 - Note any connections, methodologies, or perspectives represented
 - Be specific about what aspects of the topic these results address
 
-Your selection and summary will guide the reflection process to determine if more searching is needed.""",
-    )
+Your selection and summary will guide the reflection process to determine if more searching is needed."""
 
-
-def get_reflector_agent(config: IfetcherConfig) -> Agent:
-    """Get or create reflector agent.
-
-    Parameters:
-        config: Configuration object with agent settings
-
-    Returns:
-        Configured Agent instance
-    """
-    return get_agent(
-        config,
-        "widesearch",
-        "reflector",
-        ReflectionOut,
-        Deps,
-        """You are an expert at evaluating literature search coverage and deciding when sufficient breadth has been achieved.
+REFLECTOR_PROMPT = """You are an expert at evaluating literature search coverage and deciding when sufficient breadth has been achieved.
 
 Your task is to reflect on search results collected so far and decide whether to continue searching or stop.
 
@@ -199,5 +130,45 @@ Decision guidelines for WHEN TO STOP:
 - Stop if the last 2 rounds added minimal new diverse results despite different queries
 - Stop if we've reached the maximum configured search rounds
 
-IMPORTANT: Require strong evidence before stopping. "Adequate coverage" is not sufficient - aim for "comprehensive coverage" with diverse result types and sufficient volume (aim for 50+ unique results for most research topics). Be thorough rather than conservative.""",
+IMPORTANT: Require strong evidence before stopping. "Adequate coverage" is not sufficient - aim for "comprehensive coverage" with diverse result types and sufficient volume (aim for 50+ unique results for most research topics). Be thorough rather than conservative."""
+
+
+# Agent factory functions - thin wrappers over get_agent() using the prompts above
+
+def get_goal_planner_agent(config: IfetcherConfig) -> Agent:
+    """Get goal planner agent."""
+    return get_agent(
+        config, "widesearch", "goal_planner", SubjectGoalsOut, Deps, GOAL_PLANNER_PROMPT
+    )
+
+
+def get_query_generator_agent(config: IfetcherConfig) -> Agent:
+    """Get query generator agent."""
+    return get_agent(
+        config,
+        "widesearch",
+        "query_generator",
+        QueryGenerationOut,
+        Deps,
+        QUERY_GENERATOR_PROMPT,
+        default_model_settings=ModelSettings(parallel_tool_calls=False),
+    )
+
+
+def get_result_selector_agent(config: IfetcherConfig) -> Agent:
+    """Get result selector agent."""
+    return get_agent(
+        config,
+        "widesearch",
+        "result_selector",
+        ResultSelectionOut,
+        Deps,
+        RESULT_SELECTOR_PROMPT,
+    )
+
+
+def get_reflector_agent(config: IfetcherConfig) -> Agent:
+    """Get reflector agent."""
+    return get_agent(
+        config, "widesearch", "reflector", ReflectionOut, Deps, REFLECTOR_PROMPT
     )

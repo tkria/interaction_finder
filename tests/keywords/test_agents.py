@@ -4,13 +4,13 @@ import pytest
 from pydantic_ai.models.test import TestModel
 
 from interaction_finder.keywords.agents import (
-from interaction_finder.settings import IfetcherConfig
     get_document_summarizer_agent,
     get_keyword_evaluator_agent,
     get_query_expander_agent,
     get_reflector_agent,
     get_result_selector_agent,
 )
+from interaction_finder.settings import IfetcherConfig
 from interaction_finder.keywords.deps import Deps
 from interaction_finder.keywords.extractors import RAKEExtractor
 from interaction_finder.keywords.models import (
@@ -135,6 +135,7 @@ class TestAgentConfiguration:
 
     def test_all_agents_have_system_prompts(self):
         """Test all agents are configured with system prompts."""
+        config = IfetcherConfig()
         agent_factories = [
             get_query_expander_agent,
             get_result_selector_agent,
@@ -144,13 +145,14 @@ class TestAgentConfiguration:
         ]
         for factory in agent_factories:
             # Get the agent instance from the factory
-            agent = factory("openai:gpt-4o-mini")
+            agent = factory(config)
             # Agents should have system prompts configured
             assert agent._system_prompts is not None
             assert len(agent._system_prompts) > 0  # Has prompts
 
     def test_all_agents_have_deps_type(self):
         """Test all agents are configured with Deps type."""
+        config = IfetcherConfig()
         agent_factories = [
             get_query_expander_agent,
             get_result_selector_agent,
@@ -160,5 +162,5 @@ class TestAgentConfiguration:
         ]
         for factory in agent_factories:
             # Get the agent instance from the factory
-            agent = factory("openai:gpt-4o-mini")
+            agent = factory(config)
             assert agent._deps_type == Deps

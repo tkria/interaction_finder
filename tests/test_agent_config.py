@@ -77,7 +77,10 @@ class TestConfigResolution:
         config = IfetcherConfig(
             agents={
                 "_": {"llm": "global-model", "retries": 3},
-                "extraction": {"llm": "module-model", "entity": {"llm": "agent-model"}},
+                "extraction": {
+                    "_": {"llm": "module-model"},
+                    "entity": {"llm": "agent-model"},
+                },
             }
         )
 
@@ -249,7 +252,7 @@ class TestRealWorldScenarios:
             agents={
                 "_": {"llm": "openai:gpt-4o-mini"},
                 "extraction": {
-                    "llm": "openai:gpt-4o-mini",
+                    "_": {"llm": "openai:gpt-4o-mini"},
                     "judge": {"llm": "openai:gpt-4o"},
                 },
             }

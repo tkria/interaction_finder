@@ -15,6 +15,8 @@ class IfetcherConfig(BaseModel):
     class AgentSpec(BaseModel):
         """Configuration for AI agent behavior and settings."""
 
+        model_config = {"extra": "forbid"}
+
         llm: str | None = Field(
             None, description="Language model to use for this agent"
         )
@@ -55,7 +57,7 @@ class IfetcherConfig(BaseModel):
                 return self
             # Create dict with parent values, override with self's non-None values
             merged_data = {}
-            for field_name in self.model_fields:
+            for field_name in IfetcherConfig.AgentSpec.model_fields:
                 self_value = getattr(self, field_name)
                 parent_value = getattr(parent, field_name)
                 # Use self's value if not None, otherwise inherit from parent
@@ -64,7 +66,7 @@ class IfetcherConfig(BaseModel):
                 )
             return IfetcherConfig.AgentSpec.model_validate(merged_data)
 
-    agents: dict[str, Any] | AgentSpec = Field(
+    agents: dict[str, dict[str, AgentSpec] | AgentSpec] | AgentSpec = Field(
         default_factory=dict,
         description="Configuration for AI agents (supports multi-tier: agents._, agents.module._, agents.module.agent)",
     )
@@ -267,15 +269,9 @@ class IfetcherConfig(BaseModel):
 
         Resolution order (most specific to least specific):
         1. agents.module.agent (specific agent override)
-        2. agents.module._ (module-level default with underscore)
-        3. agents.module (module-level default without underscore, if AgentSpec)
-        4. agents._ (global default with underscore)
-        5. agents (global default if AgentSpec)
-        6. Empty AgentSpec (all None values)
-
-        Note: Both underscore and non-underscore versions are checked for defaults
-        to provide flexibility in config style. agents._ and agents are equivalent
-        for global defaults, as are agents.module._ and agents.module for module defaults.
+        2. agents.module._ (module-level default)
+        3. agents._ (global default)
+        4. Empty AgentSpec (all None values)
 
         Parameters:
             module: Module name (e.g., "keywords", "widesearch", "extraction")
@@ -288,62 +284,37 @@ class IfetcherConfig(BaseModel):
             >>> config.resolve_agent_config("extraction", "judge")
             # Returns merged spec: agent-specific → module-level → global
         """
-        # Start with empty spec (all None values)
+        # Get global default
         global_spec = IfetcherConfig.AgentSpec()
-        # Get global defaults (check both _ and root level)
         if isinstance(self.agents, IfetcherConfig.AgentSpec):
             global_spec = self.agents
-        elif isinstance(self.agents, dict):
-            if "_" in self.agents:
-                global_val = self.agents["_"]
-                if isinstance(global_val, dict):
-                    global_spec = IfetcherConfig.AgentSpec.model_validate(global_val)
-                elif isinstance(global_val, IfetcherConfig.AgentSpec):
-                    global_spec = global_val
-        # Get module-level config
+        elif isinstance(self.agents, dict) and "_" in self.agents:
+            global_spec = self.agents["_"]
+
+        # Get module-level default
         module_spec = None
         if isinstance(self.agents, dict) and module in self.agents:
             module_val = self.agents[module]
-            # Check if module value is an AgentSpec (used as module default)
-            if isinstance(module_val, dict):
-                # Check for _ key for explicit module default
-                if "_" in module_val:
-                    underscore_val = module_val["_"]
-                    if isinstance(underscore_val, dict):
-                        module_spec = IfetcherConfig.AgentSpec.model_validate(
-                            underscore_val
-                        )
-                    elif isinstance(underscore_val, IfetcherConfig.AgentSpec):
-                        module_spec = underscore_val
-                # If no _ key and no agent specified, treat module value as implicit default
-                elif agent is None:
-                    # Try to parse entire module dict as AgentSpec
-                    try:
-                        module_spec = IfetcherConfig.AgentSpec.model_validate(
-                            module_val
-                        )
-                    except:
-                        pass  # Not a valid AgentSpec, continue
-            elif isinstance(module_val, IfetcherConfig.AgentSpec):
+            if isinstance(module_val, IfetcherConfig.AgentSpec):
+                # Module has a single default spec
                 module_spec = module_val
+            elif "_" in module_val:
+                # Module has explicit _ default
+                module_spec = module_val["_"]
+
         # Merge module spec with global spec
         current_spec = (
             module_spec.merge_with_parent(global_spec) if module_spec else global_spec
         )
-        # If agent is specified, get agent-specific config
+
+        # Get agent-specific config if requested
         if agent is not None:
-            agent_spec = None
             if isinstance(self.agents, dict) and module in self.agents:
                 module_val = self.agents[module]
                 if isinstance(module_val, dict) and agent in module_val:
-                    agent_val = module_val[agent]
-                    if isinstance(agent_val, dict):
-                        agent_spec = IfetcherConfig.AgentSpec.model_validate(agent_val)
-                    elif isinstance(agent_val, IfetcherConfig.AgentSpec):
-                        agent_spec = agent_val
-            # Merge agent spec with module/global spec
-            if agent_spec:
-                current_spec = agent_spec.merge_with_parent(current_spec)
+                    agent_spec = module_val[agent]
+                    current_spec = agent_spec.merge_with_parent(current_spec)
+
         return current_spec
 
     @staticmethod
@@ -401,10 +372,7 @@ class IfetcherConfig(BaseModel):
             else:
                 # Handle comma-separated list values
                 if isinstance(value, str) and "," in value:
-                    try:
-                        current[last_key] = [item.strip() for item in value.split(",")]
-                    except:
-                        current[last_key] = value
+                    current[last_key] = [item.strip() for item in value.split(",")]
                 else:
                     current[last_key] = value
         return result

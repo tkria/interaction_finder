@@ -243,20 +243,16 @@ class TestValidation:
             Path(f.name).unlink()
 
     def test_agent_retries_range(self):
-        """Test that agent retries are validated."""
-        toml_content = """
-        [agents.default]
-        retries = 100  # Too high, max is 10
-        """
-
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".toml", delete=False) as f:
-            f.write(toml_content)
-            f.flush()
-
-            with pytest.raises(Exception):  # Pydantic ValidationError
-                IfetcherConfig.from_path(f.name)
-
-            Path(f.name).unlink()
+        """Test that agent retries are validated at config creation."""
+        # Validation should fail immediately when creating the config
+        with pytest.raises(Exception):  # Pydantic ValidationError
+            IfetcherConfig(
+                agents={
+                    "extraction": {
+                        "judge": {"retries": 100},  # Too high, max is 10
+                    }
+                }
+            )
 
 
 class TestApplyOverrides:
