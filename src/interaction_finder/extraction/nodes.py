@@ -115,9 +115,7 @@ class ExtractFromDocumentsNode(BaseNode[State, Deps, ExtractionResult]):
 {resource.text[:15000]}
 
 Extract all entities of the specified types that are relevant to the topic.
-Use canonical names and provide exact quotes.
-
-Return a JSON object with both "entities" and "reasoning" fields."""
+For each entity, provide: canonical name, all verbatim names from text, supporting quotes, and reasoning."""
 
             pair_prompt = f"""Extract associations from this document relevant to: {ctx.state.topic}
 
@@ -153,33 +151,54 @@ Use canonical entity names and provide exact quotes supporting each association.
                 # Continue without pairs from this resource
                 pair_result = None
 
-            # Convert entities to EntityMention with ResourceQuotes
+            # Convert entities to EntityMention with ResourceQuotes, merging duplicates
             entities_dict = {}
             if entity_result is not None:
-                for (
-                    canonical_name,
-                    entity_info,
-                ) in entity_result.output.entities.items():
-                    # Convert quote strings to ResourceQuotes
-                    quotes = []
-                    for quote_str in entity_info.supporting_quotes:
-                        try:
-                            quote = resource.quote(quote_str)
-                            quotes.append(quote)
-                            ctx.state.quotes_validated += 1
-                        except Exception as e:
-                            ctx.state.quotes_failed += 1
-                            ctx.deps.logger.warning(
-                                f"Failed to validate entity quote for '{canonical_name}' "
-                                f"in {resource.id.url}: {type(e).__name__}: {e}"
-                            )
+                # Group entities by name to handle duplicates
+                entities_by_name: dict[str, list] = {}
+                for entity_info in entity_result.output.entities:
+                    if entity_info.name not in entities_by_name:
+                        entities_by_name[entity_info.name] = []
+                    entities_by_name[entity_info.name].append(entity_info)
 
-                    if quotes:  # Only store entity if we have valid quotes
-                        entities_dict[canonical_name] = EntityMention(
-                            canonical_name=canonical_name,
-                            entity_type=entity_info.entity_type,
-                            verbatim_names=entity_info.verbatim_names,
-                            quotes=quotes,
+                # Convert and merge each entity name
+                for entity_name, entity_infos in entities_by_name.items():
+                    # Validate all quotes from all instances
+                    all_quotes = []
+                    for entity_info in entity_infos:
+                        for quote_str in entity_info.quotes:
+                            try:
+                                quote = resource.quote(quote_str)
+                                all_quotes.append(quote)
+                                ctx.state.quotes_validated += 1
+                            except Exception as e:
+                                ctx.state.quotes_failed += 1
+                                ctx.deps.logger.warning(
+                                    f"Failed to validate entity quote for '{entity_name}' "
+                                    f"in {resource.id.url}: {type(e).__name__}: {e}"
+                                )
+
+                    if all_quotes:  # Only store entity if we have valid quotes
+                        # Merge aliases from all instances (deduplicate)
+                        all_aliases = []
+                        seen_aliases = set()
+                        for entity_info in entity_infos:
+                            for alias in entity_info.aliases:
+                                if alias not in seen_aliases:
+                                    all_aliases.append(alias)
+                                    seen_aliases.add(alias)
+
+                        # Merge reasoning (join with separator if multiple)
+                        merged_reasoning = " | ".join(
+                            entity_info.reasoning for entity_info in entity_infos
+                        )
+
+                        entities_dict[entity_name] = EntityMention(
+                            kind=entity_infos[0].kind,  # Should be consistent
+                            name=entity_name,
+                            aliases=all_aliases,
+                            quotes=all_quotes,
+                            reasoning=merged_reasoning,
                         )
 
             # Store entities for this resource
@@ -268,7 +287,7 @@ class AssessEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
 
 **Topic:** {ctx.state.topic}
 
-**Entity:** {entity_name} (type: {entity_mention.entity_type})
+**Entity:** {entity_name} (type: {entity_mention.kind})
 
 **Quotes from document:**
 {quotes_str}
@@ -591,9 +610,9 @@ class FinalizeNode(BaseNode[State, Deps, ExtractionResult]):
                     entity2_type = "unknown"
                     for entities_dict in ctx.state.entities_by_resource.values():
                         if pair_key[0] in entities_dict:
-                            entity1_type = entities_dict[pair_key[0]].entity_type
+                            entity1_type = entities_dict[pair_key[0]].kind
                         if pair_key[1] in entities_dict:
-                            entity2_type = entities_dict[pair_key[1]].entity_type
+                            entity2_type = entities_dict[pair_key[1]].kind
 
                     # Build PairWithProvenance
                     pair_with_prov = PairWithProvenance(

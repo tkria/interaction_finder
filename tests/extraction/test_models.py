@@ -27,52 +27,76 @@ class TestEntityInfo:
     def test_valid_entity_info(self):
         """Test creating valid EntityInfo."""
         info = EntityInfo(
-            entity_type="gene",
-            verbatim_names=["BRCA1", "BRCA-1"],
-            supporting_quotes=["BRCA1 is associated with breast cancer."],
+            kind="gene",
+            name="BRCA1",
+            aliases=["BRCA1", "BRCA-1"],
+            quotes=["BRCA1 is associated with breast cancer."],
+            reasoning="BRCA1 is mentioned in context of breast cancer susceptibility.",
         )
-        assert info.entity_type == "gene"
-        assert len(info.verbatim_names) == 2
-        assert len(info.supporting_quotes) == 1
+        assert info.kind == "gene"
+        assert info.name == "BRCA1"
+        assert len(info.aliases) == 2
+        assert len(info.quotes) == 1
+        assert len(info.reasoning) >= 20
 
-    def test_requires_verbatim_names(self):
-        """Test that verbatim_names must be non-empty."""
+    def test_requires_aliases(self):
+        """Test that aliases must be non-empty."""
         with pytest.raises(ValidationError):
             EntityInfo(
-                entity_type="gene", verbatim_names=[], supporting_quotes=["quote"]
+                kind="gene",
+                name="BRCA1",
+                aliases=[],
+                quotes=["quote"],
+                reasoning="This should fail due to empty aliases.",
             )
 
-    def test_requires_supporting_quotes(self):
-        """Test that supporting_quotes must be non-empty."""
+    def test_requires_quotes(self):
+        """Test that quotes must be non-empty."""
         with pytest.raises(ValidationError):
             EntityInfo(
-                entity_type="gene", verbatim_names=["BRCA1"], supporting_quotes=[]
+                kind="gene",
+                name="BRCA1",
+                aliases=["BRCA1"],
+                quotes=[],
+                reasoning="This should fail due to empty quotes.",
+            )
+
+    def test_requires_reasoning_min_length(self):
+        """Test that reasoning must be at least 20 characters."""
+        with pytest.raises(ValidationError):
+            EntityInfo(
+                kind="gene",
+                name="BRCA1",
+                aliases=["BRCA1"],
+                quotes=["quote"],
+                reasoning="Too short",
             )
 
     def test_accepts_type_alias(self):
-        """Test that 'type' alias works for entity_type field.
+        """Test that 'type' alias works for kind field.
 
         This ensures LLM responses using 'type' are accepted.
         """
-        # LLM response using 'type' instead of 'entity_type'
+        # LLM response using 'type' instead of 'kind'
         info = EntityInfo(
             type="gene",
-            verbatim_names=["BRCA1"],
-            supporting_quotes=["BRCA1 is a tumor suppressor gene."],
+            name="BRCA1",
+            aliases=["BRCA1"],
+            quotes=["BRCA1 is a tumor suppressor gene."],
+            reasoning="BRCA1 is a well-known tumor suppressor gene involved in DNA repair.",
         )
-        assert info.entity_type == "gene"
+        assert info.kind == "gene"
 
-    def test_accepts_entity_type_field_name(self):
-        """Test that 'entity_type' field name still works.
-
-        This ensures backward compatibility.
-        """
+    def test_accepts_kind_field_name(self):
+        """Test that 'kind' field name works directly."""
         info = EntityInfo(
-            entity_type="disease",
-            verbatim_names=["cancer"],
-            supporting_quotes=["The patient has cancer."],
+            kind="disease",
+            name="breast cancer",
+            aliases=["breast cancer", "mammary carcinoma"],
+            quotes=["The patient has breast cancer."],
+            reasoning="Breast cancer is the primary disease mentioned in this context.",
         )
-        assert info.entity_type == "disease"
+        assert info.kind == "disease"
 
 
 class TestEntityExtractionOut:
@@ -81,34 +105,50 @@ class TestEntityExtractionOut:
     def test_valid_extraction_output(self):
         """Test creating valid EntityExtractionOut."""
         output = EntityExtractionOut(
-            entities={
-                "BRCA1": EntityInfo(
-                    entity_type="gene",
-                    verbatim_names=["BRCA1"],
-                    supporting_quotes=["quote"],
+            entities=[
+                EntityInfo(
+                    kind="gene",
+                    name="BRCA1",
+                    aliases=["BRCA1"],
+                    quotes=["BRCA1 is associated with breast cancer."],
+                    reasoning="BRCA1 is a key gene in breast cancer susceptibility.",
                 )
-            },
-            reasoning="Found BRCA1 mentioned in context of breast cancer.",
+            ]
         )
-        assert "BRCA1" in output.entities
-        assert len(output.reasoning) >= 20
+        assert len(output.entities) == 1
+        assert output.entities[0].name == "BRCA1"
 
-    def test_requires_reasoning_min_length(self):
-        """Test that reasoning must be at least 20 characters."""
-        with pytest.raises(ValidationError):
-            EntityExtractionOut(entities={}, reasoning="Too short")
-
-    def test_empty_entities_with_valid_reasoning(self):
-        """Test that empty entities dict is valid when no relevant entities found.
+    def test_empty_entities_list(self):
+        """Test that empty entities list is valid when no relevant entities found.
 
         This is the expected LLM response when no relevant entities exist.
         """
+        output = EntityExtractionOut(entities=[])
+        assert output.entities == []
+
+    def test_multiple_entities(self):
+        """Test extraction output with multiple entities."""
         output = EntityExtractionOut(
-            entities={},
-            reasoning="No entities of the specified types were found relevant to the topic.",
+            entities=[
+                EntityInfo(
+                    kind="gene",
+                    name="BRCA1",
+                    aliases=["BRCA1"],
+                    quotes=["quote1"],
+                    reasoning="BRCA1 is a tumor suppressor gene.",
+                ),
+                EntityInfo(
+                    kind="disease",
+                    name="breast cancer",
+                    aliases=["breast cancer"],
+                    quotes=["quote2"],
+                    reasoning="Breast cancer is the primary disease discussed.",
+                ),
+            ]
         )
-        assert output.entities == {}
-        assert len(output.reasoning) >= 20
+        assert len(output.entities) == 2
+        assert output.entities[0].name == "BRCA1"
+        assert output.entities[1].name == "breast cancer"
 
 
 class TestPairInfo:

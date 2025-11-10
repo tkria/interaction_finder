@@ -24,19 +24,24 @@ from interaction_finder.resources import ResourceId, ResourceQuote
 
 @dataclass
 class EntityMention:
-    """Entity found in a single resource.
+    """Entity found in a single resource (after quote validation).
+
+    This is the validated, resource-quote-enriched version of EntityInfo.
+    Multiple EntityInfo instances with the same name are merged during conversion.
 
     Attributes:
-        canonical_name: Standardized entity name (e.g., "BRCA1")
-        entity_type: Single type like "gene", "disease", "protein"
-        verbatim_names: Names as they appear in text (e.g., ["BRCA-1", "BRCA1"])
-        quotes: Supporting quotes from the resource
+        kind: Entity type (e.g., "gene", "disease", "protein")
+        name: Canonical entity name (e.g., "BRCA1")
+        aliases: Names as they appear in text (e.g., ["BRCA-1", "BRCA1"])
+        quotes: Supporting quotes from the resource (validated ResourceQuote objects)
+        reasoning: Explanation of extraction choices (merged if duplicates combined)
     """
 
-    canonical_name: str
-    entity_type: str
-    verbatim_names: list[str]
+    kind: str
+    name: str
+    aliases: list[str]
     quotes: list[ResourceQuote]
+    reasoning: str
 
 
 @dataclass
@@ -122,29 +127,25 @@ class EntityInfo(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    entity_type: str = Field(
+    kind: str = Field(
         alias="type", description='Entity type (e.g., "gene", "disease", "protein")'
     )
-    verbatim_names: list[str] = Field(
-        description="Names as they appear in the text", min_length=1
+    name: str = Field(description="Canonical name of the entity")
+    aliases: list[str] = Field(
+        description="Names as they appear in the text, verbatim", min_length=1
     )
-    supporting_quotes: list[str] = Field(
+    quotes: list[str] = Field(
         description="Direct quotes from text supporting this entity", min_length=1
+    )
+    reasoning: str = Field(
+        min_length=20, description="Brief explanation of why this entity was extracted"
     )
 
 
 class EntityExtractionOut(BaseModel):
-    """LLM output: all entities found in document.
+    """LLM output: all entities found in document."""
 
-    The dict keys are canonical entity names, values contain details.
-    """
-
-    entities: dict[str, EntityInfo] = Field(
-        description="Entities found, keyed by canonical name"
-    )
-    reasoning: str = Field(
-        min_length=20, description="Brief explanation of extraction choices"
-    )
+    entities: list[EntityInfo] = Field(description="Entities found in document")
 
 
 class PairInfo(BaseModel):

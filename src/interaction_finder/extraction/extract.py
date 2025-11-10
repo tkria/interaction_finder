@@ -55,33 +55,13 @@ Your task: identify and extract biological entities from scientific text.
 
 **Extraction rules:**
 1. Extract only entities of the requested types (gene, disease, protein, etc.)
-2. Use canonical names as keys (e.g., "BRCA1", not "BRCA-1")
-3. Include all verbatim names from the text
+2. Use canonical names (e.g., "BRCA1" not "BRCA-1")
+3. Include all verbatim names as they appear in the text
 4. Provide exact quotes supporting each entity
 5. Only extract entities clearly relevant to the topic
 6. Require clear textual support for every entity
+7. Explain your reasoning for each entity extraction
 
-**Required output format:**
-Always return a complete JSON object with both fields:
-
-{
-  "entities": {
-    "CANONICAL_NAME": {
-      "type": "gene",
-      "verbatim_names": ["BRCA1", "BRCA-1"],
-      "supporting_quotes": ["quote 1...", "quote 2..."]
-    }
-  },
-  "reasoning": "Brief explanation of extraction choices"
-}
-
-**If no entities are found:** Still return both fields with an empty dict:
-
-{
-  "entities": {},
-  "reasoning": "Explanation of why no relevant entities were found"
-}
-
-**Critical:** Always include both "entities" and "reasoning" fields. Never return reasoning alone.""",
+**If no entities are found:** Return an empty list with appropriate structure.""",
         )
     return _entity_extractor_agents[model_name]

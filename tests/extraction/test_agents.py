@@ -42,8 +42,7 @@ class TestEntityExtractorAgent:
                 deps=None,
             )
             assert isinstance(result.output, EntityExtractionOut)
-            assert isinstance(result.output.entities, dict)
-            assert isinstance(result.output.reasoning, str)
+            assert isinstance(result.output.entities, list)
 
 
 class TestPairExtractorAgent:
