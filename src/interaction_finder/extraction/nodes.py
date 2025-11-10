@@ -296,7 +296,7 @@ Evaluate how strongly these quotes support the entity's relevance to the topic.
 Reference specific quote indices in your assessment."""
 
             # Call assessment agent using configured extraction model
-            result = await get_entity_assessor_agent(ctx.deps.extraction_model).run(
+            result = await get_entity_assessor_agent(ctx.deps.config).run(
                 prompt, deps=ctx.deps, usage=usage
             )
 
@@ -413,7 +413,7 @@ Consider both the relevance of the individual entities and the strength of their
 Reference specific quote indices in your assessment."""
 
             # Call assessment agent using configured extraction model
-            result = await get_pair_assessor_agent(ctx.deps.extraction_model).run(
+            result = await get_pair_assessor_agent(ctx.deps.config).run(
                 prompt, deps=ctx.deps, usage=usage
             )
 
@@ -570,7 +570,7 @@ and your confidence level. Consider:
 
                 # Call final judge agent using configured judge model
                 usage = RunUsage()
-                result = await get_final_judge_agent(ctx.deps.judge_model).run(
+                result = await get_final_judge_agent(ctx.deps.config).run(
                     prompt, deps=ctx.deps, usage=usage
                 )
 

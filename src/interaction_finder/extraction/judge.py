@@ -1,51 +1,18 @@
-"""Final judgment agent.
+"""Module for judge agent."""
 
-Makes cross-document judgments on pair validity by synthesizing evidence from all resources.
-"""
-
-from pydantic_ai import Agent
 from pydantic_ai.settings import ModelSettings
 
+from interaction_finder.agent_config import agent_getter
 from interaction_finder.extraction.deps import Deps
 from interaction_finder.extraction.models import FinalJudgmentOut
 
 
-def resolve_model(model_name: str):
-    """Resolve model name to pydantic-ai model specification.
-
-    Parameters:
-        model_name: Model identifier (e.g., "openai:gpt-4o-mini")
-
-    Returns:
-        Model specification for pydantic-ai Agent
-    """
-    return model_name
-
-
-# Cached agent instances by model name
-_final_judge_agents: dict[str, Agent] = {}
-
-
-def get_final_judge_agent(model_name: str) -> Agent:
-    """Get or create final judge agent instance.
-
-    Lazy initialization to avoid requiring API keys at import time.
-    Caches agents per model name for reuse.
-
-    Parameters:
-        model_name: Model identifier (e.g., "openai:gpt-4o")
-
-    Returns:
-        Configured Agent instance
-    """
-    if model_name not in _final_judge_agents:
-        _final_judge_agents[model_name] = Agent(
-            model=resolve_model(model_name),
-            deps_type=Deps,
-            output_type=FinalJudgmentOut,
-            retries=2,
-            model_settings=ModelSettings(parallel_tool_calls=False),
-            system_prompt="""You are an expert scientific reviewer synthesizing evidence across multiple documents.
+get_judge_agent = agent_getter(
+    "extraction",
+    "judge",
+    FinalJudgmentOut,
+    Deps,
+    """You are an expert scientific reviewer synthesizing evidence across multiple documents.
 
 Your task is to make a final judgment on whether an entity-entity association
 is valid based on evidence from multiple sources. You will receive:
@@ -86,5 +53,5 @@ Output requirements:
 - Provide detailed rationale referencing specific evidence
 - Acknowledge contradictions or limitations
 - Explain what tipped the balance of judgment""",
-        )
-    return _final_judge_agents[model_name]
+    default_model_settings=ModelSettings(parallel_tool_calls=False),
+)

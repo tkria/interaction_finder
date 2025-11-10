@@ -39,13 +39,13 @@ class PlanGoalsNode(BaseNode[State, Deps, list[SearchResult]]):
 
             # Use goal planner agent
             usage = RunUsage()
-            model_name = ctx.deps.config["llm_model"]
+            # Model configured via get_*_agent(ctx.deps.config)
             prompt = f"""Research topic: {ctx.state.topic}
 
 Keyphrases available: {", ".join(ctx.state.keyphrases)}
 
 Identify subject areas and research domains that should be covered to ensure comprehensive literature discovery."""
-            result = await get_goal_planner_agent(model_name).run(
+            result = await get_goal_planner_agent(ctx.deps.config).run(
                 prompt, deps=ctx.deps, usage=usage
             )
 
@@ -107,8 +107,8 @@ Generate search queries that target unsatisfied subject goals and incorporate th
 
             # Use query generator agent
             usage = RunUsage()
-            model_name = ctx.deps.config["llm_model"]
-            result = await get_query_generator_agent(model_name).run(
+            # Model configured via get_*_agent(ctx.deps.config)
+            result = await get_query_generator_agent(ctx.deps.config).run(
                 prompt, deps=ctx.deps, usage=usage
             )
 
@@ -253,8 +253,8 @@ Select the most relevant results and summarize what subject areas they cover."""
 
             # Use result selector agent
             usage = RunUsage()
-            model_name = ctx.deps.config["llm_model"]
-            result = await get_result_selector_agent(model_name).run(
+            # Model configured via get_*_agent(ctx.deps.config)
+            result = await get_result_selector_agent(ctx.deps.config).run(
                 prompt, deps=ctx.deps, usage=usage
             )
 
@@ -355,8 +355,8 @@ Evaluate coverage and decide whether to continue searching or stop."""
 
             # Use reflector agent
             usage = RunUsage()
-            model_name = ctx.deps.config["llm_model"]
-            result = await get_reflector_agent(model_name).run(
+            # Model configured via get_*_agent(ctx.deps.config)
+            result = await get_reflector_agent(ctx.deps.config).run(
                 prompt, deps=ctx.deps, usage=usage
             )
 

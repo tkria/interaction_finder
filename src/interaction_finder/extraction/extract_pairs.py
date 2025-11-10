@@ -1,51 +1,18 @@
-"""Pair extraction agent.
+"""Module for pair agent."""
 
-Extracts binary entity-entity associations from document text with supporting quotes.
-"""
-
-from pydantic_ai import Agent
 from pydantic_ai.settings import ModelSettings
 
+from interaction_finder.agent_config import agent_getter
 from interaction_finder.extraction.deps import Deps
 from interaction_finder.extraction.models import PairExtractionOut
 
 
-def resolve_model(model_name: str):
-    """Resolve model name to pydantic-ai model specification.
-
-    Parameters:
-        model_name: Model identifier (e.g., "openai:gpt-4o-mini")
-
-    Returns:
-        Model specification for pydantic-ai Agent
-    """
-    return model_name
-
-
-# Cached agent instances by model name
-_pair_extractor_agents: dict[str, Agent] = {}
-
-
-def get_pair_extractor_agent(model_name: str) -> Agent:
-    """Get or create pair extractor agent instance.
-
-    Lazy initialization to avoid requiring API keys at import time.
-    Caches agents per model name for reuse.
-
-    Parameters:
-        model_name: Model identifier (e.g., "openai:gpt-4o-mini")
-
-    Returns:
-        Configured Agent instance
-    """
-    if model_name not in _pair_extractor_agents:
-        _pair_extractor_agents[model_name] = Agent(
-            model=resolve_model(model_name),
-            deps_type=Deps,
-            output_type=PairExtractionOut,
-            retries=2,
-            model_settings=ModelSettings(parallel_tool_calls=False),
-            system_prompt="""You are an expert at identifying biological associations in scientific text.
+get_pair_agent = agent_getter(
+    "extraction",
+    "pair",
+    PairExtractionOut,
+    Deps,
+    """You are an expert at identifying biological associations in scientific text.
 
 Your task: extract binary relationships between biological entities relevant to the given topic.
 
@@ -88,5 +55,5 @@ Always return a complete JSON object with both fields:
 }
 
 **Critical:** Always include both "pairs" and "reasoning" fields. Never return reasoning alone.""",
-        )
-    return _pair_extractor_agents[model_name]
+    default_model_settings=ModelSettings(parallel_tool_calls=False),
+)

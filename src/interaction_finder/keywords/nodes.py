@@ -27,40 +27,6 @@ from interaction_finder.keywords.state import State
 from interaction_finder.search.models import SearchQuery
 
 
-def _get_keywords_model(config: dict) -> str:
-    """Resolve keywords agent model from config.
-
-    Tries in order:
-    1. config["agents"]["keywords"].llm
-    2. config["tools"]["keywords"]["llm_model"]
-    3. Default: "openai:gpt-4o-mini"
-
-    Parameters:
-        config: Configuration dict
-
-    Returns:
-        Model name string
-    """
-    # Try structured agents config
-    agents = config.get("agents", {})
-    if isinstance(agents, dict) and "keywords" in agents:
-        agent_spec = agents["keywords"]
-        if hasattr(agent_spec, "llm") and agent_spec.llm:
-            return agent_spec.llm
-        elif isinstance(agent_spec, dict) and "llm" in agent_spec and agent_spec["llm"]:
-            return agent_spec["llm"]
-
-    # Try tools.keywords.llm_model
-    tools = config.get("tools", {})
-    if isinstance(tools, dict):
-        keywords_cfg = tools.get("keywords", {})
-        if isinstance(keywords_cfg, dict) and "llm_model" in keywords_cfg:
-            return keywords_cfg["llm_model"]
-
-    # Default
-    return "openai:gpt-4o-mini"
-
-
 def _clean_and_rerank_keywords_for_display(
     keywords: list[ScoredKeyword],
     topic: str,
@@ -135,7 +101,7 @@ class ExpandQueryNode(BaseNode[State, Deps, BridgingTermsOut]):
             ctx.state.current_round += 1
             # Use query expander agent
             usage = RunUsage()
-            result = await query_expander_agent.run(
+            result = await get_query_expander_agent(ctx.deps.config).run(
                 f"Generate search queries to find review articles about: {ctx.state.topic}",
                 deps=ctx.deps,
                 usage=usage,
@@ -166,7 +132,9 @@ class SearchNode(BaseNode[State, Deps, BridgingTermsOut]):
             for query_text in ctx.state.search_queries:
                 query = SearchQuery(
                     query=query_text,
-                    max_results=ctx.deps.config.get("max_results_per_query", 20),
+                    max_results=ctx.deps.operational_config.get(
+                        "max_results_per_query", 20
+                    ),
                 )
                 results = await ctx.deps.search_backend.search(query)
                 all_results.extend(results)
@@ -231,13 +199,12 @@ Search Results:
 
 Select the indices of results that are most likely to be valuable review articles."""
             # Use result selector agent
-            model_name = _get_keywords_model(ctx.deps.config)
             usage = RunUsage()
-            result = await get_result_selector_agent(model_name).run(
+            result = await get_result_selector_agent(ctx.deps.config).run(
                 prompt, deps=ctx.deps, usage=usage
             )
             # Get selected results
-            max_to_fetch = ctx.deps.config.get("max_documents_to_fetch", 10)
+            max_to_fetch = ctx.deps.config.tools.keywords.max_documents_to_fetch
             selected_indices = result.output.selected_indices[:max_to_fetch]
             ctx.state.selected_results = [
                 ctx.state.all_search_results[i]
@@ -370,7 +337,9 @@ class ExtractKeywordsNode(BaseNode[State, Deps, BridgingTermsOut]):
             if not resources:
                 logfire.info("No resources available, skipping to finalization")
                 return FinalizeNode()
-            max_keywords = ctx.deps.config.get("max_keywords_per_method", 30)
+            max_keywords = ctx.deps.operational_config.get(
+                "max_keywords_per_method", 30
+            )
             # Track already-processed URLs to avoid re-extraction
             already_processed = set(ctx.state.extracted_keywords.keys())
             new_resources = [r for r in resources if r.id.url not in already_processed]
@@ -432,12 +401,16 @@ class EvaluateKeywordsNode(BaseNode[State, Deps, BridgingTermsOut]):
                 if not resource:
                     continue
                 # Clean, deduplicate, and rerank keywords for LLM review
-                max_keywords_for_llm = ctx.deps.config.get("max_keywords_for_llm", 50)
+                max_keywords_for_llm = ctx.deps.operational_config.get(
+                    "max_keywords_for_llm", 50
+                )
                 keywords_text = _clean_and_rerank_keywords_for_display(
                     keywords, ctx.state.topic, ctx.deps.reranker, max_keywords_for_llm
                 )
                 # Get document context length from config
-                context_chars = ctx.deps.config.get("document_context_chars", 12000)
+                context_chars = ctx.deps.operational_config.get(
+                    "document_context_chars", 12000
+                )
                 # Summarize document with strict filtering instructions
                 summary_prompt = f"""Review this document and identify HIGH-QUALITY bridging terms.
 
@@ -475,11 +448,10 @@ Each bridging term must:
 **Test:** For each term, ask "Would this term appear frequently in papers specifically about {ctx.state.topic}?" If no, exclude it.
 
 Select fewer, higher-quality terms rather than reaching for quantity."""
-                model_name = _get_keywords_model(ctx.deps.config)
                 usage = RunUsage()
-                summary_result = await get_document_summarizer_agent(model_name).run(
-                    summary_prompt, deps=ctx.deps, usage=usage
-                )
+                summary_result = await get_document_summarizer_agent(
+                    ctx.deps.config
+                ).run(summary_prompt, deps=ctx.deps, usage=usage)
                 # Store summary
                 ctx.state.document_summaries.append(summary_result.output)
                 total_bridging += len(summary_result.output.bridging_terms)
@@ -536,9 +508,8 @@ Document Summaries:
 
 Decide whether coverage is sufficient (stop) or more searches are needed (continue)."""
             # Use reflector agent
-            model_name = _get_keywords_model(ctx.deps.config)
             usage = RunUsage()
-            result = await get_reflector_agent(model_name).run(
+            result = await get_reflector_agent(ctx.deps.config).run(
                 prompt, deps=ctx.deps, usage=usage
             )
             # Make decision

@@ -9,6 +9,7 @@ from .resources import (
     ResourceId,
     ResourceQuote,
 )
+from .agent_config import agent_getter, get_agent, clear_agent_cache
 
 __all__ = [
     "PageFetcher",
@@ -19,4 +20,7 @@ __all__ = [
     "ResourcePool",
     "ResourceId",
     "ResourceQuote",
+    "agent_getter",
+    "get_agent",
+    "clear_agent_cache",
 ]

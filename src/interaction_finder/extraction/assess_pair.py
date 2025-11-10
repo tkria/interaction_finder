@@ -1,51 +1,18 @@
-"""Pair assessment agent.
+"""Module for pair_assessor agent."""
 
-Assesses the strength of evidence for a pair's validity in a single document.
-"""
-
-from pydantic_ai import Agent
 from pydantic_ai.settings import ModelSettings
 
+from interaction_finder.agent_config import agent_getter
 from interaction_finder.extraction.deps import Deps
 from interaction_finder.extraction.models import PairEvidenceAssessment
 
 
-def resolve_model(model_name: str):
-    """Resolve model name to pydantic-ai model specification.
-
-    Parameters:
-        model_name: Model identifier (e.g., "openai:gpt-4o-mini")
-
-    Returns:
-        Model specification for pydantic-ai Agent
-    """
-    return model_name
-
-
-# Cached agent instances by model name
-_pair_assessor_agents: dict[str, Agent] = {}
-
-
-def get_pair_assessor_agent(model_name: str) -> Agent:
-    """Get or create pair assessor agent instance.
-
-    Lazy initialization to avoid requiring API keys at import time.
-    Caches agents per model name for reuse.
-
-    Parameters:
-        model_name: Model identifier (e.g., "openai:gpt-4o-mini")
-
-    Returns:
-        Configured Agent instance
-    """
-    if model_name not in _pair_assessor_agents:
-        _pair_assessor_agents[model_name] = Agent(
-            model=resolve_model(model_name),
-            deps_type=Deps,
-            output_type=PairEvidenceAssessment,
-            retries=2,
-            model_settings=ModelSettings(parallel_tool_calls=False),
-            system_prompt="""You are an expert at evaluating evidence for biological associations in scientific text.
+get_pair_assessor_agent = agent_getter(
+    "extraction",
+    "pair_assessor",
+    PairEvidenceAssessment,
+    Deps,
+    """You are an expert at evaluating evidence for biological associations in scientific text.
 
 Your task is to assess whether the provided quotes from a single document
 support the validity of a specific entity-entity association.
@@ -78,5 +45,5 @@ Output requirements:
 - Reference specific quote indices that support your assessment
 - Consider both pair-specific quotes and relevant entity mentions
 - Be honest about limitations or ambiguities in the evidence""",
-        )
-    return _pair_assessor_agents[model_name]
+    default_model_settings=ModelSettings(parallel_tool_calls=False),
+)

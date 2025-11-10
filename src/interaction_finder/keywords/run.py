@@ -100,11 +100,7 @@ async def run_keyword_research(
                 reranker=reranker,
                 extractors=extractors,
                 resource_pool=resource_pool,
-                config={
-                    "max_results_per_query": kw_config.max_results_per_query,
-                    "max_documents_to_fetch": kw_config.max_documents_to_fetch,
-                    "max_keywords_per_method": kw_config.max_keywords_per_method,
-                },
+                config=config,
             )
             # Create state
             state = State(topic=topic, max_rounds=kw_config.max_rounds)

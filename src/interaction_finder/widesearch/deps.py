@@ -11,6 +11,7 @@ import httpx
 
 from interaction_finder.resources import ResourcePool
 from interaction_finder.search.models import SearchBackend
+from interaction_finder.settings import IfetcherConfig
 from interaction_finder.widesearch.reranker import Reranker
 
 
@@ -33,7 +34,7 @@ class Deps:
 
     http_client: httpx.AsyncClient  # HTTP client for API calls
     search_backend: SearchBackend  # Search backend (PubMed, Perplexica, OpenAI)
-    reranker: Reranker  # Semantic reranker for search results
+    reranker: Reranker | None  # Semantic reranker (None if reranking disabled)
     resource_pool: ResourcePool  # Document pool with URL normalization
-    config: dict[str, Any]  # Configuration dictionary (widesearch settings)
+    config: IfetcherConfig  # Full configuration object
     progress: ProgressProtocol | None = None  # Optional progress counter

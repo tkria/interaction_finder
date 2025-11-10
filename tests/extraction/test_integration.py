@@ -184,11 +184,11 @@ async def test_entity_assessments_influence_pair_judgments():
         from interaction_finder.extraction.nodes import ExtractFromDocumentsNode
         from interaction_finder.extraction.state import State
         from interaction_finder.extraction.deps import Deps
+        from interaction_finder.settings import IfetcherConfig
 
         deps = Deps(
             resource_pool=pool,
-            extraction_model="openai:gpt-4o-mini",
-            judge_model="openai:gpt-4o",
+            config=IfetcherConfig(),
             logger=logging.getLogger(__name__),
         )
 

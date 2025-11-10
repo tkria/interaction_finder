@@ -54,10 +54,8 @@ def test_logger():
 
 @pytest.fixture
 def sample_config():
-    """Create sample configuration for testing."""
-    return {
-        "entity_model": "openai:gpt-4o-mini",
-        "pair_model": "openai:gpt-4o-mini",
-        "assessor_model": "openai:gpt-4o-mini",
-        "judge_model": "openai:gpt-4o",
-    }
+    """Create sample IfetcherConfig for testing."""
+    from interaction_finder.settings import IfetcherConfig
+
+    # Return default config (agents can be configured via config.toml if needed)
+    return IfetcherConfig()

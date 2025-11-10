@@ -96,11 +96,7 @@ async def test_full_pipeline_single_round():
                 search_backend=search_backend,
                 reranker=reranker,
                 resource_pool=resource_pool,
-                config={
-                    "results_per_query": 50,
-                    "rerank_top_k": 20,
-                    "llm_model": "openai:gpt-4o-mini",
-                },
+                config=IfetcherConfig(), operational_config=IfetcherConfig(),
             )
 
             state = State(
@@ -151,11 +147,7 @@ async def test_pipeline_reaches_max_rounds():
                 search_backend=search_backend,
                 reranker=reranker,
                 resource_pool=resource_pool,
-                config={
-                    "results_per_query": 50,
-                    "rerank_top_k": 20,
-                    "llm_model": "openai:gpt-4o-mini",
-                },
+                config=IfetcherConfig(), operational_config=IfetcherConfig(),
             )
 
             state = State(
@@ -193,11 +185,7 @@ async def test_pipeline_handles_no_results():
                 search_backend=search_backend,
                 reranker=reranker,
                 resource_pool=resource_pool,
-                config={
-                    "results_per_query": 50,
-                    "rerank_top_k": 20,
-                    "llm_model": "openai:gpt-4o-mini",
-                },
+                config=IfetcherConfig(), operational_config=IfetcherConfig(),
             )
 
             state = State(
@@ -243,11 +231,7 @@ async def test_pipeline_without_reranking():
                 search_backend=search_backend,
                 reranker=reranker,
                 resource_pool=resource_pool,
-                config={
-                    "results_per_query": 50,
-                    "enable_reranking": False,  # Disable reranking
-                    "llm_model": "openai:gpt-4o-mini",
-                },
+                config=IfetcherConfig(), operational_config=IfetcherConfig(),
             )
 
             state = State(
@@ -295,11 +279,7 @@ async def test_resource_pool_registration():
                 search_backend=search_backend,
                 reranker=reranker,
                 resource_pool=resource_pool,
-                config={
-                    "results_per_query": 50,
-                    "rerank_top_k": 20,
-                    "llm_model": "openai:gpt-4o-mini",
-                },
+                config=IfetcherConfig(), operational_config=IfetcherConfig(),
             )
 
             state = State(

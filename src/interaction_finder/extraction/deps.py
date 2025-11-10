@@ -8,6 +8,7 @@ import logging
 from dataclasses import dataclass
 
 from interaction_finder.resources import ResourcePool
+from interaction_finder.settings import IfetcherConfig
 
 
 @dataclass
@@ -16,12 +17,10 @@ class Deps:
 
     Attributes:
         resource_pool: Document storage with provenance tracking
-        extraction_model: LLM model for entity and pair extraction/assessment
-        judge_model: LLM model for final judgment on pairs
+        config: Full configuration object
         logger: Logger for warnings and debugging
     """
 
     resource_pool: ResourcePool
-    extraction_model: str
-    judge_model: str
+    config: IfetcherConfig
     logger: logging.Logger

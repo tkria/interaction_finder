@@ -5,11 +5,9 @@ Pydantic models. Agents are configured with appropriate system prompts
 and output types.
 """
 
-from typing import Type
-
-from pydantic import BaseModel
 from pydantic_ai import Agent
 
+from interaction_finder.agent_config import get_agent
 from interaction_finder.keywords.deps import Deps
 from interaction_finder.keywords.models import (
     DocumentSummaryOut,
@@ -18,72 +16,25 @@ from interaction_finder.keywords.models import (
     ReflectionOut,
     ResultSelectionOut,
 )
+from interaction_finder.settings import IfetcherConfig
 
 
-def resolve_model(model_name: str):
-    """Resolve model name to pydantic-ai model specification.
-
-    Handles both cloud models (e.g., "openai:gpt-4o") and local models.
-    For simplicity, we pass model names directly and rely on pydantic-ai's
-    built-in resolution.
-
-    Parameters:
-        model_name: str — model identifier (e.g., "openai:gpt-4o-mini")
-
-    Returns:
-        Model specification for pydantic-ai Agent
-    """
-    # For now, pass through model names directly
-    # pydantic-ai handles cloud model resolution automatically
-    return model_name
-
-
-def mk_agent(
-    model_name: str,
-    output: Type[BaseModel],
-    *,
-    system_prompt: str,
-) -> Agent[Deps, BaseModel]:
-    """Create an agent with consistent configuration.
-
-    Parameters:
-        model_name: str — model to use (e.g., "openai:gpt-4o-mini")
-        output: Type[BaseModel] — Pydantic model for structured output
-        system_prompt: str — role-specific system prompt
-
-    Returns:
-        Configured Agent instance
-    """
-    return Agent(
-        model=resolve_model(model_name),
-        deps_type=Deps,
-        output_type=output,
-        retries=2,
-        system_prompt=system_prompt,
-    )
-
-
-# Cached agent instances by (agent_type, model_name)
-_agent_cache: dict[tuple[str, str], Agent] = {}
-
-
-def get_query_expander_agent(model_name: str) -> Agent:
+def get_query_expander_agent(config: IfetcherConfig) -> Agent:
     """Get or create query expander agent.
 
-    Lazy initialization with per-model caching.
-
     Parameters:
-        model_name: Model identifier
+        config: Configuration object with agent settings
 
     Returns:
         Configured Agent instance
     """
-    cache_key = ("query_expander", model_name)
-    if cache_key not in _agent_cache:
-        _agent_cache[cache_key] = mk_agent(
-            model_name,
-            QueryExpansionOut,
-            system_prompt="""You are an expert at generating search queries for finding review articles and comprehensive summaries.
+    return get_agent(
+        config,
+        "keywords",
+        "query_expander",
+        QueryExpansionOut,
+        Deps,
+        """You are an expert at generating search queries for finding review articles and comprehensive summaries.
 
 Your goal is to create queries that will find review articles, meta-analyses, and comprehensive summaries about the given topic. These articles should discuss the topic broadly and mention related concepts that could serve as "bridging terms" for literature search.
 
@@ -95,27 +46,25 @@ Guidelines:
 - Generate 1-5 queries, prioritizing quality over quantity
 
 Focus on finding articles that will help identify bridging terms: related concepts, alternative approaches, and connected research areas that don't appear in the original topic name.""",
-        )
-    return _agent_cache[cache_key]
+    )
 
 
-def get_result_selector_agent(model_name: str) -> Agent:
+def get_result_selector_agent(config: IfetcherConfig) -> Agent:
     """Get or create result selector agent.
 
-    Lazy initialization with per-model caching.
-
     Parameters:
-        model_name: Model identifier
+        config: Configuration object with agent settings
 
     Returns:
         Configured Agent instance
     """
-    cache_key = ("result_selector", model_name)
-    if cache_key not in _agent_cache:
-        _agent_cache[cache_key] = mk_agent(
-            model_name,
-            ResultSelectionOut,
-            system_prompt="""You are an expert at identifying review articles and comprehensive summaries from search results.
+    return get_agent(
+        config,
+        "keywords",
+        "result_selector",
+        ResultSelectionOut,
+        Deps,
+        """You are an expert at identifying review articles and comprehensive summaries from search results.
 
 Your task is to select which search results are most likely to be valuable review articles that will help identify bridging terms. Review the titles and snippets to make your selection.
 
@@ -127,27 +76,25 @@ Selection criteria:
 - Look for articles that discuss related areas and connections
 
 Return the indices of results to fetch, ordered by priority (most valuable first). Typical selections are 5-10 results, but adjust based on quality.""",
-        )
-    return _agent_cache[cache_key]
+    )
 
 
-def get_keyword_evaluator_agent(model_name: str) -> Agent:
+def get_keyword_evaluator_agent(config: IfetcherConfig) -> Agent:
     """Get or create keyword evaluator agent.
 
-    Lazy initialization with per-model caching.
-
     Parameters:
-        model_name: Model identifier
+        config: Configuration object with agent settings
 
     Returns:
         Configured Agent instance
     """
-    cache_key = ("keyword_evaluator", model_name)
-    if cache_key not in _agent_cache:
-        _agent_cache[cache_key] = mk_agent(
-            model_name,
-            KeywordEvaluationOut,
-            system_prompt="""You are an expert at identifying useful bridging terms for literature search.
+    return get_agent(
+        config,
+        "keywords",
+        "keyword_evaluator",
+        KeywordEvaluationOut,
+        Deps,
+        """You are an expert at identifying useful bridging terms for literature search.
 
 Given a document about a topic and keywords extracted by various algorithms, your job is to:
 1. Identify which keywords would be useful as "bridging terms" for finding related literature
@@ -166,27 +113,25 @@ Avoid selecting:
 - Acronyms without clear meaning
 
 Focus on terms that would genuinely help expand literature search coverage.""",
-        )
-    return _agent_cache[cache_key]
+    )
 
 
-def get_document_summarizer_agent(model_name: str) -> Agent:
+def get_document_summarizer_agent(config: IfetcherConfig) -> Agent:
     """Get or create document summarizer agent.
 
-    Lazy initialization with per-model caching.
-
     Parameters:
-        model_name: Model identifier
+        config: Configuration object with agent settings
 
     Returns:
         Configured Agent instance
     """
-    cache_key = ("document_summarizer", model_name)
-    if cache_key not in _agent_cache:
-        _agent_cache[cache_key] = mk_agent(
-            model_name,
-            DocumentSummaryOut,
-            system_prompt="""You are an expert at summarizing scientific documents and identifying bridging terms for literature search expansion.
+    return get_agent(
+        config,
+        "keywords",
+        "document_summarizer",
+        DocumentSummaryOut,
+        Deps,
+        """You are an expert at summarizing scientific documents and identifying bridging terms for literature search expansion.
 
 **Core principle:** Bridging terms should help researchers find MORE papers about their target research topic using different search angles.
 
@@ -201,27 +146,25 @@ Given a document, provide:
 4. Assessment of what new coverage this document adds
 
 Focus on identifying concepts that connect to the target topic, not just the document's specific focus.""",
-        )
-    return _agent_cache[cache_key]
+    )
 
 
-def get_reflector_agent(model_name: str) -> Agent:
+def get_reflector_agent(config: IfetcherConfig) -> Agent:
     """Get or create reflector agent.
 
-    Lazy initialization with per-model caching.
-
     Parameters:
-        model_name: Model identifier
+        config: Configuration object with agent settings
 
     Returns:
         Configured Agent instance
     """
-    cache_key = ("reflector", model_name)
-    if cache_key not in _agent_cache:
-        _agent_cache[cache_key] = mk_agent(
-            model_name,
-            ReflectionOut,
-            system_prompt="""You are an expert at assessing literature search coverage and deciding when sufficient coverage has been achieved.
+    return get_agent(
+        config,
+        "keywords",
+        "reflector",
+        ReflectionOut,
+        Deps,
+        """You are an expert at assessing literature search coverage and deciding when sufficient coverage has been achieved.
 
 Given summaries of all documents processed so far, decide whether to continue searching or stop.
 
@@ -240,5 +183,4 @@ Decision criteria for STOP:
 If continuing, suggest new search angles based on gaps identified in the coverage so far.
 
 Be thoughtful but not overly perfectionistic. The goal is reasonable coverage, not exhaustive coverage.""",
-        )
-    return _agent_cache[cache_key]
+    )

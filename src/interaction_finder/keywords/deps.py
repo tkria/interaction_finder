@@ -10,6 +10,7 @@ from interaction_finder.keywords.extractors import KeywordExtractor
 from interaction_finder.keywords.reranker import Reranker
 from interaction_finder.resources import ResourcePool
 from interaction_finder.search.models import SearchBackend
+from interaction_finder.settings import IfetcherConfig
 
 
 @dataclass
@@ -26,4 +27,4 @@ class Deps:
     reranker: Reranker  # Semantic reranker for search results
     extractors: dict[str, KeywordExtractor]  # name -> extractor instance
     resource_pool: ResourcePool  # Document pool with provenance tracking
-    config: dict[str, Any]  # Configuration dictionary
+    config: IfetcherConfig  # Full configuration object

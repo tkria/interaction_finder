@@ -33,13 +33,40 @@ class IfetcherConfig(BaseModel):
         instrument: bool = Field(
             True, description="Enable instrumentation and logging for this agent"
         )
-        prompt: str | None = Field(
-            None, description="Custom prompt template for the agent"
+        system_prompt: str | None = Field(
+            None, description="Custom system prompt override for the agent"
+        )
+        model_settings: dict[str, Any] | None = Field(
+            None, description="Model-specific settings (e.g., parallel_tool_calls)"
         )
 
-    agents: dict[str, AgentSpec] = Field(
+        def merge_with_parent(
+            self, parent: "IfetcherConfig.AgentSpec | None"
+        ) -> "IfetcherConfig.AgentSpec":
+            """Merge this spec with a parent spec, preferring non-None values from self.
+
+            Parameters:
+                parent: Parent AgentSpec to inherit from (or None)
+
+            Returns:
+                New AgentSpec with merged values
+            """
+            if parent is None:
+                return self
+            # Create dict with parent values, override with self's non-None values
+            merged_data = {}
+            for field_name in self.model_fields:
+                self_value = getattr(self, field_name)
+                parent_value = getattr(parent, field_name)
+                # Use self's value if not None, otherwise inherit from parent
+                merged_data[field_name] = (
+                    self_value if self_value is not None else parent_value
+                )
+            return IfetcherConfig.AgentSpec.model_validate(merged_data)
+
+    agents: dict[str, Any] | AgentSpec = Field(
         default_factory=dict,
-        description="Configuration for different AI agents by name",
+        description="Configuration for AI agents (supports multi-tier: agents._, agents.module._, agents.module.agent)",
     )
 
     class Tools(BaseModel):
@@ -234,6 +261,90 @@ class IfetcherConfig(BaseModel):
         if self._dir:
             return (self._dir / path).resolve()
         return Path.cwd() / path
+
+    def resolve_agent_config(self, module: str, agent: str | None = None) -> AgentSpec:
+        """Recursively resolve agent configuration with fallback chain.
+
+        Resolution order (most specific to least specific):
+        1. agents.module.agent (specific agent override)
+        2. agents.module._ (module-level default with underscore)
+        3. agents.module (module-level default without underscore, if AgentSpec)
+        4. agents._ (global default with underscore)
+        5. agents (global default if AgentSpec)
+        6. Empty AgentSpec (all None values)
+
+        Note: Both underscore and non-underscore versions are checked for defaults
+        to provide flexibility in config style. agents._ and agents are equivalent
+        for global defaults, as are agents.module._ and agents.module for module defaults.
+
+        Parameters:
+            module: Module name (e.g., "keywords", "widesearch", "extraction")
+            agent: Optional agent name (e.g., "query_expander", "judge")
+
+        Returns:
+            Merged AgentSpec with inheritance from parent levels
+
+        Example:
+            >>> config.resolve_agent_config("extraction", "judge")
+            # Returns merged spec: agent-specific → module-level → global
+        """
+        # Start with empty spec (all None values)
+        global_spec = IfetcherConfig.AgentSpec()
+        # Get global defaults (check both _ and root level)
+        if isinstance(self.agents, IfetcherConfig.AgentSpec):
+            global_spec = self.agents
+        elif isinstance(self.agents, dict):
+            if "_" in self.agents:
+                global_val = self.agents["_"]
+                if isinstance(global_val, dict):
+                    global_spec = IfetcherConfig.AgentSpec.model_validate(global_val)
+                elif isinstance(global_val, IfetcherConfig.AgentSpec):
+                    global_spec = global_val
+        # Get module-level config
+        module_spec = None
+        if isinstance(self.agents, dict) and module in self.agents:
+            module_val = self.agents[module]
+            # Check if module value is an AgentSpec (used as module default)
+            if isinstance(module_val, dict):
+                # Check for _ key for explicit module default
+                if "_" in module_val:
+                    underscore_val = module_val["_"]
+                    if isinstance(underscore_val, dict):
+                        module_spec = IfetcherConfig.AgentSpec.model_validate(
+                            underscore_val
+                        )
+                    elif isinstance(underscore_val, IfetcherConfig.AgentSpec):
+                        module_spec = underscore_val
+                # If no _ key and no agent specified, treat module value as implicit default
+                elif agent is None:
+                    # Try to parse entire module dict as AgentSpec
+                    try:
+                        module_spec = IfetcherConfig.AgentSpec.model_validate(
+                            module_val
+                        )
+                    except:
+                        pass  # Not a valid AgentSpec, continue
+            elif isinstance(module_val, IfetcherConfig.AgentSpec):
+                module_spec = module_val
+        # Merge module spec with global spec
+        current_spec = (
+            module_spec.merge_with_parent(global_spec) if module_spec else global_spec
+        )
+        # If agent is specified, get agent-specific config
+        if agent is not None:
+            agent_spec = None
+            if isinstance(self.agents, dict) and module in self.agents:
+                module_val = self.agents[module]
+                if isinstance(module_val, dict) and agent in module_val:
+                    agent_val = module_val[agent]
+                    if isinstance(agent_val, dict):
+                        agent_spec = IfetcherConfig.AgentSpec.model_validate(agent_val)
+                    elif isinstance(agent_val, IfetcherConfig.AgentSpec):
+                        agent_spec = agent_val
+            # Merge agent spec with module/global spec
+            if agent_spec:
+                current_spec = agent_spec.merge_with_parent(current_spec)
+        return current_spec
 
     @staticmethod
     def apply_overrides(

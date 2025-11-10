@@ -5,12 +5,11 @@ Pydantic models. Agents are configured with appropriate system prompts
 and output types.
 """
 
-from typing import Type
-
-from pydantic import BaseModel
 from pydantic_ai import Agent
 from pydantic_ai.settings import ModelSettings
 
+from interaction_finder.agent_config import get_agent
+from interaction_finder.settings import IfetcherConfig
 from interaction_finder.widesearch.deps import Deps
 from interaction_finder.widesearch.models import (
     QueryGenerationOut,
@@ -20,72 +19,22 @@ from interaction_finder.widesearch.models import (
 )
 
 
-def resolve_model(model_name: str):
-    """Resolve model name to pydantic-ai model specification.
-
-    Handles both cloud models (e.g., "openai:gpt-4o") and local models.
-    For simplicity, we pass model names directly and rely on pydantic-ai's
-    built-in resolution.
-
-    Parameters:
-        model_name: str — model identifier (e.g., "openai:gpt-4o-mini")
-
-    Returns:
-        Model specification for pydantic-ai Agent
-    """
-    # Pass through model names directly - pydantic-ai handles cloud model resolution
-    return model_name
-
-
-def mk_agent(
-    model_name: str,
-    output: Type[BaseModel],
-    *,
-    system_prompt: str,
-    model_settings: ModelSettings | None = None,
-) -> Agent[Deps, BaseModel]:
-    """Create an agent with consistent configuration.
-
-    Parameters:
-        model_name: str — model to use (e.g., "openai:gpt-4o-mini")
-        output: Type[BaseModel] — Pydantic model for structured output
-        system_prompt: str — role-specific system prompt
-        model_settings: ModelSettings | None — optional model-specific settings
-
-    Returns:
-        Configured Agent instance
-    """
-    return Agent(
-        model=resolve_model(model_name),
-        deps_type=Deps,
-        output_type=output,
-        retries=2,
-        system_prompt=system_prompt,
-        model_settings=model_settings,
-    )
-
-
-# Cached agent instances by (agent_type, model_name)
-_agent_cache: dict[tuple[str, str], Agent] = {}
-
-
-def get_goal_planner_agent(model_name: str) -> Agent:
+def get_goal_planner_agent(config: IfetcherConfig) -> Agent:
     """Get or create goal planner agent.
 
-    Lazy initialization with per-model caching.
-
     Parameters:
-        model_name: Model identifier
+        config: Configuration object with agent settings
 
     Returns:
         Configured Agent instance
     """
-    cache_key = ("goal_planner", model_name)
-    if cache_key not in _agent_cache:
-        _agent_cache[cache_key] = mk_agent(
-            model_name,
-            SubjectGoalsOut,
-            system_prompt="""You are an expert research strategist planning comprehensive literature searches.
+    return get_agent(
+        config,
+        "widesearch",
+        "goal_planner",
+        SubjectGoalsOut,
+        Deps,
+        """You are an expert research strategist planning comprehensive literature searches.
 
 Your task is to identify subject areas and research domains that should be covered to ensure comprehensive literature discovery on a given topic.
 
@@ -101,33 +50,25 @@ Guidelines for Comprehensive Coverage:
 - Aim for 8-15 well-defined subject goals that span the research landscape
 
 Be ambitious about coverage - it's better to identify more goals that guide thorough exploration than to miss important research areas. Your goals should guide query generation to ensure diverse, comprehensive coverage without drifting into irrelevance.""",
-        )
-    return _agent_cache[cache_key]
+    )
 
 
-def get_query_generator_agent(model_name: str) -> Agent:
+def get_query_generator_agent(config: IfetcherConfig) -> Agent:
     """Get or create query generator agent.
 
-    Lazy initialization with per-model caching.
-
-    Note: Parallel tool calls are disabled because we want a single cohesive
-    set of queries rather than multiple independent query generation attempts.
-    With parallel_tool_calls=True, the LLM may make multiple final_result calls
-    but only the first is captured.
-
     Parameters:
-        model_name: Model identifier
+        config: Configuration object with agent settings
 
     Returns:
         Configured Agent instance
     """
-    cache_key = ("query_generator", model_name)
-    if cache_key not in _agent_cache:
-        _agent_cache[cache_key] = mk_agent(
-            model_name,
-            QueryGenerationOut,
-            model_settings=ModelSettings(parallel_tool_calls=False),
-            system_prompt="""You are an expert at generating search queries for academic literature discovery.
+    return get_agent(
+        config,
+        "widesearch",
+        "query_generator",
+        QueryGenerationOut,
+        Deps,
+        """You are an expert at generating search queries for academic literature discovery.
 
 Your task is to create diverse, targeted search queries that will find relevant papers and articles. You will be given:
 - A research topic
@@ -172,27 +113,26 @@ Query Generation Guidelines:
 - Avoid redundancy with previous queries
 
 IMPORTANT: Return ALL queries in a single structured response. Do not create multiple separate responses for different complexity levels.""",
-        )
-    return _agent_cache[cache_key]
+        default_model_settings=ModelSettings(parallel_tool_calls=False),
+    )
 
 
-def get_result_selector_agent(model_name: str) -> Agent:
+def get_result_selector_agent(config: IfetcherConfig) -> Agent:
     """Get or create result selector agent.
 
-    Lazy initialization with per-model caching.
-
     Parameters:
-        model_name: Model identifier
+        config: Configuration object with agent settings
 
     Returns:
         Configured Agent instance
     """
-    cache_key = ("result_selector", model_name)
-    if cache_key not in _agent_cache:
-        _agent_cache[cache_key] = mk_agent(
-            model_name,
-            ResultSelectionOut,
-            system_prompt="""You are an expert at evaluating search results for relevance and coverage.
+    return get_agent(
+        config,
+        "widesearch",
+        "result_selector",
+        ResultSelectionOut,
+        Deps,
+        """You are an expert at evaluating search results for relevance and coverage.
 
 Your task is to select which search results are most relevant to the research topic and summarize what subject areas they cover.
 
@@ -210,27 +150,25 @@ Coverage summary requirements:
 - Be specific about what aspects of the topic these results address
 
 Your selection and summary will guide the reflection process to determine if more searching is needed.""",
-        )
-    return _agent_cache[cache_key]
+    )
 
 
-def get_reflector_agent(model_name: str) -> Agent:
+def get_reflector_agent(config: IfetcherConfig) -> Agent:
     """Get or create reflector agent.
 
-    Lazy initialization with per-model caching.
-
     Parameters:
-        model_name: Model identifier
+        config: Configuration object with agent settings
 
     Returns:
         Configured Agent instance
     """
-    cache_key = ("reflector", model_name)
-    if cache_key not in _agent_cache:
-        _agent_cache[cache_key] = mk_agent(
-            model_name,
-            ReflectionOut,
-            system_prompt="""You are an expert at evaluating literature search coverage and deciding when sufficient breadth has been achieved.
+    return get_agent(
+        config,
+        "widesearch",
+        "reflector",
+        ReflectionOut,
+        Deps,
+        """You are an expert at evaluating literature search coverage and deciding when sufficient breadth has been achieved.
 
 Your task is to reflect on search results collected so far and decide whether to continue searching or stop.
 
@@ -262,5 +200,4 @@ Decision guidelines for WHEN TO STOP:
 - Stop if we've reached the maximum configured search rounds
 
 IMPORTANT: Require strong evidence before stopping. "Adequate coverage" is not sufficient - aim for "comprehensive coverage" with diverse result types and sufficient volume (aim for 50+ unique results for most research topics). Be thorough rather than conservative.""",
-        )
-    return _agent_cache[cache_key]
+    )

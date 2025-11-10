@@ -45,6 +45,17 @@ uv run interaction-finder widesearch keywords.json "pulmonary arterial hypertens
 uv run interaction-finder extract searches.json "PAH genetics" -e gene -e disease -o results.json
 ```
 
+**Agent Configuration**: Configure LLM models for different pipeline stages:
+
+```bash
+# Override agent models via CLI
+uv run interaction-finder extract searches.json "topic" -e gene \
+  -O agents.extraction.judge.llm=openai:gpt-4o
+
+# Use configuration modes
+uv run interaction-finder widesearch keywords.json "topic" -m development
+```
+
 **Additional Commands**:
 ```bash
 # Fetch and cache web content
@@ -180,11 +191,37 @@ path = config.abspath("training_data/{term}.jsonl", term="BRCA1")
 
 **Key configuration sections**:
 - `tools.search` - Search backend configuration (PubMed, Perplexica, OpenAI)
-- `tools.keywords` - Keyword extraction parameters (algorithms, LLM model, max rounds)
+- `tools.keywords` - Keyword extraction parameters (algorithms, max rounds)
 - `tools.widesearch` - Wide search parameters (max rounds, reranking, backends)
 - `tools.reverse_search` - Reverse search configuration (query construction, clustering)
-- `agents.*` - LLM agent specifications for each pipeline stage
+- `agents.*` - **Multi-tier LLM agent configuration** (see below)
 - `output.*` - Cache paths and output locations
+
+### Multi-Tier Agent Configuration
+
+Agents use hierarchical configuration with fallback: `agents.module.agent` → `agents.module._` → `agents._` → code default
+
+```toml
+# config.toml example
+[agents._]                      # Global default
+llm = "openai:gpt-4o-mini"
+
+[agents.extraction.judge]      # Individual override
+llm = "openai:gpt-4o"
+```
+
+**Agent names**: keywords (`query_expander`, `result_selector`, `keyword_evaluator`, `document_summarizer`, `reflector`), widesearch (`goal_planner`, `query_generator`, `result_selector`, `reflector`), extraction (`entity`, `entity_assessor`, `pair`, `pair_assessor`, `judge`)
+
+**For developers** - define agents with `agent_getter()`:
+```python
+from interaction_finder.agent_config import agent_getter
+
+get_entity_agent = agent_getter(
+    "extraction", "entity", EntityExtractionOut, Deps,
+    """You are an expert...""",
+)
+# Usage: agent = get_entity_agent(ctx.deps.config)
+```
 
 ## Testing Strategy
 

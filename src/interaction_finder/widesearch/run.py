@@ -74,19 +74,10 @@ async def run_widesearch(
     # Extract widesearch config
     ws_config = config.tools.widesearch
 
-    # Build config dict for pipeline
-    pipeline_config: dict[str, Any] = {
-        "results_per_query": ws_config.results_per_query,
-        "rerank_top_k": ws_config.rerank_top_k,
-        "enable_reranking": (
-            enable_reranking
-            if enable_reranking is not None
-            else ws_config.enable_reranking
-        ),
-        "llm_model": ws_config.llm_model,
-    }
-
-    # Determine max_rounds
+    # Resolve effective values (parameter overrides take precedence)
+    effective_enable_reranking = (
+        enable_reranking if enable_reranking is not None else ws_config.enable_reranking
+    )
     effective_max_rounds = (
         max_rounds if max_rounds is not None else ws_config.max_rounds
     )
@@ -95,11 +86,13 @@ async def run_widesearch(
     if resource_pool is None:
         resource_pool = ResourcePool()
 
-    # Create reranker
-    reranker = Reranker(
-        model_name=ws_config.reranker_model,
-        device=ws_config.reranker_device,
-    )
+    # Create reranker if enabled
+    reranker = None
+    if effective_enable_reranking:
+        reranker = Reranker(
+            model_name=ws_config.reranker_model,
+            device=ws_config.reranker_device,
+        )
 
     # Handle HTTP client
     own_client = http_client is None
@@ -113,7 +106,7 @@ async def run_widesearch(
             search_backend=search_backend,
             reranker=reranker,
             resource_pool=resource_pool,
-            config=pipeline_config,
+            config=config,
             progress=progress,
         )
 
@@ -189,19 +182,10 @@ async def run_widesearch_with_checkpoint(
     # Extract widesearch config
     ws_config = config.tools.widesearch
 
-    # Build config dict for pipeline
-    pipeline_config: dict[str, Any] = {
-        "results_per_query": ws_config.results_per_query,
-        "rerank_top_k": ws_config.rerank_top_k,
-        "enable_reranking": (
-            enable_reranking
-            if enable_reranking is not None
-            else ws_config.enable_reranking
-        ),
-        "llm_model": ws_config.llm_model,
-    }
-
-    # Determine max_rounds
+    # Resolve effective values (parameter overrides take precedence)
+    effective_enable_reranking = (
+        enable_reranking if enable_reranking is not None else ws_config.enable_reranking
+    )
     effective_max_rounds = (
         max_rounds if max_rounds is not None else ws_config.max_rounds
     )
@@ -212,7 +196,7 @@ async def run_widesearch_with_checkpoint(
 
     # Create reranker only if reranking is enabled
     reranker = None
-    if pipeline_config["enable_reranking"]:
+    if effective_enable_reranking:
         reranker = Reranker(
             model_name=ws_config.reranker_model,
             device=ws_config.reranker_device,
@@ -230,7 +214,7 @@ async def run_widesearch_with_checkpoint(
             search_backend=search_backend,
             reranker=reranker,
             resource_pool=resource_pool,
-            config=pipeline_config,
+            config=config,
             progress=progress,
         )
 

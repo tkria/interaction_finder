@@ -1,0 +1,123 @@
+"""Test that SearchResult metadata is preserved through the pipeline.
+
+Regression test for bug where ReflectNode was creating new SearchResult
+objects with empty titles instead of retrieving the stored objects.
+"""
+
+import pytest
+from unittest.mock import AsyncMock, MagicMock
+
+from interaction_finder.search.models import SearchQuery, SearchResult, SearchBackend
+from interaction_finder.widesearch import run_widesearch
+
+
+class MockSearchBackend(SearchBackend):
+    """Mock search backend that returns results with full metadata."""
+
+    def __init__(self, results_per_query=5):
+        super().__init__()
+        self.results_per_query = results_per_query
+        self.search_count = 0
+
+    @property
+    def name(self) -> str:
+        return "mock"
+
+    async def search(self, query: SearchQuery) -> list[SearchResult]:
+        """Return mock results with titles, snippets, and relevance."""
+        self.search_count += 1
+        results = []
+        for i in range(min(query.max_results, self.results_per_query)):
+            idx = self.search_count * 100 + i
+            results.append(
+                SearchResult(
+                    title=f"Test Article {idx}: {query.query[:30]}",
+                    url=f"https://example.com/article/{idx}",
+                    snippet=f"This is a snippet for article {idx} about {query.query}",
+                    relevance=0.9 - (i * 0.1),
+                )
+            )
+        return results
+
+    def healthy(self) -> bool:
+        return True
+
+
+@pytest.mark.asyncio
+async def test_search_result_metadata_preserved():
+    """Test that titles, snippets, and relevance are preserved in final results."""
+    backend = MockSearchBackend(results_per_query=3)
+
+    results = await run_widesearch(
+        topic="test topic",
+        keyphrases=["keyword1", "keyword2"],
+        search_backend=backend,
+        max_rounds=1,  # Single round to simplify
+        enable_reranking=False,
+    )
+
+    # Should have at least some results
+    assert len(results) > 0, "Expected some results from widesearch"
+
+    # Check that metadata is preserved
+    for result in results:
+        assert result.title != "", f"Title should not be empty for {result.url}"
+        assert result.title.startswith("Test Article"), (
+            f"Expected proper title, got: {result.title}"
+        )
+        assert result.snippet is not None, (
+            f"Snippet should not be None for {result.url}"
+        )
+        assert "snippet for article" in result.snippet
+        assert result.relevance is not None, f"Relevance should not be None"
+        assert 0.0 <= result.relevance <= 1.0
+
+
+@pytest.mark.asyncio
+async def test_max_rounds_metadata_preserved():
+    """Test metadata preservation when max_rounds is reached."""
+    backend = MockSearchBackend(results_per_query=2)
+
+    results = await run_widesearch(
+        topic="test topic",
+        keyphrases=["keyword1"],
+        search_backend=backend,
+        max_rounds=2,  # Force max_rounds termination
+        enable_reranking=False,
+    )
+
+    assert len(results) > 0
+
+    # Verify all results have metadata
+    for result in results:
+        assert result.title != "", f"Title empty after max_rounds: {result.url}"
+        assert result.snippet is not None
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_metadata_preserved():
+    """Test that checkpoint results preserve metadata."""
+    from interaction_finder.widesearch import run_widesearch_with_checkpoint
+
+    backend = MockSearchBackend(results_per_query=3)
+
+    checkpoint = await run_widesearch_with_checkpoint(
+        topic="test topic",
+        keyphrases=["keyword1"],
+        search_backend=backend,
+        max_rounds=1,
+        enable_reranking=False,
+    )
+
+    # Check results in checkpoint
+    assert len(checkpoint.results) > 0
+    for result in checkpoint.results:
+        assert result.title != "", f"Empty title in checkpoint: {result.url}"
+        assert result.snippet is not None
+        assert result.relevance is not None
+
+    # Verify SearchResult objects can be serialized individually
+    for result in checkpoint.results:
+        result_dict = result.model_dump()
+        assert result_dict["title"] != "", "Empty title after model_dump"
+        assert result_dict["snippet"] is not None

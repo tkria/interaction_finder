@@ -13,14 +13,14 @@ from interaction_finder.extraction.nodes import ExtractFromDocumentsNode
 from interaction_finder.extraction.state import State
 from interaction_finder.logging import logfire
 from interaction_finder.resources import ResourcePool
+from interaction_finder.settings import IfetcherConfig
 
 
 async def run_extraction(
     topic: str,
     target_entity_types: list[str],
     resource_pool: ResourcePool,
-    extraction_model: str = "openai:gpt-4o-mini",
-    judge_model: str = "openai:gpt-4o",
+    config: IfetcherConfig | None = None,
     logger: logging.Logger | None = None,
 ) -> ExtractionResult:
     """Run the association extraction pipeline.
@@ -29,34 +29,38 @@ async def run_extraction(
         topic: Research topic for context (e.g., "genes associated with breast cancer")
         target_entity_types: Types of entities to extract (e.g., ["gene", "disease"])
         resource_pool: ResourcePool containing documents to process
-        extraction_model: LLM model for entity/pair extraction and assessment
-        judge_model: LLM model for final judgment on pairs
+        config: Configuration object (creates default if None)
         logger: Logger for warnings and debugging (optional)
 
     Returns:
         ExtractionResult with accepted pairs and metadata
 
     Example:
+        >>> from interaction_finder import IfetcherConfig
+        >>> config = IfetcherConfig.from_path("config.toml")
         >>> pool = ResourcePool()
         >>> pool.add(url="...", title="...", document_text="...")
         >>> result = await run_extraction(
         ...     topic="BRCA1 and breast cancer",
         ...     target_entity_types=["gene", "disease"],
         ...     resource_pool=pool,
-        ...     extraction_model="openai:gpt-5-mini",
-        ...     judge_model="openai:gpt-4o"
+        ...     config=config,
         ... )
         >>> print(f"Found {len(result.accepted_pairs)} associations")
     """
     with logfire.span("run_extraction", topic=topic):
-        # Initialize deps
+        # Load config or use defaults
+        if config is None:
+            config = IfetcherConfig()
+
+        # Initialize logger
         if logger is None:
             logger = logging.getLogger(__name__)
 
+        # Create dependencies
         deps = Deps(
             resource_pool=resource_pool,
-            extraction_model=extraction_model,
-            judge_model=judge_model,
+            config=config,
             logger=logger,
         )
 
