@@ -34,20 +34,44 @@ class SubjectGoalsOut(BaseModel):
 class QueryGenerationOut(BaseModel):
     """Output model for query generation agent.
 
-    Produces diverse search queries targeting unsatisfied subject goals
-    and leveraging provided keyphrases.
+    Produces diverse search queries at multiple complexity levels targeting
+    unsatisfied subject goals and leveraging provided keyphrases.
     """
 
-    queries: list[str] = Field(
+    broad_queries: list[str] = Field(
+        ...,
+        min_length=2,
+        description="Broad queries (1-2 concepts, 3-6 words)",
+    )
+    medium_queries: list[str] = Field(
+        ...,
+        min_length=2,
+        description="Medium queries (2-3 concepts, 6-10 words)",
+    )
+    focused_queries: list[str] = Field(
+        ...,
+        min_length=2,
+        description="Focused queries (3+ concepts, 10-15 words)",
+    )
+    indirect_queries: list[str] = Field(
         ...,
         min_length=1,
-        max_length=15,
-        description="Search queries targeting unsatisfied subject goals",
+        description="Indirect queries (related concepts without main topic subject)",
     )
     reasoning: str = Field(
         default="",
         description="Explanation of query generation strategy and targeting",
     )
+
+    @property
+    def queries(self) -> list[str]:
+        """Return all queries flattened into a single list."""
+        return (
+            self.broad_queries
+            + self.medium_queries
+            + self.focused_queries
+            + self.indirect_queries
+        )
 
 
 class ResultSelectionOut(BaseModel):

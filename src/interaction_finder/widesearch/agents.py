@@ -41,44 +41,43 @@ Your task is to create diverse, targeted search queries that will find relevant 
 - A list of keyphrases to incorporate
 - Subject goals to target (unsatisfied areas needing coverage)
 
-Core Strategy - Generate Queries at MULTIPLE COMPLEXITY LEVELS:
+REQUIRED: Generate queries at ALL FOUR complexity levels below. Each level serves a distinct purpose:
 
-1. BROAD queries (1-2 main concepts, 3-6 words):
+1. BROAD queries (1-2 concepts, 3-6 words) — minimum 2 required:
    - Simple combinations of core concepts
    - High-level domain terms
    - Example: "pulmonary hypertension genetics"
-   - These cast a wide net and ensure baseline coverage
+   - Purpose: Cast a wide net, ensure baseline coverage
 
-2. MEDIUM queries (2-3 concepts, 6-10 words):
+2. MEDIUM queries (2-3 concepts, 6-10 words) — minimum 2 required:
    - Combine specific mechanisms with conditions
    - Balance specificity and breadth
    - Example: "BMPR2 mutations pulmonary arterial hypertension"
-   - These target specific but well-documented areas
+   - Purpose: Target specific but well-documented areas
 
-3. FOCUSED queries (3+ concepts, 10-15 words):
+3. FOCUSED queries (3+ concepts, 10-15 words) — minimum 2 required:
    - Highly specific research questions
    - Combine multiple mechanisms, pathways, or contexts
    - Example: "endothelial dysfunction inflammatory cytokines pulmonary arterial hypertension"
-   - These find specialized literature
+   - Purpose: Find specialized literature
 
-4. NON-TOPIC queries (without main topic terms):
-   - Use gene names, pathways, or mechanisms alone
-   - Example: "BMPR2 signaling endothelial dysfunction"
-   - These find papers that may not explicitly mention the condition but discuss relevant biology
+4. INDIRECT queries (without main topic subject) — minimum 1 required:
+   - Omit the main topic subject entirely; use related concepts like genes, pathways, mechanisms, diseases, or phenotypes
+   - REQUIRED: Include both broad and focused indirect queries to cover the complexity range
+   - Broad indirect examples: "bone morphogenetic protein signaling", "vascular remodeling"
+   - Focused indirect examples: "BMPR2 SMAD1 SMAD5 transcriptional regulation endothelial cells", "right ventricular hypertrophy molecular mechanisms"
+   - Purpose: Find papers discussing relevant biology without explicit topic mention
 
 Query Generation Guidelines:
-- Generate 5-10 queries per round (aim higher when many goals are unsatisfied)
-- Include queries from ALL complexity levels above in a SINGLE response (don't only generate focused queries)
-- Mix broad, medium, focused, and non-topic queries together in your output
-- Prioritize breadth: cast a wide net before diving deep
+- Prioritize breadth first: cast a wide net with broad queries before diving deep into specialized areas
+- Use diverse search strategies: broad/medium/focused queries include the main topic terms to find directly relevant papers; indirect queries exclude the main topic to discover related biological mechanisms and pathways
 - Target unsatisfied subject goals explicitly
 - Incorporate provided keyphrases naturally but don't force all keyphrases into every query
 - Use variations in terminology, synonyms, and related concepts
 - Consider different angles: methodologies, applications, reviews, comparisons, case studies
-- Both include AND exclude the main topic terms across different queries
 - Avoid redundancy with previous queries
 
-IMPORTANT: Return ALL queries in a single structured response. Do not create multiple separate responses for different complexity levels."""
+Your response will be structured with separate fields for each complexity level. Return all queries in a single structured response."""
 
 RESULT_SELECTOR_PROMPT = """You are an expert at identifying relevant research papers for comprehensive literature collection.
 

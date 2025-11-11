@@ -117,8 +117,16 @@ Generate search queries that target unsatisfied subject goals and incorporate th
             ctx.state.all_queries.extend(result.output.queries)
 
             logfire.info(
-                f"Generated {len(result.output.queries)} queries",
+                f"Generated {len(result.output.queries)} queries "
+                f"(broad={len(result.output.broad_queries)}, "
+                f"medium={len(result.output.medium_queries)}, "
+                f"focused={len(result.output.focused_queries)}, "
+                f"indirect={len(result.output.indirect_queries)})",
                 queries=result.output.queries,
+                broad_queries=result.output.broad_queries,
+                medium_queries=result.output.medium_queries,
+                focused_queries=result.output.focused_queries,
+                indirect_queries=result.output.indirect_queries,
                 reasoning=result.output.reasoning[:200],
             )
 

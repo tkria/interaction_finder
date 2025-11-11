@@ -52,33 +52,51 @@ class TestQueryGenerationOut:
     """Tests for QueryGenerationOut model."""
 
     def test_valid_queries(self):
-        """Test valid query generation output."""
+        """Test valid query generation output with all complexity levels."""
         output = QueryGenerationOut(
-            queries=["diabetes treatment", "insulin resistance mechanisms"],
+            broad_queries=["diabetes treatment", "insulin resistance"],
+            medium_queries=["type 2 diabetes insulin signaling", "glucose metabolism"],
+            focused_queries=[
+                "insulin receptor substrate phosphorylation diabetes",
+                "glucose transporter GLUT4 translocation insulin signaling",
+            ],
+            indirect_queries=["IRS1 signaling"],
             reasoning="These queries target different aspects of the topic",
         )
-        assert len(output.queries) == 2
+        assert len(output.broad_queries) == 2
+        assert len(output.medium_queries) == 2
+        assert len(output.focused_queries) == 2
+        assert len(output.indirect_queries) == 1
+        assert len(output.queries) == 7
 
-    def test_single_query(self):
-        """Test single query is valid."""
+    def test_single_query_per_level(self):
+        """Test minimum queries per level."""
         output = QueryGenerationOut(
-            queries=["comprehensive review of diabetes"],
-            reasoning="Broad query to start the search and find comprehensive review articles",
+            broad_queries=["diabetes", "insulin"],
+            medium_queries=["type 2 diabetes treatment", "insulin resistance"],
+            focused_queries=["insulin receptor substrate phosphorylation", "glucose"],
+            indirect_queries=["IRS1"],
         )
-        assert len(output.queries) == 1
+        assert len(output.queries) == 7
 
-    def test_too_many_queries(self):
-        """Test maximum queries constraint."""
+    def test_too_few_queries(self):
+        """Test minimum queries constraint per level."""
+        # broad_queries requires min 2
         with pytest.raises(ValidationError):
             QueryGenerationOut(
-                queries=[f"query {i}" for i in range(16)],  # Too many (max is 15)
-                reasoning="This should fail",
+                broad_queries=["diabetes"],  # Too few
+                medium_queries=["type 2 diabetes", "insulin"],
+                focused_queries=["query 1", "query 2"],
+                indirect_queries=["IRS1"],
             )
 
     def test_reasoning_optional(self):
         """Test reasoning field is optional."""
         output = QueryGenerationOut(
-            queries=["diabetes treatment", "insulin resistance mechanisms"],
+            broad_queries=["diabetes", "insulin"],
+            medium_queries=["type 2 diabetes", "insulin resistance"],
+            focused_queries=["insulin receptor substrate", "glucose metabolism"],
+            indirect_queries=["IRS1"],
         )
         assert output.reasoning == ""
 
