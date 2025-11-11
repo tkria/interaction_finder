@@ -43,34 +43,36 @@ Your task is to create diverse, targeted search queries that will find relevant 
 
 REQUIRED: Generate queries at ALL FOUR complexity levels below. Each level serves a distinct purpose:
 
-1. BROAD queries (1-2 concepts, 3-6 words) — minimum 2 required:
-   - Simple combinations of core concepts
-   - High-level domain terms
-   - Example: "pulmonary hypertension genetics"
+1. BROAD queries (1-2 general concepts, 3-6 words) — minimum 2 required:
+   - Combine the main topic with ONE general domain concept (e.g., genetics, epidemiology, treatment)
+   - NO specific named entities (genes, proteins, drugs, chemicals) beyond the topic itself
+   - Example: "pulmonary hypertension genetics", "PAH environmental factors"
    - Purpose: Cast a wide net, ensure baseline coverage
 
 2. MEDIUM queries (2-3 concepts, 6-10 words) — minimum 2 required:
-   - Combine specific mechanisms with conditions
-   - Balance specificity and breadth
-   - Example: "BMPR2 mutations pulmonary arterial hypertension"
+   - Combine specific mechanisms with conditions using natural phrases
+   - Use at most ONE specific entity per query
+   - Example: "BMPR2 mutations in pulmonary arterial hypertension"
    - Purpose: Target specific but well-documented areas
 
 3. FOCUSED queries (3+ concepts, 10-15 words) — minimum 2 required:
-   - Highly specific research questions
-   - Combine multiple mechanisms, pathways, or contexts
-   - Example: "endothelial dysfunction inflammatory cytokines pulmonary arterial hypertension"
+   - Highly specific research questions with clear semantic structure
+   - Limit to 1-2 specific entities; prefer process/mechanism names over entity lists
+   - Use connecting words (and, in, with, for) not just keyword lists
+   - Example: "endothelial dysfunction and inflammatory cytokines in pulmonary arterial hypertension"
    - Purpose: Find specialized literature
 
-4. INDIRECT queries (without main topic subject) — minimum 1 required:
-   - Omit the main topic subject entirely; use related concepts like genes, pathways, mechanisms, diseases, or phenotypes
-   - REQUIRED: Include both broad and focused indirect queries to cover the complexity range
+4. INDIRECT queries (without main topic subject) — minimum 2 required (at least one broad, at least one focused):
+   - Completely OMIT the main research topic; use only related keyphrases, mechanisms, or phenotypes
+   - Include both broad and focused indirect queries to cover the complexity range
    - Broad indirect examples: "bone morphogenetic protein signaling", "vascular remodeling"
-   - Focused indirect examples: "BMPR2 SMAD1 SMAD5 transcriptional regulation endothelial cells", "right ventricular hypertrophy molecular mechanisms"
+   - Focused indirect examples: "BMPR2 signaling in endothelial cells", "right ventricular hypertrophy molecular mechanisms"
    - Purpose: Find papers discussing relevant biology without explicit topic mention
 
 Query Generation Guidelines:
+- Structure queries as natural phrases with connecting words, not keyword concatenation
+- Balance topic vs keyphrase usage: broad/medium/focused queries typically include the main topic, but may substitute related keyphrases; indirect queries MUST exclude the main topic entirely
 - Prioritize breadth first: cast a wide net with broad queries before diving deep into specialized areas
-- Use diverse search strategies: broad/medium/focused queries include the main topic terms to find directly relevant papers; indirect queries exclude the main topic to discover related biological mechanisms and pathways
 - Target unsatisfied subject goals explicitly
 - Incorporate provided keyphrases naturally but don't force all keyphrases into every query
 - Use variations in terminology, synonyms, and related concepts
