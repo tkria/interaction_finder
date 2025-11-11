@@ -132,7 +132,12 @@ Use canonical entity names and provide exact quotes supporting each association.
                 entity_result = await get_entity_extractor_agent(ctx.deps.config).run(
                     entity_prompt, deps=ctx.deps, usage=usage
                 )
-            except Exception as e:
+            except (
+                # Catch expected failures from LLM operations
+                TimeoutError,
+                ConnectionError,
+                ValueError,  # Model/validation errors from pydantic-ai
+            ) as e:
                 ctx.deps.logger.error(
                     f"Entity extraction failed for {resource.id.url}: {type(e).__name__}: {e}"
                 )
@@ -144,7 +149,12 @@ Use canonical entity names and provide exact quotes supporting each association.
                 pair_result = await get_pair_agent(ctx.deps.config).run(
                     pair_prompt, deps=ctx.deps, usage=usage
                 )
-            except Exception as e:
+            except (
+                # Catch expected failures from LLM operations
+                TimeoutError,
+                ConnectionError,
+                ValueError,  # Model/validation errors from pydantic-ai
+            ) as e:
                 ctx.deps.logger.error(
                     f"Pair extraction failed for {resource.id.url}: {type(e).__name__}: {e}"
                 )
