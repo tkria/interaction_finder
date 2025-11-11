@@ -1,13 +1,14 @@
 """Data models for the extraction pipeline.
 
 This module defines:
-1. Core data structures (dataclasses) used internally in State
+1. Core data structures (dataclasses for State-internal, Pydantic for serialization)
 2. Agent output models (Pydantic) returned by LLM agents
-3. Final pipeline output models
+3. Final pipeline output models (Pydantic)
 
 The separation ensures clean boundaries: agents return Pydantic models with
 raw string quotes, which are immediately converted to ResourceQuote objects
-for storage in State.
+for storage in State. Models that appear in serialized output use Pydantic BaseModel
+to enable proper JSON serialization via model_dump().
 """
 
 from dataclasses import dataclass
@@ -65,8 +66,7 @@ class PairMention:
 PairKey = tuple[str, str, str]  # (entity1, entity2, relationship_type)
 
 
-@dataclass
-class EntityAssessment:
+class EntityAssessment(BaseModel):
     """Evidence assessment for one entity in one resource.
 
     Attributes:
@@ -82,8 +82,7 @@ class EntityAssessment:
     quotes: list[ResourceQuote]
 
 
-@dataclass
-class PairAssessment:
+class PairAssessment(BaseModel):
     """Evidence assessment for one pair in one resource.
 
     Attributes:
@@ -99,8 +98,7 @@ class PairAssessment:
     quotes: list[ResourceQuote]
 
 
-@dataclass
-class FinalJudgment:
+class FinalJudgment(BaseModel):
     """Cross-document judgment on whether a pair is valid.
 
     Attributes:

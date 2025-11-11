@@ -347,3 +347,65 @@ class TestExtractionResult:
 
         assert len(result.accepted_pairs) == 0
         assert result.metadata.pairs_accepted == 0
+
+    def test_result_serialization(self):
+        """Test that ExtractionResult can be serialized with model_dump."""
+        import json
+        from interaction_finder.extraction.models import (
+            FinalJudgment,
+            PairAssessment,
+        )
+
+        # Create a pool and get a resource
+        pool = ResourcePool()
+        pool.add(
+            url="http://example.com",
+            title="Test document",
+            document_text="BRCA1 is associated with breast cancer.",
+        )
+        resource = pool.resources[0]
+        quote = resource.quote("BRCA1")
+        # Create proper assessment and judgment objects
+        assessment = PairAssessment(
+            resource_id=resource.id,
+            strength="strong",
+            rationale="Strong evidence from multiple sources",
+            quotes=[quote],
+        )
+        judgment = FinalJudgment(
+            accepted=True,
+            confidence="high",
+            rationale="Multiple strong assessments across documents",
+        )
+        result = ExtractionResult(
+            accepted_pairs=[
+                PairWithProvenance(
+                    entity1="BRCA1",
+                    entity2="breast cancer",
+                    relationship_type="associated_with",
+                    entity1_type="gene",
+                    entity2_type="disease",
+                    all_quotes=[quote],
+                    assessments=[assessment],
+                    final_judgment=judgment,
+                )
+            ],
+            metadata=ExtractionMetadata(
+                topic="BRCA1 and breast cancer",
+                resource_count=1,
+                total_entities_found=2,
+                total_pairs_found=1,
+                pairs_accepted=1,
+                pairs_rejected=0,
+                quotes_validated=1,
+                quotes_failed=0,
+            ),
+        )
+        # Test model_dump
+        output_data = result.model_dump(mode="json")
+        assert isinstance(output_data, dict)
+        assert "accepted_pairs" in output_data
+        assert "metadata" in output_data
+        # Test JSON serialization
+        json_str = json.dumps(output_data, indent=2)
+        assert len(json_str) > 0
