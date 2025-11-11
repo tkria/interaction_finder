@@ -55,10 +55,7 @@ def _resolve_gpt5_model(
     # Create the base GPT-5 model with default profile
     model = OpenAIResponsesModel(
         base_model,
-        profile=replace(
-            OpenAIModelProfile.from_profile(openai_model_profile("gpt-5")),
-            openai_supports_encrypted_reasoning_content=False,
-        ),
+        profile=OpenAIModelProfile.from_profile(openai_model_profile("gpt-5")),
     )
 
     # Handle reasoning effort if specified

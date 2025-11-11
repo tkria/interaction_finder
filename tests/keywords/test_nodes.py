@@ -19,6 +19,7 @@ from interaction_finder.keywords.deps import Deps
 from interaction_finder.keywords.state import State
 from interaction_finder.keywords.models import DocumentSummaryOut
 from interaction_finder.resources import ResourcePool
+from interaction_finder.settings import IfetcherConfig
 
 
 @pytest.fixture
@@ -38,7 +39,7 @@ def mock_deps():
         reranker=Mock(),
         extractors=extractors,
         resource_pool=ResourcePool(),
-        config={},
+        config=IfetcherConfig(),
     )
 
 

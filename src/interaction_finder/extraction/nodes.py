@@ -16,8 +16,8 @@ from interaction_finder.extraction.assess_entity import get_entity_assessor_agen
 from interaction_finder.extraction.assess_pair import get_pair_assessor_agent
 from interaction_finder.extraction.deps import Deps
 from interaction_finder.extraction.extract import get_entity_extractor_agent
-from interaction_finder.extraction.extract_pairs import get_pair_extractor_agent
-from interaction_finder.extraction.judge import get_final_judge_agent
+from interaction_finder.extraction.extract_pairs import get_pair_agent
+from interaction_finder.extraction.judge import get_judge_agent
 from interaction_finder.extraction.models import (
     EntityAssessment,
     EntityMention,
@@ -141,9 +141,9 @@ Use canonical entity names and provide exact quotes supporting each association.
 
             # Extract pairs using configured extraction model
             try:
-                pair_result = await get_pair_extractor_agent(
-                    ctx.deps.extraction_model
-                ).run(pair_prompt, deps=ctx.deps, usage=usage)
+                pair_result = await get_pair_agent(ctx.deps.extraction_model).run(
+                    pair_prompt, deps=ctx.deps, usage=usage
+                )
             except Exception as e:
                 ctx.deps.logger.error(
                     f"Pair extraction failed for {resource.id.url}: {type(e).__name__}: {e}"
@@ -570,7 +570,7 @@ and your confidence level. Consider:
 
                 # Call final judge agent using configured judge model
                 usage = RunUsage()
-                result = await get_final_judge_agent(ctx.deps.config).run(
+                result = await get_judge_agent(ctx.deps.config).run(
                     prompt, deps=ctx.deps, usage=usage
                 )
 

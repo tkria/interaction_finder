@@ -10,16 +10,16 @@ from interaction_finder.extraction.assess_entity import get_entity_assessor_agen
 from interaction_finder.extraction.assess_pair import get_pair_assessor_agent
 from interaction_finder.extraction.deps import Deps
 from interaction_finder.extraction.extract import get_entity_extractor_agent
-from interaction_finder.extraction.extract_pairs import get_pair_extractor_agent
-from interaction_finder.extraction.judge import get_final_judge_agent
+from interaction_finder.extraction.extract_pairs import get_pair_agent
+from interaction_finder.extraction.judge import get_judge_agent
 from interaction_finder.extraction.models import (
-from interaction_finder.settings import IfetcherConfig
     EntityEvidenceAssessment,
     EntityExtractionOut,
     FinalJudgmentOut,
     PairEvidenceAssessment,
     PairExtractionOut,
 )
+from interaction_finder.settings import IfetcherConfig
 
 
 class TestEntityExtractorAgent:
@@ -51,7 +51,7 @@ class TestPairExtractorAgent:
 
     def test_agent_configuration(self):
         """Test agent has correct configuration."""
-        agent = get_pair_extractor_agent(IfetcherConfig())
+        agent = get_pair_agent(IfetcherConfig())
         assert agent._deps_type == Deps
         assert agent._system_prompts is not None
 
@@ -59,7 +59,7 @@ class TestPairExtractorAgent:
     async def test_agent_returns_correct_type(self):
         """Test agent returns PairExtractionOut."""
         test_model = TestModel()
-        agent = get_pair_extractor_agent(IfetcherConfig())
+        agent = get_pair_agent(IfetcherConfig())
         with agent.override(model=test_model):
             result = await agent.run(
                 "Extract pairs from: BRCA1 is associated with breast cancer.", deps=None
@@ -122,7 +122,7 @@ class TestFinalJudgeAgent:
 
     def test_agent_configuration(self):
         """Test agent has correct configuration."""
-        agent = get_final_judge_agent(IfetcherConfig())
+        agent = get_judge_agent(IfetcherConfig())
         assert agent._deps_type == Deps
         assert agent._system_prompts is not None
 
@@ -130,7 +130,7 @@ class TestFinalJudgeAgent:
     async def test_agent_returns_correct_type(self):
         """Test agent returns FinalJudgmentOut."""
         test_model = TestModel()
-        agent = get_final_judge_agent(IfetcherConfig())
+        agent = get_judge_agent(IfetcherConfig())
         with agent.override(model=test_model):
             result = await agent.run(
                 "Judge: BRCA1-breast cancer association across documents.", deps=None

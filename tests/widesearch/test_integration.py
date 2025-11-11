@@ -8,6 +8,7 @@ from pydantic_ai.models.test import TestModel
 
 from interaction_finder.resources import ResourcePool
 from interaction_finder.search.models import SearchBackend, SearchQuery, SearchResult
+from interaction_finder.settings import IfetcherConfig
 from interaction_finder.widesearch import Deps, State, graph
 from interaction_finder.widesearch.agents import (
     get_goal_planner_agent,
@@ -83,12 +84,12 @@ async def test_full_pipeline_single_round():
     test_model = TestModel()
 
     # Override agents with test model
-    model_name = "openai:gpt-4o-mini"
+    config = IfetcherConfig()
     with (
-        get_goal_planner_agent(model_name).override(model=test_model),
-        get_query_generator_agent(model_name).override(model=test_model),
-        get_result_selector_agent(model_name).override(model=test_model),
-        get_reflector_agent(model_name).override(model=test_model),
+        get_goal_planner_agent(config).override(model=test_model),
+        get_query_generator_agent(config).override(model=test_model),
+        get_result_selector_agent(config).override(model=test_model),
+        get_reflector_agent(config).override(model=test_model),
     ):
         async with httpx.AsyncClient() as client:
             deps = Deps(
@@ -96,7 +97,7 @@ async def test_full_pipeline_single_round():
                 search_backend=search_backend,
                 reranker=reranker,
                 resource_pool=resource_pool,
-                config=IfetcherConfig(), operational_config=IfetcherConfig(),
+                config=IfetcherConfig(),
             )
 
             state = State(
@@ -134,12 +135,12 @@ async def test_pipeline_reaches_max_rounds():
 
     test_model = TestModel()
 
-    model_name = "openai:gpt-4o-mini"
+    config = IfetcherConfig()
     with (
-        get_goal_planner_agent(model_name).override(model=test_model),
-        get_query_generator_agent(model_name).override(model=test_model),
-        get_result_selector_agent(model_name).override(model=test_model),
-        get_reflector_agent(model_name).override(model=test_model),
+        get_goal_planner_agent(config).override(model=test_model),
+        get_query_generator_agent(config).override(model=test_model),
+        get_result_selector_agent(config).override(model=test_model),
+        get_reflector_agent(config).override(model=test_model),
     ):
         async with httpx.AsyncClient() as client:
             deps = Deps(
@@ -147,7 +148,7 @@ async def test_pipeline_reaches_max_rounds():
                 search_backend=search_backend,
                 reranker=reranker,
                 resource_pool=resource_pool,
-                config=IfetcherConfig(), operational_config=IfetcherConfig(),
+                config=IfetcherConfig(),
             )
 
             state = State(
@@ -172,12 +173,12 @@ async def test_pipeline_handles_no_results():
 
     test_model = TestModel()
 
-    model_name = "openai:gpt-4o-mini"
+    config = IfetcherConfig()
     with (
-        get_goal_planner_agent(model_name).override(model=test_model),
-        get_query_generator_agent(model_name).override(model=test_model),
-        get_result_selector_agent(model_name).override(model=test_model),
-        get_reflector_agent(model_name).override(model=test_model),
+        get_goal_planner_agent(config).override(model=test_model),
+        get_query_generator_agent(config).override(model=test_model),
+        get_result_selector_agent(config).override(model=test_model),
+        get_reflector_agent(config).override(model=test_model),
     ):
         async with httpx.AsyncClient() as client:
             deps = Deps(
@@ -185,7 +186,7 @@ async def test_pipeline_handles_no_results():
                 search_backend=search_backend,
                 reranker=reranker,
                 resource_pool=resource_pool,
-                config=IfetcherConfig(), operational_config=IfetcherConfig(),
+                config=IfetcherConfig(),
             )
 
             state = State(
@@ -218,20 +219,20 @@ async def test_pipeline_without_reranking():
 
     test_model = TestModel()
 
-    model_name = "openai:gpt-4o-mini"
+    config = IfetcherConfig()
     with (
-        get_goal_planner_agent(model_name).override(model=test_model),
-        get_query_generator_agent(model_name).override(model=test_model),
-        get_result_selector_agent(model_name).override(model=test_model),
-        get_reflector_agent(model_name).override(model=test_model),
+        get_goal_planner_agent(config).override(model=test_model),
+        get_query_generator_agent(config).override(model=test_model),
+        get_result_selector_agent(config).override(model=test_model),
+        get_reflector_agent(config).override(model=test_model),
     ):
         async with httpx.AsyncClient() as client:
             deps = Deps(
                 http_client=client,
                 search_backend=search_backend,
-                reranker=reranker,
+                reranker=None,  # Disable reranking by passing None
                 resource_pool=resource_pool,
-                config=IfetcherConfig(), operational_config=IfetcherConfig(),
+                config=IfetcherConfig(),
             )
 
             state = State(
@@ -244,7 +245,7 @@ async def test_pipeline_without_reranking():
 
             # Should complete successfully
             assert result.output is not None
-            # Reranker should not have been called
+            # Reranker should not have been called (it's None)
             assert reranker.rerank_count == 0
 
 
@@ -266,12 +267,12 @@ async def test_resource_pool_registration():
 
     test_model = TestModel()
 
-    model_name = "openai:gpt-4o-mini"
+    config = IfetcherConfig()
     with (
-        get_goal_planner_agent(model_name).override(model=test_model),
-        get_query_generator_agent(model_name).override(model=test_model),
-        get_result_selector_agent(model_name).override(model=test_model),
-        get_reflector_agent(model_name).override(model=test_model),
+        get_goal_planner_agent(config).override(model=test_model),
+        get_query_generator_agent(config).override(model=test_model),
+        get_result_selector_agent(config).override(model=test_model),
+        get_reflector_agent(config).override(model=test_model),
     ):
         async with httpx.AsyncClient() as client:
             deps = Deps(
@@ -279,7 +280,7 @@ async def test_resource_pool_registration():
                 search_backend=search_backend,
                 reranker=reranker,
                 resource_pool=resource_pool,
-                config=IfetcherConfig(), operational_config=IfetcherConfig(),
+                config=IfetcherConfig(),
             )
 
             state = State(

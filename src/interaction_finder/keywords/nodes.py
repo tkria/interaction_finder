@@ -132,9 +132,7 @@ class SearchNode(BaseNode[State, Deps, BridgingTermsOut]):
             for query_text in ctx.state.search_queries:
                 query = SearchQuery(
                     query=query_text,
-                    max_results=ctx.deps.operational_config.get(
-                        "max_results_per_query", 20
-                    ),
+                    max_results=ctx.deps.config.tools.keywords.max_results_per_query,
                 )
                 results = await ctx.deps.search_backend.search(query)
                 all_results.extend(results)
@@ -337,9 +335,7 @@ class ExtractKeywordsNode(BaseNode[State, Deps, BridgingTermsOut]):
             if not resources:
                 logfire.info("No resources available, skipping to finalization")
                 return FinalizeNode()
-            max_keywords = ctx.deps.operational_config.get(
-                "max_keywords_per_method", 30
-            )
+            max_keywords = ctx.deps.config.tools.keywords.max_keywords_per_method
             # Track already-processed URLs to avoid re-extraction
             already_processed = set(ctx.state.extracted_keywords.keys())
             new_resources = [r for r in resources if r.id.url not in already_processed]
@@ -401,16 +397,14 @@ class EvaluateKeywordsNode(BaseNode[State, Deps, BridgingTermsOut]):
                 if not resource:
                     continue
                 # Clean, deduplicate, and rerank keywords for LLM review
-                max_keywords_for_llm = ctx.deps.operational_config.get(
-                    "max_keywords_for_llm", 50
+                max_keywords_for_llm = (
+                    ctx.deps.config.tools.keywords.max_keywords_for_llm
                 )
                 keywords_text = _clean_and_rerank_keywords_for_display(
                     keywords, ctx.state.topic, ctx.deps.reranker, max_keywords_for_llm
                 )
                 # Get document context length from config
-                context_chars = ctx.deps.operational_config.get(
-                    "document_context_chars", 12000
-                )
+                context_chars = ctx.deps.config.tools.keywords.document_context_chars
                 # Summarize document with strict filtering instructions
                 summary_prompt = f"""Review this document and identify HIGH-QUALITY bridging terms.
 

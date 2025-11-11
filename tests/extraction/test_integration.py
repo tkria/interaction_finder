@@ -12,9 +12,10 @@ from interaction_finder.extraction import run_extraction
 from interaction_finder.extraction.assess_entity import get_entity_assessor_agent
 from interaction_finder.extraction.assess_pair import get_pair_assessor_agent
 from interaction_finder.extraction.extract import get_entity_extractor_agent
-from interaction_finder.extraction.extract_pairs import get_pair_extractor_agent
-from interaction_finder.extraction.judge import get_final_judge_agent
+from interaction_finder.extraction.extract_pairs import get_pair_agent
+from interaction_finder.extraction.judge import get_judge_agent
 from interaction_finder.resources import ResourcePool
+from interaction_finder.settings import IfetcherConfig
 
 
 @pytest.mark.asyncio
@@ -53,13 +54,13 @@ async def test_extraction_pipeline_with_mocked_agents():
     # Use TestModel for all agents
     test_model = TestModel()
 
-    model_name = "openai:gpt-4o-mini"
+    config = IfetcherConfig()
     with (
-        get_entity_extractor_agent(model_name).override(model=test_model),
-        get_pair_extractor_agent(model_name).override(model=test_model),
-        get_entity_assessor_agent(model_name).override(model=test_model),
-        get_pair_assessor_agent(model_name).override(model=test_model),
-        get_final_judge_agent(model_name).override(model=test_model),
+        get_entity_extractor_agent(config).override(model=test_model),
+        get_pair_agent(config).override(model=test_model),
+        get_entity_assessor_agent(config).override(model=test_model),
+        get_pair_assessor_agent(config).override(model=test_model),
+        get_judge_agent(config).override(model=test_model),
     ):
         result = await run_extraction(
             topic="BRCA1 and breast cancer",
@@ -98,13 +99,13 @@ async def test_quote_validation_failures_logged():
 
     test_model = TestModel()
 
-    model_name = "openai:gpt-4o-mini"
+    config = IfetcherConfig()
     with (
-        get_entity_extractor_agent(model_name).override(model=test_model),
-        get_pair_extractor_agent(model_name).override(model=test_model),
-        get_entity_assessor_agent(model_name).override(model=test_model),
-        get_pair_assessor_agent(model_name).override(model=test_model),
-        get_final_judge_agent(model_name).override(model=test_model),
+        get_entity_extractor_agent(config).override(model=test_model),
+        get_pair_agent(config).override(model=test_model),
+        get_entity_assessor_agent(config).override(model=test_model),
+        get_pair_assessor_agent(config).override(model=test_model),
+        get_judge_agent(config).override(model=test_model),
     ):
         result = await run_extraction(
             topic="test",
@@ -134,13 +135,13 @@ async def test_multiple_resources_processed():
 
     test_model = TestModel()
 
-    model_name = "openai:gpt-4o-mini"
+    config = IfetcherConfig()
     with (
-        get_entity_extractor_agent(model_name).override(model=test_model),
-        get_pair_extractor_agent(model_name).override(model=test_model),
-        get_entity_assessor_agent(model_name).override(model=test_model),
-        get_pair_assessor_agent(model_name).override(model=test_model),
-        get_final_judge_agent(model_name).override(model=test_model),
+        get_entity_extractor_agent(config).override(model=test_model),
+        get_pair_agent(config).override(model=test_model),
+        get_entity_assessor_agent(config).override(model=test_model),
+        get_pair_assessor_agent(config).override(model=test_model),
+        get_judge_agent(config).override(model=test_model),
     ):
         result = await run_extraction(
             topic="BRCA1 and breast cancer",
@@ -171,24 +172,23 @@ async def test_entity_assessments_influence_pair_judgments():
 
     test_model = TestModel()
 
-    model_name = "openai:gpt-4o-mini"
+    config = IfetcherConfig()
     with (
-        get_entity_extractor_agent(model_name).override(model=test_model),
-        get_pair_extractor_agent(model_name).override(model=test_model),
-        get_entity_assessor_agent(model_name).override(model=test_model),
-        get_pair_assessor_agent(model_name).override(model=test_model),
-        get_final_judge_agent(model_name).override(model=test_model),
+        get_entity_extractor_agent(config).override(model=test_model),
+        get_pair_agent(config).override(model=test_model),
+        get_entity_assessor_agent(config).override(model=test_model),
+        get_pair_assessor_agent(config).override(model=test_model),
+        get_judge_agent(config).override(model=test_model),
     ):
         # Import the graph to access state after running
         from interaction_finder.extraction.graph import graph
         from interaction_finder.extraction.nodes import ExtractFromDocumentsNode
         from interaction_finder.extraction.state import State
         from interaction_finder.extraction.deps import Deps
-        from interaction_finder.settings import IfetcherConfig
 
         deps = Deps(
             resource_pool=pool,
-            config=IfetcherConfig(),
+            config=config,
             logger=logging.getLogger(__name__),
         )
 
