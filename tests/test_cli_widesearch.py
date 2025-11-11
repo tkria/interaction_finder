@@ -203,34 +203,51 @@ def test_widesearch_with_reranking_flags(tmp_path, mock_keywords_file, mock_chec
 
     with patch("interaction_finder.cli.asyncio.run", side_effect=mock_asyncio_run):
         # Test with --rerank-top-k=0 (disabled)
-        result = runner.invoke(
-            app,
-            [
-                "widesearch",
-                str(mock_keywords_file),
-                "test topic",
-                "--rerank-top-k=0",
-                "-o",
-                str(output_file),
-            ],
-        )
+        with patch(
+            "interaction_finder.widesearch.reranker.Reranker"
+        ) as mock_reranker_cls:
+            result = runner.invoke(
+                app,
+                [
+                    "widesearch",
+                    str(mock_keywords_file),
+                    "test topic",
+                    "--rerank-top-k=0",
+                    "-o",
+                    str(output_file),
+                ],
+            )
 
-        assert result.exit_code == 0
+            assert result.exit_code == 0
+            # Verify Reranker was NOT instantiated when rerank_top_k=0
+            mock_reranker_cls.assert_not_called()
 
         # Test with --rerank-top-k=50 (enabled)
-        result = runner.invoke(
-            app,
-            [
-                "widesearch",
-                str(mock_keywords_file),
-                "test topic",
-                "--rerank-top-k=50",
-                "-o",
-                str(output_file),
-            ],
-        )
+        with patch(
+            "interaction_finder.widesearch.reranker.Reranker"
+        ) as mock_reranker_cls:
+            # Mock the reranker instance and its methods
+            mock_reranker = MagicMock()
+            mock_reranker._get_model.return_value = None
+            mock_reranker_cls.return_value = mock_reranker
 
-        assert result.exit_code == 0
+            result = runner.invoke(
+                app,
+                [
+                    "widesearch",
+                    str(mock_keywords_file),
+                    "test topic",
+                    "--rerank-top-k=50",
+                    "-o",
+                    str(output_file),
+                ],
+            )
+
+            assert result.exit_code == 0
+            # Verify Reranker WAS instantiated when rerank_top_k=50
+            mock_reranker_cls.assert_called_once()
+            # Verify the model was pre-loaded
+            mock_reranker._get_model.assert_called_once()
 
 
 def test_widesearch_unknown_backend(tmp_path, mock_keywords_file):
