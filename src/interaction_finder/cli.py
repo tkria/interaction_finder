@@ -636,11 +636,22 @@ def widesearch(
         if resource_count > 0:
             console.print(f"Starting with {resource_count} existing resources in pool")
         console.print()
+        # Pre-load reranker if enabled to avoid debug messages during progress display
+        reranker = None
+        if cfg.tools.widesearch.enable_reranking:
+            from interaction_finder.widesearch.reranker import Reranker
+
+            reranker = Reranker(
+                model_name=cfg.tools.widesearch.reranker_model,
+                device=cfg.tools.widesearch.reranker_device,
+            )
+            # Trigger model loading before progress display starts
+            _ = reranker._get_model()
         # Create progress display
         from interaction_finder.widesearch.progress import WidesearchProgress
 
         progress_counter = WidesearchProgress()
-        # Run widesearch with checkpoint, passing the resource pool
+        # Run widesearch with checkpoint, passing the resource pool and pre-loaded reranker
         with progress_counter:
             checkpoint = asyncio.run(
                 run_widesearch_with_checkpoint(
@@ -651,6 +662,7 @@ def widesearch(
                     config=cfg,
                     max_rounds=max_rounds,
                     enable_reranking=enable_reranking,
+                    reranker=reranker,
                     progress=progress_counter,
                 )
             )

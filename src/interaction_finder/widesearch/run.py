@@ -30,6 +30,7 @@ async def run_widesearch(
     config: IfetcherConfig | None = None,
     max_rounds: int | None = None,
     enable_reranking: bool | None = None,
+    reranker: Reranker | None = None,
     http_client: httpx.AsyncClient | None = None,
     progress: Any | None = None,
 ) -> list[SearchResult]:
@@ -47,6 +48,7 @@ async def run_widesearch(
         config: IfetcherConfig | None — configuration object (uses defaults if None)
         max_rounds: int | None — override max_rounds from config
         enable_reranking: bool | None — override enable_reranking from config
+        reranker: Reranker | None — pre-initialized reranker (creates new if None and reranking enabled)
         http_client: httpx.AsyncClient | None — HTTP client (creates temporary if None)
         progress: Any | None — optional progress counter for live display
 
@@ -86,9 +88,8 @@ async def run_widesearch(
     if resource_pool is None:
         resource_pool = ResourcePool()
 
-    # Create reranker if enabled
-    reranker = None
-    if effective_enable_reranking:
+    # Create reranker if enabled and not provided
+    if reranker is None and effective_enable_reranking:
         reranker = Reranker(
             model_name=ws_config.reranker_model,
             device=ws_config.reranker_device,
@@ -137,6 +138,7 @@ async def run_widesearch_with_checkpoint(
     config: IfetcherConfig | None = None,
     max_rounds: int | None = None,
     enable_reranking: bool | None = None,
+    reranker: Reranker | None = None,
     http_client: httpx.AsyncClient | None = None,
     progress: Any | None = None,
 ) -> WidesearchCheckpoint:
@@ -155,6 +157,7 @@ async def run_widesearch_with_checkpoint(
         config: IfetcherConfig | None — configuration object (uses defaults if None)
         max_rounds: int | None — override max_rounds from config
         enable_reranking: bool | None — override enable_reranking from config
+        reranker: Reranker | None — pre-initialized reranker (creates new if None and reranking enabled)
         http_client: httpx.AsyncClient | None — HTTP client (creates temporary if None)
         progress: Any | None — optional progress counter for live display
 
@@ -194,9 +197,8 @@ async def run_widesearch_with_checkpoint(
     if resource_pool is None:
         resource_pool = ResourcePool()
 
-    # Create reranker only if reranking is enabled
-    reranker = None
-    if effective_enable_reranking:
+    # Create reranker if enabled and not provided
+    if reranker is None and effective_enable_reranking:
         reranker = Reranker(
             model_name=ws_config.reranker_model,
             device=ws_config.reranker_device,
