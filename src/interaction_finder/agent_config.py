@@ -5,7 +5,6 @@ all pipeline stages (keywords, widesearch, extraction) with multi-tier
 configuration resolution.
 """
 
-from dataclasses import replace
 from typing import Any, Callable, Type
 
 from pydantic import BaseModel
@@ -28,7 +27,7 @@ _agent_cache: dict[tuple[str, str, str, frozenset[tuple[str, Any]]], Agent] = {}
 
 def _resolve_gpt5_model(
     model_string: str,
-) -> tuple[OpenAIResponsesModel | str, ModelSettings | None]:
+) -> tuple[OpenAIResponsesModel | str, OpenAIResponsesModelSettings | None]:
     """Resolve GPT-5 model strings with optional reasoning effort.
 
     Handles model strings like:
@@ -42,7 +41,7 @@ def _resolve_gpt5_model(
         model_string: Model string in format "openai:gpt-5[-variant][/effort]"
 
     Returns:
-        Tuple of (model, model_settings) where model_settings contains reasoning effort if specified
+        Tuple of (model, model_settings) where model_settings is OpenAIResponsesModelSettings if reasoning effort specified
     """
     # Check if this is a GPT-5 model string
     if not model_string.startswith("openai:gpt-5"):
@@ -193,9 +192,10 @@ def get_agent(
     if gpt5_settings:
         if model_settings:
             # Merge: GPT-5 settings take precedence for reasoning_effort
-            model_settings = ModelSettings(
-                **(model_settings.model_dump() | gpt5_settings.model_dump())
-            )
+            # Both ModelSettings and OpenAIResponsesModelSettings are dict subclasses, not Pydantic models
+            model_settings_dict = dict(model_settings)
+            gpt5_dict = dict(gpt5_settings)
+            model_settings = ModelSettings(**(model_settings_dict | gpt5_dict))
         else:
             model_settings = gpt5_settings
     # Build cache key from all configuration parameters
