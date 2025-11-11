@@ -14,9 +14,9 @@ to enable proper JSON serialization via model_dump().
 from dataclasses import dataclass
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from interaction_finder.resources import ResourceId, ResourceQuote
+from interaction_finder.resources import ResourceId, ResourcePool, ResourceQuote
 
 # =============================================================================
 # Core data structures (used in State)
@@ -251,10 +251,67 @@ class ExtractionMetadata(BaseModel):
 class ExtractionResult(BaseModel):
     """Final pipeline output.
 
-    Contains only accepted pairs with full provenance.
+    Contains accepted pairs with full provenance and shared resource pool.
+    Provides efficient serialization by storing resources once and referencing
+    by ID in quotes.
     """
 
+    resources: ResourcePool = Field(
+        description="Shared pool of all resources referenced by quotes"
+    )
     accepted_pairs: list[PairWithProvenance] = Field(
         description="Pairs accepted after evidence assessment"
     )
     metadata: ExtractionMetadata = Field(description="Extraction statistics")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _rehydrate_quotes(cls, data):
+        """Restore Resource objects in quotes from resource_id references.
+
+        During deserialization, ResourceQuotes contain resource_id instead of
+        full Resource. This validator looks up resources from the pool and
+        injects them into quote dicts before Pydantic validates the structure.
+        """
+        if not isinstance(data, dict) or "resources" not in data:
+            return data
+
+        # Check if this is serialized data (pairs are dicts with resource_id in quotes)
+        pairs = data.get("accepted_pairs", [])
+        if not pairs or not isinstance(pairs[0], dict):
+            return data
+
+        # Check first quote for resource_id (indicates serialized data)
+        first_pair = pairs[0]
+        if not first_pair.get("all_quotes"):
+            return data
+
+        first_quote = first_pair["all_quotes"][0]
+        if not isinstance(first_quote, dict) or "resource_id" not in first_quote:
+            return data
+
+        # Deserialize pool and inject resources into all quotes
+        pool = ResourcePool.model_validate(data["resources"])
+
+        def inject_resource(quote_dict: dict) -> None:
+            """Replace resource_id with actual Resource from pool."""
+            rid_data = quote_dict["resource_id"]
+            counter = int(rid_data["id"].split("_")[0])
+            rid = ResourceId(url=rid_data["url"], counter=counter)
+
+            resource = pool.get(rid)
+            if resource is None:
+                raise ValueError(f"Resource {rid.id} not found in pool")
+
+            quote_dict["resource"] = resource
+            del quote_dict["resource_id"]
+
+        # Process all quotes in all pairs
+        for pair in pairs:
+            for quote_dict in pair["all_quotes"]:
+                inject_resource(quote_dict)
+            for assessment in pair["assessments"]:
+                for quote_dict in assessment["quotes"]:
+                    inject_resource(quote_dict)
+
+        return data

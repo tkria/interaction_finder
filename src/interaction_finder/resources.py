@@ -21,6 +21,7 @@ from pydantic import (
     field_validator,
     ValidationInfo,
     model_serializer,
+    model_validator,
 )
 from pydantic_core import core_schema
 from rapidfuzz import fuzz
@@ -1423,8 +1424,27 @@ class ResourceQuote(BaseModel):
         default=None, description="Fuzzy similarity score if fuzzy matching was used"
     )
 
+    @model_serializer(mode="wrap")
+    def _serialize(self, serializer, info):
+        """Replace Resource with resource_id reference during JSON serialization."""
+        if info.mode == "json":
+            data = serializer(self)
+            # Replace full resource with just ID reference
+            data["resource_id"] = {
+                "id": self.resource.id.id,
+                "url": self.resource.id.url,
+            }
+            del data["resource"]
+            return data
+        else:
+            return serializer(self)
+
     def __init__(
-        self, resource: Resource, text: str, similarity_threshold: float = 1.0, **data
+        self,
+        resource: Resource = None,
+        text: str = None,
+        similarity_threshold: float = 1.0,
+        **data,
     ):
         """
         Create ResourceQuote by finding all occurrences of text in resource.
@@ -1447,7 +1467,7 @@ class ResourceQuote(BaseModel):
             QuoteNearMatchError subclasses: If similarity between FUZZY_SUGGESTION_THRESHOLD
                 and similarity_threshold (includes error-specific diagnostics)
         """
-        # Allow direct construction if spans and query_text are provided
+        # Allow direct construction if spans and query_text are provided (for deserialization)
         if "spans" in data and "query_text" in data:
             # Set is_disjoint if not provided
             if "is_disjoint" not in data:
@@ -1456,6 +1476,10 @@ class ResourceQuote(BaseModel):
                 )
             super().__init__(resource=resource, **data)
             return
+
+        # Normal construction requires resource and text
+        if resource is None or text is None:
+            raise ValueError("resource and text are required for quote matching")
 
         # Strategy 0: Try verbatim match in original text (preserves formatting)
         verbatim_spans = self._find_verbatim(resource.text, text)

@@ -658,6 +658,10 @@ class FinalizeNode(BaseNode[State, Deps, ExtractionResult]):
                 quotes_failed=ctx.state.quotes_failed,
             )
 
-            result = ExtractionResult(accepted_pairs=accepted_pairs, metadata=metadata)
+            result = ExtractionResult(
+                resources=ctx.deps.resource_pool,
+                accepted_pairs=accepted_pairs,
+                metadata=metadata,
+            )
 
             return End(result)

@@ -298,6 +298,7 @@ class TestExtractionResult:
         quote = resource.quote("BRCA1 is associated with breast cancer.")
 
         result = ExtractionResult(
+            resources=pool,
             accepted_pairs=[
                 PairWithProvenance(
                     entity1="BRCA1",
@@ -331,7 +332,9 @@ class TestExtractionResult:
 
     def test_empty_result(self):
         """Test creating empty ExtractionResult."""
+        pool = ResourcePool()
         result = ExtractionResult(
+            resources=pool,
             accepted_pairs=[],
             metadata=ExtractionMetadata(
                 topic="test",
@@ -347,6 +350,103 @@ class TestExtractionResult:
 
         assert len(result.accepted_pairs) == 0
         assert result.metadata.pairs_accepted == 0
+
+    def test_serialization_deduplicates_resources(self):
+        """Test that serialized ExtractionResult deduplicates resource content.
+
+        ResourceQuotes should serialize with only resource_id references,
+        with full resource content stored once in the resources pool.
+        """
+        # Create pool with one resource
+        pool = ResourcePool()
+        resource = pool.add(
+            url="https://example.com/paper",
+            title="Test Paper",
+            document_text="BRCA1 and BRCA2 are associated with breast cancer.",
+        )
+
+        # Create multiple quotes from same resource
+        quote1 = resource.quote("BRCA1")
+        quote2 = resource.quote("BRCA2")
+        quote3 = resource.quote("breast cancer")
+
+        result = ExtractionResult(
+            resources=pool,
+            accepted_pairs=[
+                PairWithProvenance(
+                    entity1="BRCA1",
+                    entity2="breast cancer",
+                    relationship_type="associated_with",
+                    entity1_type="gene",
+                    entity2_type="disease",
+                    all_quotes=[quote1, quote3],
+                    assessments=[],
+                    final_judgment={
+                        "accepted": True,
+                        "confidence": "high",
+                        "rationale": "Strong evidence",
+                    },
+                ),
+                PairWithProvenance(
+                    entity1="BRCA2",
+                    entity2="breast cancer",
+                    relationship_type="associated_with",
+                    entity1_type="gene",
+                    entity2_type="disease",
+                    all_quotes=[quote2, quote3],
+                    assessments=[],
+                    final_judgment={
+                        "accepted": True,
+                        "confidence": "high",
+                        "rationale": "Strong evidence",
+                    },
+                ),
+            ],
+            metadata=ExtractionMetadata(
+                topic="BRCA genes and breast cancer",
+                resource_count=1,
+                total_entities_found=3,
+                total_pairs_found=2,
+                pairs_accepted=2,
+                pairs_rejected=0,
+                quotes_validated=3,
+                quotes_failed=0,
+            ),
+        )
+
+        # Serialize to JSON
+        import json
+
+        json_str = result.model_dump_json()
+        json_data = json.loads(json_str)
+
+        # Verify structure: resources at top level
+        assert "resources" in json_data
+        assert isinstance(json_data["resources"], list)
+        assert len(json_data["resources"]) == 1
+
+        # Verify resource content appears only once
+        resource_text = "BRCA1 and BRCA2 are associated with breast cancer."
+        text_count = json_str.count(resource_text)
+        assert text_count == 1, f"Resource text should appear once, found {text_count}"
+
+        # Verify quotes have resource_id instead of full resource
+        first_quote = json_data["accepted_pairs"][0]["all_quotes"][0]
+        assert "resource_id" in first_quote
+        assert "resource" not in first_quote
+        assert first_quote["resource_id"]["id"] == resource.id.id
+
+        # Deserialize and verify functionality is preserved
+        result_restored = ExtractionResult.model_validate_json(json_str)
+
+        assert len(result_restored.accepted_pairs) == 2
+        assert len(result_restored.resources.resources) == 1
+
+        # Verify quotes work correctly after deserialization
+        restored_quote = result_restored.accepted_pairs[0].all_quotes[0]
+        assert restored_quote.resource.id.id == resource.id.id
+        assert restored_quote.resource.text == resource_text
+        assert restored_quote.query_text in ["BRCA1", "breast cancer"]
 
     def test_result_serialization(self):
         """Test that ExtractionResult can be serialized with model_dump."""
@@ -378,6 +478,7 @@ class TestExtractionResult:
             rationale="Multiple strong assessments across documents",
         )
         result = ExtractionResult(
+            resources=pool,
             accepted_pairs=[
                 PairWithProvenance(
                     entity1="BRCA1",
