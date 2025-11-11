@@ -138,7 +138,6 @@ class PerplexicaBackend(SearchBackend):
             query=query.query[:100],
             max_results=query.max_results,
         ):
-            logfire.info(f"Searching Perplexica: {query.query[:100]}...")
             try:
                 request_data = self._build_search_request(query)
                 session = await self._get_session()
@@ -160,7 +159,11 @@ class PerplexicaBackend(SearchBackend):
 
                 response_data = response.json()
                 results = self._parse_perplexica_response(response_data, query)
-                logfire.info(f"Perplexica search complete: {len(results)} results")
+                logfire.info(
+                    f"Perplexica search returned {len(results)} results",
+                    query=query.query[:100],
+                    results=results,
+                )
                 return results
 
             except httpx.TimeoutException:  # type: ignore[misc]

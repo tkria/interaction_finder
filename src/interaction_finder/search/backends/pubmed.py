@@ -294,20 +294,24 @@ class PubMedBackend(SearchBackend):
             query=query.query[:100],
             max_results=query.max_results,
         ):
-            logfire.info(f"Searching PubMed: {query.query[:100]}...")
             try:
                 # Step 1: Search for PMIDs
                 search_result = await self._esearch(query)
                 pmids = search_result["pmids"]
                 total_count = search_result["count"]
-                logfire.info(f"Found {len(pmids)} PMIDs (total matches: {total_count})")
 
                 if not pmids:
+                    logfire.info(
+                        f"PubMed search returned 0 results",
+                        query=query.query[:100],
+                        total_matches=total_count,
+                        pmids=[],
+                        results=[],
+                    )
                     return []
 
                 # Step 2: Fetch summaries for PMIDs
                 summaries = await self._esummary(pmids)
-                logfire.info(f"Fetched {len(summaries)} summaries")
 
                 # Step 3: Convert to SearchResult objects
                 results = []
@@ -329,7 +333,13 @@ class PubMedBackend(SearchBackend):
                         f"Failed to convert {conversion_errors}/{len(summaries)} summaries"
                     )
 
-                logfire.info(f"PubMed search complete: {len(results)} results")
+                logfire.info(
+                    f"PubMed search returned {len(results)} results (total matches: {total_count})",
+                    query=query.query[:100],
+                    total_matches=total_count,
+                    pmids=pmids,
+                    results=results,
+                )
                 return results
 
             except RuntimeError:

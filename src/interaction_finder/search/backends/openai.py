@@ -244,7 +244,6 @@ class OpenAIBackend(SearchBackend):
             max_results=query.max_results,
             model=self.model,
         ):
-            logfire.info(f"Searching OpenAI: {query.query[:100]}...")
             try:
                 request_data = self._build_search_request(query)
                 session = await self._get_session()
@@ -269,7 +268,11 @@ class OpenAIBackend(SearchBackend):
 
                 response_data = response.json()
                 results = self._parse_openai_response(response_data, query)
-                logfire.info(f"OpenAI search complete: {len(results)} results")
+                logfire.info(
+                    f"OpenAI search returned {len(results)} results",
+                    query=query.query[:100],
+                    results=results,
+                )
                 return results
 
             except httpx.TimeoutException:  # type: ignore[misc]
