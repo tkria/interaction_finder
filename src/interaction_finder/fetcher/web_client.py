@@ -10,6 +10,26 @@ CHUNK_MIN_SENTENCES = 2
 CHUNK_SKIP_WINDOW = 1
 CHUNK_SIMILARITY_THRESHOLD = 0.5
 
+# PubMed full-text link following configuration
+PUBMED_MAX_CONCURRENT_LINKS = 3
+PUBMED_CONTENT_IMPROVEMENT_THRESHOLD = 0.5  # 50% improvement required
+
+# PubMed metadata headings to exclude from superset comparison
+# These are PubMed-specific UI elements, not part of the actual article
+PUBMED_METADATA_HEADINGS = {
+    "figures",
+    "conflict of interest statement",
+    "references",
+    "similar articles",
+    "cited by",
+    "publication types",
+    "mesh terms",
+    "substances",
+    "grant support",
+    "supplementary material",
+    "related information",
+}
+
 # DOI extraction schema for XPath-based extraction from academic publishers
 DOI_EXTRACTION_SCHEMA = {
     "name": "DOI extractor (XPath)",
@@ -45,6 +65,20 @@ DOI_EXTRACTION_SCHEMA = {
             "type": "attribute",
             "attribute": "href",
         },
+    ],
+}
+
+# PubMed full-text link extraction schema
+PUBMED_FULLTEXT_LINKS_SCHEMA = {
+    "name": "PubMed full-text links extractor",
+    "baseSelector": "/html",
+    "fields": [
+        {
+            "name": "fulltext_links",
+            "selector": "//div[contains(@class, 'full-text-links-list')]//a",
+            "type": "attribute",
+            "attribute": "href",
+        }
     ],
 }
 
@@ -423,10 +457,26 @@ class WebClient:
         )
 
     async def fetch_html(self, url: str, retry: bool = False) -> Dict[str, str]:
-        """Fetch HTML with automatic retry escalation."""
-        return await self._fetch_with_retry_escalation(
+        """Fetch HTML with automatic retry escalation and PubMed full-text following."""
+        # First, fetch the initial content
+        result = await self._fetch_with_retry_escalation(
             url, self._fetch_html_simple, self._fetch_html_stealth, retry
         )
+
+        # Check if this is a PubMed URL and try to find better full-text
+        if self._is_pubmed_url(url):
+            # Extract full-text links from already-fetched HTML
+            fulltext_links = self._extract_pubmed_fulltext_links(
+                result["raw_content"], url
+            )
+            if fulltext_links:
+                better_result = await self._try_pubmed_fulltext_links(
+                    result, fulltext_links
+                )
+                if better_result:
+                    return better_result
+
+        return result
 
     async def fetch_pdf(self, url: str, retry: bool = False) -> Dict[str, str]:
         """Fetch PDF content with format detection."""
@@ -698,6 +748,185 @@ class WebClient:
         from urllib.parse import urlparse
 
         return urlparse(url).path.lower().endswith(".pdf")
+
+    def _is_pubmed_url(self, url: str) -> bool:
+        """Check if URL is a PubMed article page."""
+        import re
+
+        return bool(re.match(r"https://pubmed\.ncbi\.nlm\.nih\.gov/\d+/?$", url))
+
+    def _extract_pubmed_fulltext_links(self, html: str, base_url: str) -> List[str]:
+        """
+        Extract full-text links from PubMed HTML.
+
+        Parameters:
+            html: Raw HTML content from PubMed page
+            base_url: PubMed URL for resolving relative links
+
+        Returns:
+            List of absolute full-text link URLs
+        """
+        from lxml import etree
+        from io import StringIO
+        from urllib.parse import urljoin
+
+        try:
+            parser = etree.HTMLParser()
+            tree = etree.parse(StringIO(html), parser)
+            # Extract all hrefs from links in the full-text-links-list div
+            links = tree.xpath(
+                "//div[contains(@class, 'full-text-links-list')]//a/@href"
+            )
+            # Convert to absolute URLs and deduplicate
+            return list(
+                dict.fromkeys(urljoin(base_url, link) for link in links if link)
+            )
+        except Exception:
+            return []
+
+    def _is_content_superset(self, candidate_md: str, baseline_md: str) -> bool:
+        """
+        Check if candidate is a strict superset of baseline content.
+
+        Criteria:
+        - Markdown length >= 1.5x baseline (50% improvement threshold)
+        - All baseline headings present in candidate
+        - Total heading content length >= baseline
+
+        Parameters:
+            candidate_md: Candidate markdown content
+            baseline_md: Baseline markdown content
+
+        Returns:
+            True if candidate is a strict superset, False otherwise
+        """
+        # Criterion 1: Length check (50% improvement)
+        if len(candidate_md) < len(baseline_md) * (
+            1 + PUBMED_CONTENT_IMPROVEMENT_THRESHOLD
+        ):
+            return False
+
+        # Extract headings from both documents
+        from .content_processor import ContentProcessor
+
+        processor = ContentProcessor()
+        baseline_headings = processor._extract_and_classify_headings(baseline_md)
+        candidate_headings = processor._extract_and_classify_headings(candidate_md)
+
+        # Criterion 2: All baseline headings must be present in candidate
+        # (excluding PubMed-specific metadata headings)
+        baseline_heading_texts = {h.text.lower().strip() for h in baseline_headings}
+        candidate_heading_texts = {h.text.lower().strip() for h in candidate_headings}
+
+        # Filter out PubMed metadata headings from baseline
+        baseline_content_headings = baseline_heading_texts - PUBMED_METADATA_HEADINGS
+
+        if not baseline_content_headings.issubset(candidate_heading_texts):
+            return False
+
+        # Criterion 3: Total heading content length comparison
+        # Extract content under each heading
+        def get_heading_content_length(markdown: str, headings) -> int:
+            """Calculate total length of content under headings."""
+            total_length = 0
+            for i, heading in enumerate(headings):
+                # Find content between this heading and next heading (or end)
+                start = heading.end_pos
+                if i + 1 < len(headings):
+                    end = headings[i + 1].start_pos
+                else:
+                    end = len(markdown)
+                content = markdown[start:end].strip()
+                total_length += len(content)
+            return total_length
+
+        baseline_content_length = get_heading_content_length(
+            baseline_md, baseline_headings
+        )
+        candidate_content_length = get_heading_content_length(
+            candidate_md, candidate_headings
+        )
+
+        if candidate_content_length < baseline_content_length:
+            return False
+
+        return True
+
+    async def _try_pubmed_fulltext_links(
+        self,
+        pubmed_result: Dict[str, str],
+        fulltext_links: List[str],
+    ) -> Dict[str, str] | None:
+        """
+        Try fetching full-text links to find better content.
+
+        Parameters:
+            pubmed_result: Result dict from PubMed fetch
+            fulltext_links: List of full-text link URLs to try
+
+        Returns:
+            Best result dict with updated final_url, or None if PubMed is best
+        """
+        if not fulltext_links:
+            return None
+
+        import asyncio
+
+        # Get baseline content for comparison
+        from .content_processor import ContentProcessor
+
+        processor = ContentProcessor()
+        baseline_md = processor.refine_article(pubmed_result["markdown_content"])
+
+        # Fetch full-text links concurrently with semaphore
+        semaphore = asyncio.Semaphore(PUBMED_MAX_CONCURRENT_LINKS)
+
+        async def try_single_link(link: str):
+            """Try fetching a single full-text link."""
+            async with semaphore:
+                try:
+                    # Fetch using the appropriate method (PDF or HTML)
+                    if self._is_pdf_url(link):
+                        result = await self.fetch_pdf(link, retry=False)
+                    else:
+                        result = await self.fetch_html(link, retry=False)
+
+                    # Process and compare
+                    candidate_md = processor.refine_article(result["markdown_content"])
+
+                    if self._is_content_superset(candidate_md, baseline_md):
+                        return (link, result, len(candidate_md))
+                    else:
+                        return None
+                except Exception:
+                    # Silently ignore failures for individual links
+                    return None
+
+        # Try all links concurrently
+        tasks = [try_single_link(link) for link in fulltext_links]
+        results = await asyncio.gather(*tasks, return_exceptions=False)
+
+        # Filter successful results and find best one (longest content)
+        successful_results = [r for r in results if r is not None]
+
+        if not successful_results:
+            return None
+
+        # Return the result with the most content
+        best_link, best_result, best_length = max(
+            successful_results, key=lambda x: x[2]
+        )
+
+        # Update final_url to point to the best full-text link
+        best_result["final_url"] = best_link
+
+        if self.verbose:
+            self._debug_console.print(
+                f"\r[green]Found better full-text at {best_link} "
+                f"({best_length} vs {len(baseline_md)} chars)[/green]"
+            )
+
+        return best_result
 
     def _should_retry_with_stealth(self, fetch_result: Dict[str, str]) -> bool:
         """Decide whether to retry fetching with stealth/full-text instrumentation."""

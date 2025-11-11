@@ -85,6 +85,36 @@ class IfetcherConfig(BaseModel):
             default_factory=Crawl4AI, description="Crawl4AI configuration"
         )
 
+        class Fetcher(BaseModel):
+            """Configuration for web content fetching."""
+
+            class PubMed(BaseModel):
+                """Configuration for PubMed full-text link following."""
+
+                follow_fulltext_links: bool = Field(
+                    True, description="Automatically follow PubMed full-text links"
+                )
+                max_concurrent_links: int = Field(
+                    3,
+                    ge=1,
+                    le=10,
+                    description="Maximum concurrent full-text link fetches",
+                )
+                content_improvement_threshold: float = Field(
+                    0.5,
+                    ge=0.0,
+                    le=1.0,
+                    description="Minimum improvement ratio (0.5 = 50% more content) required to use full-text link",
+                )
+
+            pubmed: PubMed = Field(
+                default_factory=PubMed, description="PubMed-specific configuration"
+            )
+
+        fetcher: Fetcher = Field(
+            default_factory=Fetcher, description="Fetcher configuration"
+        )
+
         class Keywords(BaseModel):
             """Configuration for keyword research module."""
 
