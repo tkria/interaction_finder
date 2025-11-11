@@ -65,10 +65,12 @@ def test_widesearch_command_basic(tmp_path, mock_keywords_file, mock_checkpoint)
     """Test basic widesearch command execution."""
     output_file = tmp_path / "output.json"
 
-    with patch("interaction_finder.cli.asyncio.run") as mock_asyncio:
-        # Setup mock to return checkpoint
-        mock_asyncio.return_value = mock_checkpoint
+    def mock_asyncio_run(coro):
+        """Mock asyncio.run that properly closes the coroutine."""
+        coro.close()  # Close coroutine to avoid "never awaited" warning
+        return mock_checkpoint
 
+    with patch("interaction_finder.cli.asyncio.run", side_effect=mock_asyncio_run):
         result = runner.invoke(
             app,
             [
@@ -141,9 +143,12 @@ def test_widesearch_with_backend_option(tmp_path, mock_keywords_file, mock_check
     """Test widesearch with backend option."""
     output_file = tmp_path / "output.json"
 
-    with patch("interaction_finder.cli.asyncio.run") as mock_asyncio:
-        mock_asyncio.return_value = mock_checkpoint
+    def mock_asyncio_run(coro):
+        """Mock asyncio.run that properly closes the coroutine."""
+        coro.close()  # Close coroutine to avoid "never awaited" warning
+        return mock_checkpoint
 
+    with patch("interaction_finder.cli.asyncio.run", side_effect=mock_asyncio_run):
         result = runner.invoke(
             app,
             [
@@ -165,9 +170,12 @@ def test_widesearch_with_max_rounds(tmp_path, mock_keywords_file, mock_checkpoin
     """Test widesearch with max_rounds override."""
     output_file = tmp_path / "output.json"
 
-    with patch("interaction_finder.cli.asyncio.run") as mock_asyncio:
-        mock_asyncio.return_value = mock_checkpoint
+    def mock_asyncio_run(coro):
+        """Mock asyncio.run that properly closes the coroutine."""
+        coro.close()  # Close coroutine to avoid "never awaited" warning
+        return mock_checkpoint
 
+    with patch("interaction_finder.cli.asyncio.run", side_effect=mock_asyncio_run):
         result = runner.invoke(
             app,
             [
@@ -188,9 +196,12 @@ def test_widesearch_with_reranking_flags(tmp_path, mock_keywords_file, mock_chec
     """Test widesearch with reranking enable/disable flags."""
     output_file = tmp_path / "output.json"
 
-    with patch("interaction_finder.cli.asyncio.run") as mock_asyncio:
-        mock_asyncio.return_value = mock_checkpoint
+    def mock_asyncio_run(coro):
+        """Mock asyncio.run that properly closes the coroutine."""
+        coro.close()  # Close coroutine to avoid "never awaited" warning
+        return mock_checkpoint
 
+    with patch("interaction_finder.cli.asyncio.run", side_effect=mock_asyncio_run):
         # Test with --no-rerank
         result = runner.invoke(
             app,
@@ -244,9 +255,13 @@ def test_widesearch_unknown_backend(tmp_path, mock_keywords_file):
 
 def test_widesearch_without_output_file(mock_keywords_file, mock_checkpoint):
     """Test widesearch without output file (should still run)."""
-    with patch("interaction_finder.cli.asyncio.run") as mock_asyncio:
-        mock_asyncio.return_value = mock_checkpoint
 
+    def mock_asyncio_run(coro):
+        """Mock asyncio.run that properly closes the coroutine."""
+        coro.close()  # Close coroutine to avoid "never awaited" warning
+        return mock_checkpoint
+
+    with patch("interaction_finder.cli.asyncio.run", side_effect=mock_asyncio_run):
         result = runner.invoke(
             app,
             ["widesearch", str(mock_keywords_file), "test topic"],
@@ -261,9 +276,12 @@ def test_widesearch_checkpoint_structure(tmp_path, mock_keywords_file, mock_chec
     """Test that checkpoint JSON has all required fields."""
     output_file = tmp_path / "checkpoint.json"
 
-    with patch("interaction_finder.cli.asyncio.run") as mock_asyncio:
-        mock_asyncio.return_value = mock_checkpoint
+    def mock_asyncio_run(coro):
+        """Mock asyncio.run that properly closes the coroutine."""
+        coro.close()  # Close coroutine to avoid "never awaited" warning
+        return mock_checkpoint
 
+    with patch("interaction_finder.cli.asyncio.run", side_effect=mock_asyncio_run):
         result = runner.invoke(
             app,
             [
@@ -307,9 +325,12 @@ def test_widesearch_with_config_overrides(
     """Test widesearch with config overrides."""
     output_file = tmp_path / "output.json"
 
-    with patch("interaction_finder.cli.asyncio.run") as mock_asyncio:
-        mock_asyncio.return_value = mock_checkpoint
+    def mock_asyncio_run(coro):
+        """Mock asyncio.run that properly closes the coroutine."""
+        coro.close()  # Close coroutine to avoid "never awaited" warning
+        return mock_checkpoint
 
+    with patch("interaction_finder.cli.asyncio.run", side_effect=mock_asyncio_run):
         result = runner.invoke(
             app,
             [
@@ -330,9 +351,12 @@ def test_widesearch_verbose_mode(tmp_path, mock_keywords_file, mock_checkpoint):
     """Test widesearch with verbose flag."""
     output_file = tmp_path / "output.json"
 
-    with patch("interaction_finder.cli.asyncio.run") as mock_asyncio:
-        mock_asyncio.return_value = mock_checkpoint
+    def mock_asyncio_run(coro):
+        """Mock asyncio.run that properly closes the coroutine."""
+        coro.close()  # Close coroutine to avoid "never awaited" warning
+        return mock_checkpoint
 
+    with patch("interaction_finder.cli.asyncio.run", side_effect=mock_asyncio_run):
         result = runner.invoke(
             app,
             [
