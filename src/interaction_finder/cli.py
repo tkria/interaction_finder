@@ -707,7 +707,7 @@ def widesearch(
         console.print()
         # Pre-load reranker if enabled to avoid debug messages during progress display
         reranker = None
-        if cfg.tools.widesearch.enable_reranking:
+        if cfg.tools.widesearch.rerank_top_k > 0:
             from interaction_finder.widesearch.reranker import Reranker
 
             reranker = Reranker(
@@ -730,7 +730,6 @@ def widesearch(
                     resource_pool=bridging_terms.resources,
                     config=cfg,
                     max_rounds=max_rounds,
-                    enable_reranking=enable_reranking,
                     reranker=reranker,
                     progress=progress_counter,
                 )
