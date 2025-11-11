@@ -343,13 +343,33 @@ Select the most relevant results and summarize what subject areas they cover."""
             # Accumulate coverage summaries
             ctx.state.search_summaries.append(result.output.covered_topics_summary)
 
+            # Compute rejected indices for logging
+            all_indices = set(range(len(batch)))
+            selected_indices_set = set(result.output.selected_indices)
+            rejected_indices = sorted(all_indices - selected_indices_set)
+
+            # Build selected and rejected result info for logging
+            selected_results_info = [
+                {"index": idx, "title": batch[idx].title, "url": batch[idx].url}
+                for idx in result.output.selected_indices
+                if 0 <= idx < len(batch)
+            ]
+            rejected_results_info = [
+                {"index": idx, "title": batch[idx].title, "url": batch[idx].url}
+                for idx in rejected_indices
+            ]
+
             logfire.info(
                 f"Batch processed: selected {len(result.output.selected_indices)} results ({registered_count} new URLs registered)",
                 batch_size=len(batch),
                 batch_offset=batch_offset,
                 selected_count=len(result.output.selected_indices),
                 registered_count=registered_count,
+                rejected_count=len(rejected_indices),
                 covered_topics=result.output.covered_topics_summary[:200],
+                reasoning=result.output.reasoning,
+                selected_results=selected_results_info,
+                rejected_results=rejected_results_info,
             )
 
 

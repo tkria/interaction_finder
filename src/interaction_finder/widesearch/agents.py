@@ -80,24 +80,45 @@ Query Generation Guidelines:
 
 IMPORTANT: Return ALL queries in a single structured response. Do not create multiple separate responses for different complexity levels."""
 
-RESULT_SELECTOR_PROMPT = """You are an expert at evaluating search results for relevance and coverage.
+RESULT_SELECTOR_PROMPT = """You are an expert at identifying relevant research papers for comprehensive literature collection.
 
-Your task is to select which search results are most relevant to the research topic and summarize what subject areas they cover.
+Your task is to select search results that are relevant to the research topic. The goal is to build a broad collection of papers for downstream entity extraction and analysis, so adopt an inclusive selection strategy.
 
-Selection criteria:
-- Prioritize results highly relevant to the topic
-- Look for comprehensive coverage (reviews, surveys, meta-analyses)
-- Favor results that appear to discuss multiple aspects or connections
-- Prefer authoritative sources and recent publications when titles/snippets suggest quality
-- Select 5-15 results depending on quality and diversity
-- Ensure selected results advance coverage of subject goals
+## Selection Strategy
 
-Coverage summary requirements:
-- Identify what subject areas and topics are well-covered by selected results
-- Note any connections, methodologies, or perspectives represented
-- Be specific about what aspects of the topic these results address
+Include results that meet ANY of these criteria:
+- Directly relevant to the research topic (mentions key concepts, entities, or domains)
+- Discusses mechanisms, pathways, biological processes, or clinical applications related to the topic
+- Reports primary research findings ON the topic (experimental studies, clinical trials, case reports)
+- Provides overviews of the topic or related domains (reviews, meta-analyses, systematic reviews)
+- Examines methodologies, techniques, or approaches used to study the topic
+- Discusses entities or associations that plausibly connect to the topic (genes, proteins, diseases, pathways, treatments)
 
-Your selection and summary will guide the reflection process to determine if more searching is needed."""
+When uncertain about a result's relevance based solely on title and snippet, include it rather than exclude it. Downstream processing will filter for quality and extract specific information.
+
+## What to Exclude
+
+Exclude only results that are:
+- Clearly off-topic or unrelated to the research domain
+- Duplicate content (same paper appearing multiple times in the batch)
+- Non-academic content with no substantive research discussion (news, advertisements, etc.)
+
+## Selection Target
+
+Aim to select 40-60% of results in each batch. Adjust based on apparent quality:
+- If most results appear highly relevant, select toward the higher end (50-60%)
+- If results are mixed quality, select toward the middle range (40-50%)
+- Only select fewer than 40% if the batch contains substantial off-topic content
+
+## Coverage Summary
+
+After making your selection, provide a summary that includes:
+- What subject areas and research domains are covered by selected results
+- What types of research are represented (reviews, primary studies, clinical research, basic science)
+- What specific aspects of the topic these results address (mechanisms, treatments, diagnostics, etc.)
+- Any notable entities, pathways, or connections mentioned across results
+
+Your selection builds the literature collection for entity extraction. Prioritize breadth and recall over precision."""
 
 REFLECTOR_PROMPT = """You are an expert at evaluating literature search coverage and deciding when sufficient breadth has been achieved.
 
@@ -134,6 +155,7 @@ IMPORTANT: Require strong evidence before stopping. "Adequate coverage" is not s
 
 
 # Agent factory functions - thin wrappers over get_agent() using the prompts above
+
 
 def get_goal_planner_agent(config: IfetcherConfig) -> Agent:
     """Get goal planner agent."""
