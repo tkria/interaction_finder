@@ -29,7 +29,6 @@ async def run_widesearch(
     resource_pool: ResourcePool | None = None,
     config: IfetcherConfig | None = None,
     max_rounds: int | None = None,
-    enable_reranking: bool | None = None,
     reranker: Reranker | None = None,
     http_client: httpx.AsyncClient | None = None,
     progress: Any | None = None,
@@ -47,8 +46,7 @@ async def run_widesearch(
         resource_pool: ResourcePool | None — existing resource pool (creates new if None)
         config: IfetcherConfig | None — configuration object (uses defaults if None)
         max_rounds: int | None — override max_rounds from config
-        enable_reranking: bool | None — override enable_reranking from config
-        reranker: Reranker | None — pre-initialized reranker (creates new if None and reranking enabled)
+        reranker: Reranker | None — pre-initialized reranker (creates new if None and rerank_top_k > 0)
         http_client: httpx.AsyncClient | None — HTTP client (creates temporary if None)
         progress: Any | None — optional progress counter for live display
 
@@ -65,7 +63,6 @@ async def run_widesearch(
         ...     keyphrases=["insulin", "glucose"],
         ...     search_backend=backend,
         ...     max_rounds=3,
-        ...     enable_reranking=False
         ... )
         >>> print(f"Found {len(results)} unique URLs")
     """
@@ -77,9 +74,6 @@ async def run_widesearch(
     ws_config = config.tools.widesearch
 
     # Resolve effective values (parameter overrides take precedence)
-    effective_enable_reranking = (
-        enable_reranking if enable_reranking is not None else ws_config.enable_reranking
-    )
     effective_max_rounds = (
         max_rounds if max_rounds is not None else ws_config.max_rounds
     )
@@ -88,8 +82,8 @@ async def run_widesearch(
     if resource_pool is None:
         resource_pool = ResourcePool()
 
-    # Create reranker if enabled and not provided
-    if reranker is None and effective_enable_reranking:
+    # Create reranker if enabled (rerank_top_k > 0) and not provided
+    if reranker is None and ws_config.rerank_top_k > 0:
         reranker = Reranker(
             model_name=ws_config.reranker_model,
             device=ws_config.reranker_device,
@@ -137,7 +131,6 @@ async def run_widesearch_with_checkpoint(
     resource_pool: ResourcePool | None = None,
     config: IfetcherConfig | None = None,
     max_rounds: int | None = None,
-    enable_reranking: bool | None = None,
     reranker: Reranker | None = None,
     http_client: httpx.AsyncClient | None = None,
     progress: Any | None = None,
@@ -156,8 +149,7 @@ async def run_widesearch_with_checkpoint(
         resource_pool: ResourcePool | None — existing resource pool (creates new if None)
         config: IfetcherConfig | None — configuration object (uses defaults if None)
         max_rounds: int | None — override max_rounds from config
-        enable_reranking: bool | None — override enable_reranking from config
-        reranker: Reranker | None — pre-initialized reranker (creates new if None and reranking enabled)
+        reranker: Reranker | None — pre-initialized reranker (creates new if None and rerank_top_k > 0)
         http_client: httpx.AsyncClient | None — HTTP client (creates temporary if None)
         progress: Any | None — optional progress counter for live display
 
@@ -186,9 +178,6 @@ async def run_widesearch_with_checkpoint(
     ws_config = config.tools.widesearch
 
     # Resolve effective values (parameter overrides take precedence)
-    effective_enable_reranking = (
-        enable_reranking if enable_reranking is not None else ws_config.enable_reranking
-    )
     effective_max_rounds = (
         max_rounds if max_rounds is not None else ws_config.max_rounds
     )
@@ -197,8 +186,8 @@ async def run_widesearch_with_checkpoint(
     if resource_pool is None:
         resource_pool = ResourcePool()
 
-    # Create reranker if enabled and not provided
-    if reranker is None and effective_enable_reranking:
+    # Create reranker if enabled (rerank_top_k > 0) and not provided
+    if reranker is None and ws_config.rerank_top_k > 0:
         reranker = Reranker(
             model_name=ws_config.reranker_model,
             device=ws_config.reranker_device,

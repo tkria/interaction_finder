@@ -189,10 +189,10 @@ class RerankNode(BaseNode[State, Deps, list[SearchResult]]):
                 logfire.info("No results to rerank, skipping")
                 return SelectResultsNode()
 
-            # Check if reranking is enabled
-            enable_reranking = ctx.deps.config.tools.widesearch.enable_reranking
+            # Check if reranking is enabled (rerank_top_k > 0)
+            top_k = ctx.deps.config.tools.widesearch.rerank_top_k
 
-            if not enable_reranking or ctx.deps.reranker is None:
+            if top_k == 0 or ctx.deps.reranker is None:
                 logfire.info(
                     f"Reranking disabled, passing {len(ctx.state.current_results)} results unchanged"
                 )
@@ -201,7 +201,6 @@ class RerankNode(BaseNode[State, Deps, list[SearchResult]]):
             logfire.info(f"Reranking {len(ctx.state.current_results)} results")
 
             # Rerank using topic as query
-            top_k = ctx.deps.config.tools.widesearch.rerank_top_k
             reranked = ctx.deps.reranker.rerank(
                 ctx.state.topic, ctx.state.current_results, top_k=top_k
             )

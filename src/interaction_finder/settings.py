@@ -182,15 +182,11 @@ class IfetcherConfig(BaseModel):
             max_rounds: int = Field(
                 8, ge=1, le=15, description="Maximum search rounds before stopping"
             )
-            enable_reranking: bool = Field(
-                False,
-                description="Enable semantic reranking of search results (if False, pass all results to LLM)",
-            )
             rerank_top_k: int = Field(
-                50,
-                ge=1,
+                0,
+                ge=0,
                 le=200,
-                description="Number of top results to keep after reranking (only used if enable_reranking=True)",
+                description="Number of top results to keep after reranking (0 = disabled, pass all results to LLM)",
             )
             batch_size: int = Field(
                 0,

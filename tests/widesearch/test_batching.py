@@ -21,8 +21,8 @@ def test_config():
     config = IfetcherConfig()
     # Force CPU device for reranker to avoid CUDA OOM in tests
     config.tools.widesearch.reranker_device = "cpu"
-    # Disable reranking by default for these tests
-    config.tools.widesearch.enable_reranking = False
+    # Disable reranking by default for these tests (rerank_top_k = 0)
+    config.tools.widesearch.rerank_top_k = 0
     return config
 
 
@@ -178,7 +178,6 @@ async def test_batching_with_reranking_enabled(test_config):
     test_model = TestModel()
 
     # Enable both reranking and batching
-    test_config.tools.widesearch.enable_reranking = True
     test_config.tools.widesearch.rerank_top_k = 20  # Rerank down to 20 results
     test_config.tools.widesearch.batch_size = 10  # Then process in batches of 10
 

@@ -53,7 +53,6 @@ async def test_search_result_metadata_preserved():
         keyphrases=["keyword1", "keyword2"],
         search_backend=backend,
         max_rounds=1,  # Single round to simplify
-        enable_reranking=False,
     )
 
     # Should have at least some results
@@ -83,7 +82,6 @@ async def test_max_rounds_metadata_preserved():
         keyphrases=["keyword1"],
         search_backend=backend,
         max_rounds=2,  # Force max_rounds termination
-        enable_reranking=False,
     )
 
     assert len(results) > 0
@@ -106,7 +104,6 @@ async def test_checkpoint_metadata_preserved():
         keyphrases=["keyword1"],
         search_backend=backend,
         max_rounds=1,
-        enable_reranking=False,
     )
 
     # Check results in checkpoint

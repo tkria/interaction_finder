@@ -153,7 +153,6 @@ async def test_run_widesearch_disable_reranking():
             keyphrases=["keyword"],
             search_backend=backend,
             max_rounds=1,
-            enable_reranking=False,  # Disable reranking
         )
 
         assert isinstance(results, list)

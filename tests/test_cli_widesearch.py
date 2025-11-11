@@ -202,14 +202,14 @@ def test_widesearch_with_reranking_flags(tmp_path, mock_keywords_file, mock_chec
         return mock_checkpoint
 
     with patch("interaction_finder.cli.asyncio.run", side_effect=mock_asyncio_run):
-        # Test with --no-rerank
+        # Test with --rerank-top-k=0 (disabled)
         result = runner.invoke(
             app,
             [
                 "widesearch",
                 str(mock_keywords_file),
                 "test topic",
-                "--no-rerank",
+                "--rerank-top-k=0",
                 "-o",
                 str(output_file),
             ],
@@ -217,14 +217,14 @@ def test_widesearch_with_reranking_flags(tmp_path, mock_keywords_file, mock_chec
 
         assert result.exit_code == 0
 
-        # Test with --rerank
+        # Test with --rerank-top-k=50 (enabled)
         result = runner.invoke(
             app,
             [
                 "widesearch",
                 str(mock_keywords_file),
                 "test topic",
-                "--rerank",
+                "--rerank-top-k=50",
                 "-o",
                 str(output_file),
             ],
