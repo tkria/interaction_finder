@@ -140,8 +140,6 @@ class SearchNode(BaseNode[State, Deps, list[SearchResult]]):
             num_queries=len(ctx.state.current_queries),
             round=ctx.state.current_round,
         ):
-            logfire.info(f"Executing {len(ctx.state.current_queries)} search queries")
-
             # Execute all searches
             all_results = []
             for query_text in ctx.state.current_queries:
@@ -164,7 +162,10 @@ class SearchNode(BaseNode[State, Deps, list[SearchResult]]):
             unique_urls = len(set(r.url for r in all_results))
 
             logfire.info(
-                f"Found {len(all_results)} total results ({unique_urls} unique URLs)"
+                f"Fetched {len(all_results)} results ({unique_urls} unique)",
+                total_results=len(all_results),
+                unique_urls=unique_urls,
+                results=all_results,
             )
 
             return RerankNode()
