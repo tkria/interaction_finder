@@ -182,12 +182,17 @@ class RerankNode(BaseNode[State, Deps, list[SearchResult]]):
     async def run(self, ctx: GraphRunContext[State, Deps]) -> "SelectResultsNode":
         """Rerank results and update state (or skip if disabled)."""
         with logfire.span(
-            "RerankNode",
+            f"Rerank: {len(ctx.state.current_results)} results",
             num_results=len(ctx.state.current_results),
             round=ctx.state.current_round,
         ):
             if not ctx.state.current_results:
-                logfire.info("No results to rerank, skipping")
+                logfire.info(
+                    "No results to rerank",
+                    input_count=0,
+                    output_count=0,
+                    results=[],
+                )
                 return SelectResultsNode()
 
             # Check if reranking is enabled (rerank_top_k > 0)
@@ -195,11 +200,12 @@ class RerankNode(BaseNode[State, Deps, list[SearchResult]]):
 
             if top_k == 0 or ctx.deps.reranker is None:
                 logfire.info(
-                    f"Reranking disabled, passing {len(ctx.state.current_results)} results unchanged"
+                    f"Reranking disabled, passing {len(ctx.state.current_results)} results unchanged",
+                    input_count=len(ctx.state.current_results),
+                    output_count=len(ctx.state.current_results),
+                    reranking_enabled=False,
                 )
                 return SelectResultsNode()
-
-            logfire.info(f"Reranking {len(ctx.state.current_results)} results")
 
             # Rerank using topic as query
             reranked = ctx.deps.reranker.rerank(
@@ -208,6 +214,14 @@ class RerankNode(BaseNode[State, Deps, list[SearchResult]]):
 
             # Update state with reranked results
             ctx.state.current_results = reranked
+
+            logfire.info(
+                f"Reranked {len(reranked)} results",
+                input_count=len(ctx.state.current_results),
+                output_count=len(reranked),
+                top_k=top_k,
+                results=reranked,
+            )
 
             return SelectResultsNode()
 

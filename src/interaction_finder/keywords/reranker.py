@@ -117,10 +117,25 @@ class Reranker:
         if top_k is not None:
             reranked = reranked[:top_k]
         final_results = [result for _, result in reranked]
+
+        # Compute score range for logging
+        score_range = None
+        if final_results:
+            min_score = final_results[-1].relevance
+            max_score = final_results[0].relevance
+            score_range = {"min": min_score, "max": max_score}
+
         logfire.info(
-            f"Reranked {len(results)} results → {len(final_results)} results (scores: {final_results[0].relevance:.2f}-{final_results[-1].relevance:.2f})"
-            if final_results
-            else "Reranked 0 results"
+            f"Reranked {len(results)} results → {len(final_results)} results"
+            + (
+                f" (scores: {final_results[0].relevance:.2f}-{final_results[-1].relevance:.2f})"
+                if final_results
+                else ""
+            ),
+            input_count=len(results),
+            output_count=len(final_results),
+            score_range=score_range,
+            results=final_results,
         )
         return final_results
 

@@ -125,8 +125,11 @@ class SearchNode(BaseNode[State, Deps, BridgingTermsOut]):
 
     async def run(self, ctx: GraphRunContext[State, Deps]) -> "RerankNode":
         """Execute searches and store results."""
-        with logfire.span("SearchNode", num_queries=len(ctx.state.search_queries)):
-            logfire.info(f"Executing {len(ctx.state.search_queries)} search queries")
+        with logfire.span(
+            f"Keyword search: {ctx.state.topic}",
+            topic=ctx.state.topic,
+            num_queries=len(ctx.state.search_queries),
+        ):
             # Execute all searches
             all_results = []
             for query_text in ctx.state.search_queries:
@@ -138,7 +141,17 @@ class SearchNode(BaseNode[State, Deps, BridgingTermsOut]):
                 all_results.extend(results)
             # Store in state
             ctx.state.all_search_results = all_results
-            logfire.info(f"Found {len(all_results)} total search results")
+
+            # Count unique URLs
+            unique_urls = len(set(r.url for r in all_results))
+
+            logfire.info(
+                f"Fetched {len(all_results)} results ({unique_urls} unique)",
+                queries=ctx.state.search_queries,
+                total_results=len(all_results),
+                unique_urls=unique_urls,
+                results=all_results,
+            )
             return RerankNode()
 
 
@@ -151,18 +164,31 @@ class RerankNode(BaseNode[State, Deps, BridgingTermsOut]):
 
     async def run(self, ctx: GraphRunContext[State, Deps]) -> "SelectResultsNode":
         """Rerank results and update state."""
-        with logfire.span("RerankNode", num_results=len(ctx.state.all_search_results)):
+        with logfire.span(
+            f"Rerank: {len(ctx.state.all_search_results)} results",
+            num_results=len(ctx.state.all_search_results),
+        ):
             if not ctx.state.all_search_results:
-                logfire.info("No results to rerank, skipping")
-                # No results to rerank, skip to selection
+                logfire.info(
+                    "No results to rerank",
+                    input_count=0,
+                    output_count=0,
+                    results=[],
+                )
                 return SelectResultsNode()
-            logfire.info(f"Reranking {len(ctx.state.all_search_results)} results")
             # Rerank using topic as query
             reranked = ctx.deps.reranker.rerank(
                 ctx.state.topic, ctx.state.all_search_results
             )
             # Update state with reranked results
             ctx.state.all_search_results = reranked
+
+            logfire.info(
+                f"Reranked {len(reranked)} results",
+                input_count=len(ctx.state.all_search_results),
+                output_count=len(reranked),
+                results=reranked,
+            )
             return SelectResultsNode()
 
 
@@ -228,7 +254,8 @@ class FetchDocumentsNode(BaseNode[State, Deps, BridgingTermsOut]):
     async def run(self, ctx: GraphRunContext[State, Deps]) -> "ExtractKeywordsNode":
         """Fetch documents and add to resource pool."""
         with logfire.span(
-            "FetchDocumentsNode", num_selected=len(ctx.state.selected_results)
+            f"Fetch {len(ctx.state.selected_results)} documents",
+            num_selected=len(ctx.state.selected_results),
         ):
             if not ctx.state.selected_results:
                 logfire.info("No selected results, skipping to finalization")
