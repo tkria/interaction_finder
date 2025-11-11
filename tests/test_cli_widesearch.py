@@ -192,8 +192,10 @@ def test_widesearch_with_max_rounds(tmp_path, mock_keywords_file, mock_checkpoin
         assert result.exit_code == 0
 
 
-def test_widesearch_with_reranking_flags(tmp_path, mock_keywords_file, mock_checkpoint):
-    """Test widesearch with reranking enable/disable flags."""
+def test_widesearch_with_reranking_config(
+    tmp_path, mock_keywords_file, mock_checkpoint
+):
+    """Test widesearch with reranking configuration via overrides."""
     output_file = tmp_path / "output.json"
 
     def mock_asyncio_run(coro):
@@ -202,7 +204,7 @@ def test_widesearch_with_reranking_flags(tmp_path, mock_keywords_file, mock_chec
         return mock_checkpoint
 
     with patch("interaction_finder.cli.asyncio.run", side_effect=mock_asyncio_run):
-        # Test with --rerank-top-k=0 (disabled)
+        # Test with rerank_top_k=0 (disabled) via config override
         with patch(
             "interaction_finder.widesearch.reranker.Reranker"
         ) as mock_reranker_cls:
@@ -212,7 +214,8 @@ def test_widesearch_with_reranking_flags(tmp_path, mock_keywords_file, mock_chec
                     "widesearch",
                     str(mock_keywords_file),
                     "test topic",
-                    "--rerank-top-k=0",
+                    "-O",
+                    "tools.widesearch.rerank_top_k=0",
                     "-o",
                     str(output_file),
                 ],
@@ -222,7 +225,7 @@ def test_widesearch_with_reranking_flags(tmp_path, mock_keywords_file, mock_chec
             # Verify Reranker was NOT instantiated when rerank_top_k=0
             mock_reranker_cls.assert_not_called()
 
-        # Test with --rerank-top-k=50 (enabled)
+        # Test with rerank_top_k=50 (enabled) via config override
         with patch(
             "interaction_finder.widesearch.reranker.Reranker"
         ) as mock_reranker_cls:
@@ -237,7 +240,8 @@ def test_widesearch_with_reranking_flags(tmp_path, mock_keywords_file, mock_chec
                     "widesearch",
                     str(mock_keywords_file),
                     "test topic",
-                    "--rerank-top-k=50",
+                    "-O",
+                    "tools.widesearch.rerank_top_k=50",
                     "-o",
                     str(output_file),
                 ],

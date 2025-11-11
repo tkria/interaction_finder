@@ -611,11 +611,6 @@ def widesearch(
     max_rounds: Optional[int] = typer.Option(
         None, "--max-rounds", help="Override maximum search rounds"
     ),
-    rerank_top_k: Optional[int] = typer.Option(
-        None,
-        "--rerank-top-k",
-        help="Number of top results after reranking (0 = disabled)",
-    ),
     fetch: bool = typer.Option(
         False, "--fetch", help="Fetch and cache content for all selected results"
     ),
@@ -662,8 +657,6 @@ def widesearch(
         # Apply CLI overrides to config
         if max_rounds is not None:
             cfg.tools.widesearch.max_rounds = max_rounds
-        if rerank_top_k is not None:
-            cfg.tools.widesearch.rerank_top_k = rerank_top_k
         # Determine backend
         backend_name = backend if backend else cfg.tools.widesearch.search_backend
         # Import backends and create mapping
