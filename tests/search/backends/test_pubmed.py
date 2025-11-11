@@ -151,26 +151,15 @@ class TestPubMedBackendInitialization:
             with pytest.raises(RuntimeError, match="httpx is required"):
                 PubMedBackend()
 
-    def test_api_key_info_message_when_not_configured(self):
-        """Test that informational message is logged when API key is missing."""
-        with patch("interaction_finder.search.backends.pubmed.logfire") as mock_logfire:
-            PubMedBackend()
+    def test_api_key_warning_check_when_not_configured(self):
+        """Test that warning check returns True when API key is missing."""
+        backend = PubMedBackend()
+        assert backend.should_show_api_key_warning() is True
 
-            # Should log info message about API key
-            mock_logfire.info.assert_called_once()
-            call_args = mock_logfire.info.call_args[0][0]
-            assert "API key not configured" in call_args
-            assert "3 req/sec" in call_args
-            assert "10 req/sec" in call_args
-            assert "https://www.ncbi.nlm.nih.gov/account/settings/" in call_args
-
-    def test_no_api_key_message_when_configured(self):
-        """Test that no message is logged when API key is present."""
-        with patch("interaction_finder.search.backends.pubmed.logfire") as mock_logfire:
-            PubMedBackend({"api_key": "test_key"})
-
-            # Should not log info message
-            mock_logfire.info.assert_not_called()
+    def test_api_key_warning_check_when_configured(self):
+        """Test that warning check returns False when API key is present."""
+        backend = PubMedBackend({"api_key": "test_key"})
+        assert backend.should_show_api_key_warning() is False
 
 
 class TestSessionManagement:

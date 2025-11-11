@@ -475,11 +475,27 @@ def extract_keywords(
         if backend:
             cfg.tools.keywords.search_backend = backend
 
+        # Show PubMed API key warning if using PubMed backend
+        # Note: Keywords module currently hardcodes PubMedBackend
+        backend_name = cfg.tools.keywords.search_backend
+        if backend_name == "pubmed":
+            # Import backend to check for API key
+            from interaction_finder.search.backends.pubmed import PubMedBackend
+
+            test_backend = PubMedBackend(config={})
+            if test_backend.should_show_api_key_warning():
+                console.print(
+                    "[yellow]Note:[/yellow] PubMed API key not configured. "
+                    "Using default rate limit of 3 req/sec.\n"
+                    "With an API key, you can increase to 10 req/sec. "
+                    "Get your free key at: https://www.ncbi.nlm.nih.gov/account/settings/\n"
+                )
+
         # Import here to avoid slow imports at CLI startup
         from interaction_finder.keywords import run_keyword_research
 
         # Run keyword research
-        console.print(f"\n[bold]Extracting bridging terms for:[/bold] {topic}\n")
+        console.print(f"[bold]Extracting bridging terms for:[/bold] {topic}\n")
         result = asyncio.run(run_keyword_research(topic, cfg, verbose=True))
 
         # Display results
@@ -597,11 +613,23 @@ def widesearch(
             valid = ", ".join(BACKENDS.keys())
             raise ValueError(f"Unknown backend '{backend_name}'. Valid: {valid}")
         search_backend = backend_class(config={})
+        # Show PubMed API key warning if applicable
+        if (
+            backend_name == "pubmed"
+            and hasattr(search_backend, "should_show_api_key_warning")
+            and search_backend.should_show_api_key_warning()
+        ):
+            console.print(
+                "[yellow]Note:[/yellow] PubMed API key not configured. "
+                "Using default rate limit of 3 req/sec.\n"
+                "With an API key, you can increase to 10 req/sec. "
+                "Get your free key at: https://www.ncbi.nlm.nih.gov/account/settings/\n"
+            )
         # Import widesearch entrypoint
         from interaction_finder.widesearch import run_widesearch_with_checkpoint
 
         # Display start message
-        console.print(f"\n[bold]Running widesearch for:[/bold] {topic}")
+        console.print(f"[bold]Running widesearch for:[/bold] {topic}")
         console.print(f"Using {len(keyphrases)} keyphrases from {keywords_file.name}")
         # Show resource pool info if present
         resource_count = len(bridging_terms.resources.resource_map)

@@ -61,15 +61,6 @@ class PubMedBackend(SearchBackend):
         self.retmode = config.get("retmode", "xml")
         self.use_mesh = config.get("use_mesh", True)
 
-        # Inform about API key benefits
-        if not self.api_key:
-            logfire.info(
-                "PubMed API key not configured. "
-                "Using default rate limit of 3 req/sec. "
-                "With an API key, you can increase to 10 req/sec. "
-                "Get your free key at: https://www.ncbi.nlm.nih.gov/account/settings/"
-            )
-
         # Rate limiting
         self._last_request_time = 0.0
         self._request_lock = asyncio.Lock()
@@ -81,6 +72,10 @@ class PubMedBackend(SearchBackend):
     def name(self) -> str:
         """Name identifier for this backend."""
         return "pubmed"
+
+    def should_show_api_key_warning(self) -> bool:
+        """Check if API key warning should be displayed."""
+        return not self.api_key
 
     async def _get_session(self) -> httpx.AsyncClient:  # type: ignore[valid-type]
         """Get or create HTTP session."""
