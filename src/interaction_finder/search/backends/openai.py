@@ -238,9 +238,10 @@ class OpenAIBackend(SearchBackend):
 
     async def search(self, query: SearchQuery) -> List[SearchResult]:
         """Perform a search with the given query."""
+        query_text = query.query
         with logfire.span(
-            "OpenAIBackend.search",
-            query=query.query[:100],
+            f"OpenAI: {query_text}",
+            query=query_text,
             max_results=query.max_results,
             model=self.model,
         ):
@@ -270,7 +271,7 @@ class OpenAIBackend(SearchBackend):
                 results = self._parse_openai_response(response_data, query)
                 logfire.info(
                     f"OpenAI search returned {len(results)} results",
-                    query=query.query[:100],
+                    query=query_text,
                     results=results,
                 )
                 return results

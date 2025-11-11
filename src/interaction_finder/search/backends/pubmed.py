@@ -289,9 +289,10 @@ class PubMedBackend(SearchBackend):
 
     async def search(self, query: SearchQuery) -> List[SearchResult]:
         """Perform a search with the given query."""
+        query_text = query.query
         with logfire.span(
-            "PubMedBackend.search",
-            query=query.query[:100],
+            f"PubMed: {query_text}",
+            query=query_text,
             max_results=query.max_results,
         ):
             try:
@@ -303,7 +304,7 @@ class PubMedBackend(SearchBackend):
                 if not pmids:
                     logfire.info(
                         f"PubMed search returned 0 results",
-                        query=query.query[:100],
+                        query=query_text,
                         total_matches=total_count,
                         pmids=[],
                         results=[],
@@ -335,7 +336,7 @@ class PubMedBackend(SearchBackend):
 
                 logfire.info(
                     f"PubMed search returned {len(results)} results (total matches: {total_count})",
-                    query=query.query[:100],
+                    query=query_text,
                     total_matches=total_count,
                     pmids=pmids,
                     results=results,

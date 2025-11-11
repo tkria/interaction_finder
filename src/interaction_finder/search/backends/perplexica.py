@@ -133,9 +133,10 @@ class PerplexicaBackend(SearchBackend):
 
     async def search(self, query: SearchQuery) -> List[SearchResult]:
         """Perform a search with the given query."""
+        query_text = query.query
         with logfire.span(
-            "PerplexicaBackend.search",
-            query=query.query[:100],
+            f"Perplexica: {query_text}",
+            query=query_text,
             max_results=query.max_results,
         ):
             try:
@@ -161,7 +162,7 @@ class PerplexicaBackend(SearchBackend):
                 results = self._parse_perplexica_response(response_data, query)
                 logfire.info(
                     f"Perplexica search returned {len(results)} results",
-                    query=query.query[:100],
+                    query=query_text,
                     results=results,
                 )
                 return results
