@@ -13,6 +13,7 @@ from pydantic_graph import BaseNode, End, GraphRunContext
 from pydantic_ai.usage import RunUsage
 
 from interaction_finder.logging import logfire
+from interaction_finder.resources import compute_chunk_spans
 from interaction_finder.keywords.agents import (
     get_document_summarizer_agent,
     get_query_expander_agent,
@@ -280,13 +281,24 @@ class FetchDocumentsNode(BaseNode[State, Deps, BridgingTermsOut]):
             contents = await ctx.deps.fetcher.get_markdown(
                 urls, progress=False, fail_fast=False, retry=False
             )
+            chunk_lists = await ctx.deps.fetcher.get_chunks(
+                urls, progress=False, fail_fast=False, retry=False
+            )
             # Add content to resource pool and track failures
             fetched_count = 0
             failed_count = 0
-            for (url, title), content in zip(urls_to_fetch, contents):
+            for (url, title), content, chunks in zip(
+                urls_to_fetch, contents, chunk_lists
+            ):
                 if content:
                     rid = resource_ids_map[url]
-                    ctx.deps.resource_pool.add_content(rid, title, content)
+                    # Compute chunk spans from full text and chunk texts
+                    chunk_spans = (
+                        compute_chunk_spans(content, chunks) if chunks else None
+                    )
+                    ctx.deps.resource_pool.add_content(
+                        rid, title, content, chunks=chunk_spans
+                    )
                     fetched_count += 1
                 else:
                     failed_count += 1

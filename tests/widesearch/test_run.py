@@ -402,12 +402,24 @@ async def test_fetch_and_populate_results_basic(test_config, tmp_path):
 
     # Mock PageFetcher.get_markdown to return mock content
     mock_content = ["# Paper 1 content", "# Paper 2 content"]
+    # Mock PageFetcher.get_chunks to return mock chunks
+    mock_chunks = [
+        ["# Paper 1 content"],  # Single chunk for paper 1
+        ["# Paper 2", " content"],  # Two chunks for paper 2
+    ]
 
-    with patch(
-        "interaction_finder.widesearch.run.PageFetcher.get_markdown",
-        new_callable=AsyncMock,
-    ) as mock_get_markdown:
+    with (
+        patch(
+            "interaction_finder.widesearch.run.PageFetcher.get_markdown",
+            new_callable=AsyncMock,
+        ) as mock_get_markdown,
+        patch(
+            "interaction_finder.widesearch.run.PageFetcher.get_chunks",
+            new_callable=AsyncMock,
+        ) as mock_get_chunks,
+    ):
         mock_get_markdown.return_value = mock_content
+        mock_get_chunks.return_value = mock_chunks
 
         # Run fetch_and_populate_results
         stats = await fetch_and_populate_results(checkpoint, test_config)
@@ -420,11 +432,24 @@ async def test_fetch_and_populate_results_basic(test_config, tmp_path):
 
         # Verify resources were added to pool
         assert len(checkpoint.resources.resource_map) == 2
-        # Verify content was added
-        for url in ["https://example.com/1", "https://example.com/2"]:
-            resource = checkpoint.resources.get(url)
-            assert resource is not None
-            assert resource.text is not None
+
+        # Verify Paper 1: single chunk
+        resource1 = checkpoint.resources.get("https://example.com/1")
+        assert resource1 is not None
+        assert resource1.text == "# Paper 1 content"
+        assert len(resource1.chunks) == 1
+        assert resource1.chunks[0] == (0, len("# Paper 1 content"))
+
+        # Verify Paper 2: two chunks
+        resource2 = checkpoint.resources.get("https://example.com/2")
+        assert resource2 is not None
+        assert resource2.text == "# Paper 2 content"
+        # Should have 2 chunks computed from ["# Paper 2", " content"]
+        assert len(resource2.chunks) == 2
+        # First chunk should be "# Paper 2" found at start
+        assert resource2.chunks[0][0] == 0
+        # Second chunk should be " content" found after first chunk
+        assert resource2.chunks[1][0] > 0
 
 
 @pytest.mark.asyncio
@@ -455,11 +480,18 @@ async def test_fetch_and_populate_results_with_existing_content(test_config, tmp
     test_config.output.cache = str(tmp_path / "cache")
 
     # Mock PageFetcher to return content only for URL 2
-    with patch(
-        "interaction_finder.widesearch.run.PageFetcher.get_markdown",
-        new_callable=AsyncMock,
-    ) as mock_get_markdown:
+    with (
+        patch(
+            "interaction_finder.widesearch.run.PageFetcher.get_markdown",
+            new_callable=AsyncMock,
+        ) as mock_get_markdown,
+        patch(
+            "interaction_finder.widesearch.run.PageFetcher.get_chunks",
+            new_callable=AsyncMock,
+        ) as mock_get_chunks,
+    ):
         mock_get_markdown.return_value = ["# Paper 2 content"]
+        mock_get_chunks.return_value = [["# Paper 2 content"]]
 
         stats = await fetch_and_populate_results(checkpoint, test_config)
 
@@ -496,11 +528,18 @@ async def test_fetch_and_populate_results_handles_failures(test_config, tmp_path
     test_config.output.cache = str(tmp_path / "cache")
 
     # Mock PageFetcher to return content for first URL, None for second (failed)
-    with patch(
-        "interaction_finder.widesearch.run.PageFetcher.get_markdown",
-        new_callable=AsyncMock,
-    ) as mock_get_markdown:
+    with (
+        patch(
+            "interaction_finder.widesearch.run.PageFetcher.get_markdown",
+            new_callable=AsyncMock,
+        ) as mock_get_markdown,
+        patch(
+            "interaction_finder.widesearch.run.PageFetcher.get_chunks",
+            new_callable=AsyncMock,
+        ) as mock_get_chunks,
+    ):
         mock_get_markdown.return_value = ["# Paper 1 content", None]
+        mock_get_chunks.return_value = [["# Paper 1 content"], []]
 
         stats = await fetch_and_populate_results(checkpoint, test_config)
 

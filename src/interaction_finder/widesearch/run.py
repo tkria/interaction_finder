@@ -10,7 +10,7 @@ import httpx
 
 from interaction_finder.fetcher import PageFetcher
 from interaction_finder.logging import logfire
-from interaction_finder.resources import ResourcePool
+from interaction_finder.resources import ResourcePool, compute_chunk_spans
 from interaction_finder.search.models import SearchBackend, SearchResult
 from interaction_finder.settings import IfetcherConfig
 from interaction_finder.widesearch.deps import Deps
@@ -275,11 +275,14 @@ async def fetch_and_populate_results(
     # Fetch and populate
     urls = [url for url, _, _ in urls_to_fetch]
     contents = await fetcher.get_markdown(urls, progress=False, fail_fast=False)
+    chunk_lists = await fetcher.get_chunks(urls, progress=False, fail_fast=False)
 
     fetched = 0
-    for (url, title, rid), content in zip(urls_to_fetch, contents):
+    for (url, title, rid), content, chunks in zip(urls_to_fetch, contents, chunk_lists):
         if content:
-            checkpoint.resources.add_content(rid, title, content)
+            # Compute chunk spans from full text and chunk texts
+            chunk_spans = compute_chunk_spans(content, chunks) if chunks else None
+            checkpoint.resources.add_content(rid, title, content, chunks=chunk_spans)
             fetched += 1
         else:
             logfire.warning(f"Failed to fetch content for {url}")
