@@ -129,9 +129,9 @@ Use canonical entity names and provide exact quotes supporting each association.
 
             # Extract entities using configured extraction model
             try:
-                entity_result = await get_entity_extractor_agent(
-                    ctx.deps.extraction_model
-                ).run(entity_prompt, deps=ctx.deps, usage=usage)
+                entity_result = await get_entity_extractor_agent(ctx.deps.config).run(
+                    entity_prompt, deps=ctx.deps, usage=usage
+                )
             except Exception as e:
                 ctx.deps.logger.error(
                     f"Entity extraction failed for {resource.id.url}: {type(e).__name__}: {e}"
@@ -141,7 +141,7 @@ Use canonical entity names and provide exact quotes supporting each association.
 
             # Extract pairs using configured extraction model
             try:
-                pair_result = await get_pair_agent(ctx.deps.extraction_model).run(
+                pair_result = await get_pair_agent(ctx.deps.config).run(
                     pair_prompt, deps=ctx.deps, usage=usage
                 )
             except Exception as e:
