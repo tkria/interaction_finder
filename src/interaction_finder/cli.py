@@ -324,6 +324,16 @@ def fetch(
         "--input",
         help="Read URLs from file (one per line)",
     ),
+    clear_cache: bool = typer.Option(
+        False,
+        "--clear-cache",
+        help="Clear matching URLs from cache instead of fetching",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Show what would be cleared without actually clearing (use with --clear-cache)",
+    ),
     format: str = typer.Option(
         "paths",
         "--format",
@@ -344,7 +354,7 @@ def fetch(
     ),
 ):
     """
-    Fetch web content and cache it using PageFetcher.
+    Fetch web content and cache it using PageFetcher, or clear cache entries.
 
     Downloads HTML/PDF content, converts to markdown, and caches locally.
     Useful for prefetching content, debugging cache behavior, and scripting workflows.
@@ -366,6 +376,24 @@ def fetch(
       # Perform semantic chunking
       interaction-finder fetch https://example.com --chunk
 
+      # Clear all PubMed URLs from cache
+      interaction-finder fetch pubmed --clear-cache
+
+      # Clear specific URLs (with or without https://)
+      interaction-finder fetch "pmc.ncbi.nlm.nih.gov" --clear-cache
+
+      # Clear URLs from file
+      interaction-finder fetch --input pubmed-urls.txt --clear-cache
+
+      # Preview what would be cleared
+      interaction-finder fetch pubmed --clear-cache --dry-run
+
+      # Clear ALL cached URLs (dangerous!)
+      interaction-finder fetch --clear-cache
+
+      # Glob pattern matching
+      interaction-finder fetch "https://pubmed.ncbi.nlm.nih.gov/123*" --clear-cache
+
       # With config override
       interaction-finder fetch https://example.com -O output.cache=custom_cache/
     """
@@ -377,10 +405,53 @@ def fetch(
     try:
         # Load configuration
         cfg = load_config(config_path, overrides, mode)
+        # Handle cache clearing mode
+        if clear_cache:
+            from interaction_finder.fetcher import URLCache
 
+            cache_dir = cfg.abspath(cfg.output.cache)
+            cache = URLCache(cache_dir)
+            console.print(f"\n[bold]Cache directory:[/bold] {cache_dir}")
+            # Collect URL patterns (or empty for clear-all)
+            try:
+                patterns = (
+                    cli_fetch.collect_urls(urls, input_file)
+                    if (urls or input_file)
+                    else []
+                )
+            except ValueError:
+                # No URLs provided = clear all
+                patterns = []
+            # Confirm clear-all operation
+            if not patterns and not dry_run:
+                confirm = typer.confirm(
+                    "\n⚠️  Are you ABSOLUTELY sure you want to delete ALL cached URLs? This cannot be undone!"
+                )
+                if not confirm:
+                    console.print("[yellow]Cancelled.[/yellow]")
+                    raise typer.Exit(0)
+
+            # Run cache clearing
+            async def clear_impl():
+                return await cli_fetch.clear_cache_urls(
+                    cache, patterns, console, dry_run
+                )
+
+            cleared, errors = asyncio.run(clear_impl())
+            # Report results
+            if not dry_run:
+                console.print(f"\n[green]✓[/green] Successfully cleared {cleared} URLs")
+                if errors > 0:
+                    console.print(f"[yellow]⚠[/yellow] {errors} errors occurred")
+            return
+        # Validate dry_run only used with clear_cache
+        if dry_run and not clear_cache:
+            console.print(
+                "[red]Error:[/red] --dry-run can only be used with --clear-cache"
+            )
+            raise typer.Exit(1)
         # Collect URLs from args or file input
         collected_urls = cli_fetch.collect_urls(urls, input_file)
-
         # Validate format option
         if format not in ("paths", "content"):
             console.print(
@@ -388,7 +459,6 @@ def fetch(
                 "Must be 'paths' or 'content'"
             )
             raise typer.Exit(1)
-
         # Validate content format constraint (single URL only)
         if format == "content" and len(collected_urls) != 1:
             console.print(
@@ -408,17 +478,14 @@ def fetch(
 
         # Run fetch operation
         results = asyncio.run(fetch_impl())
-
         # Output results based on format
         if format == "paths":
             exit_code = cli_fetch.output_paths(results, console)
         else:  # format == "content"
             exit_code = cli_fetch.output_content(results, console)
-
         # Print summary if verbose
         if verbose:
             cli_fetch.print_summary(results, console)
-
         # Exit with appropriate code
         if exit_code != 0:
             raise typer.Exit(exit_code)

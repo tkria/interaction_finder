@@ -7,6 +7,7 @@ fetch orchestration using PageFetcher for markdown and chunk content retrieval.
 """
 
 from dataclasses import dataclass
+from fnmatch import fnmatch
 from pathlib import Path
 from typing import List, Optional
 
@@ -14,7 +15,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from interaction_finder.fetcher import PageFetcher
+from interaction_finder.fetcher import PageFetcher, URLCache
 from interaction_finder.settings import IfetcherConfig
 
 
@@ -407,3 +408,117 @@ def print_summary(results: List[FetchResult], console: Console) -> None:
         expand=False,
     )
     console.print(panel)
+
+
+def match_url_pattern(url: str, pattern: str) -> bool:
+    """
+    Check if URL matches a pattern using prefix, substring, or glob matching.
+
+    Matching rules:
+    - If pattern contains wildcards (*), use glob matching
+    - Otherwise, use case-insensitive substring matching
+    - "https://" prefix in pattern is optional (e.g., "pubmed" matches "https://pubmed.ncbi.nlm.nih.gov/...")
+
+    Parameters:
+        url: URL to check
+        pattern: Pattern to match against (with optional https:// prefix)
+
+    Returns:
+        True if URL matches pattern, False otherwise
+    """
+    # Normalize both for case-insensitive comparison
+    url_lower = url.lower()
+    pattern_lower = pattern.lower()
+    # Check for glob pattern (only * triggers glob, not ? since ? is common in URL query params)
+    if "*" in pattern_lower:
+        return fnmatch(url_lower, pattern_lower)
+    # Substring matching (covers prefix matching as well)
+    return pattern_lower in url_lower
+
+
+async def clear_cache_urls(
+    cache: URLCache, patterns: List[str], console: Console, dry_run: bool
+) -> tuple[int, int]:
+    """
+    Clear cached URLs matching the provided patterns.
+
+    If patterns is empty, clears ALL cached URLs (requires confirmation in caller).
+
+    Parameters:
+        cache: URLCache instance
+        patterns: List of URL patterns to match (empty = clear all)
+        console: Rich console for output
+        dry_run: If True, show what would be deleted without deleting
+
+    Returns:
+        Tuple of (cleared_count, error_count)
+    """
+    from rich.progress import (
+        Progress,
+        SpinnerColumn,
+        TextColumn,
+        BarColumn,
+        TaskProgressColumn,
+    )
+
+    # List all cached URLs
+    console.print("\n[dim]Loading cached URLs...[/dim]")
+    all_urls = await cache.list_cached_urls()
+    console.print(f"Total cached URLs: {len(all_urls)}")
+    # Filter URLs based on patterns
+    if not patterns:
+        # No patterns = clear all
+        matching_urls = all_urls
+        console.print(
+            f"\n[yellow]⚠ WARNING:[/yellow] Clearing ALL {len(all_urls)} cached URLs!"
+        )
+    else:
+        # Match URLs against patterns
+        matching_urls = []
+        for url in all_urls:
+            if any(match_url_pattern(url, pattern) for pattern in patterns):
+                matching_urls.append(url)
+        console.print(
+            f"\n[bold]URLs matching patterns:[/bold] {len(matching_urls)} of {len(all_urls)}"
+        )
+    if not matching_urls:
+        console.print("[green]No URLs to clear.[/green]")
+        return 0, 0
+    # Show sample of URLs to be deleted
+    if len(matching_urls) <= 10:
+        console.print("\n[dim]URLs to be cleared:[/dim]")
+        for url in matching_urls:
+            console.print(f"  • {url}")
+    else:
+        console.print(
+            f"\n[dim]Sample of URLs to be cleared (showing first 10 of {len(matching_urls)}):[/dim]"
+        )
+        for url in matching_urls[:10]:
+            console.print(f"  • {url}")
+        console.print(f"  [dim]... and {len(matching_urls) - 10} more[/dim]")
+    if dry_run:
+        console.print(f"\n[yellow]Dry run mode:[/yellow] No files were deleted.")
+        console.print(
+            f"Run without --dry-run to actually clear {len(matching_urls)} URLs."
+        )
+        return 0, 0
+    # Clear URLs with progress indication
+    console.print(f"\n[bold]Clearing {len(matching_urls)} URLs...[/bold]")
+    cleared_count = 0
+    error_count = 0
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        console=console,
+    ) as progress:
+        task = progress.add_task("[cyan]Clearing...", total=len(matching_urls))
+        for url in matching_urls:
+            try:
+                await cache.clear_url(url)
+                cleared_count += 1
+            except Exception:
+                error_count += 1
+            progress.update(task, advance=1)
+    return cleared_count, error_count
