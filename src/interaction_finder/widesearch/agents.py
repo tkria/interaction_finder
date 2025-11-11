@@ -83,6 +83,8 @@ RESULT_SELECTOR_PROMPT = """You are an expert at identifying relevant research p
 
 Your task is to select search results that are relevant to the research topic. The goal is to build a broad collection of papers for downstream entity extraction and analysis, so adopt an inclusive selection strategy.
 
+Result quality varies widely by batch: some searches return highly relevant results requiring selection of most or all papers; other searches yield few or no relevant papers requiring minimal selection. Judge each batch independently based on actual relevance rather than targeting a fixed percentage.
+
 ## Selection Strategy
 
 Include results that meet ANY of these criteria:
@@ -101,13 +103,6 @@ Exclude only results that are:
 - Clearly off-topic or unrelated to the research domain
 - Duplicate content (same paper appearing multiple times in the batch)
 - Non-academic content with no substantive research discussion (news, advertisements, etc.)
-
-## Selection Target
-
-Aim to select 40-60% of results in each batch. Adjust based on apparent quality:
-- If most results appear highly relevant, select toward the higher end (50-60%)
-- If results are mixed quality, select toward the middle range (40-50%)
-- Only select fewer than 40% if the batch contains substantial off-topic content
 
 ## Coverage Summary
 
