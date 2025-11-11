@@ -218,7 +218,7 @@ class SelectResultsNode(BaseNode[State, Deps, list[SearchResult]]):
 
     Uses get_result_selector_agent to choose the most promising results and
     summarize what subject areas they cover. Registers selected URLs with
-    the ResourcePool.
+    the ResourcePool. Supports batching for processing large result sets.
     """
 
     async def run(self, ctx: GraphRunContext[State, Deps]) -> "ReflectNode":
@@ -234,11 +234,52 @@ class SelectResultsNode(BaseNode[State, Deps, list[SearchResult]]):
                 ctx.state.search_summaries.append("(no results found this round)")
                 return ReflectNode()
 
+            # Determine batching strategy
+            batch_size = ctx.deps.config.tools.widesearch.batch_size
+            if batch_size == 0 or len(ctx.state.current_results) <= batch_size:
+                # Process all results in a single batch
+                await self._process_batch(
+                    ctx, ctx.state.current_results, batch_offset=0
+                )
+            else:
+                # Split into batches and process each
+                results = ctx.state.current_results
+                num_batches = (len(results) + batch_size - 1) // batch_size
+                logfire.info(
+                    f"Processing {len(results)} results in {num_batches} batches of size {batch_size}"
+                )
+
+                for batch_idx in range(num_batches):
+                    start_idx = batch_idx * batch_size
+                    end_idx = min(start_idx + batch_size, len(results))
+                    batch = results[start_idx:end_idx]
+                    await self._process_batch(ctx, batch, batch_offset=start_idx)
+
+            return ReflectNode()
+
+    async def _process_batch(
+        self,
+        ctx: GraphRunContext[State, Deps],
+        batch: list[SearchResult],
+        batch_offset: int,
+    ) -> None:
+        """Process a single batch of results with the result selector agent.
+
+        Parameters:
+            ctx: Graph run context with state and deps
+            batch: list[SearchResult] — batch of results to process
+            batch_offset: int — offset for mapping indices back to full result list
+        """
+        with logfire.span(
+            "SelectResultsNode._process_batch",
+            batch_size=len(batch),
+            batch_offset=batch_offset,
+        ):
             # Prepare context for agent
             results_context = "\n\n".join(
                 [
                     f"[{i}] {r.title}\n{r.snippet or '(no snippet)'}\nURL: {r.url}"
-                    for i, r in enumerate(ctx.state.current_results)
+                    for i, r in enumerate(batch)
                 ]
             )
 
@@ -253,7 +294,6 @@ Select the most relevant results and summarize what subject areas they cover."""
 
             # Use result selector agent
             usage = RunUsage()
-            # Model configured via get_*_agent(ctx.deps.config)
             result = await get_result_selector_agent(ctx.deps.config).run(
                 prompt, deps=ctx.deps, usage=usage
             )
@@ -262,8 +302,9 @@ Select the most relevant results and summarize what subject areas they cover."""
             selected_urls = []
             registered_count = 0
             for idx in result.output.selected_indices:
-                if 0 <= idx < len(ctx.state.current_results):
-                    search_result = ctx.state.current_results[idx]
+                # Map batch-local index to full result list
+                if 0 <= idx < len(batch):
+                    search_result = batch[idx]
                     selected_urls.append(search_result.url)
                     # Store full SearchResult for metadata preservation
                     ctx.state.selected_search_results[search_result.url] = search_result
@@ -285,17 +326,17 @@ Select the most relevant results and summarize what subject areas they cover."""
                     ctx.state.selected_results[query] = []
                 ctx.state.selected_results[query].extend(selected_urls)
 
-            # Store coverage summary for this round
+            # Accumulate coverage summaries
             ctx.state.search_summaries.append(result.output.covered_topics_summary)
 
             logfire.info(
-                f"Selected {len(result.output.selected_indices)} results ({registered_count} new URLs registered)",
+                f"Batch processed: selected {len(result.output.selected_indices)} results ({registered_count} new URLs registered)",
+                batch_size=len(batch),
+                batch_offset=batch_offset,
                 selected_count=len(result.output.selected_indices),
                 registered_count=registered_count,
                 covered_topics=result.output.covered_topics_summary[:200],
             )
-
-            return ReflectNode()
 
 
 @dataclass

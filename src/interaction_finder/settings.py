@@ -183,7 +183,7 @@ class IfetcherConfig(BaseModel):
                 8, ge=1, le=15, description="Maximum search rounds before stopping"
             )
             enable_reranking: bool = Field(
-                True,
+                False,
                 description="Enable semantic reranking of search results (if False, pass all results to LLM)",
             )
             rerank_top_k: int = Field(
@@ -191,6 +191,11 @@ class IfetcherConfig(BaseModel):
                 ge=1,
                 le=200,
                 description="Number of top results to keep after reranking (only used if enable_reranking=True)",
+            )
+            batch_size: int = Field(
+                0,
+                ge=0,
+                description="Split results into batches for LLM selection (0 = process all at once)",
             )
             results_per_query: int = Field(
                 100, ge=1, le=300, description="Maximum results to fetch per query"
