@@ -52,6 +52,12 @@ class State:
     )
     # Count of entities merged (for metadata)
     entities_merged: int = 0
+    # Memoization cache for merge decisions: maps (norm_parent, norm_child, kind) → should_merge
+    # Used to avoid duplicate LLM calls and ensure consistency across documents
+    merge_decision_cache: dict[tuple[str, str, str], bool] = field(default_factory=dict)
+    # Cache hits/misses for metrics
+    merge_cache_hits: int = 0
+    merge_cache_misses: int = 0
 
     # === Stage 3: Proximal Set Identification ===
     # Groups of entities found in close proximity per resource

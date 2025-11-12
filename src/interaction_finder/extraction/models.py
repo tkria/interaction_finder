@@ -262,6 +262,8 @@ class ExtractionMetadata(BaseModel):
     total_entities_found: int
     entities_after_validation: int
     entities_merged: int
+    merge_cache_hits: int
+    merge_cache_misses: int
     proximal_sets_found: int
     total_pairs_found: int
     pairs_accepted: int

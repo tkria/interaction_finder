@@ -97,6 +97,8 @@ class ExtractEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
                 total_entities_found=0,
                 entities_after_validation=0,
                 entities_merged=0,
+                merge_cache_hits=0,
+                merge_cache_misses=0,
                 proximal_sets_found=0,
                 total_pairs_found=0,
                 pairs_accepted=0,
@@ -295,6 +297,8 @@ class ValidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
                             total_entities_found=total_found,
                             entities_after_validation=0,
                             entities_merged=ctx.state.entities_merged,
+                            merge_cache_hits=ctx.state.merge_cache_hits,
+                            merge_cache_misses=ctx.state.merge_cache_misses,
                             proximal_sets_found=0,
                             total_pairs_found=0,
                             pairs_accepted=0,
@@ -305,7 +309,113 @@ class ValidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
                     )
                 )
 
+            # Apply merge decisions consistently across all documents
+            self._normalize_merges_across_documents(ctx)
+
             return IdentifyProximalSetsNode()
+
+    def _normalize_merges_across_documents(
+        self, ctx: GraphRunContext[State, Deps]
+    ) -> None:
+        """Apply merge decisions consistently across all documents.
+
+        After per-document merging, this ensures consistency by finding
+        any entities across documents that should be merged based on cached
+        decisions and applying those merges globally.
+
+        This handles cases where:
+        - Doc1 has "PAH" alone, Doc2 has "PAH" and "pulmonary arterial hypertension pah"
+        - The LLM decided to merge them in Doc2
+        - We need to apply same merge in Doc1 if we later extract the longer variant
+
+        Algorithm:
+        1. Collect all unique entity names across all documents (by normalized name)
+        2. For each document, check if any entities should be merged based on cache
+        3. Apply merges within each document, maintaining provenance
+        """
+        # Collect all unique entity canonical names (normalized) by kind
+        all_entities_by_kind: dict[str, set[str]] = {}
+        for entities in ctx.state.validated_entities_by_resource.values():
+            for entity_name, entity in entities.items():
+                if entity.kind not in all_entities_by_kind:
+                    all_entities_by_kind[entity.kind] = set()
+                all_entities_by_kind[entity.kind].add(entity_name)
+
+        # For each kind, build a mapping of entities that should be merged
+        # based on cached decisions: child_name → parent_name
+        merge_mapping: dict[str, str] = {}
+
+        for kind, entity_names in all_entities_by_kind.items():
+            entity_list = list(entity_names)
+
+            # Check all pairs for cached merge decisions
+            for i, name1 in enumerate(entity_list):
+                norm1 = normalize_for_comparison(name1)
+
+                for name2 in entity_list[i + 1 :]:
+                    norm2 = normalize_for_comparison(name2)
+
+                    # Check if one is substring of other
+                    if norm1 == norm2:
+                        # Exact match - shouldn't happen after normalization, but handle it
+                        continue
+                    elif norm1 in norm2:
+                        # name1 is parent (general), name2 is child (specific)
+                        cache_key = (norm1, norm2, kind)
+                        if (
+                            cache_key in ctx.state.merge_decision_cache
+                            and ctx.state.merge_decision_cache[cache_key]
+                        ):
+                            # This pair should be merged
+                            merge_mapping[name2] = name1
+                    elif norm2 in norm1:
+                        # name2 is parent (general), name1 is child (specific)
+                        cache_key = (norm2, norm1, kind)
+                        if (
+                            cache_key in ctx.state.merge_decision_cache
+                            and ctx.state.merge_decision_cache[cache_key]
+                        ):
+                            # This pair should be merged
+                            merge_mapping[name1] = name2
+
+        # Apply merge mapping to all documents
+        if merge_mapping:
+            for (
+                resource_id,
+                entities,
+            ) in ctx.state.validated_entities_by_resource.items():
+                # Find entities in this document that need merging
+                entities_to_merge = []
+                for child_name in list(entities.keys()):
+                    if child_name in merge_mapping:
+                        parent_name = merge_mapping[child_name]
+                        # Only merge if parent exists in this document
+                        if parent_name in entities:
+                            entities_to_merge.append((parent_name, child_name))
+
+                # Apply merges
+                for parent_name, child_name in entities_to_merge:
+                    parent = entities[parent_name]
+                    child = entities[child_name]
+
+                    # Merge child into parent
+                    if child.name not in parent.aliases:
+                        parent.aliases.append(child.name)
+                    parent.quotes.extend(child.quotes)
+                    parent.reasoning += (
+                        f" | MERGED_POSTHOC({child.name}): {child.reasoning}"
+                    )
+                    for alias in child.aliases:
+                        if alias not in parent.aliases:
+                            parent.aliases.append(alias)
+
+                    # Remove child
+                    del entities[child_name]
+                    ctx.state.entities_merged += 1
+
+            ctx.deps.logger.info(
+                f"Post-hoc normalization: applied {len(merge_mapping)} merge rules across documents"
+            )
 
     async def _get_merge_decisions(
         self,
@@ -313,30 +423,72 @@ class ValidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
         entities: dict[str, EntityMention],
         ctx: GraphRunContext[State, Deps],
     ) -> list:
-        """Get merge decisions from LLM in batches."""
-        # Get batch size from config (default 50)
-        batch_size = getattr(ctx.deps.config.tools.extraction, "merge_batch_size", 50)
+        """Get merge decisions from cache or LLM in batches.
 
-        all_decisions = []
+        Checks cache first using normalized entity names. For cache misses,
+        queries LLM and updates cache with results.
+        """
+        from interaction_finder.extraction.models import EntityMergeDecision
 
-        # Process in batches
-        for i in range(0, len(substring_pairs), batch_size):
-            batch = substring_pairs[i : i + batch_size]
+        # Separate pairs into cached and uncached
+        cached_decisions = []
+        uncached_pairs = []
 
-            # Build prompt describing all pairs in batch
-            pairs_description = []
-            for parent_name, child_name in batch:
-                parent = entities[parent_name]
-                child = entities[child_name]
-                pairs_description.append(
-                    f"- Parent: '{parent_name}' (type: {parent.kind})\n"
-                    f"  Child: '{child_name}' (type: {child.kind})"
+        for parent_name, child_name in substring_pairs:
+            parent = entities[parent_name]
+            child = entities[child_name]
+            # Create cache key: (norm_parent, norm_child, kind)
+            # Use same kind for both since we only merge entities of same kind
+            cache_key = (
+                normalize_for_comparison(parent_name),
+                normalize_for_comparison(child_name),
+                parent.kind,
+            )
+
+            if cache_key in ctx.state.merge_decision_cache:
+                # Cache hit - reuse decision
+                should_merge = ctx.state.merge_decision_cache[cache_key]
+                cached_decisions.append(
+                    EntityMergeDecision(
+                        parent_entity=parent_name,
+                        child_entity=child_name,
+                        should_merge=should_merge,
+                        reasoning="[Cached decision from previous document]",
+                    )
                 )
+                ctx.state.merge_cache_hits += 1
+            else:
+                # Cache miss - need LLM decision
+                uncached_pairs.append((parent_name, child_name))
+                ctx.state.merge_cache_misses += 1
 
-            # Format target entity types
-            entity_types_str = ", ".join(ctx.state.target_entity_types)
+        all_decisions = cached_decisions
 
-            prompt = f"""**Research topic:** {ctx.state.topic}
+        # Query LLM for uncached pairs only
+        if uncached_pairs:
+            # Get batch size from config (default 50)
+            batch_size = getattr(
+                ctx.deps.config.tools.extraction, "merge_batch_size", 50
+            )
+
+            # Process uncached pairs in batches
+            for i in range(0, len(uncached_pairs), batch_size):
+                batch = uncached_pairs[i : i + batch_size]
+
+                # Build prompt describing all pairs in batch
+                pairs_description = []
+                for parent_name, child_name in batch:
+                    parent = entities[parent_name]
+                    child = entities[child_name]
+                    pairs_description.append(
+                        f"- Parent: '{parent_name}' (type: {parent.kind})\n"
+                        f"  Child: '{child_name}' (type: {child.kind})"
+                    )
+
+                # Format target entity types
+                entity_types_str = ", ".join(ctx.state.target_entity_types)
+
+                prompt = f"""**Research topic:** {ctx.state.topic}
 
 **Target entity types for this research:** {entity_types_str}
 
@@ -353,18 +505,30 @@ merge gene variants into the gene name).
 
 For each pair, decide if they should be merged (child absorbed into parent) or kept separate."""
 
-            # Call merge agent
-            usage = RunUsage()
-            try:
-                result = await get_entity_merge_agent(ctx.deps.config).run(
-                    prompt, deps=ctx.deps, usage=usage
-                )
-                all_decisions.extend(result.output.decisions)
-            except (TimeoutError, ConnectionError, ValueError) as e:
-                ctx.deps.logger.error(
-                    f"Entity merge decision failed: {type(e).__name__}: {e}"
-                )
-                # Continue without merging this batch
+                # Call merge agent
+                usage = RunUsage()
+                try:
+                    result = await get_entity_merge_agent(ctx.deps.config).run(
+                        prompt, deps=ctx.deps, usage=usage
+                    )
+                    # Store decisions in cache for future use
+                    for decision in result.output.decisions:
+                        parent = entities[decision.parent_entity]
+                        cache_key = (
+                            normalize_for_comparison(decision.parent_entity),
+                            normalize_for_comparison(decision.child_entity),
+                            parent.kind,
+                        )
+                        ctx.state.merge_decision_cache[cache_key] = (
+                            decision.should_merge
+                        )
+
+                    all_decisions.extend(result.output.decisions)
+                except (TimeoutError, ConnectionError, ValueError) as e:
+                    ctx.deps.logger.error(
+                        f"Entity merge decision failed: {type(e).__name__}: {e}"
+                    )
+                    # Continue without merging this batch
 
         return all_decisions
 
@@ -1002,6 +1166,8 @@ class FinalizeNode(BaseNode[State, Deps, ExtractionResult]):
                 total_entities_found=total_entities_found,
                 entities_after_validation=entities_after_validation,
                 entities_merged=ctx.state.entities_merged,
+                merge_cache_hits=ctx.state.merge_cache_hits,
+                merge_cache_misses=ctx.state.merge_cache_misses,
                 proximal_sets_found=proximal_sets_found,
                 total_pairs_found=total_pairs_found,
                 pairs_accepted=pairs_accepted,
