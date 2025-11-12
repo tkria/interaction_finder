@@ -57,6 +57,37 @@ def test_widesearch_progress_context_manager():
         assert progress.searches_run == 1
 
 
+def test_widesearch_progress_phase_transitions():
+    """Phase transitions update correctly."""
+    progress = WidesearchProgress()
+    # Should initialize idle
+    assert progress._status_msg == ""
+    assert progress._highlight == ""
+    # Set to searching without backend
+    progress.set_phase_searching()
+    assert progress._status_msg == "Searching"
+    assert progress._highlight == "search"
+    # Set to searching with backend
+    progress.set_phase_searching(backend="PubMed")
+    assert progress._status_msg == "Searching PubMed"
+    assert progress._highlight == "search"
+    # Set to reranking
+    progress.set_phase_reranking()
+    assert progress._status_msg == "Reranking results"
+    assert progress._highlight == "search"
+    # Set to selecting
+    progress.set_phase_selecting()
+    assert progress._status_msg == "Selecting results"
+    assert progress._highlight == "select"
+    # Set to completed
+    progress.set_completed()
+    assert progress._status_msg.startswith("✓ Completed in")
+    # Set back to idle
+    progress.set_phase_idle()
+    assert progress._status_msg == ""
+    assert progress._highlight == ""
+
+
 def test_dummy_progress_no_op():
     """DummyProgress accepts all operations without error."""
     progress = DummyProgress()
@@ -67,6 +98,12 @@ def test_dummy_progress_no_op():
     progress.add_results(50)
     progress.add_selected(5)
     progress.set_round(3, 5)
+    progress.set_phase_searching()
+    progress.set_phase_searching(backend="PubMed")
+    progress.set_phase_reranking()
+    progress.set_phase_selecting()
+    progress.set_phase_idle()
+    progress.set_completed()
     progress.stop()
     # Context manager should work
     with progress:

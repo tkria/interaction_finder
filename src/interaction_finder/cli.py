@@ -727,11 +727,8 @@ def widesearch(
                     progress=progress_counter,
                 )
             )
-        # Display results summary
-        console.print("\n[bold green]✓ Widesearch completed[/bold green]")
-        console.print(f"Rounds: {checkpoint.rounds_completed}")
-        console.print(f"Queries executed: {len(checkpoint.queries)}")
-        console.print(f"Unique results: {len(checkpoint.results)}")
+        # Progress display already shows completion summary, just add newline
+        console.print()
         # Fetch content if requested
         if fetch:
             from interaction_finder.widesearch import fetch_and_populate_results

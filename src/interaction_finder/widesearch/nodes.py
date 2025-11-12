@@ -126,6 +126,10 @@ class SearchNode(BaseNode[State, Deps, list[SearchResult]]):
             num_queries=len(ctx.state.current_queries),
             round=ctx.state.current_round,
         ):
+            # Set phase to searching with backend name
+            if ctx.deps.progress:
+                backend_name = ctx.deps.search_backend.name
+                ctx.deps.progress.set_phase_searching(backend=backend_name)
             # Execute all searches
             all_results = []
             for query_text in ctx.state.current_queries:
@@ -192,7 +196,9 @@ class RerankNode(BaseNode[State, Deps, list[SearchResult]]):
                     reranking_enabled=False,
                 )
                 return SelectResultsNode()
-
+            # Set phase to reranking
+            if ctx.deps.progress:
+                ctx.deps.progress.set_phase_reranking()
             # Rerank using topic as query
             reranked = ctx.deps.reranker.rerank(
                 ctx.state.topic, ctx.state.current_results, top_k=top_k
@@ -270,6 +276,9 @@ class SelectResultsNode(BaseNode[State, Deps, list[SearchResult]]):
             batch: list[SearchResult] — batch of results to process
             batch_offset: int — offset for mapping indices back to full result list
         """
+        # Set phase to selecting
+        if ctx.deps.progress:
+            ctx.deps.progress.set_phase_selecting()
         # Prepare context for agent
         results_context = "\n\n".join(
             [
