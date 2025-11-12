@@ -93,7 +93,7 @@ class WidesearchProgress:
 
         # Add status header if active or completed
         if self._status_msg:
-            rule = Rule(style="dim", characters="─", width=25)
+            rule = Rule(style="dim", characters="─")
             if self._status_msg.startswith("✓"):
                 header = Text(self._status_msg, style="bold green")
             else:

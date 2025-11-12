@@ -24,6 +24,7 @@ class ProgressProtocol(Protocol):
     pairs_total: int
     quotes_validated: int
     quotes_failed: int
+    unique_pairs: int
     accepted: int
     rejected: int
 

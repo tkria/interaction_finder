@@ -32,6 +32,7 @@ class ExtractionProgress:
     pairs_total: int = 0
     quotes_validated: int = 0
     quotes_failed: int = 0
+    unique_pairs: int = 0  # Cross-document deduplicated pairs
     accepted: int = 0
     rejected: int = 0
     _status_msg: str = field(default="", init=False)
@@ -94,22 +95,9 @@ class ExtractionProgress:
                 f"[{bright}]{self.documents_processed}/{self.documents_total}[/]",
             )
 
-        # Entity metrics
+        # Document-level metrics (indented)
         bright = "bold bright_yellow" if self._highlight == "docs" else "bold yellow"
-        table.add_row("Entities", f"[{bright}]{self.entities_found}[/]")
-
-        # Pair metrics
-        bright = "bold bright_yellow" if self._highlight == "pairs" else "bold yellow"
-        table.add_row("Pairs found", f"[{bright}]{self.pairs_found}[/]")
-
-        # Assessment progress (just show count, since pairs_found is above)
-        if self.pairs_assessed > 0:
-            bright = (
-                "bold bright_yellow"
-                if self._highlight == "assessment"
-                else "bold yellow"
-            )
-            table.add_row("Pairs assessed", f"[{bright}]{self.pairs_assessed}[/]")
+        table.add_row("  Entities", f"[{bright}]{self.entities_found}[/]")
 
         # Quote validation (show validated count with invalid in parentheses)
         quote_style = "bold yellow"
@@ -119,15 +107,35 @@ class ExtractionProgress:
             )
         else:
             quote_text = f"{self.quotes_validated}"
-        table.add_row("Quotes", f"[{quote_style}]{quote_text}[/]")
+        table.add_row("  Quotes", f"[{quote_style}]{quote_text}[/]")
 
-        # Final counts
-        table.add_row("Accepted", f"[bold green]{self.accepted}[/]")
-        table.add_row("Rejected", f"[bold yellow]{self.rejected}[/]")
+        # Pair metrics
+        bright = "bold bright_yellow" if self._highlight == "pairs" else "bold yellow"
+        table.add_row("  Pairs found", f"[{bright}]{self.pairs_found}[/]")
+
+        # Assessment progress (just show count, since pairs_found is above)
+        if self.pairs_assessed > 0:
+            bright = (
+                "bold bright_yellow"
+                if self._highlight == "assessment"
+                else "bold yellow"
+            )
+            table.add_row("  Assessed", f"[{bright}]{self.pairs_assessed}[/]")
+
+        # Combined judgment section (only show if we have cross-document results)
+        if self.unique_pairs > 0 or self.accepted > 0 or self.rejected > 0:
+            table.add_row("", "")  # Blank line
+            table.add_row("[bold cyan]Combined Judgment[/]", "")
+            if self.unique_pairs > 0:
+                table.add_row("  Unique pairs", f"[bold yellow]{self.unique_pairs}[/]")
+            if self.accepted > 0:
+                table.add_row("  Accepted", f"[bold green]{self.accepted}[/]")
+            if self.rejected > 0:
+                table.add_row("  Rejected", f"[bold yellow]{self.rejected}[/]")
 
         # Add status header if active or completed
         if self._status_msg:
-            rule = Rule(style="dim", characters="─", width=35)
+            rule = Rule(style="dim", characters="─")
             if self._status_msg.startswith("✓"):
                 header = Text(self._status_msg, style="bold green")
             else:

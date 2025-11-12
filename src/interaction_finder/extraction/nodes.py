@@ -933,6 +933,10 @@ class JudgeCrossDocumentNode(BaseNode[State, Deps, ExtractionResult]):
     async def run(self, ctx: GraphRunContext[State, Deps]) -> "FinalizeNode":
         """Judge all unique pairs across documents."""
         with logfire.span("JudgeCrossDocumentNode"):
+            # Set phase
+            if ctx.deps.progress:
+                ctx.deps.progress.set_phase_judging()
+
             # Group assessments by entity pair
             assessments_by_pair: dict[EntityPairKey, list[PairAssessment]] = (
                 defaultdict(list)
@@ -945,6 +949,11 @@ class JudgeCrossDocumentNode(BaseNode[State, Deps, ExtractionResult]):
                     )
                     assessments_by_pair[pair_key].append(assessment)
 
+            # Update unique pairs count
+            if ctx.deps.progress:
+                ctx.deps.progress.unique_pairs = len(assessments_by_pair)
+                ctx.deps.progress.update()
+
             # Judge each pair
             tasks = []
             for pair_key, assessments in assessments_by_pair.items():
@@ -956,6 +965,13 @@ class JudgeCrossDocumentNode(BaseNode[State, Deps, ExtractionResult]):
 
                 for pair_key, judgment in judgments:
                     ctx.state.pair_judgments[pair_key] = judgment
+                    # Update accepted/rejected counts
+                    if ctx.deps.progress:
+                        if judgment.accepted:
+                            ctx.deps.progress.accepted += 1
+                        else:
+                            ctx.deps.progress.rejected += 1
+                        ctx.deps.progress.update()
 
             return FinalizeNode()
 
