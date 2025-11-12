@@ -69,15 +69,7 @@ class ExtractionProgress:
         elapsed = int(time() - self._start_time)
         mins, secs = divmod(elapsed, 60)
         time_str = f"{mins}m {secs}s" if mins else f"{secs}s"
-        # Calculate acceptance rate
-        total = self.accepted + self.rejected
-        if total > 0:
-            rate = (self.accepted / total) * 100
-            self.set_status(
-                f"✓ Completed in {time_str} ({self.accepted}/{total} pairs accepted, {rate:.1f}%)"
-            )
-        else:
-            self.set_status(f"✓ Completed in {time_str}")
+        self.set_status(f"✓ Extraction completed in {time_str}")
 
     def stop(self) -> None:
         """Stop the live display, showing completion status."""
