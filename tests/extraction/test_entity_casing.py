@@ -1,0 +1,263 @@
+"""Tests to verify that entity names preserve original casing.
+
+The system should:
+1. Use normalization only for comparison/grouping
+2. Store entities with their original casing from LLM output
+3. Keep canonical names readable (e.g., "BRCA1" not "brca1")
+"""
+
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+from pydantic_ai.usage import RunUsage
+from pydantic_graph import GraphRunContext
+
+from interaction_finder.extraction.models import EntityExtractionOut, EntityInfo
+from interaction_finder.extraction.nodes import ExtractEntitiesNode
+from interaction_finder.extraction.state import State
+from interaction_finder.extraction.utils import build_permitted_pairs
+from interaction_finder.resources import Resource, ResourceId, ResourcePool
+
+
+def create_mock_agent_with_override(run_return_value):
+    """Create a mock agent with working rename_agent() support."""
+    mock_agent = MagicMock()
+    mock_agent.run = AsyncMock(return_value=run_return_value)
+    mock_agent._name = "mock_agent"
+    return mock_agent
+
+
+@pytest.fixture
+def mock_deps():
+    """Create mock dependencies with a resource pool."""
+    deps = MagicMock()
+    deps.config = MagicMock()
+    deps.logger = MagicMock()
+    deps.resource_pool = ResourcePool()
+    # Add a test resource
+    deps.resource_pool.add(
+        url="https://example.com/doc1",
+        title="Test Document",
+        document_text="BRCA1 is a tumor suppressor gene. The BRCA1 protein plays a role in DNA repair.",
+        chunks=[(0, 50), (50, 100)],
+    )
+    return deps
+
+
+class TestEntityCasing:
+    """Test that entity names preserve original casing."""
+
+    @pytest.mark.asyncio
+    async def test_preserves_uppercase_gene_names(self, mock_deps):
+        """Entity names should preserve uppercase (e.g., BRCA1, not brca1)."""
+        node = ExtractEntitiesNode()
+        state = State(
+            topic="breast cancer genetics",
+            target_entity_types=["gene"],
+            permitted_pairs=build_permitted_pairs(["gene"]),
+        )
+        ctx = GraphRunContext(state=state, deps=mock_deps)
+
+        # Mock LLM response with uppercase gene name
+        mock_result = MagicMock()
+        mock_result.output = EntityExtractionOut(
+            entities=[
+                EntityInfo(
+                    kind="gene",
+                    name="BRCA1",
+                    aliases=["BRCA1", "BRCA-1"],
+                    quotes=["BRCA1 is a tumor suppressor gene"],
+                    reasoning="BRCA1 is a well-known breast cancer susceptibility gene",
+                )
+            ]
+        )
+        mock_agent = create_mock_agent_with_override(mock_result)
+
+        # Patch the agent getter
+        import interaction_finder.extraction.nodes as nodes_module
+
+        original_getter = nodes_module.get_entity_extractor_agent
+        nodes_module.get_entity_extractor_agent = lambda config: mock_agent
+
+        try:
+            await node.run(ctx)
+
+            # Check that entity is stored with uppercase name
+            resource_id = list(ctx.state.entities_by_resource.keys())[0]
+            entities = ctx.state.entities_by_resource[resource_id]
+
+            # Should have exactly one entity
+            assert len(entities) == 1
+
+            # Entity should be accessible by its canonical name "BRCA1"
+            assert "BRCA1" in entities
+            entity = entities["BRCA1"]
+
+            # Canonical name should be uppercase
+            assert entity.name == "BRCA1"
+            assert entity.name != "brca1"
+
+        finally:
+            nodes_module.get_entity_extractor_agent = original_getter
+
+    @pytest.mark.asyncio
+    async def test_preserves_mixed_case_disease_names(self, mock_deps):
+        """Disease names with mixed case should be preserved."""
+        node = ExtractEntitiesNode()
+        state = State(
+            topic="cardiovascular diseases",
+            target_entity_types=["disease"],
+            permitted_pairs=build_permitted_pairs(["disease"]),
+        )
+        ctx = GraphRunContext(state=state, deps=mock_deps)
+
+        # Mock LLM response with mixed-case disease name
+        mock_result = MagicMock()
+        mock_result.output = EntityExtractionOut(
+            entities=[
+                EntityInfo(
+                    kind="disease",
+                    name="Alzheimer's disease",
+                    aliases=["Alzheimer's disease", "AD"],
+                    quotes=["BRCA1 is a tumor suppressor gene"],  # Use valid quote
+                    reasoning="Neurodegenerative disease",
+                )
+            ]
+        )
+        mock_agent = create_mock_agent_with_override(mock_result)
+
+        import interaction_finder.extraction.nodes as nodes_module
+
+        original_getter = nodes_module.get_entity_extractor_agent
+        nodes_module.get_entity_extractor_agent = lambda config: mock_agent
+
+        try:
+            await node.run(ctx)
+
+            resource_id = list(ctx.state.entities_by_resource.keys())[0]
+            entities = ctx.state.entities_by_resource[resource_id]
+
+            # Should preserve mixed case
+            assert "Alzheimer's disease" in entities
+            entity = entities["Alzheimer's disease"]
+            assert entity.name == "Alzheimer's disease"
+            assert entity.name != "alzheimer's disease"
+
+        finally:
+            nodes_module.get_entity_extractor_agent = original_getter
+
+    @pytest.mark.asyncio
+    async def test_groups_case_variants_by_normalization(self, mock_deps):
+        """Entities differing only in case should be grouped together."""
+        node = ExtractEntitiesNode()
+        state = State(
+            topic="genetics",
+            target_entity_types=["gene"],
+            permitted_pairs=build_permitted_pairs(["gene"]),
+        )
+        ctx = GraphRunContext(state=state, deps=mock_deps)
+
+        # Mock LLM response with multiple case variants
+        mock_result = MagicMock()
+        mock_result.output = EntityExtractionOut(
+            entities=[
+                EntityInfo(
+                    kind="gene",
+                    name="BRCA1",
+                    aliases=["BRCA1"],
+                    quotes=["BRCA1 is a tumor suppressor gene"],
+                    reasoning="First mention of this gene in the document",
+                ),
+                EntityInfo(
+                    kind="gene",
+                    name="brca1",  # Different case
+                    aliases=["brca1"],
+                    quotes=["The BRCA1 protein plays a role"],
+                    reasoning="Second mention of this gene with different case",
+                ),
+                EntityInfo(
+                    kind="gene",
+                    name="Brca1",  # Yet another case
+                    aliases=["Brca1"],
+                    quotes=["BRCA1 is a tumor suppressor gene"],
+                    reasoning="Third mention with mixed case variant",
+                ),
+            ]
+        )
+        mock_agent = create_mock_agent_with_override(mock_result)
+
+        import interaction_finder.extraction.nodes as nodes_module
+
+        original_getter = nodes_module.get_entity_extractor_agent
+        nodes_module.get_entity_extractor_agent = lambda config: mock_agent
+
+        try:
+            await node.run(ctx)
+
+            resource_id = list(ctx.state.entities_by_resource.keys())[0]
+            entities = ctx.state.entities_by_resource[resource_id]
+
+            # Should have exactly one entity (all variants merged)
+            assert len(entities) == 1
+
+            # Should use first variant's casing as canonical
+            assert "BRCA1" in entities
+            entity = entities["BRCA1"]
+            assert entity.name == "BRCA1"
+
+            # Should have merged quotes from all three mentions
+            assert len(entity.quotes) == 3
+
+            # Should have merged reasoning from all variants
+            assert "First mention" in entity.reasoning
+            assert "Second mention" in entity.reasoning
+            assert "Third mention" in entity.reasoning
+
+        finally:
+            nodes_module.get_entity_extractor_agent = original_getter
+
+    @pytest.mark.asyncio
+    async def test_preserves_casing_in_acronyms(self, mock_deps):
+        """Acronyms should preserve their specific casing."""
+        node = ExtractEntitiesNode()
+        state = State(
+            topic="hypertension",
+            target_entity_types=["disease"],
+            permitted_pairs=build_permitted_pairs(["disease"]),
+        )
+        ctx = GraphRunContext(state=state, deps=mock_deps)
+
+        # Mock LLM response with acronym
+        mock_result = MagicMock()
+        mock_result.output = EntityExtractionOut(
+            entities=[
+                EntityInfo(
+                    kind="disease",
+                    name="PAH",
+                    aliases=["PAH", "pulmonary arterial hypertension"],
+                    quotes=["BRCA1 is a tumor suppressor gene"],  # Use valid quote
+                    reasoning="Pulmonary arterial hypertension acronym",
+                )
+            ]
+        )
+        mock_agent = create_mock_agent_with_override(mock_result)
+
+        import interaction_finder.extraction.nodes as nodes_module
+
+        original_getter = nodes_module.get_entity_extractor_agent
+        nodes_module.get_entity_extractor_agent = lambda config: mock_agent
+
+        try:
+            await node.run(ctx)
+
+            resource_id = list(ctx.state.entities_by_resource.keys())[0]
+            entities = ctx.state.entities_by_resource[resource_id]
+
+            # Should preserve uppercase acronym
+            assert "PAH" in entities
+            entity = entities["PAH"]
+            assert entity.name == "PAH"
+            assert entity.name != "pah"
+
+        finally:
+            nodes_module.get_entity_extractor_agent = original_getter

@@ -168,17 +168,19 @@ For each entity, provide: canonical name, all verbatim names from text, supporti
                             f"in {resource.id.url}: {type(e).__name__}: {e}"
                         )
             if all_quotes:  # Only store entity if we have valid quotes
+                # Use first entity's name (after stripping kind annotation) as canonical name
+                # This preserves original casing (e.g., "BRCA1" not "brca1")
+                canonical_name = strip_kind_annotation(entity_infos[0].name)
                 # Collect all original names and aliases
-                # Skip original names that differ only in capitalization from normalized
                 all_aliases = []
                 seen_aliases_normalized = set()
                 for entity_info in entity_infos:
-                    # Add original name only if it differs beyond just capitalization
-                    name_normalized = normalize_for_comparison(entity_info.name)
-                    if name_normalized != normalized_name:
-                        # Name differs in more than just capitalization (e.g., punctuation)
+                    # Add original name as alias if it differs from canonical
+                    stripped_name = strip_kind_annotation(entity_info.name)
+                    if stripped_name != canonical_name:
+                        name_normalized = normalize_for_comparison(stripped_name)
                         if name_normalized not in seen_aliases_normalized:
-                            all_aliases.append(entity_info.name)
+                            all_aliases.append(stripped_name)
                             seen_aliases_normalized.add(name_normalized)
                     # Add all aliases from this entity
                     for alias in entity_info.aliases:
@@ -190,10 +192,11 @@ For each entity, provide: canonical name, all verbatim names from text, supporti
                 merged_reasoning = " | ".join(
                     entity_info.reasoning for entity_info in entity_infos
                 )
-                # Use normalized name as canonical name
-                entities_dict[normalized_name] = EntityMention(
+                # Store with canonical name as both key and in entity object
+                # Normalized name is only used for grouping during extraction
+                entities_dict[canonical_name] = EntityMention(
                     kind=entity_infos[0].kind,
-                    name=normalized_name,
+                    name=canonical_name,
                     aliases=all_aliases,
                     quotes=all_quotes,
                     reasoning=merged_reasoning,
