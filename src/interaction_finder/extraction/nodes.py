@@ -40,7 +40,7 @@ from interaction_finder.extraction.models import (
     PairJudgment,
     SimpleEntity,
 )
-from interaction_finder.extraction.state import QuoteValidationFailure, State
+from interaction_finder.extraction.state import State
 from interaction_finder.extraction.utils import (
     build_text_region,
     collect_relevant_text_for_quotes,
