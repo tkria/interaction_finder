@@ -40,7 +40,7 @@ from interaction_finder.extraction.models import (
     PairJudgment,
     SimpleEntity,
 )
-from interaction_finder.extraction.state import State
+from interaction_finder.extraction.state import QuoteValidationFailure, State
 from interaction_finder.extraction.utils import (
     build_text_region,
     collect_relevant_text_for_quotes,
@@ -52,6 +52,29 @@ from interaction_finder.extraction.utils import (
 )
 from interaction_finder.logging import logfire
 from interaction_finder.resources import Resource
+
+
+def _classify_quote_error(error: Exception) -> str:
+    """Classify quote validation error by type."""
+    error_name = type(error).__name__
+    if "Paraphrase" in error_name:
+        return "paraphrased"
+    elif "Missing" in error_name or "NotFound" in error_name:
+        return "missing"
+    else:
+        return "fuzzy_match_failed"
+
+
+def _extract_similarity(error: Exception) -> float | None:
+    """Extract similarity percentage from error message if available."""
+    error_str = str(error)
+    # Look for "Similarity: XX.X%" pattern
+    import re
+
+    match = re.search(r"Similarity:\s*([\d.]+)%", error_str)
+    if match:
+        return float(match.group(1))
+    return None
 
 
 @dataclass
@@ -75,6 +98,11 @@ class ExtractEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
             if not resources:
                 ctx.deps.logger.warning("No resources to process")
                 return End(self._empty_result(ctx))
+
+            # Set up progress tracking
+            if ctx.deps.progress:
+                ctx.deps.progress.documents_total = len(resources)
+                ctx.deps.progress.set_phase_extracting()
 
             # Process all resources in parallel
             tasks = [self._process_resource(resource, ctx) for resource in resources]
@@ -204,6 +232,16 @@ For each entity, provide: canonical name, all verbatim names from text, supporti
         # Store entities for this resource
         if entities_dict:
             ctx.state.entities_by_resource[resource.id] = entities_dict
+
+            # Update progress
+            if ctx.deps.progress:
+                ctx.deps.progress.documents_processed += 1
+                ctx.deps.progress.entities_found = sum(
+                    len(e) for e in ctx.state.entities_by_resource.values()
+                )
+                ctx.deps.progress.quotes_validated = ctx.state.quotes_validated
+                ctx.deps.progress.quotes_failed = ctx.state.quotes_failed
+                ctx.deps.progress.update()
 
 
 @dataclass

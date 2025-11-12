@@ -850,29 +850,24 @@ def extract(
         )
         console.print(f"Processing {resources_with_content} resources with content\n")
         from interaction_finder.extraction import run_extraction
+        from interaction_finder.extraction.progress import ExtractionProgress
 
-        # Run extraction with config
-        result = asyncio.run(
-            run_extraction(
-                topic=topic,
-                target_entity_types=entity_types,
-                resource_pool=checkpoint.resources,
-                config=cfg,
+        # Create progress display
+        progress = ExtractionProgress()
+
+        # Run extraction with config and progress
+        with progress:
+            result = asyncio.run(
+                run_extraction(
+                    topic=topic,
+                    target_entity_types=entity_types,
+                    resource_pool=checkpoint.resources,
+                    config=cfg,
+                    progress=progress,
+                )
             )
-        )
-        # Display results summary
-        console.print("\n[bold green]✓ Extraction completed[/bold green]")
-        console.print(f"Resources processed: {result.metadata.resource_count}")
-        console.print(f"Entities found: {result.metadata.total_entities_found}")
-        console.print(f"Pairs found: {result.metadata.total_pairs_found}")
-        console.print(
-            f"[green]Pairs accepted:[/green] {result.metadata.pairs_accepted}"
-        )
-        console.print(f"Pairs rejected: {result.metadata.pairs_rejected}")
-        console.print(
-            f"Quote validation: {result.metadata.quotes_validated} validated, "
-            f"{result.metadata.quotes_failed} failed"
-        )
+        # Progress display already shows completion summary
+        console.print()
         # Show sample of accepted pairs
         accepted_judgments = [j for j in result.judgments if j.accepted]
         if accepted_judgments:

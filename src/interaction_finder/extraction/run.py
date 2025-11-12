@@ -23,6 +23,7 @@ async def run_extraction(
     resource_pool: ResourcePool,
     config: IfetcherConfig | None = None,
     logger: logging.Logger | None = None,
+    progress=None,
 ) -> ExtractionResult:
     """Run the association extraction pipeline.
 
@@ -64,6 +65,7 @@ async def run_extraction(
             resource_pool=resource_pool,
             config=config,
             logger=logger,
+            progress=progress,
         )
 
         # Build permitted pairs map from target entity types

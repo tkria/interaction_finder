@@ -25,6 +25,21 @@ from interaction_finder.resources import ResourceId
 
 
 @dataclass
+class QuoteValidationFailure:
+    """Record of a quote validation failure with complete information.
+
+    Captures all details needed for debugging and reporting without truncation.
+    """
+
+    entity_name: str
+    resource_id: ResourceId
+    quote_text: str
+    error_type: str  # "paraphrased", "missing", "fuzzy_match_failed"
+    similarity: float | None = None
+    details: str = ""
+
+
+@dataclass
 class State:
     """Pipeline state with precise, upfront field definitions.
 
@@ -78,3 +93,4 @@ class State:
     # === Metrics (populated throughout) ===
     quotes_validated: int = 0
     quotes_failed: int = 0
+    quote_failures: list[QuoteValidationFailure] = field(default_factory=list)
