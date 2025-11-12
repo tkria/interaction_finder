@@ -85,13 +85,16 @@ class ExtractionProgress:
         table.add_column(style="bold cyan")
         table.add_column(style="bold yellow", justify="right")
 
-        # Documents progress
+        # Documents section header
+        table.add_row("[bold cyan]Documents[/]", "")
+
+        # Documents processed
         if self.documents_total > 0:
             bright = (
                 "bold bright_yellow" if self._highlight == "docs" else "bold yellow"
             )
             table.add_row(
-                "Documents",
+                "  Processed",
                 f"[{bright}]{self.documents_processed}/{self.documents_total}[/]",
             )
 
@@ -109,18 +112,18 @@ class ExtractionProgress:
             quote_text = f"{self.quotes_validated}"
         table.add_row("  Quotes", f"[{quote_style}]{quote_text}[/]")
 
-        # Pair metrics
-        bright = "bold bright_yellow" if self._highlight == "pairs" else "bold yellow"
-        table.add_row("  Pairs found", f"[{bright}]{self.pairs_found}[/]")
-
-        # Assessment progress (indented to align with "found")
-        if self.pairs_assessed > 0:
+        # Pairs assessed (combined found + assessed as fraction)
+        if self.pairs_assessed > 0 or self.pairs_found > 0:
             bright = (
                 "bold bright_yellow"
-                if self._highlight == "assessment"
+                if self._highlight in ("pairs", "assessment")
                 else "bold yellow"
             )
-            table.add_row("        assessed", f"[{bright}]{self.pairs_assessed}[/]")
+            # Show as fraction: assessed/found
+            table.add_row(
+                "  Pairs assessed",
+                f"[{bright}]{self.pairs_assessed}/{self.pairs_found}[/]",
+            )
 
         # Combined judgment section (only show if we have cross-document results)
         if self.unique_pairs > 0 or self.accepted > 0 or self.rejected > 0:
