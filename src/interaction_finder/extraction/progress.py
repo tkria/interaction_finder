@@ -113,14 +113,14 @@ class ExtractionProgress:
         bright = "bold bright_yellow" if self._highlight == "pairs" else "bold yellow"
         table.add_row("  Pairs found", f"[{bright}]{self.pairs_found}[/]")
 
-        # Assessment progress (just show count, since pairs_found is above)
+        # Assessment progress (indented to align with "found")
         if self.pairs_assessed > 0:
             bright = (
                 "bold bright_yellow"
                 if self._highlight == "assessment"
                 else "bold yellow"
             )
-            table.add_row("  Assessed", f"[{bright}]{self.pairs_assessed}[/]")
+            table.add_row("        assessed", f"[{bright}]{self.pairs_assessed}[/]")
 
         # Combined judgment section (only show if we have cross-document results)
         if self.unique_pairs > 0 or self.accepted > 0 or self.rejected > 0:
