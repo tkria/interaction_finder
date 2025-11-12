@@ -12,7 +12,7 @@ to enable proper JSON serialization via model_dump().
 """
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, NamedTuple
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -46,70 +46,36 @@ class EntityMention:
 
 
 @dataclass
-class PairMention:
-    """Association found in a single resource.
+class ProximalEntitySet:
+    """Group of entities found in close proximity within a document.
+
+    Used to identify regions where multiple entities co-occur, which may
+    indicate potential associations worth investigating.
 
     Attributes:
-        entity1: First entity (canonical name)
-        entity2: Second entity (canonical name)
-        relationship_type: Type of relationship (e.g., "associated_with", "regulates")
-        quotes: Supporting quotes from the resource
+        entities: Set of canonical entity names found in proximity
+        chunk_range: (start_chunk_idx, end_chunk_idx) spanning all quotes
+        entity_quotes: Mapping from canonical name to quotes for that entity
     """
 
-    entity1: str
-    entity2: str
-    relationship_type: str
-    quotes: list[ResourceQuote]
+    entities: set[str]
+    chunk_range: tuple[int, int]
+    entity_quotes: dict[str, list[ResourceQuote]]
 
 
-# Type alias for pair identification across resources
-PairKey = tuple[str, str, str]  # (entity1, entity2, relationship_type)
+class EntityPairKey(NamedTuple):
+    """Identifier for an entity pair across documents.
 
-
-class EntityAssessment(BaseModel):
-    """Evidence assessment for one entity in one resource.
+    Entity names are ordered lexicographically by their kinds to ensure
+    consistent pairing (e.g., always gene-disease, not disease-gene).
 
     Attributes:
-        resource_id: Which resource this assessment is from
-        strength: Evidence strength rating
-        rationale: Why this rating was assigned
-        quotes: Subset of entity's quotes supporting this assessment
+        entity1_name: First entity canonical name
+        entity2_name: Second entity canonical name
     """
 
-    resource_id: ResourceId
-    strength: Literal["none", "weak", "strong"]
-    rationale: str
-    quotes: list[ResourceQuote]
-
-
-class PairAssessment(BaseModel):
-    """Evidence assessment for one pair in one resource.
-
-    Attributes:
-        resource_id: Which resource this assessment is from
-        strength: Evidence strength rating
-        rationale: Why this rating was assigned
-        quotes: Supporting quotes for this assessment
-    """
-
-    resource_id: ResourceId
-    strength: Literal["none", "weak", "strong"]
-    rationale: str
-    quotes: list[ResourceQuote]
-
-
-class FinalJudgment(BaseModel):
-    """Cross-document judgment on whether a pair is valid.
-
-    Attributes:
-        accepted: Whether the pair is accepted as valid
-        confidence: Confidence level in this judgment
-        rationale: Explanation of the decision
-    """
-
-    accepted: bool
-    confidence: Literal["high", "medium", "low"]
-    rationale: str
+    entity1_name: str
+    entity2_name: str
 
 
 # =============================================================================
@@ -146,93 +112,146 @@ class EntityExtractionOut(BaseModel):
     entities: list[EntityInfo] = Field(description="Entities found in document")
 
 
-class PairInfo(BaseModel):
-    """LLM output for a single pair."""
+class EntityMergeDecision(BaseModel):
+    """LLM decision on whether to merge two entities.
+
+    Used when one entity name is a substring of another (e.g., "BRCA" vs "BRCA1").
+    """
+
+    parent_entity: str = Field(description="Entity to keep (canonical name)")
+    child_entity: str = Field(description="Entity to merge into parent")
+    should_merge: bool = Field(description="Whether these entities should be merged")
+    reasoning: str = Field(min_length=20, description="Explanation of merge decision")
+
+
+class EntityMergeDecisions(BaseModel):
+    """LLM output: batch of merge decisions."""
+
+    decisions: list[EntityMergeDecision] = Field(
+        description="Merge decisions for all candidate pairs"
+    )
+
+
+class ProximalPairInfo(BaseModel):
+    """LLM output for a single pair extracted from a proximal region."""
 
     entity1: str = Field(description="First entity (canonical name)")
     entity2: str = Field(description="Second entity (canonical name)")
-    relationship_type: str = Field(
-        description='Relationship type (e.g., "associated_with", "regulates")'
+    relationship_types: list[str] = Field(
+        description="Possible relationship types (may suggest multiple)",
+        min_length=1,
     )
     supporting_quotes: list[str] = Field(
         description="Direct quotes supporting this association", min_length=1
     )
 
 
-class PairExtractionOut(BaseModel):
-    """LLM output: all pairs found in document."""
+class ProximalPairExtraction(BaseModel):
+    """LLM output: all pairs found in a proximal region."""
 
-    pairs: list[PairInfo] = Field(description="Associations found in document")
+    pairs: list[ProximalPairInfo] = Field(
+        description="Associations found in this text region"
+    )
     reasoning: str = Field(
         min_length=20, description="Brief explanation of extraction choices"
     )
 
 
-class EntityEvidenceAssessment(BaseModel):
-    """LLM assessment of entity's relevance in one document."""
+class PairEvidenceJudgment(BaseModel):
+    """LLM assessment of pair evidence in a single document.
 
-    strength: Literal["none", "weak", "strong"] = Field(
-        description="Evidence strength for this entity's relevance to the topic"
-    )
-    rationale: str = Field(
-        min_length=30, description="Explanation for the strength rating"
-    )
-    supporting_quote_ids: list[int] = Field(
-        description="Indices (0-based) of quotes that support this assessment"
-    )
+    Evaluates the strength of evidence and selects the most appropriate
+    relationship type from candidates.
+    """
 
-
-class PairEvidenceAssessment(BaseModel):
-    """LLM assessment of pair's validity in one document."""
-
-    strength: Literal["none", "weak", "strong"] = Field(
-        description="Evidence strength for this pair's validity"
+    relationship: str = Field(
+        description="Selected relationship type (from candidates or new)"
     )
-    rationale: str = Field(
-        min_length=30, description="Explanation for the strength rating"
+    confidence: Literal["high", "medium", "low"] = Field(
+        description="Confidence in this pair's validity based on evidence"
+    )
+    reasoning: str = Field(
+        min_length=30, description="Explanation of confidence and relationship choice"
     )
     supporting_quote_ids: list[int] = Field(
         description="Indices (0-based) of quotes that support this assessment"
     )
 
 
-class FinalJudgmentOut(BaseModel):
-    """LLM final judgment across all documents."""
+class CrossDocumentJudgment(BaseModel):
+    """LLM final judgment synthesizing evidence across all documents."""
 
-    accepted: bool = Field(description="Whether to accept this pair as valid")
+    accepted: bool = Field(
+        description="Whether to accept this pair as a valid association"
+    )
     confidence: Literal["high", "medium", "low"] = Field(
         description="Confidence level in this judgment"
     )
-    rationale: str = Field(
+    reasoning: str = Field(
         min_length=50, description="Detailed explanation of the decision"
     )
 
 
 # =============================================================================
-# Final pipeline output
+# Final pipeline output models
 # =============================================================================
 
 
-class PairWithProvenance(BaseModel):
-    """Accepted pair with complete provenance chain.
+class SimpleEntity(BaseModel):
+    """Lightweight entity representation for final output.
 
-    This is the primary output of the extraction pipeline.
+    Contains only the essential information needed to identify an entity
+    without the full provenance chain.
     """
 
-    entity1: str = Field(description="First entity (canonical name)")
-    entity2: str = Field(description="Second entity (canonical name)")
-    relationship_type: str = Field(description="Type of relationship")
-    entity1_type: str = Field(description='Entity type (e.g., "gene")')
-    entity2_type: str = Field(description='Entity type (e.g., "disease")')
-    all_quotes: list[ResourceQuote] = Field(
-        description="All quotes from all resources supporting this pair"
-    )
+    name: str = Field(description="Canonical entity name")
+    kind: str = Field(description='Entity type (e.g., "gene", "disease")')
+    aliases: list[str] = Field(description="Alternative names found in text")
+
+
+class PairAssessment(BaseModel):
+    """Evidence assessment for one pair in one document.
+
+    This is the core result of per-document pair analysis, containing
+    the selected relationship, confidence level, and supporting evidence.
+
+    Attributes:
+        resource_id: Which document this assessment is from
+        entity1: First entity with full information
+        entity2: Second entity with full information
+        relationship: Selected relationship type
+        quotes: Supporting quotes from this document
+        confidence: Qualitative confidence in this association
+        reasoning: Explanation of confidence level
+    """
+
+    resource_id: ResourceId
+    entity1: EntityMention
+    entity2: EntityMention
+    relationship: str
+    quotes: list[ResourceQuote]
+    confidence: Literal["high", "medium", "low"]
+    reasoning: str
+
+
+class PairJudgment(BaseModel):
+    """Final cross-document judgment on an entity pair.
+
+    This is the primary output of the extraction pipeline, containing
+    all per-document assessments and the final accept/reject decision.
+    """
+
+    entity1: SimpleEntity = Field(description="First entity")
+    entity2: SimpleEntity = Field(description="Second entity")
+    relationship: str = Field(description="Final relationship type")
     assessments: list[PairAssessment] = Field(
-        description="Per-resource evidence assessments"
+        description="All per-document assessments"
     )
-    final_judgment: FinalJudgment = Field(
-        description="Cross-document judgment on validity"
+    accepted: bool = Field(description="Whether this pair is accepted")
+    confidence: Literal["high", "medium", "low"] = Field(
+        description="Confidence in final judgment"
     )
+    reasoning: str = Field(description="Explanation of final decision")
 
 
 class ExtractionMetadata(BaseModel):
@@ -241,6 +260,9 @@ class ExtractionMetadata(BaseModel):
     topic: str
     resource_count: int
     total_entities_found: int
+    entities_after_validation: int
+    entities_merged: int
+    proximal_sets_found: int
     total_pairs_found: int
     pairs_accepted: int
     pairs_rejected: int
@@ -251,7 +273,7 @@ class ExtractionMetadata(BaseModel):
 class ExtractionResult(BaseModel):
     """Final pipeline output.
 
-    Contains accepted pairs with full provenance and shared resource pool.
+    Contains accepted pair judgments with full provenance and shared resource pool.
     Provides efficient serialization by storing resources once and referencing
     by ID in quotes.
     """
@@ -259,8 +281,8 @@ class ExtractionResult(BaseModel):
     resources: ResourcePool = Field(
         description="Shared pool of all resources referenced by quotes"
     )
-    accepted_pairs: list[PairWithProvenance] = Field(
-        description="Pairs accepted after evidence assessment"
+    judgments: list[PairJudgment] = Field(
+        description="All pair judgments (accepted and rejected)"
     )
     metadata: ExtractionMetadata = Field(description="Extraction statistics")
 
@@ -276,17 +298,21 @@ class ExtractionResult(BaseModel):
         if not isinstance(data, dict) or "resources" not in data:
             return data
 
-        # Check if this is serialized data (pairs are dicts with resource_id in quotes)
-        pairs = data.get("accepted_pairs", [])
-        if not pairs or not isinstance(pairs[0], dict):
+        # Check if this is serialized data (judgments are dicts with resource_id in quotes)
+        judgments = data.get("judgments", [])
+        if not judgments or not isinstance(judgments[0], dict):
             return data
 
-        # Check first quote for resource_id (indicates serialized data)
-        first_pair = pairs[0]
-        if not first_pair.get("all_quotes"):
+        # Check first assessment for resource_id (indicates serialized data)
+        first_judgment = judgments[0]
+        if not first_judgment.get("assessments"):
             return data
 
-        first_quote = first_pair["all_quotes"][0]
+        first_assessment = first_judgment["assessments"][0]
+        if not first_assessment.get("quotes"):
+            return data
+
+        first_quote = first_assessment["quotes"][0]
         if not isinstance(first_quote, dict) or "resource_id" not in first_quote:
             return data
 
@@ -306,12 +332,17 @@ class ExtractionResult(BaseModel):
             quote_dict["resource"] = resource
             del quote_dict["resource_id"]
 
-        # Process all quotes in all pairs
-        for pair in pairs:
-            for quote_dict in pair["all_quotes"]:
-                inject_resource(quote_dict)
-            for assessment in pair["assessments"]:
+        # Process all quotes in all assessments in all judgments
+        for judgment in judgments:
+            for assessment in judgment["assessments"]:
+                # Inject resources into quotes
                 for quote_dict in assessment["quotes"]:
                     inject_resource(quote_dict)
+
+                # Inject resources into entity quotes (entity1 and entity2)
+                for entity_key in ["entity1", "entity2"]:
+                    entity = assessment[entity_key]
+                    for quote_dict in entity["quotes"]:
+                        inject_resource(quote_dict)
 
         return data

@@ -877,21 +877,24 @@ def extract(
             f"{result.metadata.quotes_failed} failed"
         )
         # Show sample of accepted pairs
-        if result.accepted_pairs:
+        accepted_judgments = [j for j in result.judgments if j.accepted]
+        if accepted_judgments:
             console.print("\n[bold]Sample accepted pairs:[/bold]")
-            for pair in result.accepted_pairs[:5]:
+            for judgment in accepted_judgments[:5]:
                 console.print(
-                    f"  • {pair.entity1} ({pair.entity1_type}) "
-                    f"[dim]{pair.relationship_type}[/dim] "
-                    f"{pair.entity2} ({pair.entity2_type})"
+                    f"  • {judgment.entity1.name} ({judgment.entity1.kind}) "
+                    f"[dim]{judgment.relationship}[/dim] "
+                    f"{judgment.entity2.name} ({judgment.entity2.kind})"
                 )
+                # Count total quotes across all assessments
+                total_quotes = sum(len(a.quotes) for a in judgment.assessments)
                 console.print(
-                    f"    Evidence: {len(pair.all_quotes)} quotes, "
-                    f"{len(pair.assessments)} assessments, "
-                    f"confidence: {pair.final_judgment.confidence}"
+                    f"    Evidence: {total_quotes} quotes, "
+                    f"{len(judgment.assessments)} assessments, "
+                    f"confidence: {judgment.confidence}"
                 )
-            if len(result.accepted_pairs) > 5:
-                console.print(f"  ... and {len(result.accepted_pairs) - 5} more")
+            if len(accepted_judgments) > 5:
+                console.print(f"  ... and {len(accepted_judgments) - 5} more")
         # Save to file if requested
         if output:
             output_data = result.model_dump(mode="json")

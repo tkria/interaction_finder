@@ -243,6 +243,35 @@ class IfetcherConfig(BaseModel):
             default_factory=Widesearch, description="Widesearch configuration"
         )
 
+        class Extraction(BaseModel):
+            """Configuration for entity-pair extraction module."""
+
+            proximal_window_chunks: int = Field(
+                2,
+                ge=0,
+                le=10,
+                description="Maximum chunk distance for entities to be considered proximal",
+            )
+            region_padding_chunks: int = Field(
+                1,
+                ge=0,
+                le=5,
+                description="Number of chunks to pad around text regions",
+            )
+            merge_batch_size: int = Field(
+                50,
+                ge=1,
+                le=200,
+                description="Maximum number of entity merge decisions per LLM call",
+            )
+            enable_entity_kind_validation: bool = Field(
+                True, description="Filter entities not matching target kinds"
+            )
+
+        extraction: Extraction = Field(
+            default_factory=Extraction, description="Extraction configuration"
+        )
+
     tools: Tools = Field(
         default_factory=Tools, description="External tools configuration"
     )

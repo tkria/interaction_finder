@@ -7,8 +7,9 @@ Main entry point:
     run_extraction() - Run the full extraction pipeline
 
 Key models:
-    ExtractionResult - Final output with accepted pairs and metadata
-    PairWithProvenance - Individual association with complete provenance
+    ExtractionResult - Final output with all pair judgments and metadata
+    PairJudgment - Individual association judgment with accept/reject decision
+    PairAssessment - Per-document evidence assessment
     ExtractionMetadata - Summary statistics
 
 Example:
@@ -24,22 +25,25 @@ Example:
     ...     resource_pool=pool
     ... )
     >>>
-    >>> for pair in result.accepted_pairs:
-    ...     print(f"{pair.entity1} {pair.relationship_type} {pair.entity2}")
+    >>> accepted = [j for j in result.judgments if j.accepted]
+    >>> for judgment in accepted:
+    ...     print(f"{judgment.entity1.name} {judgment.relationship} {judgment.entity2.name}")
 """
 
 from interaction_finder.extraction.graph import graph
 from interaction_finder.extraction.models import (
     ExtractionMetadata,
     ExtractionResult,
-    PairWithProvenance,
+    PairAssessment,
+    PairJudgment,
 )
 from interaction_finder.extraction.run import run_extraction
 
 __all__ = [
     "run_extraction",
     "ExtractionResult",
-    "PairWithProvenance",
+    "PairJudgment",
+    "PairAssessment",
     "ExtractionMetadata",
     "graph",
 ]

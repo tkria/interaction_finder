@@ -3,109 +3,118 @@
 Each node represents a stage in the pipeline. Nodes control flow via
 return type annotations. All branching and looping happens in nodes;
 agents only produce typed data.
+
+Pipeline stages:
+1. ExtractEntitiesNode - Extract entities from documents
+2. ValidateEntitiesNode - Validate entity kinds and merge substring duplicates
+3. IdentifyProximalSetsNode - Find groups of proximal entities
+4. ExtractPairsFromProximalSetsNode - Extract pairs from proximal regions
+5. AssessPairsNode - Judge evidence for each pair per document
+6. JudgeCrossDocumentNode - Make final accept/reject decisions
+7. FinalizeNode - Build final output
 """
 
 import asyncio
+from collections import defaultdict
 from dataclasses import dataclass
 from typing import Union
 
 from pydantic_ai.usage import RunUsage
 from pydantic_graph import BaseNode, End, GraphRunContext
 
-from interaction_finder.extraction.assess_entity import get_entity_assessor_agent
-from interaction_finder.extraction.assess_pair import get_pair_assessor_agent
 from interaction_finder.extraction.deps import Deps
 from interaction_finder.extraction.extract import get_entity_extractor_agent
-from interaction_finder.extraction.extract_pairs import get_pair_agent
-from interaction_finder.extraction.judge import get_judge_agent
+from interaction_finder.extraction.extract_proximal_pairs import get_proximal_pair_agent
+from interaction_finder.extraction.judge_cross_document import (
+    get_cross_document_judge_agent,
+)
+from interaction_finder.extraction.judge_pair_evidence import get_pair_judge_agent
+from interaction_finder.extraction.merge_entities import get_entity_merge_agent
 from interaction_finder.extraction.models import (
-    EntityAssessment,
     EntityMention,
+    EntityPairKey,
     ExtractionMetadata,
     ExtractionResult,
-    FinalJudgment,
     PairAssessment,
-    PairKey,
-    PairMention,
-    PairWithProvenance,
+    PairJudgment,
+    SimpleEntity,
 )
 from interaction_finder.extraction.state import State
+from interaction_finder.extraction.utils import (
+    build_text_region,
+    collect_relevant_text_for_quotes,
+    find_substring_entities,
+    identify_proximal_sets,
+    make_entity_pair_key,
+    normalize_for_comparison,
+)
 from interaction_finder.logging import logfire
 from interaction_finder.resources import Resource
 
 
 @dataclass
-class ExtractFromDocumentsNode(BaseNode[State, Deps, ExtractionResult]):
-    """Extract entities and pairs from all resources in parallel.
+class ExtractEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
+    """Extract entities from all resources in parallel.
 
     For each resource:
     1. Call entity_extractor_agent to get entities with quotes
-    2. Call pair_extractor_agent to get pairs with quotes
-    3. Convert all quote strings to ResourceQuote objects
-    4. Store validated results in State
+    2. Convert all quote strings to ResourceQuote objects via fuzzy matching
+    3. Merge entities with same canonical name
+    4. Store validated results in State.entities_by_resource
     """
 
     async def run(
         self, ctx: GraphRunContext[State, Deps]
-    ) -> Union["AssessEntitiesNode", End[ExtractionResult]]:
+    ) -> Union["ValidateEntitiesNode", End[ExtractionResult]]:
         """Process all resources in parallel."""
-        with logfire.span("ExtractFromDocumentsNode"):
+        with logfire.span("ExtractEntitiesNode"):
             resources = ctx.deps.resource_pool.resources
 
             if not resources:
                 ctx.deps.logger.warning("No resources to process")
-                # Return empty result
-                return End(
-                    ExtractionResult(
-                        accepted_pairs=[],
-                        metadata=ExtractionMetadata(
-                            topic=ctx.state.topic,
-                            resource_count=0,
-                            total_entities_found=0,
-                            total_pairs_found=0,
-                            pairs_accepted=0,
-                            pairs_rejected=0,
-                            quotes_validated=0,
-                            quotes_failed=0,
-                        ),
-                    )
-                )
+                return End(self._empty_result(ctx))
 
             # Process all resources in parallel
             tasks = [self._process_resource(resource, ctx) for resource in resources]
             await asyncio.gather(*tasks)
 
-            # Check if we found any entities or pairs
-            if not ctx.state.entities_by_resource and not ctx.state.pairs_by_resource:
-                ctx.deps.logger.warning("No entities or pairs extracted from documents")
-                return End(
-                    ExtractionResult(
-                        accepted_pairs=[],
-                        metadata=ExtractionMetadata(
-                            topic=ctx.state.topic,
-                            resource_count=len(resources),
-                            total_entities_found=0,
-                            total_pairs_found=0,
-                            pairs_accepted=0,
-                            pairs_rejected=0,
-                            quotes_validated=ctx.state.quotes_validated,
-                            quotes_failed=ctx.state.quotes_failed,
-                        ),
-                    )
-                )
+            # Check if we found any entities
+            if not ctx.state.entities_by_resource:
+                ctx.deps.logger.warning("No entities extracted from documents")
+                return End(self._empty_result(ctx))
 
-            return AssessEntitiesNode()
+            return ValidateEntitiesNode()
+
+    def _empty_result(self, ctx: GraphRunContext[State, Deps]) -> ExtractionResult:
+        """Create empty result for early termination."""
+        return ExtractionResult(
+            resources=ctx.deps.resource_pool,
+            judgments=[],
+            metadata=ExtractionMetadata(
+                topic=ctx.state.topic,
+                resource_count=len(ctx.deps.resource_pool.resources),
+                total_entities_found=0,
+                entities_after_validation=0,
+                entities_merged=0,
+                proximal_sets_found=0,
+                total_pairs_found=0,
+                pairs_accepted=0,
+                pairs_rejected=0,
+                quotes_validated=0,
+                quotes_failed=0,
+            ),
+        )
 
     async def _process_resource(
         self, resource: Resource, ctx: GraphRunContext[State, Deps]
     ):
-        """Process a single resource: extract entities and pairs."""
+        """Process a single resource: extract entities."""
         with logfire.span("process_resource", resource_url=resource.id.url):
             usage = RunUsage()
 
-            # Build prompts - keep focused and structured
+            # Build prompt
             entity_types_str = ", ".join(ctx.state.target_entity_types)
-            entity_prompt = f"""Extract entities from this document relevant to: {ctx.state.topic}
+            prompt = f"""Extract entities from this document relevant to: {ctx.state.topic}
 
 **Target entity types:** {entity_types_str}
 
@@ -117,315 +126,541 @@ class ExtractFromDocumentsNode(BaseNode[State, Deps, ExtractionResult]):
 Extract all entities of the specified types that are relevant to the topic.
 For each entity, provide: canonical name, all verbatim names from text, supporting quotes, and reasoning."""
 
-            pair_prompt = f"""Extract associations from this document relevant to: {ctx.state.topic}
-
-**Document title:** {resource.title}
-
-**Document text:**
-{resource.text[:15000]}
-
-Extract binary entity-entity associations relevant to the topic.
-Use canonical entity names and provide exact quotes supporting each association."""
-
-            # Extract entities using configured extraction model
+            # Extract entities
             try:
-                entity_result = await get_entity_extractor_agent(ctx.deps.config).run(
-                    entity_prompt, deps=ctx.deps, usage=usage
+                result = await get_entity_extractor_agent(ctx.deps.config).run(
+                    prompt, deps=ctx.deps, usage=usage
                 )
-            except (
-                # Catch expected failures from LLM operations
-                TimeoutError,
-                ConnectionError,
-                ValueError,  # Model/validation errors from pydantic-ai
-            ) as e:
+            except (TimeoutError, ConnectionError, ValueError) as e:
                 ctx.deps.logger.error(
                     f"Entity extraction failed for {resource.id.url}: {type(e).__name__}: {e}"
                 )
-                # Continue without entities from this resource
-                entity_result = None
+                return
 
-            # Extract pairs using configured extraction model
-            try:
-                pair_result = await get_pair_agent(ctx.deps.config).run(
-                    pair_prompt, deps=ctx.deps, usage=usage
-                )
-            except (
-                # Catch expected failures from LLM operations
-                TimeoutError,
-                ConnectionError,
-                ValueError,  # Model/validation errors from pydantic-ai
-            ) as e:
-                ctx.deps.logger.error(
-                    f"Pair extraction failed for {resource.id.url}: {type(e).__name__}: {e}"
-                )
-                # Continue without pairs from this resource
-                pair_result = None
+            # Convert entities to EntityMention with ResourceQuotes, merging duplicates by name
+            entities_by_name: dict[str, list] = {}
+            for entity_info in result.output.entities:
+                if entity_info.name not in entities_by_name:
+                    entities_by_name[entity_info.name] = []
+                entities_by_name[entity_info.name].append(entity_info)
 
-            # Convert entities to EntityMention with ResourceQuotes, merging duplicates
+            # Convert and merge each entity name
             entities_dict = {}
-            if entity_result is not None:
-                # Group entities by name to handle duplicates
-                entities_by_name: dict[str, list] = {}
-                for entity_info in entity_result.output.entities:
-                    if entity_info.name not in entities_by_name:
-                        entities_by_name[entity_info.name] = []
-                    entities_by_name[entity_info.name].append(entity_info)
+            for entity_name, entity_infos in entities_by_name.items():
+                # Validate all quotes from all instances
+                all_quotes = []
+                for entity_info in entity_infos:
+                    for quote_str in entity_info.quotes:
+                        try:
+                            quote = resource.quote(quote_str)
+                            all_quotes.append(quote)
+                            ctx.state.quotes_validated += 1
+                        except Exception as e:
+                            ctx.state.quotes_failed += 1
+                            ctx.deps.logger.warning(
+                                f"Failed to validate entity quote for '{entity_name}' "
+                                f"in {resource.id.url}: {type(e).__name__}: {e}"
+                            )
 
-                # Convert and merge each entity name
-                for entity_name, entity_infos in entities_by_name.items():
-                    # Validate all quotes from all instances
-                    all_quotes = []
+                if all_quotes:  # Only store entity if we have valid quotes
+                    # Merge aliases (deduplicate)
+                    all_aliases = []
+                    seen_aliases = set()
                     for entity_info in entity_infos:
-                        for quote_str in entity_info.quotes:
-                            try:
-                                quote = resource.quote(quote_str)
-                                all_quotes.append(quote)
-                                ctx.state.quotes_validated += 1
-                            except Exception as e:
-                                ctx.state.quotes_failed += 1
-                                ctx.deps.logger.warning(
-                                    f"Failed to validate entity quote for '{entity_name}' "
-                                    f"in {resource.id.url}: {type(e).__name__}: {e}"
-                                )
+                        for alias in entity_info.aliases:
+                            if alias not in seen_aliases:
+                                all_aliases.append(alias)
+                                seen_aliases.add(alias)
 
-                    if all_quotes:  # Only store entity if we have valid quotes
-                        # Merge aliases from all instances (deduplicate)
-                        all_aliases = []
-                        seen_aliases = set()
-                        for entity_info in entity_infos:
-                            for alias in entity_info.aliases:
-                                if alias not in seen_aliases:
-                                    all_aliases.append(alias)
-                                    seen_aliases.add(alias)
+                    # Merge reasoning
+                    merged_reasoning = " | ".join(
+                        entity_info.reasoning for entity_info in entity_infos
+                    )
 
-                        # Merge reasoning (join with separator if multiple)
-                        merged_reasoning = " | ".join(
-                            entity_info.reasoning for entity_info in entity_infos
-                        )
-
-                        entities_dict[entity_name] = EntityMention(
-                            kind=entity_infos[0].kind,  # Should be consistent
-                            name=entity_name,
-                            aliases=all_aliases,
-                            quotes=all_quotes,
-                            reasoning=merged_reasoning,
-                        )
+                    entities_dict[entity_name] = EntityMention(
+                        kind=entity_infos[0].kind,
+                        name=entity_name,
+                        aliases=all_aliases,
+                        quotes=all_quotes,
+                        reasoning=merged_reasoning,
+                    )
 
             # Store entities for this resource
             if entities_dict:
                 ctx.state.entities_by_resource[resource.id] = entities_dict
 
-            # Convert pairs to PairMention with ResourceQuotes
-            pairs_list = []
-            if pair_result is not None:
-                for pair_info in pair_result.output.pairs:
-                    # Convert quote strings to ResourceQuotes
-                    quotes = []
-                    for quote_str in pair_info.supporting_quotes:
-                        try:
-                            quote = resource.quote(quote_str)
-                            quotes.append(quote)
-                            ctx.state.quotes_validated += 1
-                        except Exception as e:
-                            ctx.state.quotes_failed += 1
-                            ctx.deps.logger.warning(
-                                f"Failed to validate pair quote for "
-                                f"'{pair_info.entity1}-{pair_info.entity2}' "
-                                f"in {resource.id.url}: {type(e).__name__}: {e}"
-                            )
 
-                    if quotes:  # Only store pair if we have valid quotes
-                        pairs_list.append(
-                            PairMention(
-                                entity1=pair_info.entity1,
-                                entity2=pair_info.entity2,
-                                relationship_type=pair_info.relationship_type,
-                                quotes=quotes,
-                            )
-                        )
+@dataclass
+class ValidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
+    """Validate entity kinds and merge substring duplicates.
 
-            # Store pairs for this resource
-            if pairs_list:
-                ctx.state.pairs_by_resource[resource.id] = pairs_list
+    For each resource:
+    1. Remove entities not matching target_entity_types
+    2. Identify entity pairs where one name is substring of another
+    3. Batch LLM calls to decide which should be merged
+    4. Apply merge decisions (move child name to parent aliases)
+    5. Store validated entities
+    """
+
+    async def run(
+        self, ctx: GraphRunContext[State, Deps]
+    ) -> Union["IdentifyProximalSetsNode", End[ExtractionResult]]:
+        """Validate entities across all resources."""
+        with logfire.span("ValidateEntitiesNode"):
+            # Process each resource
+            for resource_id, entities in ctx.state.entities_by_resource.items():
+                # Filter by kind
+                valid_entities = {
+                    name: entity
+                    for name, entity in entities.items()
+                    if entity.kind in ctx.state.target_entity_types
+                }
+
+                if not valid_entities:
+                    continue
+
+                # Find substring entity pairs
+                substring_pairs = find_substring_entities(valid_entities)
+
+                if substring_pairs:
+                    # Batch merge decisions via LLM
+                    merge_decisions = await self._get_merge_decisions(
+                        substring_pairs, valid_entities, ctx
+                    )
+
+                    # Apply merges
+                    for decision in merge_decisions:
+                        if decision.should_merge:
+                            parent = valid_entities.get(decision.parent_entity)
+                            child = valid_entities.get(decision.child_entity)
+
+                            if parent and child:
+                                # Merge child into parent
+                                # Add child name to parent aliases
+                                if child.name not in parent.aliases:
+                                    parent.aliases.append(child.name)
+                                # Combine quotes
+                                parent.quotes.extend(child.quotes)
+                                # Merge reasoning
+                                parent.reasoning += (
+                                    f" | MERGED({child.name}): {child.reasoning}"
+                                )
+                                # Add child aliases to parent
+                                for alias in child.aliases:
+                                    if alias not in parent.aliases:
+                                        parent.aliases.append(alias)
+
+                                # Remove child
+                                del valid_entities[decision.child_entity]
+                                ctx.state.entities_merged += 1
+
+                # Store validated entities
+                if valid_entities:
+                    ctx.state.validated_entities_by_resource[resource_id] = (
+                        valid_entities
+                    )
+
+            # Check if we have any validated entities
+            if not ctx.state.validated_entities_by_resource:
+                ctx.deps.logger.warning("No entities after validation")
+                total_found = sum(
+                    len(entities)
+                    for entities in ctx.state.entities_by_resource.values()
+                )
+                return End(
+                    ExtractionResult(
+                        resources=ctx.deps.resource_pool,
+                        judgments=[],
+                        metadata=ExtractionMetadata(
+                            topic=ctx.state.topic,
+                            resource_count=len(ctx.deps.resource_pool.resources),
+                            total_entities_found=total_found,
+                            entities_after_validation=0,
+                            entities_merged=ctx.state.entities_merged,
+                            proximal_sets_found=0,
+                            total_pairs_found=0,
+                            pairs_accepted=0,
+                            pairs_rejected=0,
+                            quotes_validated=ctx.state.quotes_validated,
+                            quotes_failed=ctx.state.quotes_failed,
+                        ),
+                    )
+                )
+
+            return IdentifyProximalSetsNode()
+
+    async def _get_merge_decisions(
+        self,
+        substring_pairs: list[tuple[str, str]],
+        entities: dict[str, EntityMention],
+        ctx: GraphRunContext[State, Deps],
+    ) -> list:
+        """Get merge decisions from LLM in batches."""
+        # Get batch size from config (default 50)
+        batch_size = getattr(ctx.deps.config.tools.extraction, "merge_batch_size", 50)
+
+        all_decisions = []
+
+        # Process in batches
+        for i in range(0, len(substring_pairs), batch_size):
+            batch = substring_pairs[i : i + batch_size]
+
+            # Build prompt describing all pairs in batch
+            pairs_description = []
+            for parent_name, child_name in batch:
+                parent = entities[parent_name]
+                child = entities[child_name]
+                pairs_description.append(
+                    f"- Parent: '{parent_name}' (type: {parent.kind})\n"
+                    f"  Child: '{child_name}' (type: {child.kind})"
+                )
+
+            prompt = f"""Topic: {ctx.state.topic}
+
+You need to decide whether the following entity pairs should be merged.
+Each pair has one entity whose name is a substring of the other.
+
+Entity pairs to evaluate:
+{chr(10).join(pairs_description)}
+
+For each pair, decide if they should be merged (child absorbed into parent) or kept separate."""
+
+            # Call merge agent
+            usage = RunUsage()
+            try:
+                result = await get_entity_merge_agent(ctx.deps.config).run(
+                    prompt, deps=ctx.deps, usage=usage
+                )
+                all_decisions.extend(result.output.decisions)
+            except (TimeoutError, ConnectionError, ValueError) as e:
+                ctx.deps.logger.error(
+                    f"Entity merge decision failed: {type(e).__name__}: {e}"
+                )
+                # Continue without merging this batch
+
+        return all_decisions
 
 
 @dataclass
-class AssessEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
-    """Assess entity relevance per resource in parallel.
+class IdentifyProximalSetsNode(BaseNode[State, Deps, ExtractionResult]):
+    """Identify groups of entities found in close proximity.
 
-    For each (entity, resource) combination, call entity_assessor_agent
-    to evaluate evidence strength.
+    For each resource:
+    1. Use sliding window algorithm to find entity co-occurrence regions
+    2. Store ProximalEntitySet objects
+    """
+
+    async def run(
+        self, ctx: GraphRunContext[State, Deps]
+    ) -> "ExtractPairsFromProximalSetsNode":
+        """Identify proximal sets in all resources."""
+        with logfire.span("IdentifyProximalSetsNode"):
+            # Get proximity threshold from config (default 2)
+            threshold = getattr(
+                ctx.deps.config.tools.extraction, "proximal_window_chunks", 2
+            )
+
+            # Process each resource
+            for (
+                resource_id,
+                entities,
+            ) in ctx.state.validated_entities_by_resource.items():
+                resource = ctx.deps.resource_pool.get(resource_id)
+                if not resource:
+                    continue
+
+                # Identify proximal sets
+                proximal_sets = identify_proximal_sets(entities, threshold, resource)
+
+                if proximal_sets:
+                    ctx.state.proximal_sets_by_resource[resource_id] = proximal_sets
+
+            return ExtractPairsFromProximalSetsNode()
+
+
+@dataclass
+class ExtractPairsFromProximalSetsNode(BaseNode[State, Deps, ExtractionResult]):
+    """Extract pairs from proximal entity regions.
+
+    For each proximal set:
+    1. Build text region (first quote chunk to last + padding)
+    2. Call proximal_pair_agent to extract associations
+    3. Validate entities in response are in proximal set
+    4. Validate quotes and create pair objects
+    5. Store pairs temporarily per resource (deduplication happens in next node)
     """
 
     async def run(self, ctx: GraphRunContext[State, Deps]) -> "AssessPairsNode":
-        """Assess all entity mentions in parallel."""
-        with logfire.span("AssessEntitiesNode"):
-            # Build list of (entity_name, resource_id, quotes) tuples to assess
-            assessment_tasks = []
-            for resource_id, entities_dict in ctx.state.entities_by_resource.items():
-                for entity_name, entity_mention in entities_dict.items():
-                    assessment_tasks.append(
-                        self._assess_entity(
-                            entity_name, entity_mention, resource_id, ctx
+        """Extract pairs from all proximal sets in parallel."""
+        with logfire.span("ExtractPairsFromProximalSetsNode"):
+            # Collect all proximal sets with their resource context
+            tasks = []
+            for (
+                resource_id,
+                proximal_sets,
+            ) in ctx.state.proximal_sets_by_resource.items():
+                resource = ctx.deps.resource_pool.get(resource_id)
+                if not resource:
+                    continue
+
+                entities = ctx.state.validated_entities_by_resource[resource_id]
+
+                for proximal_set in proximal_sets:
+                    tasks.append(
+                        self._process_proximal_set(
+                            proximal_set, entities, resource, resource_id, ctx
                         )
                     )
 
-            # Run all assessments in parallel
-            if assessment_tasks:
-                await asyncio.gather(*assessment_tasks)
+            # Run all extractions in parallel
+            if tasks:
+                # Results is list of (resource_id, list[pair_tuples])
+                results = await asyncio.gather(*tasks)
+
+                # Organize by resource for next stage
+                pairs_by_resource = defaultdict(list)
+                for resource_id, pairs in results:
+                    if pairs:
+                        pairs_by_resource[resource_id].extend(pairs)
+
+                # Store temporarily (will be deduplicated and assessed in next node)
+                # Store as list of (entity1, entity2, relationship_candidates, quotes) tuples
+                ctx.state._temp_pairs_by_resource = dict(pairs_by_resource)
 
             return AssessPairsNode()
 
-    async def _assess_entity(
+    async def _process_proximal_set(
         self,
-        entity_name: str,
-        entity_mention: EntityMention,
+        proximal_set,
+        entities: dict[str, EntityMention],
+        resource: Resource,
         resource_id,
         ctx: GraphRunContext[State, Deps],
-    ):
-        """Assess a single entity in a single resource."""
-        with logfire.span("assess_entity", entity=entity_name):
+    ) -> tuple:
+        """Process a single proximal set to extract pairs."""
+        with logfire.span("process_proximal_set"):
+            # Get padding from config (default 1)
+            padding = getattr(
+                ctx.deps.config.tools.extraction, "region_padding_chunks", 1
+            )
+
+            # Build text region
+            chunk_start, chunk_end = proximal_set.chunk_range
+            text_region = build_text_region(resource, chunk_start, chunk_end, padding)
+
+            # Build entity list with aliases
+            entity_list = []
+            for entity_name in proximal_set.entities:
+                entity = entities.get(entity_name)
+                if entity:
+                    aliases_str = ", ".join(entity.aliases)
+                    entity_list.append(
+                        f"- {entity_name} ({entity.kind}): aliases [{aliases_str}]"
+                    )
+
+            prompt = f"""Topic: {ctx.state.topic}
+
+**Entities in this region:**
+{chr(10).join(entity_list)}
+
+**Text region:**
+{text_region}
+
+Extract all binary associations between these entities that are clearly stated or implied in the text.
+Use canonical entity names (not aliases) and provide exact supporting quotes."""
+
+            # Call proximal pair agent
             usage = RunUsage()
+            try:
+                result = await get_proximal_pair_agent(ctx.deps.config).run(
+                    prompt, deps=ctx.deps, usage=usage
+                )
+            except (TimeoutError, ConnectionError, ValueError) as e:
+                ctx.deps.logger.error(
+                    f"Proximal pair extraction failed: {type(e).__name__}: {e}"
+                )
+                return (resource_id, [])
 
-            # Build quote list for prompt
-            quotes_str = "\n".join(
-                f"[{i}] {q.get_quote_text()}"
-                for i, q in enumerate(entity_mention.quotes)
-            )
+            # Process extracted pairs
+            pairs = []
+            for pair_info in result.output.pairs:
+                # Verify entities are in proximal set
+                if (
+                    pair_info.entity1 not in proximal_set.entities
+                    or pair_info.entity2 not in proximal_set.entities
+                ):
+                    ctx.deps.logger.warning(
+                        f"Pair references entity not in proximal set: "
+                        f"{pair_info.entity1}-{pair_info.entity2}"
+                    )
+                    continue
 
-            prompt = f"""Assess the evidence strength for this entity's relevance to the topic.
+                # Validate quotes
+                quotes = []
+                for quote_str in pair_info.supporting_quotes:
+                    try:
+                        quote = resource.quote(quote_str)
+                        quotes.append(quote)
+                        ctx.state.quotes_validated += 1
+                    except Exception as e:
+                        ctx.state.quotes_failed += 1
+                        ctx.deps.logger.warning(
+                            f"Failed to validate pair quote: {type(e).__name__}: {e}"
+                        )
 
-**Topic:** {ctx.state.topic}
+                if quotes:
+                    # Store as tuple (will be converted to PairAssessment after dedup/assessment)
+                    pairs.append(
+                        (
+                            pair_info.entity1,
+                            pair_info.entity2,
+                            pair_info.relationship_types,
+                            quotes,
+                        )
+                    )
 
-**Entity:** {entity_name} (type: {entity_mention.kind})
-
-**Quotes from document:**
-{quotes_str}
-
-Evaluate how strongly these quotes support the entity's relevance to the topic.
-Reference specific quote indices in your assessment."""
-
-            # Call assessment agent using configured extraction model
-            result = await get_entity_assessor_agent(ctx.deps.config).run(
-                prompt, deps=ctx.deps, usage=usage
-            )
-
-            # Extract referenced quotes
-            referenced_quotes = [
-                entity_mention.quotes[i]
-                for i in result.output.supporting_quote_ids
-                if i < len(entity_mention.quotes)
-            ]
-
-            # Create assessment
-            assessment = EntityAssessment(
-                resource_id=resource_id,
-                strength=result.output.strength,
-                rationale=result.output.rationale,
-                quotes=referenced_quotes,
-            )
-
-            # Store in state
-            if entity_name not in ctx.state.entity_assessments:
-                ctx.state.entity_assessments[entity_name] = []
-            ctx.state.entity_assessments[entity_name].append(assessment)
+            return (resource_id, pairs)
 
 
 @dataclass
 class AssessPairsNode(BaseNode[State, Deps, ExtractionResult]):
-    """Assess pair validity per resource in parallel.
+    """Deduplicate pairs and assess evidence per document.
 
-    For each (pair, resource) combination, gather pair quotes and entity quotes,
-    then call pair_assessor_agent to evaluate evidence strength.
+    For each resource:
+    1. Deduplicate pairs (same entity pair may appear in multiple proximal sets)
+    2. For each unique pair:
+       - Collect all quotes
+       - Build relevant text region
+       - Call pair_judge_agent
+       - Create PairAssessment with full EntityMention objects
+    3. Store assessments
     """
 
-    async def run(self, ctx: GraphRunContext[State, Deps]) -> "JudgePairsNode":
-        """Assess all pair mentions in parallel."""
+    async def run(self, ctx: GraphRunContext[State, Deps]) -> "JudgeCrossDocumentNode":
+        """Assess all pairs per resource."""
         with logfire.span("AssessPairsNode"):
-            # Build list of (pair, resource_id) tuples to assess
-            assessment_tasks = []
-            for resource_id, pairs_list in ctx.state.pairs_by_resource.items():
-                for pair_mention in pairs_list:
-                    assessment_tasks.append(
-                        self._assess_pair(pair_mention, resource_id, ctx)
+            # Get temporary pairs from previous node
+            temp_pairs = getattr(ctx.state, "_temp_pairs_by_resource", {})
+
+            # Process each resource
+            tasks = []
+            for resource_id, pairs_list in temp_pairs.items():
+                resource = ctx.deps.resource_pool.get(resource_id)
+                if not resource:
+                    continue
+
+                entities = ctx.state.validated_entities_by_resource[resource_id]
+
+                # Deduplicate pairs by (entity1, entity2)
+                pairs_dict = {}
+                for entity1_name, entity2_name, rel_types, quotes in pairs_list:
+                    # Get entity objects
+                    entity1 = entities[entity1_name]
+                    entity2 = entities[entity2_name]
+
+                    # Create ordered key (determines canonical ordering)
+                    pair_key = make_entity_pair_key(entity1, entity2)
+
+                    if pair_key not in pairs_dict:
+                        # Store entities in the canonical order determined by pair_key
+                        ordered_entity1 = entities[pair_key.entity1_name]
+                        ordered_entity2 = entities[pair_key.entity2_name]
+
+                        pairs_dict[pair_key] = {
+                            "entity1": ordered_entity1,
+                            "entity2": ordered_entity2,
+                            "relationship_candidates": set(),
+                            "quotes": [],
+                        }
+
+                    pairs_dict[pair_key]["relationship_candidates"].update(rel_types)
+                    pairs_dict[pair_key]["quotes"].extend(quotes)
+
+                # Assess each unique pair
+                for pair_info in pairs_dict.values():
+                    tasks.append(
+                        self._assess_pair(pair_info, resource, resource_id, ctx)
                     )
 
             # Run all assessments in parallel
-            if assessment_tasks:
-                await asyncio.gather(*assessment_tasks)
+            if tasks:
+                assessments = await asyncio.gather(*tasks)
 
-            return JudgePairsNode()
+                # Organize by resource
+                for resource_id, assessment in assessments:
+                    if assessment:
+                        if resource_id not in ctx.state.pair_assessments_by_resource:
+                            ctx.state.pair_assessments_by_resource[resource_id] = []
+                        ctx.state.pair_assessments_by_resource[resource_id].append(
+                            assessment
+                        )
+
+            # Clean up temporary data
+            if hasattr(ctx.state, "_temp_pairs_by_resource"):
+                delattr(ctx.state, "_temp_pairs_by_resource")
+
+            return JudgeCrossDocumentNode()
 
     async def _assess_pair(
         self,
-        pair_mention: PairMention,
+        pair_info: dict,
+        resource: Resource,
         resource_id,
         ctx: GraphRunContext[State, Deps],
-    ):
+    ) -> tuple:
         """Assess a single pair in a single resource."""
-        pair_key: PairKey = (
-            pair_mention.entity1,
-            pair_mention.entity2,
-            pair_mention.relationship_type,
-        )
+        entity1 = pair_info["entity1"]
+        entity2 = pair_info["entity2"]
 
-        with logfire.span("assess_pair", pair=f"{pair_key[0]}-{pair_key[1]}"):
-            usage = RunUsage()
+        with logfire.span("assess_pair", pair=f"{entity1.name}-{entity2.name}"):
+            # Get padding from config
+            padding = getattr(
+                ctx.deps.config.tools.extraction, "region_padding_chunks", 1
+            )
 
-            # Gather all relevant quotes: pair quotes + entity quotes from this resource
-            all_quotes = list(pair_mention.quotes)
-
-            # Add entity quotes if entities exist in this resource
-            entities_in_resource = ctx.state.entities_by_resource.get(resource_id, {})
-            if pair_mention.entity1 in entities_in_resource:
-                all_quotes.extend(entities_in_resource[pair_mention.entity1].quotes)
-            if pair_mention.entity2 in entities_in_resource:
-                all_quotes.extend(entities_in_resource[pair_mention.entity2].quotes)
+            # Build relevant text for all quotes
+            all_quotes = pair_info["quotes"]
+            text_region = collect_relevant_text_for_quotes(
+                resource, all_quotes, padding
+            )
 
             # Build quote list for prompt
             quotes_str = "\n".join(
                 f"[{i}] {q.get_quote_text()}" for i, q in enumerate(all_quotes)
             )
 
-            # Include entity assessment context if available
-            entity1_context = ""
-            entity2_context = ""
-            if pair_mention.entity1 in ctx.state.entity_assessments:
-                assessments = [
-                    a
-                    for a in ctx.state.entity_assessments[pair_mention.entity1]
-                    if a.resource_id == resource_id
-                ]
-                if assessments:
-                    entity1_context = f"\n**{pair_mention.entity1} relevance:** {assessments[0].strength} - {assessments[0].rationale}"
+            # Build relationship candidates string
+            candidates = list(pair_info["relationship_candidates"])
+            candidates_str = ", ".join(f'"{c}"' for c in candidates)
 
-            if pair_mention.entity2 in ctx.state.entity_assessments:
-                assessments = [
-                    a
-                    for a in ctx.state.entity_assessments[pair_mention.entity2]
-                    if a.resource_id == resource_id
-                ]
-                if assessments:
-                    entity2_context = f"\n**{pair_mention.entity2} relevance:** {assessments[0].strength} - {assessments[0].rationale}"
+            prompt = f"""Topic: {ctx.state.topic}
 
-            prompt = f"""Assess the evidence strength for this association.
+**Pair:** {entity1.name} ({entity1.kind}) ↔ {entity2.name} ({entity2.kind})
 
-**Topic:** {ctx.state.topic}
+**Relationship type candidates:** {candidates_str}
 
-**Association:** {pair_mention.entity1} {pair_mention.relationship_type} {pair_mention.entity2}
-{entity1_context}{entity2_context}
+**Relevant text from document:**
+{text_region}
 
-**Quotes from document:**
+**Supporting quotes:**
 {quotes_str}
 
-Evaluate how strongly these quotes support the validity of this association.
-Consider both the relevance of the individual entities and the strength of their relationship.
-Reference specific quote indices in your assessment."""
+Assess the strength of evidence for this association in this document.
+Select the most appropriate relationship type (from candidates or propose a more specific one).
+Assign a confidence level (high/medium/low) and explain your reasoning."""
 
-            # Call assessment agent using configured extraction model
-            result = await get_pair_assessor_agent(ctx.deps.config).run(
-                prompt, deps=ctx.deps, usage=usage
-            )
+            # Call pair judge agent
+            usage = RunUsage()
+            try:
+                result = await get_pair_judge_agent(ctx.deps.config).run(
+                    prompt, deps=ctx.deps, usage=usage
+                )
+            except (TimeoutError, ConnectionError, ValueError) as e:
+                ctx.deps.logger.error(
+                    f"Pair assessment failed for {entity1.name}-{entity2.name}: "
+                    f"{type(e).__name__}: {e}"
+                )
+                return (resource_id, None)
 
             # Extract referenced quotes
             referenced_quotes = [
@@ -437,221 +672,299 @@ Reference specific quote indices in your assessment."""
             # Create assessment
             assessment = PairAssessment(
                 resource_id=resource_id,
-                strength=result.output.strength,
-                rationale=result.output.rationale,
-                quotes=referenced_quotes,
+                entity1=entity1,
+                entity2=entity2,
+                relationship=result.output.relationship,
+                quotes=referenced_quotes if referenced_quotes else all_quotes,
+                confidence=result.output.confidence,
+                reasoning=result.output.reasoning,
             )
 
-            # Store in state
-            if pair_key not in ctx.state.pair_assessments:
-                ctx.state.pair_assessments[pair_key] = []
-            ctx.state.pair_assessments[pair_key].append(assessment)
+            return (resource_id, assessment)
 
 
 @dataclass
-class JudgePairsNode(BaseNode[State, Deps, ExtractionResult]):
-    """Make final judgments on pairs (conditional LLM calls).
+class JudgeCrossDocumentNode(BaseNode[State, Deps, ExtractionResult]):
+    """Make final accept/reject decisions across documents.
 
-    For each unique pair across all resources:
-    1. Check if high-confidence judgment possible from assessments alone
-    2. If yes: make deterministic judgment
-    3. If no: gather all quotes and call final_judge_agent
+    For each unique entity pair:
+    1. Check if deterministic accept is possible (multiple high-confidence, consistent relationship)
+    2. Otherwise, investigate by:
+       - Collecting all quotes from all assessments
+       - Building combined text
+       - Calling cross_document_judge_agent
+    3. Create PairJudgment with decision
+    4. Store in state
     """
 
     async def run(self, ctx: GraphRunContext[State, Deps]) -> "FinalizeNode":
-        """Make final judgments on all pairs."""
-        with logfire.span("JudgePairsNode"):
-            # Process each unique pair
-            judgment_tasks = []
-            for pair_key in ctx.state.pair_assessments.keys():
-                judgment_tasks.append(self._judge_pair(pair_key, ctx))
+        """Judge all unique pairs across documents."""
+        with logfire.span("JudgeCrossDocumentNode"):
+            # Group assessments by entity pair
+            assessments_by_pair: dict[EntityPairKey, list[PairAssessment]] = (
+                defaultdict(list)
+            )
+
+            for assessments_list in ctx.state.pair_assessments_by_resource.values():
+                for assessment in assessments_list:
+                    pair_key = make_entity_pair_key(
+                        assessment.entity1, assessment.entity2
+                    )
+                    assessments_by_pair[pair_key].append(assessment)
+
+            # Judge each pair
+            tasks = []
+            for pair_key, assessments in assessments_by_pair.items():
+                tasks.append(self._judge_pair(pair_key, assessments, ctx))
 
             # Run all judgments in parallel
-            if judgment_tasks:
-                await asyncio.gather(*judgment_tasks)
+            if tasks:
+                judgments = await asyncio.gather(*tasks)
+
+                for pair_key, judgment in judgments:
+                    ctx.state.pair_judgments[pair_key] = judgment
 
             return FinalizeNode()
 
-    def _can_judge_deterministically(
+    def _can_accept_deterministically(
         self, assessments: list[PairAssessment]
-    ) -> tuple[bool, FinalJudgment | None]:
-        """Check if we can make high-confidence judgment without LLM.
+    ) -> tuple[bool, str, str]:
+        """Check if we can accept without LLM call.
 
         Returns:
-            (can_judge, judgment) - judgment is None if can't judge deterministically
+            (can_accept, relationship, reasoning) or (False, "", "")
         """
-        strong_count = sum(1 for a in assessments if a.strength == "strong")
-        none_count = sum(1 for a in assessments if a.strength == "none")
+        # Need multiple high-confidence assessments with same relationship
+        high_conf = [a for a in assessments if a.confidence == "high"]
 
-        # High-confidence accept: multiple strong assessments
-        if strong_count >= 2:
-            return (
-                True,
-                FinalJudgment(
+        if len(high_conf) >= 2:
+            # Check if all have same relationship
+            relationships = {a.relationship for a in high_conf}
+            if len(relationships) == 1:
+                relationship = high_conf[0].relationship
+                return (
+                    True,
+                    relationship,
+                    f"Multiple high-confidence assessments ({len(high_conf)}) "
+                    f"with consistent relationship '{relationship}' provide strong evidence.",
+                )
+
+        return (False, "", "")
+
+    def _should_investigate(self, assessments: list[PairAssessment]) -> bool:
+        """Determine if we need LLM investigation.
+
+        Always investigate except for the deterministic accept case.
+        """
+        # Check for deterministic accept
+        can_accept, _, _ = self._can_accept_deterministically(assessments)
+        if can_accept:
+            return False
+
+        # All other cases need investigation
+        return True
+
+    async def _judge_pair(
+        self,
+        pair_key: EntityPairKey,
+        assessments: list[PairAssessment],
+        ctx: GraphRunContext[State, Deps],
+    ) -> tuple[EntityPairKey, PairJudgment]:
+        """Make final judgment on a single pair."""
+        with logfire.span(
+            "judge_pair", pair=f"{pair_key.entity1_name}-{pair_key.entity2_name}"
+        ):
+            # Try deterministic accept
+            can_accept, relationship, reasoning = self._can_accept_deterministically(
+                assessments
+            )
+
+            if can_accept:
+                # Create judgment without LLM call
+                # Get entity info from first assessment
+                first_assessment = assessments[0]
+                judgment = PairJudgment(
+                    entity1=SimpleEntity(
+                        name=first_assessment.entity1.name,
+                        kind=first_assessment.entity1.kind,
+                        aliases=first_assessment.entity1.aliases,
+                    ),
+                    entity2=SimpleEntity(
+                        name=first_assessment.entity2.name,
+                        kind=first_assessment.entity2.kind,
+                        aliases=first_assessment.entity2.aliases,
+                    ),
+                    relationship=relationship,
+                    assessments=assessments,
                     accepted=True,
                     confidence="high",
-                    rationale=f"Multiple strong assessments ({strong_count}) "
-                    "provide high-confidence evidence for this association.",
-                ),
-            )
+                    reasoning=reasoning,
+                )
+                return (pair_key, judgment)
 
-        # High-confidence reject: multiple none assessments
-        if none_count >= 2:
-            return (
-                True,
-                FinalJudgment(
-                    accepted=False,
-                    confidence="high",
-                    rationale=f"Multiple assessments ({none_count}) found no "
-                    "meaningful evidence for this association.",
-                ),
-            )
+            # Need LLM investigation
+            # Collect all quotes and build combined text
+            all_quotes = []
+            for assessment in assessments:
+                all_quotes.extend(assessment.quotes)
 
-        # Can't judge deterministically
-        return (False, None)
+            # Get unique resources
+            resource_ids = list({assessment.resource_id for assessment in assessments})
 
-    async def _judge_pair(self, pair_key: PairKey, ctx: GraphRunContext[State, Deps]):
-        """Make final judgment on a single pair."""
-        with logfire.span("judge_pair", pair=f"{pair_key[0]}-{pair_key[1]}"):
-            assessments = ctx.state.pair_assessments[pair_key]
+            # Build combined text (one section per resource)
+            text_sections = []
+            for resource_id in resource_ids:
+                resource = ctx.deps.resource_pool.get(resource_id)
+                if not resource:
+                    continue
 
-            # Try deterministic judgment first
-            can_judge, judgment = self._can_judge_deterministically(assessments)
+                # Get quotes from this resource
+                resource_quotes = [
+                    q for q in all_quotes if q.resource.id == resource_id
+                ]
 
-            if can_judge:
-                ctx.state.final_pair_judgments[pair_key] = judgment
-            else:
-                # Need LLM judgment - gather all quotes from all resources
-                all_quotes = []
-                for assessment in assessments:
-                    all_quotes.extend(assessment.quotes)
+                if resource_quotes:
+                    padding = getattr(
+                        ctx.deps.config.tools.extraction, "region_padding_chunks", 1
+                    )
+                    text = collect_relevant_text_for_quotes(
+                        resource, resource_quotes, padding
+                    )
+                    text_sections.append(
+                        f"**Document {resource_ids.index(resource_id) + 1}:** {resource.title}\n{text}"
+                    )
 
-                # Also gather quotes from pair mentions
-                for resource_id, pairs_list in ctx.state.pairs_by_resource.items():
-                    for pair_mention in pairs_list:
-                        if (
-                            pair_mention.entity1 == pair_key[0]
-                            and pair_mention.entity2 == pair_key[1]
-                            and pair_mention.relationship_type == pair_key[2]
-                        ):
-                            all_quotes.extend(pair_mention.quotes)
+            combined_text = "\n\n---\n\n".join(text_sections)
 
-                # Build assessment summary
-                assessment_summary = "\n".join(
-                    f"- Resource {i + 1}: {a.strength} - {a.rationale}"
-                    for i, a in enumerate(assessments)
+            # Build assessment summary
+            assessment_summary = []
+            for i, assessment in enumerate(assessments):
+                assessment_summary.append(
+                    f"Document {resource_ids.index(assessment.resource_id) + 1}: "
+                    f"{assessment.confidence} confidence - {assessment.relationship}\n"
+                    f"  Reasoning: {assessment.reasoning}"
                 )
 
-                # Include entity assessment summary across all documents
-                entity1_summary = ""
-                entity2_summary = ""
-                if pair_key[0] in ctx.state.entity_assessments:
-                    entity1_assessments = ctx.state.entity_assessments[pair_key[0]]
-                    strengths = [a.strength for a in entity1_assessments]
-                    entity1_summary = f"\n\n**{pair_key[0]} relevance across documents:** {', '.join(strengths)}"
+            # Get all relationship types mentioned
+            relationships = {a.relationship for a in assessments}
+            relationships_str = ", ".join(f'"{r}"' for r in relationships)
 
-                if pair_key[1] in ctx.state.entity_assessments:
-                    entity2_assessments = ctx.state.entity_assessments[pair_key[1]]
-                    strengths = [a.strength for a in entity2_assessments]
-                    entity2_summary = f"\n**{pair_key[1]} relevance across documents:** {', '.join(strengths)}"
+            prompt = f"""Topic: {ctx.state.topic}
 
-                # Build quote list
-                quotes_str = "\n".join(
-                    f"[{i}] {q.get_quote_text()}" for i, q in enumerate(all_quotes)
-                )
+**Pair:** {pair_key.entity1_name} ↔ {pair_key.entity2_name}
 
-                prompt = f"""Make a final judgment on this association across all documents.
+**Per-document assessments:**
+{chr(10).join(assessment_summary)}
 
-**Topic:** {ctx.state.topic}
+**Relationship types found:** {relationships_str}
 
-**Association:** {pair_key[0]} {pair_key[2]} {pair_key[1]}
+**Combined evidence from all documents:**
+{combined_text}
 
-**Per-document pair assessments:**
-{assessment_summary}{entity1_summary}{entity2_summary}
+Make a final judgment on whether to accept this association.
+Synthesize the evidence across documents, considering consistency, quality, and contradictions.
+Decide: accept or reject, with confidence level (high/medium/low) and detailed reasoning."""
 
-**All supporting quotes:**
-{quotes_str}
-
-Based on the evidence across all documents, decide whether to accept this association
-and your confidence level. Consider:
-1. The strength and consistency of pair-level evidence
-2. The relevance of both entities to the topic
-3. The quality and quantity of supporting quotes"""
-
-                # Call final judge agent using configured judge model
-                usage = RunUsage()
-                result = await get_judge_agent(ctx.deps.config).run(
+            # Call cross-document judge
+            usage = RunUsage()
+            try:
+                result = await get_cross_document_judge_agent(ctx.deps.config).run(
                     prompt, deps=ctx.deps, usage=usage
                 )
-
-                judgment = FinalJudgment(
-                    accepted=result.output.accepted,
-                    confidence=result.output.confidence,
-                    rationale=result.output.rationale,
+            except (TimeoutError, ConnectionError, ValueError) as e:
+                ctx.deps.logger.error(
+                    f"Cross-document judgment failed for {pair_key}: "
+                    f"{type(e).__name__}: {e}"
+                )
+                # Default to rejection with low confidence
+                first_assessment = assessments[0]
+                return (
+                    pair_key,
+                    PairJudgment(
+                        entity1=SimpleEntity(
+                            name=first_assessment.entity1.name,
+                            kind=first_assessment.entity1.kind,
+                            aliases=first_assessment.entity1.aliases,
+                        ),
+                        entity2=SimpleEntity(
+                            name=first_assessment.entity2.name,
+                            kind=first_assessment.entity2.kind,
+                            aliases=first_assessment.entity2.aliases,
+                        ),
+                        relationship=first_assessment.relationship,
+                        assessments=assessments,
+                        accepted=False,
+                        confidence="low",
+                        reasoning=f"Judgment failed due to error: {e}",
+                    ),
                 )
 
-                ctx.state.final_pair_judgments[pair_key] = judgment
+            # Select most common relationship type
+            relationship_counts = {}
+            for assessment in assessments:
+                relationship_counts[assessment.relationship] = (
+                    relationship_counts.get(assessment.relationship, 0) + 1
+                )
+            most_common_relationship = max(
+                relationship_counts.items(), key=lambda x: x[1]
+            )[0]
+
+            # Create judgment
+            first_assessment = assessments[0]
+            judgment = PairJudgment(
+                entity1=SimpleEntity(
+                    name=first_assessment.entity1.name,
+                    kind=first_assessment.entity1.kind,
+                    aliases=first_assessment.entity1.aliases,
+                ),
+                entity2=SimpleEntity(
+                    name=first_assessment.entity2.name,
+                    kind=first_assessment.entity2.kind,
+                    aliases=first_assessment.entity2.aliases,
+                ),
+                relationship=most_common_relationship,
+                assessments=assessments,
+                accepted=result.output.accepted,
+                confidence=result.output.confidence,
+                reasoning=result.output.reasoning,
+            )
+
+            return (pair_key, judgment)
 
 
 @dataclass
 class FinalizeNode(BaseNode[State, Deps, ExtractionResult]):
-    """Build final output with accepted pairs and provenance."""
+    """Build final output with all judgments and metadata."""
 
     async def run(self, ctx: GraphRunContext[State, Deps]) -> End[ExtractionResult]:
-        """Gather accepted pairs and build final result."""
+        """Gather all judgments and build final result."""
         with logfire.span("FinalizeNode"):
-            accepted_pairs = []
+            # Convert judgments dict to list
+            all_judgments = list(ctx.state.pair_judgments.values())
 
-            for pair_key, judgment in ctx.state.final_pair_judgments.items():
-                if judgment.accepted:
-                    # Gather all quotes for this pair
-                    all_quotes = []
-                    for resource_id, pairs_list in ctx.state.pairs_by_resource.items():
-                        for pair_mention in pairs_list:
-                            if (
-                                pair_mention.entity1 == pair_key[0]
-                                and pair_mention.entity2 == pair_key[1]
-                                and pair_mention.relationship_type == pair_key[2]
-                            ):
-                                all_quotes.extend(pair_mention.quotes)
-
-                    # Get entity types from entity mentions
-                    entity1_type = "unknown"
-                    entity2_type = "unknown"
-                    for entities_dict in ctx.state.entities_by_resource.values():
-                        if pair_key[0] in entities_dict:
-                            entity1_type = entities_dict[pair_key[0]].kind
-                        if pair_key[1] in entities_dict:
-                            entity2_type = entities_dict[pair_key[1]].kind
-
-                    # Build PairWithProvenance
-                    pair_with_prov = PairWithProvenance(
-                        entity1=pair_key[0],
-                        entity2=pair_key[1],
-                        relationship_type=pair_key[2],
-                        entity1_type=entity1_type,
-                        entity2_type=entity2_type,
-                        all_quotes=all_quotes,
-                        assessments=ctx.state.pair_assessments[pair_key],
-                        final_judgment=judgment,
-                    )
-                    accepted_pairs.append(pair_with_prov)
-
-            # Build metadata
-            total_entities = sum(
+            # Calculate metadata
+            total_entities_found = sum(
                 len(entities) for entities in ctx.state.entities_by_resource.values()
             )
-            total_pairs = sum(
-                len(pairs) for pairs in ctx.state.pairs_by_resource.values()
+            entities_after_validation = sum(
+                len(entities)
+                for entities in ctx.state.validated_entities_by_resource.values()
             )
-            pairs_accepted = len(accepted_pairs)
-            pairs_rejected = len(ctx.state.final_pair_judgments) - pairs_accepted
+            proximal_sets_found = sum(
+                len(sets) for sets in ctx.state.proximal_sets_by_resource.values()
+            )
+            total_pairs_found = len(all_judgments)
+            pairs_accepted = sum(1 for j in all_judgments if j.accepted)
+            pairs_rejected = total_pairs_found - pairs_accepted
 
             metadata = ExtractionMetadata(
                 topic=ctx.state.topic,
                 resource_count=len(ctx.deps.resource_pool.resources),
-                total_entities_found=total_entities,
-                total_pairs_found=total_pairs,
+                total_entities_found=total_entities_found,
+                entities_after_validation=entities_after_validation,
+                entities_merged=ctx.state.entities_merged,
+                proximal_sets_found=proximal_sets_found,
+                total_pairs_found=total_pairs_found,
                 pairs_accepted=pairs_accepted,
                 pairs_rejected=pairs_rejected,
                 quotes_validated=ctx.state.quotes_validated,
@@ -660,7 +973,7 @@ class FinalizeNode(BaseNode[State, Deps, ExtractionResult]):
 
             result = ExtractionResult(
                 resources=ctx.deps.resource_pool,
-                accepted_pairs=accepted_pairs,
+                judgments=all_judgments,
                 metadata=metadata,
             )
 

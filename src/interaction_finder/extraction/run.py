@@ -9,7 +9,7 @@ import logging
 from interaction_finder.extraction.deps import Deps
 from interaction_finder.extraction.graph import graph
 from interaction_finder.extraction.models import ExtractionResult
-from interaction_finder.extraction.nodes import ExtractFromDocumentsNode
+from interaction_finder.extraction.nodes import ExtractEntitiesNode
 from interaction_finder.extraction.state import State
 from interaction_finder.logging import logfire
 from interaction_finder.resources import ResourcePool
@@ -46,7 +46,8 @@ async def run_extraction(
         ...     resource_pool=pool,
         ...     config=config,
         ... )
-        >>> print(f"Found {len(result.accepted_pairs)} associations")
+        >>> accepted = [j for j in result.judgments if j.accepted]
+        >>> print(f"Found {len(accepted)} associations")
     """
     with logfire.span("run_extraction", topic=topic):
         # Load config or use defaults
@@ -68,6 +69,6 @@ async def run_extraction(
         state = State(topic=topic, target_entity_types=target_entity_types)
 
         # Run graph
-        result = await graph.run(ExtractFromDocumentsNode(), state=state, deps=deps)
+        result = await graph.run(ExtractEntitiesNode(), state=state, deps=deps)
 
         return result.output

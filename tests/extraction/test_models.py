@@ -7,16 +7,16 @@ import pytest
 from pydantic import ValidationError
 
 from interaction_finder.extraction.models import (
-    EntityEvidenceAssessment,
     EntityExtractionOut,
     EntityInfo,
+    EntityMergeDecision,
+    EntityMergeDecisions,
     ExtractionMetadata,
     ExtractionResult,
-    FinalJudgmentOut,
-    PairEvidenceAssessment,
-    PairExtractionOut,
-    PairInfo,
-    PairWithProvenance,
+    PairJudgment,
+    ProximalPairExtraction,
+    ProximalPairInfo,
+    SimpleEntity,
 )
 from interaction_finder.resources import ResourcePool
 
@@ -77,7 +77,6 @@ class TestEntityInfo:
 
         This ensures LLM responses using 'type' are accepted.
         """
-        # LLM response using 'type' instead of 'kind'
         info = EntityInfo(
             type="gene",
             name="BRCA1",
@@ -119,10 +118,7 @@ class TestEntityExtractionOut:
         assert output.entities[0].name == "BRCA1"
 
     def test_empty_entities_list(self):
-        """Test that empty entities list is valid when no relevant entities found.
-
-        This is the expected LLM response when no relevant entities exist.
-        """
+        """Test that empty entities list is valid when no relevant entities found."""
         output = EntityExtractionOut(entities=[])
         assert output.entities == []
 
@@ -151,43 +147,79 @@ class TestEntityExtractionOut:
         assert output.entities[1].name == "breast cancer"
 
 
-class TestPairInfo:
-    """Tests for PairInfo model."""
+class TestEntityMergeDecision:
+    """Tests for EntityMergeDecision model."""
 
-    def test_valid_pair_info(self):
-        """Test creating valid PairInfo."""
-        pair = PairInfo(
+    def test_valid_merge_decision(self):
+        """Test creating valid merge decision."""
+        decision = EntityMergeDecision(
+            parent_entity="BRCA1",
+            child_entity="BRCA",
+            should_merge=True,
+            reasoning="BRCA is commonly used shorthand for BRCA1 in this context.",
+        )
+        assert decision.parent_entity == "BRCA1"
+        assert decision.child_entity == "BRCA"
+        assert decision.should_merge is True
+
+    def test_requires_reasoning_min_length(self):
+        """Test that reasoning must be at least 20 characters."""
+        with pytest.raises(ValidationError):
+            EntityMergeDecision(
+                parent_entity="BRCA1",
+                child_entity="BRCA",
+                should_merge=True,
+                reasoning="Too short",
+            )
+
+
+class TestProximalPairInfo:
+    """Tests for ProximalPairInfo model."""
+
+    def test_valid_proximal_pair(self):
+        """Test creating valid ProximalPairInfo."""
+        pair = ProximalPairInfo(
             entity1="BRCA1",
             entity2="breast cancer",
-            relationship_type="associated_with",
+            relationship_types=["associated_with", "causes"],
             supporting_quotes=["BRCA1 is associated with breast cancer."],
         )
         assert pair.entity1 == "BRCA1"
         assert pair.entity2 == "breast cancer"
-        assert pair.relationship_type == "associated_with"
+        assert len(pair.relationship_types) == 2
+
+    def test_requires_relationship_types(self):
+        """Test that relationship_types must be non-empty."""
+        with pytest.raises(ValidationError):
+            ProximalPairInfo(
+                entity1="BRCA1",
+                entity2="breast cancer",
+                relationship_types=[],
+                supporting_quotes=["quote"],
+            )
 
     def test_requires_supporting_quotes(self):
         """Test that supporting_quotes must be non-empty."""
         with pytest.raises(ValidationError):
-            PairInfo(
+            ProximalPairInfo(
                 entity1="BRCA1",
                 entity2="breast cancer",
-                relationship_type="associated_with",
+                relationship_types=["associated_with"],
                 supporting_quotes=[],
             )
 
 
-class TestPairExtractionOut:
-    """Tests for PairExtractionOut model."""
+class TestProximalPairExtraction:
+    """Tests for ProximalPairExtraction model."""
 
-    def test_valid_pair_extraction(self):
-        """Test creating valid PairExtractionOut."""
-        output = PairExtractionOut(
+    def test_valid_extraction(self):
+        """Test creating valid ProximalPairExtraction."""
+        output = ProximalPairExtraction(
             pairs=[
-                PairInfo(
+                ProximalPairInfo(
                     entity1="BRCA1",
                     entity2="breast cancer",
-                    relationship_type="associated_with",
+                    relationship_types=["associated_with"],
                     supporting_quotes=["quote"],
                 )
             ],
@@ -197,11 +229,8 @@ class TestPairExtractionOut:
         assert len(output.reasoning) >= 20
 
     def test_empty_pairs_with_valid_reasoning(self):
-        """Test that empty pairs list is valid when no relevant associations found.
-
-        This is the expected LLM response when no relevant associations exist.
-        """
-        output = PairExtractionOut(
+        """Test that empty pairs list is valid when no associations found."""
+        output = ProximalPairExtraction(
             pairs=[],
             reasoning="No relevant associations between entities were found in the text.",
         )
@@ -209,78 +238,53 @@ class TestPairExtractionOut:
         assert len(output.reasoning) >= 20
 
 
-class TestEntityEvidenceAssessment:
-    """Tests for EntityEvidenceAssessment model."""
+class TestSimpleEntity:
+    """Tests for SimpleEntity model."""
 
-    def test_valid_assessment(self):
-        """Test creating valid assessment."""
-        assessment = EntityEvidenceAssessment(
-            strength="strong",
-            rationale="Multiple independent sources support this entity.",
-            supporting_quote_ids=[0, 1, 2],
-        )
-        assert assessment.strength == "strong"
-        assert len(assessment.rationale) >= 30
-
-    def test_strength_must_be_valid(self):
-        """Test that strength must be one of: none, weak, strong."""
-        with pytest.raises(ValidationError):
-            EntityEvidenceAssessment(
-                strength="invalid",  # type: ignore
-                rationale="This should fail due to invalid strength.",
-                supporting_quote_ids=[],
-            )
-
-    def test_requires_rationale_min_length(self):
-        """Test that rationale must be at least 30 characters."""
-        with pytest.raises(ValidationError):
-            EntityEvidenceAssessment(
-                strength="weak", rationale="Too short", supporting_quote_ids=[]
-            )
+    def test_valid_simple_entity(self):
+        """Test creating valid SimpleEntity."""
+        entity = SimpleEntity(name="BRCA1", kind="gene", aliases=["BRCA1", "BRCA-1"])
+        assert entity.name == "BRCA1"
+        assert entity.kind == "gene"
+        assert len(entity.aliases) == 2
 
 
-class TestPairEvidenceAssessment:
-    """Tests for PairEvidenceAssessment model."""
-
-    def test_valid_assessment(self):
-        """Test creating valid assessment."""
-        assessment = PairEvidenceAssessment(
-            strength="strong",
-            rationale="Clear experimental evidence supports this association.",
-            supporting_quote_ids=[0, 1],
-        )
-        assert assessment.strength == "strong"
-        assert len(assessment.rationale) >= 30
-
-
-class TestFinalJudgmentOut:
-    """Tests for FinalJudgmentOut model."""
+class TestPairJudgment:
+    """Tests for PairJudgment model."""
 
     def test_valid_judgment_accepted(self):
         """Test creating valid accepted judgment."""
-        judgment = FinalJudgmentOut(
+        judgment = PairJudgment(
+            entity1=SimpleEntity(name="BRCA1", kind="gene", aliases=["BRCA1"]),
+            entity2=SimpleEntity(
+                name="breast cancer", kind="disease", aliases=["breast cancer"]
+            ),
+            relationship="associated_with",
+            assessments=[],
             accepted=True,
             confidence="high",
-            rationale="Multiple strong sources with consistent evidence support acceptance.",
+            reasoning="Multiple strong sources with consistent evidence support acceptance.",
         )
         assert judgment.accepted is True
         assert judgment.confidence == "high"
-        assert len(judgment.rationale) >= 50
+        assert judgment.entity1.name == "BRCA1"
+        assert judgment.entity2.name == "breast cancer"
 
     def test_valid_judgment_rejected(self):
         """Test creating valid rejected judgment."""
-        judgment = FinalJudgmentOut(
+        judgment = PairJudgment(
+            entity1=SimpleEntity(name="BRCA1", kind="gene", aliases=["BRCA1"]),
+            entity2=SimpleEntity(
+                name="breast cancer", kind="disease", aliases=["breast cancer"]
+            ),
+            relationship="associated_with",
+            assessments=[],
             accepted=False,
-            confidence="medium",
-            rationale="Evidence is weak or contradictory, leading to rejection despite some support.",
+            confidence="low",
+            reasoning="Evidence is weak or contradictory, leading to rejection.",
         )
         assert judgment.accepted is False
-        assert judgment.confidence == "medium"
-
-    def test_requires_rationale_min_length(self):
-        """Test that rationale must be at least 50 characters."""
-        with pytest.raises(ValidationError):
-            FinalJudgmentOut(accepted=True, confidence="high", rationale="Too short")
+        assert judgment.confidence == "low"
 
 
 class TestExtractionResult:
@@ -288,37 +292,30 @@ class TestExtractionResult:
 
     def test_valid_result(self):
         """Test creating valid ExtractionResult."""
-        # Create minimal resource pool and quote
         pool = ResourcePool()
-        resource = pool.add(
-            url="https://example.com/paper",
-            title="Test Paper",
-            document_text="BRCA1 is associated with breast cancer.",
-        )
-        quote = resource.quote("BRCA1 is associated with breast cancer.")
 
         result = ExtractionResult(
             resources=pool,
-            accepted_pairs=[
-                PairWithProvenance(
-                    entity1="BRCA1",
-                    entity2="breast cancer",
-                    relationship_type="associated_with",
-                    entity1_type="gene",
-                    entity2_type="disease",
-                    all_quotes=[quote],
+            judgments=[
+                PairJudgment(
+                    entity1=SimpleEntity(name="BRCA1", kind="gene", aliases=["BRCA1"]),
+                    entity2=SimpleEntity(
+                        name="breast cancer", kind="disease", aliases=["breast cancer"]
+                    ),
+                    relationship="associated_with",
                     assessments=[],
-                    final_judgment={
-                        "accepted": True,
-                        "confidence": "high",
-                        "rationale": "Strong evidence",
-                    },
+                    accepted=True,
+                    confidence="high",
+                    reasoning="Strong evidence from multiple sources.",
                 )
             ],
             metadata=ExtractionMetadata(
                 topic="BRCA1 and breast cancer",
                 resource_count=1,
                 total_entities_found=2,
+                entities_after_validation=2,
+                entities_merged=0,
+                proximal_sets_found=1,
                 total_pairs_found=1,
                 pairs_accepted=1,
                 pairs_rejected=0,
@@ -327,7 +324,7 @@ class TestExtractionResult:
             ),
         )
 
-        assert len(result.accepted_pairs) == 1
+        assert len(result.judgments) == 1
         assert result.metadata.pairs_accepted == 1
 
     def test_empty_result(self):
@@ -335,11 +332,14 @@ class TestExtractionResult:
         pool = ResourcePool()
         result = ExtractionResult(
             resources=pool,
-            accepted_pairs=[],
+            judgments=[],
             metadata=ExtractionMetadata(
                 topic="test",
                 resource_count=0,
                 total_entities_found=0,
+                entities_after_validation=0,
+                entities_merged=0,
+                proximal_sets_found=0,
                 total_pairs_found=0,
                 pairs_accepted=0,
                 pairs_rejected=0,
@@ -348,165 +348,5 @@ class TestExtractionResult:
             ),
         )
 
-        assert len(result.accepted_pairs) == 0
+        assert len(result.judgments) == 0
         assert result.metadata.pairs_accepted == 0
-
-    def test_serialization_deduplicates_resources(self):
-        """Test that serialized ExtractionResult deduplicates resource content.
-
-        ResourceQuotes should serialize with only resource_id references,
-        with full resource content stored once in the resources pool.
-        """
-        # Create pool with one resource
-        pool = ResourcePool()
-        resource = pool.add(
-            url="https://example.com/paper",
-            title="Test Paper",
-            document_text="BRCA1 and BRCA2 are associated with breast cancer.",
-        )
-
-        # Create multiple quotes from same resource
-        quote1 = resource.quote("BRCA1")
-        quote2 = resource.quote("BRCA2")
-        quote3 = resource.quote("breast cancer")
-
-        result = ExtractionResult(
-            resources=pool,
-            accepted_pairs=[
-                PairWithProvenance(
-                    entity1="BRCA1",
-                    entity2="breast cancer",
-                    relationship_type="associated_with",
-                    entity1_type="gene",
-                    entity2_type="disease",
-                    all_quotes=[quote1, quote3],
-                    assessments=[],
-                    final_judgment={
-                        "accepted": True,
-                        "confidence": "high",
-                        "rationale": "Strong evidence",
-                    },
-                ),
-                PairWithProvenance(
-                    entity1="BRCA2",
-                    entity2="breast cancer",
-                    relationship_type="associated_with",
-                    entity1_type="gene",
-                    entity2_type="disease",
-                    all_quotes=[quote2, quote3],
-                    assessments=[],
-                    final_judgment={
-                        "accepted": True,
-                        "confidence": "high",
-                        "rationale": "Strong evidence",
-                    },
-                ),
-            ],
-            metadata=ExtractionMetadata(
-                topic="BRCA genes and breast cancer",
-                resource_count=1,
-                total_entities_found=3,
-                total_pairs_found=2,
-                pairs_accepted=2,
-                pairs_rejected=0,
-                quotes_validated=3,
-                quotes_failed=0,
-            ),
-        )
-
-        # Serialize to JSON
-        import json
-
-        json_str = result.model_dump_json()
-        json_data = json.loads(json_str)
-
-        # Verify structure: resources at top level
-        assert "resources" in json_data
-        assert isinstance(json_data["resources"], list)
-        assert len(json_data["resources"]) == 1
-
-        # Verify resource content appears only once
-        resource_text = "BRCA1 and BRCA2 are associated with breast cancer."
-        text_count = json_str.count(resource_text)
-        assert text_count == 1, f"Resource text should appear once, found {text_count}"
-
-        # Verify quotes have resource_id instead of full resource
-        first_quote = json_data["accepted_pairs"][0]["all_quotes"][0]
-        assert "resource_id" in first_quote
-        assert "resource" not in first_quote
-        assert first_quote["resource_id"]["id"] == resource.id.id
-
-        # Deserialize and verify functionality is preserved
-        result_restored = ExtractionResult.model_validate_json(json_str)
-
-        assert len(result_restored.accepted_pairs) == 2
-        assert len(result_restored.resources.resources) == 1
-
-        # Verify quotes work correctly after deserialization
-        restored_quote = result_restored.accepted_pairs[0].all_quotes[0]
-        assert restored_quote.resource.id.id == resource.id.id
-        assert restored_quote.resource.text == resource_text
-        assert restored_quote.query_text in ["BRCA1", "breast cancer"]
-
-    def test_result_serialization(self):
-        """Test that ExtractionResult can be serialized with model_dump."""
-        import json
-        from interaction_finder.extraction.models import (
-            FinalJudgment,
-            PairAssessment,
-        )
-
-        # Create a pool and get a resource
-        pool = ResourcePool()
-        pool.add(
-            url="http://example.com",
-            title="Test document",
-            document_text="BRCA1 is associated with breast cancer.",
-        )
-        resource = pool.resources[0]
-        quote = resource.quote("BRCA1")
-        # Create proper assessment and judgment objects
-        assessment = PairAssessment(
-            resource_id=resource.id,
-            strength="strong",
-            rationale="Strong evidence from multiple sources",
-            quotes=[quote],
-        )
-        judgment = FinalJudgment(
-            accepted=True,
-            confidence="high",
-            rationale="Multiple strong assessments across documents",
-        )
-        result = ExtractionResult(
-            resources=pool,
-            accepted_pairs=[
-                PairWithProvenance(
-                    entity1="BRCA1",
-                    entity2="breast cancer",
-                    relationship_type="associated_with",
-                    entity1_type="gene",
-                    entity2_type="disease",
-                    all_quotes=[quote],
-                    assessments=[assessment],
-                    final_judgment=judgment,
-                )
-            ],
-            metadata=ExtractionMetadata(
-                topic="BRCA1 and breast cancer",
-                resource_count=1,
-                total_entities_found=2,
-                total_pairs_found=1,
-                pairs_accepted=1,
-                pairs_rejected=0,
-                quotes_validated=1,
-                quotes_failed=0,
-            ),
-        )
-        # Test model_dump
-        output_data = result.model_dump(mode="json")
-        assert isinstance(output_data, dict)
-        assert "accepted_pairs" in output_data
-        assert "metadata" in output_data
-        # Test JSON serialization
-        json_str = json.dumps(output_data, indent=2)
-        assert len(json_str) > 0

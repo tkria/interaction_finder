@@ -19,10 +19,12 @@ class TestGraphAssembly:
         node_names = list(graph.node_defs.keys())
 
         expected_nodes = [
-            "ExtractFromDocumentsNode",
-            "AssessEntitiesNode",
+            "ExtractEntitiesNode",
+            "ValidateEntitiesNode",
+            "IdentifyProximalSetsNode",
+            "ExtractPairsFromProximalSetsNode",
             "AssessPairsNode",
-            "JudgePairsNode",
+            "JudgeCrossDocumentNode",
             "FinalizeNode",
         ]
 
@@ -35,5 +37,5 @@ class TestGraphAssembly:
 
         assert isinstance(mermaid, str)
         assert len(mermaid) > 0
-        assert "ExtractFromDocumentsNode" in mermaid
+        assert "ExtractEntitiesNode" in mermaid
         assert "FinalizeNode" in mermaid

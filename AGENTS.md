@@ -210,7 +210,7 @@ llm = "openai:gpt-4o-mini"
 llm = "openai:gpt-4o"
 ```
 
-**Agent names**: keywords (`query_expander`, `result_selector`, `keyword_evaluator`, `document_summarizer`, `reflector`), widesearch (`goal_planner`, `query_generator`, `result_selector`, `reflector`), extraction (`entity`, `entity_assessor`, `pair`, `pair_assessor`, `judge`)
+**Agent names**: keywords (`query_expander`, `result_selector`, `keyword_evaluator`, `document_summarizer`, `reflector`), widesearch (`goal_planner`, `query_generator`, `result_selector`, `reflector`), extraction (`entity`, `entity_merger`, `proximal_pair`, `pair_judge`, `cross_judge`)
 
 **For developers** - define agents with `agent_getter()`:
 ```python
