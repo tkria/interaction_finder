@@ -11,6 +11,7 @@ from typing import Union
 from pydantic_graph import BaseNode, End, GraphRunContext
 from pydantic_ai.usage import RunUsage
 
+from interaction_finder.agent_utils import rename_agent
 from interaction_finder.logging import logfire
 from interaction_finder.search.models import SearchQuery, SearchResult
 from interaction_finder.widesearch.agents import (
@@ -34,31 +35,25 @@ class PlanGoalsNode(BaseNode[State, Deps, list[SearchResult]]):
 
     async def run(self, ctx: GraphRunContext[State, Deps]) -> "GenerateQueriesNode":
         """Plan subject goals and initialize the search session."""
-        with logfire.span("PlanGoalsNode", topic=ctx.state.topic):
-            logfire.info(f"Planning subject goals for topic: {ctx.state.topic}")
-
-            # Use goal planner agent
-            usage = RunUsage()
-            # Model configured via get_*_agent(ctx.deps.config)
-            prompt = f"""Research topic: {ctx.state.topic}
+        logfire.info(f"Planning subject goals for topic: {ctx.state.topic}")
+        # Use goal planner agent with renamed span
+        agent = get_goal_planner_agent(ctx.deps.config)
+        usage = RunUsage()
+        prompt = f"""Research topic: {ctx.state.topic}
 
 Keyphrases available: {", ".join(ctx.state.keyphrases)}
 
 Identify subject areas and research domains that should be covered to ensure comprehensive literature discovery."""
-            result = await get_goal_planner_agent(ctx.deps.config).run(
-                prompt, deps=ctx.deps, usage=usage
-            )
-
-            # Store goals in state
-            ctx.state.subject_goals = result.output.goals
-
-            logfire.info(
-                f"Identified {len(result.output.goals)} subject goals",
-                goals=result.output.goals,
-                reasoning=result.output.reasoning[:200],
-            )
-
-            return GenerateQueriesNode()
+        with rename_agent(agent, "PlanGoalsNode"):
+            result = await agent.run(prompt, deps=ctx.deps, usage=usage)
+        # Store goals in state
+        ctx.state.subject_goals = result.output.goals
+        logfire.info(
+            f"Identified {len(result.output.goals)} subject goals",
+            goals=result.output.goals,
+            reasoning=result.output.reasoning[:200],
+        )
+        return GenerateQueriesNode()
 
 
 @dataclass
@@ -71,31 +66,17 @@ class GenerateQueriesNode(BaseNode[State, Deps, list[SearchResult]]):
 
     async def run(self, ctx: GraphRunContext[State, Deps]) -> "SearchNode":
         """Generate queries for current round."""
-        with logfire.span(
-            "GenerateQueriesNode",
-            round=ctx.state.current_round + 1,
-            unsatisfied_goals=len(ctx.state.subject_goals)
-            - len(ctx.state.satisfied_goals),
-        ):
-            # Increment round counter
-            ctx.state.current_round += 1
-
-            # Update progress display with round info
-            if ctx.deps.progress:
-                ctx.deps.progress.set_round(
-                    ctx.state.current_round, ctx.state.max_rounds
-                )
-
-            logfire.info(
-                f"Starting round {ctx.state.current_round}/{ctx.state.max_rounds}"
-            )
-
-            # Prepare context for agent
-            unsatisfied = [
-                g for g in ctx.state.subject_goals if g not in ctx.state.satisfied_goals
-            ]
-
-            prompt = f"""Research topic: {ctx.state.topic}
+        # Increment round counter
+        ctx.state.current_round += 1
+        # Update progress display with round info
+        if ctx.deps.progress:
+            ctx.deps.progress.set_round(ctx.state.current_round, ctx.state.max_rounds)
+        logfire.info(f"Starting round {ctx.state.current_round}/{ctx.state.max_rounds}")
+        # Prepare context for agent
+        unsatisfied = [
+            g for g in ctx.state.subject_goals if g not in ctx.state.satisfied_goals
+        ]
+        prompt = f"""Research topic: {ctx.state.topic}
 
 Keyphrases to incorporate: {", ".join(ctx.state.keyphrases)}
 
@@ -104,33 +85,30 @@ Subject goals (unsatisfied): {", ".join(unsatisfied) if unsatisfied else "(all g
 Round {ctx.state.current_round} of {ctx.state.max_rounds}
 
 Generate search queries that target unsatisfied subject goals and incorporate the keyphrases."""
-
-            # Use query generator agent
-            usage = RunUsage()
-            # Model configured via get_*_agent(ctx.deps.config)
-            result = await get_query_generator_agent(ctx.deps.config).run(
-                prompt, deps=ctx.deps, usage=usage
-            )
-
-            # Store queries in state
-            ctx.state.current_queries = result.output.queries
-            ctx.state.all_queries.extend(result.output.queries)
-
-            logfire.info(
-                f"Generated {len(result.output.queries)} queries "
-                f"(broad={len(result.output.broad_queries)}, "
-                f"medium={len(result.output.medium_queries)}, "
-                f"focused={len(result.output.focused_queries)}, "
-                f"indirect={len(result.output.indirect_queries)})",
-                queries=result.output.queries,
-                broad_queries=result.output.broad_queries,
-                medium_queries=result.output.medium_queries,
-                focused_queries=result.output.focused_queries,
-                indirect_queries=result.output.indirect_queries,
-                reasoning=result.output.reasoning[:200],
-            )
-
-            return SearchNode()
+        # Use query generator agent with renamed span
+        agent = get_query_generator_agent(ctx.deps.config)
+        usage = RunUsage()
+        with rename_agent(
+            agent, name=f"GenerateQueriesNode (round {ctx.state.current_round})"
+        ):
+            result = await agent.run(prompt, deps=ctx.deps, usage=usage)
+        # Store queries in state
+        ctx.state.current_queries = result.output.queries
+        ctx.state.all_queries.extend(result.output.queries)
+        logfire.info(
+            f"Generated {len(result.output.queries)} queries "
+            f"(broad={len(result.output.broad_queries)}, "
+            f"medium={len(result.output.medium_queries)}, "
+            f"focused={len(result.output.focused_queries)}, "
+            f"indirect={len(result.output.indirect_queries)})",
+            queries=result.output.queries,
+            broad_queries=result.output.broad_queries,
+            medium_queries=result.output.medium_queries,
+            focused_queries=result.output.focused_queries,
+            indirect_queries=result.output.indirect_queries,
+            reasoning=result.output.reasoning[:200],
+        )
+        return SearchNode()
 
 
 @dataclass
@@ -292,20 +270,14 @@ class SelectResultsNode(BaseNode[State, Deps, list[SearchResult]]):
             batch: list[SearchResult] — batch of results to process
             batch_offset: int — offset for mapping indices back to full result list
         """
-        with logfire.span(
-            "SelectResultsNode._process_batch",
-            batch_size=len(batch),
-            batch_offset=batch_offset,
-        ):
-            # Prepare context for agent
-            results_context = "\n\n".join(
-                [
-                    f"[{i}] {r.title}\n{r.snippet or '(no snippet)'}\nURL: {r.url}"
-                    for i, r in enumerate(batch)
-                ]
-            )
-
-            prompt = f"""Research topic: {ctx.state.topic}
+        # Prepare context for agent
+        results_context = "\n\n".join(
+            [
+                f"[{i}] {r.title}\n{r.snippet or '(no snippet)'}\nURL: {r.url}"
+                for i, r in enumerate(batch)
+            ]
+        )
+        prompt = f"""Research topic: {ctx.state.topic}
 
 Subject goals: {", ".join(ctx.state.subject_goals)}
 
@@ -313,72 +285,66 @@ Search results from round {ctx.state.current_round}:
 {results_context}
 
 Select the most relevant results and summarize what subject areas they cover."""
-
-            # Use result selector agent
-            usage = RunUsage()
-            result = await get_result_selector_agent(ctx.deps.config).run(
-                prompt, deps=ctx.deps, usage=usage
-            )
-
-            # Register selected results with ResourcePool
-            selected_urls = []
-            registered_count = 0
-            for idx in result.output.selected_indices:
-                # Map batch-local index to full result list
-                if 0 <= idx < len(batch):
-                    search_result = batch[idx]
-                    selected_urls.append(search_result.url)
-                    # Store full SearchResult for metadata preservation
-                    ctx.state.selected_search_results[search_result.url] = search_result
-                    # Register URL with resource pool (may raise ValueError if duplicate)
-                    try:
-                        ctx.deps.resource_pool.register(search_result.url)
-                        registered_count += 1
-                    except ValueError:
-                        # URL already registered, skip
-                        pass
-
-            # Update progress display with selected count
-            if ctx.deps.progress:
-                ctx.deps.progress.add_selected(len(result.output.selected_indices))
-
-            # Track selected URLs per query
-            for query in ctx.state.current_queries:
-                if query not in ctx.state.selected_results:
-                    ctx.state.selected_results[query] = []
-                ctx.state.selected_results[query].extend(selected_urls)
-
-            # Accumulate coverage summaries
-            ctx.state.search_summaries.append(result.output.covered_topics_summary)
-
-            # Compute rejected indices for logging
-            all_indices = set(range(len(batch)))
-            selected_indices_set = set(result.output.selected_indices)
-            rejected_indices = sorted(all_indices - selected_indices_set)
-
-            # Build selected and rejected result info for logging
-            selected_results_info = [
-                {"index": idx, "title": batch[idx].title, "url": batch[idx].url}
-                for idx in result.output.selected_indices
-                if 0 <= idx < len(batch)
-            ]
-            rejected_results_info = [
-                {"index": idx, "title": batch[idx].title, "url": batch[idx].url}
-                for idx in rejected_indices
-            ]
-
-            logfire.info(
-                f"Batch processed: selected {len(result.output.selected_indices)} results ({registered_count} new URLs registered)",
-                batch_size=len(batch),
-                batch_offset=batch_offset,
-                selected_count=len(result.output.selected_indices),
-                registered_count=registered_count,
-                rejected_count=len(rejected_indices),
-                covered_topics=result.output.covered_topics_summary[:200],
-                reasoning=result.output.reasoning,
-                selected_results=selected_results_info,
-                rejected_results=rejected_results_info,
-            )
+        # Use result selector agent with renamed span
+        agent = get_result_selector_agent(ctx.deps.config)
+        usage = RunUsage()
+        with rename_agent(
+            agent, name=f"SelectResultsNode (batch {batch_offset // len(batch) + 1})"
+        ):
+            result = await agent.run(prompt, deps=ctx.deps, usage=usage)
+        # Register selected results with ResourcePool
+        selected_urls = []
+        registered_count = 0
+        for idx in result.output.selected_indices:
+            # Map batch-local index to full result list
+            if 0 <= idx < len(batch):
+                search_result = batch[idx]
+                selected_urls.append(search_result.url)
+                # Store full SearchResult for metadata preservation
+                ctx.state.selected_search_results[search_result.url] = search_result
+                # Register URL with resource pool (may raise ValueError if duplicate)
+                try:
+                    ctx.deps.resource_pool.register(search_result.url)
+                    registered_count += 1
+                except ValueError:
+                    # URL already registered, skip
+                    pass
+        # Update progress display with selected count
+        if ctx.deps.progress:
+            ctx.deps.progress.add_selected(len(result.output.selected_indices))
+        # Track selected URLs per query
+        for query in ctx.state.current_queries:
+            if query not in ctx.state.selected_results:
+                ctx.state.selected_results[query] = []
+            ctx.state.selected_results[query].extend(selected_urls)
+        # Accumulate coverage summaries
+        ctx.state.search_summaries.append(result.output.covered_topics_summary)
+        # Compute rejected indices for logging
+        all_indices = set(range(len(batch)))
+        selected_indices_set = set(result.output.selected_indices)
+        rejected_indices = sorted(all_indices - selected_indices_set)
+        # Build selected and rejected result info for logging
+        selected_results_info = [
+            {"index": idx, "title": batch[idx].title, "url": batch[idx].url}
+            for idx in result.output.selected_indices
+            if 0 <= idx < len(batch)
+        ]
+        rejected_results_info = [
+            {"index": idx, "title": batch[idx].title, "url": batch[idx].url}
+            for idx in rejected_indices
+        ]
+        logfire.info(
+            f"Batch processed: selected {len(result.output.selected_indices)} results ({registered_count} new URLs registered)",
+            batch_size=len(batch),
+            batch_offset=batch_offset,
+            selected_count=len(result.output.selected_indices),
+            registered_count=registered_count,
+            rejected_count=len(rejected_indices),
+            covered_topics=result.output.covered_topics_summary[:200],
+            reasoning=result.output.reasoning,
+            selected_results=selected_results_info,
+            rejected_results=rejected_results_info,
+        )
 
 
 @dataclass
@@ -394,39 +360,32 @@ class ReflectNode(BaseNode[State, Deps, list[SearchResult]]):
         self, ctx: GraphRunContext[State, Deps]
     ) -> Union["GenerateQueriesNode", End[list[SearchResult]]]:
         """Reflect on coverage and decide next action."""
-        with logfire.span(
-            "ReflectNode",
-            round=ctx.state.current_round,
-            max_rounds=ctx.state.max_rounds,
-        ):
-            # Check if we've reached max_rounds
-            if ctx.state.current_round >= ctx.state.max_rounds:
-                logfire.info(f"Reached max_rounds ({ctx.state.max_rounds}), stopping")
-                # Return all unique results collected, preserving metadata
-                all_registered = [
-                    url for urls in ctx.state.selected_results.values() for url in urls
-                ]
-                unique_urls = list(set(all_registered))
-                # Retrieve full SearchResult objects from state
-                final_results = [
-                    ctx.state.selected_search_results[url] for url in unique_urls
-                ]
-                return End(final_results)
-
-            # Prepare context for agent
-            satisfied_str = (
-                ", ".join(ctx.state.satisfied_goals)
-                if ctx.state.satisfied_goals
-                else "(none yet)"
-            )
-            summaries_str = "\n\n".join(
-                [
-                    f"Round {i + 1}: {summary}"
-                    for i, summary in enumerate(ctx.state.search_summaries)
-                ]
-            )
-
-            prompt = f"""Research topic: {ctx.state.topic}
+        # Check if we've reached max_rounds
+        if ctx.state.current_round >= ctx.state.max_rounds:
+            logfire.info(f"Reached max_rounds ({ctx.state.max_rounds}), stopping")
+            # Return all unique results collected, preserving metadata
+            all_registered = [
+                url for urls in ctx.state.selected_results.values() for url in urls
+            ]
+            unique_urls = list(set(all_registered))
+            # Retrieve full SearchResult objects from state
+            final_results = [
+                ctx.state.selected_search_results[url] for url in unique_urls
+            ]
+            return End(final_results)
+        # Prepare context for agent
+        satisfied_str = (
+            ", ".join(ctx.state.satisfied_goals)
+            if ctx.state.satisfied_goals
+            else "(none yet)"
+        )
+        summaries_str = "\n\n".join(
+            [
+                f"Round {i + 1}: {summary}"
+                for i, summary in enumerate(ctx.state.search_summaries)
+            ]
+        )
+        prompt = f"""Research topic: {ctx.state.topic}
 
 Subject goals: {", ".join(ctx.state.subject_goals)}
 
@@ -438,52 +397,48 @@ Search summaries so far:
 Current round: {ctx.state.current_round} of {ctx.state.max_rounds}
 
 Evaluate coverage and decide whether to continue searching or stop."""
-
-            # Use reflector agent
-            usage = RunUsage()
-            # Model configured via get_*_agent(ctx.deps.config)
-            result = await get_reflector_agent(ctx.deps.config).run(
-                prompt, deps=ctx.deps, usage=usage
-            )
-
-            # Update satisfied goals
-            ctx.state.satisfied_goals.extend(result.output.satisfied_goals)
-            # Deduplicate satisfied goals
-            ctx.state.satisfied_goals = list(set(ctx.state.satisfied_goals))
-
-            # Add any new goals discovered
-            if result.output.new_goals:
-                ctx.state.subject_goals.extend(result.output.new_goals)
-                logfire.info(
-                    f"Added {len(result.output.new_goals)} new subject goals",
-                    new_goals=result.output.new_goals,
-                )
-
-            # Update continue flag
-            ctx.state.should_continue = result.output.should_continue
-
+        # Use reflector agent with renamed span
+        agent = get_reflector_agent(ctx.deps.config)
+        usage = RunUsage()
+        with rename_agent(
+            agent,
+            name=f"ReflectNode (round {ctx.state.current_round}/{ctx.state.max_rounds})",
+        ):
+            result = await agent.run(prompt, deps=ctx.deps, usage=usage)
+        # Update satisfied goals
+        ctx.state.satisfied_goals.extend(result.output.satisfied_goals)
+        # Deduplicate satisfied goals
+        ctx.state.satisfied_goals = list(set(ctx.state.satisfied_goals))
+        # Add any new goals discovered
+        if result.output.new_goals:
+            ctx.state.subject_goals.extend(result.output.new_goals)
             logfire.info(
-                f"Reflection complete: {'continue' if result.output.should_continue else 'stop'}",
-                satisfied_goals=len(ctx.state.satisfied_goals),
-                total_goals=len(ctx.state.subject_goals),
-                decision=result.output.should_continue,
-                reasoning=result.output.reasoning[:200],
+                f"Added {len(result.output.new_goals)} new subject goals",
+                new_goals=result.output.new_goals,
             )
-
-            # Decide next action
-            if result.output.should_continue:
-                return GenerateQueriesNode()
-            else:
-                # Return all unique results collected, preserving metadata
-                all_registered = [
-                    url for urls in ctx.state.selected_results.values() for url in urls
-                ]
-                unique_urls = list(set(all_registered))
-                # Retrieve full SearchResult objects from state
-                final_results = [
-                    ctx.state.selected_search_results[url] for url in unique_urls
-                ]
-                logfire.info(
-                    f"Search complete: collected {len(unique_urls)} unique URLs across {ctx.state.current_round} rounds"
-                )
-                return End(final_results)
+        # Update continue flag
+        ctx.state.should_continue = result.output.should_continue
+        logfire.info(
+            f"Reflection complete: {'continue' if result.output.should_continue else 'stop'}",
+            satisfied_goals=len(ctx.state.satisfied_goals),
+            total_goals=len(ctx.state.subject_goals),
+            decision=result.output.should_continue,
+            reasoning=result.output.reasoning[:200],
+        )
+        # Decide next action
+        if result.output.should_continue:
+            return GenerateQueriesNode()
+        else:
+            # Return all unique results collected, preserving metadata
+            all_registered = [
+                url for urls in ctx.state.selected_results.values() for url in urls
+            ]
+            unique_urls = list(set(all_registered))
+            # Retrieve full SearchResult objects from state
+            final_results = [
+                ctx.state.selected_search_results[url] for url in unique_urls
+            ]
+            logfire.info(
+                f"Search complete: collected {len(unique_urls)} unique URLs across {ctx.state.current_round} rounds"
+            )
+            return End(final_results)

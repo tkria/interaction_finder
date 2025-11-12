@@ -12,6 +12,7 @@ from typing import Union
 from pydantic_graph import BaseNode, End, GraphRunContext
 from pydantic_ai.usage import RunUsage
 
+from interaction_finder.agent_utils import rename_agent
 from interaction_finder.logging import logfire
 from interaction_finder.resources import compute_chunk_spans
 from interaction_finder.keywords.agents import (
@@ -93,28 +94,25 @@ class ExpandQueryNode(BaseNode[State, Deps, BridgingTermsOut]):
 
     async def run(self, ctx: GraphRunContext[State, Deps]) -> "SearchNode":
         """Generate search queries and increment round counter."""
-        with logfire.span(
-            "ExpandQueryNode",
-            topic=ctx.state.topic,
-            round=ctx.state.current_round + 1,
-        ):
-            # Increment round counter
-            ctx.state.current_round += 1
-            # Use query expander agent
-            usage = RunUsage()
-            result = await get_query_expander_agent(ctx.deps.config).run(
+        # Increment round counter
+        ctx.state.current_round += 1
+        # Use query expander agent with renamed span
+        agent = get_query_expander_agent(ctx.deps.config)
+        usage = RunUsage()
+        with rename_agent(agent, f"ExpandQueryNode (round {ctx.state.current_round})"):
+            result = await agent.run(
                 f"Generate search queries to find review articles about: {ctx.state.topic}",
                 deps=ctx.deps,
                 usage=usage,
             )
-            # Store queries in state
-            ctx.state.search_queries = result.output.queries
-            logfire.info(
-                f"Generated {len(result.output.queries)} queries for round {ctx.state.current_round}",
-                queries=result.output.queries,
-                reasoning=result.output.reasoning[:200],
-            )
-            return SearchNode()
+        # Store queries in state
+        ctx.state.search_queries = result.output.queries
+        logfire.info(
+            f"Generated {len(result.output.queries)} queries for round {ctx.state.current_round}",
+            queries=result.output.queries,
+            reasoning=result.output.reasoning[:200],
+        )
+        return SearchNode()
 
 
 @dataclass
@@ -202,20 +200,17 @@ class SelectResultsNode(BaseNode[State, Deps, BridgingTermsOut]):
 
     async def run(self, ctx: GraphRunContext[State, Deps]) -> "FetchDocumentsNode":
         """Select results to fetch."""
-        with logfire.span(
-            "SelectResultsNode", num_results=len(ctx.state.all_search_results)
-        ):
-            if not ctx.state.all_search_results:
-                logfire.info("No search results available, skipping to finalization")
-                return FinalizeNode()
-            # Prepare context for agent
-            results_context = "\n\n".join(
-                [
-                    f"[{i}] {r.title}\n{r.snippet or '(no snippet)'}"
-                    for i, r in enumerate(ctx.state.all_search_results)
-                ]
-            )
-            prompt = f"""Review these search results and select which ones to fetch for keyword extraction.
+        if not ctx.state.all_search_results:
+            logfire.info("No search results available, skipping to finalization")
+            return FinalizeNode()
+        # Prepare context for agent
+        results_context = "\n\n".join(
+            [
+                f"[{i}] {r.title}\n{r.snippet or '(no snippet)'}"
+                for i, r in enumerate(ctx.state.all_search_results)
+            ]
+        )
+        prompt = f"""Review these search results and select which ones to fetch for keyword extraction.
 
 Topic: {ctx.state.topic}
 
@@ -223,25 +218,25 @@ Search Results:
 {results_context}
 
 Select the indices of results that are most likely to be valuable review articles."""
-            # Use result selector agent
-            usage = RunUsage()
-            result = await get_result_selector_agent(ctx.deps.config).run(
-                prompt, deps=ctx.deps, usage=usage
-            )
-            # Get selected results
-            max_to_fetch = ctx.deps.config.tools.keywords.max_documents_to_fetch
-            selected_indices = result.output.selected_indices[:max_to_fetch]
-            ctx.state.selected_results = [
-                ctx.state.all_search_results[i]
-                for i in selected_indices
-                if i < len(ctx.state.all_search_results)
-            ]
-            logfire.info(
-                f"Selected {len(ctx.state.selected_results)} results from {len(ctx.state.all_search_results)} available",
-                selected_titles=[r.title[:60] for r in ctx.state.selected_results],
-                reasoning=result.output.reasoning[:200],
-            )
-            return FetchDocumentsNode()
+        # Use result selector agent with renamed span
+        agent = get_result_selector_agent(ctx.deps.config)
+        usage = RunUsage()
+        with rename_agent(agent, "SelectResultsNode"):
+            result = await agent.run(prompt, deps=ctx.deps, usage=usage)
+        # Get selected results
+        max_to_fetch = ctx.deps.config.tools.keywords.max_documents_to_fetch
+        selected_indices = result.output.selected_indices[:max_to_fetch]
+        ctx.state.selected_results = [
+            ctx.state.all_search_results[i]
+            for i in selected_indices
+            if i < len(ctx.state.all_search_results)
+        ]
+        logfire.info(
+            f"Selected {len(ctx.state.selected_results)} results from {len(ctx.state.all_search_results)} available",
+            selected_titles=[r.title[:60] for r in ctx.state.selected_results],
+            reasoning=result.output.reasoning[:200],
+        )
+        return FetchDocumentsNode()
 
 
 @dataclass
@@ -422,30 +417,25 @@ class EvaluateKeywordsNode(BaseNode[State, Deps, BridgingTermsOut]):
 
     async def run(self, ctx: GraphRunContext[State, Deps]) -> "ReflectNode":
         """Evaluate keywords and summarize documents."""
-        with logfire.span(
-            "EvaluateKeywordsNode", num_docs=len(ctx.state.extracted_keywords)
-        ):
-            if not ctx.state.extracted_keywords:
-                logfire.info("No extracted keywords, skipping to reflection")
-                return ReflectNode()
-            # Process each document
-            total_bridging = 0
-            for url, keywords in ctx.state.extracted_keywords.items():
-                # Get content from resource pool
-                resource = ctx.deps.resource_pool.get(url)
-                if not resource:
-                    continue
-                # Clean, deduplicate, and rerank keywords for LLM review
-                max_keywords_for_llm = (
-                    ctx.deps.config.tools.keywords.max_keywords_for_llm
-                )
-                keywords_text = _clean_and_rerank_keywords_for_display(
-                    keywords, ctx.state.topic, ctx.deps.reranker, max_keywords_for_llm
-                )
-                # Get document context length from config
-                context_chars = ctx.deps.config.tools.keywords.document_context_chars
-                # Summarize document with strict filtering instructions
-                summary_prompt = f"""Review this document and identify HIGH-QUALITY bridging terms.
+        if not ctx.state.extracted_keywords:
+            logfire.info("No extracted keywords, skipping to reflection")
+            return ReflectNode()
+        # Process each document
+        total_bridging = 0
+        for url, keywords in ctx.state.extracted_keywords.items():
+            # Get content from resource pool
+            resource = ctx.deps.resource_pool.get(url)
+            if not resource:
+                continue
+            # Clean, deduplicate, and rerank keywords for LLM review
+            max_keywords_for_llm = ctx.deps.config.tools.keywords.max_keywords_for_llm
+            keywords_text = _clean_and_rerank_keywords_for_display(
+                keywords, ctx.state.topic, ctx.deps.reranker, max_keywords_for_llm
+            )
+            # Get document context length from config
+            context_chars = ctx.deps.config.tools.keywords.document_context_chars
+            # Summarize document with strict filtering instructions
+            summary_prompt = f"""Review this document and identify HIGH-QUALITY bridging terms.
 
 **Target topic:** {ctx.state.topic}
 
@@ -481,17 +471,20 @@ Each bridging term must:
 **Test:** For each term, ask "Would this term appear frequently in papers specifically about {ctx.state.topic}?" If no, exclude it.
 
 Select fewer, higher-quality terms rather than reaching for quantity."""
-                usage = RunUsage()
-                summary_result = await get_document_summarizer_agent(
-                    ctx.deps.config
-                ).run(summary_prompt, deps=ctx.deps, usage=usage)
-                # Store summary
-                ctx.state.document_summaries.append(summary_result.output)
-                total_bridging += len(summary_result.output.bridging_terms)
-            logfire.info(
-                f"Generated {len(ctx.state.document_summaries)} summaries with {total_bridging} bridging terms total"
-            )
-            return ReflectNode()
+            # Use document summarizer agent with renamed span (include doc title for context)
+            agent = get_document_summarizer_agent(ctx.deps.config)
+            usage = RunUsage()
+            with rename_agent(agent, f"EvaluateKeywordsNode: {resource.title[:60]}"):
+                summary_result = await agent.run(
+                    summary_prompt, deps=ctx.deps, usage=usage
+                )
+            # Store summary
+            ctx.state.document_summaries.append(summary_result.output)
+            total_bridging += len(summary_result.output.bridging_terms)
+        logfire.info(
+            f"Generated {len(ctx.state.document_summaries)} summaries with {total_bridging} bridging terms total"
+        )
+        return ReflectNode()
 
 
 @dataclass
@@ -506,31 +499,25 @@ class ReflectNode(BaseNode[State, Deps, BridgingTermsOut]):
         self, ctx: GraphRunContext[State, Deps]
     ) -> Union["ExpandQueryNode", "FinalizeNode"]:
         """Reflect on coverage and decide whether to continue."""
-        with logfire.span(
-            "ReflectNode",
-            round=ctx.state.current_round,
-            max_rounds=ctx.state.max_rounds,
-            num_summaries=len(ctx.state.document_summaries),
-        ):
-            # Check iteration limit
-            if ctx.state.current_round >= ctx.state.max_rounds:
-                logfire.info(f"Max rounds reached ({ctx.state.max_rounds}), finalizing")
-                return FinalizeNode()
-            # Check if we have any summaries
-            if not ctx.state.document_summaries:
-                logfire.info("No document summaries available, finalizing")
-                return FinalizeNode()
-            # Prepare summaries for agent
-            summaries_text = "\n\n".join(
-                [
-                    f"Document {i + 1}:\nSummary: {s.summary}\n"
-                    f"Related areas: {', '.join(s.related_areas)}\n"
-                    f"Bridging terms: {', '.join(s.bridging_terms)}\n"
-                    f"Coverage: {s.coverage_contribution}"
-                    for i, s in enumerate(ctx.state.document_summaries)
-                ]
-            )
-            prompt = f"""Review the documents processed so far and decide whether to continue searching.
+        # Check iteration limit
+        if ctx.state.current_round >= ctx.state.max_rounds:
+            logfire.info(f"Max rounds reached ({ctx.state.max_rounds}), finalizing")
+            return FinalizeNode()
+        # Check if we have any summaries
+        if not ctx.state.document_summaries:
+            logfire.info("No document summaries available, finalizing")
+            return FinalizeNode()
+        # Prepare summaries for agent
+        summaries_text = "\n\n".join(
+            [
+                f"Document {i + 1}:\nSummary: {s.summary}\n"
+                f"Related areas: {', '.join(s.related_areas)}\n"
+                f"Bridging terms: {', '.join(s.bridging_terms)}\n"
+                f"Coverage: {s.coverage_contribution}"
+                for i, s in enumerate(ctx.state.document_summaries)
+            ]
+        )
+        prompt = f"""Review the documents processed so far and decide whether to continue searching.
 
 Topic: {ctx.state.topic}
 Current round: {ctx.state.current_round}/{ctx.state.max_rounds}
@@ -540,22 +527,24 @@ Document Summaries:
 {summaries_text}
 
 Decide whether coverage is sufficient (stop) or more searches are needed (continue)."""
-            # Use reflector agent
-            usage = RunUsage()
-            result = await get_reflector_agent(ctx.deps.config).run(
-                prompt, deps=ctx.deps, usage=usage
-            )
-            # Make decision
-            decision = result.output.decision
-            logfire.info(
-                f"Reflection: {decision} after round {ctx.state.current_round}",
-                decision=decision,
-                reasoning=result.output.reasoning,
-                new_search_angles=result.output.new_search_angles,
-            )
-            if decision == "stop":
-                return FinalizeNode()
-            return ExpandQueryNode()
+        # Use reflector agent with renamed span
+        agent = get_reflector_agent(ctx.deps.config)
+        usage = RunUsage()
+        with rename_agent(agent, 
+            name=f"ReflectNode (round {ctx.state.current_round}/{ctx.state.max_rounds})"
+        ):
+            result = await agent.run(prompt, deps=ctx.deps, usage=usage)
+        # Make decision
+        decision = result.output.decision
+        logfire.info(
+            f"Reflection: {decision} after round {ctx.state.current_round}",
+            decision=decision,
+            reasoning=result.output.reasoning,
+            new_search_angles=result.output.new_search_angles,
+        )
+        if decision == "stop":
+            return FinalizeNode()
+        return ExpandQueryNode()
 
 
 @dataclass

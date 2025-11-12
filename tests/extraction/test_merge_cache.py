@@ -7,6 +7,7 @@ Validates that:
 4. Cache metrics are tracked correctly
 """
 
+from contextlib import contextmanager
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -28,6 +29,21 @@ from interaction_finder.resources import (
     ResourcePool,
     ResourceQuote,
 )
+
+
+def create_mock_agent_with_override(run_return_value):
+    """Create a mock agent with working rename_agent() support.
+
+    Parameters:
+        run_return_value: The value to return from agent.run()
+
+    Returns:
+        Mock agent with ._name attribute and .run() method
+    """
+    mock_agent = MagicMock()
+    mock_agent.run = AsyncMock(return_value=run_return_value)
+    mock_agent._name = "mock_agent"  # Add _name attribute for rename_agent
+    return mock_agent
 
 
 @pytest.fixture
@@ -102,7 +118,6 @@ class TestMergeCaching:
         }
 
         # Mock LLM response
-        mock_agent = AsyncMock()
         mock_result = MagicMock()
         mock_result.output = EntityMergeDecisions(
             decisions=[
@@ -114,7 +129,7 @@ class TestMergeCaching:
                 )
             ]
         )
-        mock_agent.run = AsyncMock(return_value=mock_result)
+        mock_agent = create_mock_agent_with_override(mock_result)
 
         # Patch the agent getter
         import interaction_finder.extraction.nodes as nodes_module
@@ -174,7 +189,7 @@ class TestMergeCaching:
         }
 
         # Mock LLM (should not be called)
-        mock_agent = AsyncMock()
+        mock_agent = create_mock_agent_with_override(None)
         import interaction_finder.extraction.nodes as nodes_module
 
         original_getter = nodes_module.get_entity_merge_agent
@@ -234,7 +249,7 @@ class TestMergeCaching:
         }
 
         # Mock LLM (should not be called due to normalized cache hit)
-        mock_agent = AsyncMock()
+        mock_agent = create_mock_agent_with_override(None)
         import interaction_finder.extraction.nodes as nodes_module
 
         original_getter = nodes_module.get_entity_merge_agent
@@ -287,7 +302,6 @@ class TestMergeCaching:
         }
 
         # Mock LLM for uncached pair only
-        mock_agent = AsyncMock()
         mock_result = MagicMock()
         mock_result.output = EntityMergeDecisions(
             decisions=[
@@ -299,7 +313,7 @@ class TestMergeCaching:
                 )
             ]
         )
-        mock_agent.run = AsyncMock(return_value=mock_result)
+        mock_agent = create_mock_agent_with_override(mock_result)
 
         import interaction_finder.extraction.nodes as nodes_module
 
