@@ -110,10 +110,8 @@ class ExtractEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
         self, resource: Resource, ctx: GraphRunContext[State, Deps]
     ):
         """Process a single resource: extract entities."""
-        # Extract short identifier from URL for span name
-        url_parts = resource.id.url.split("/")
-        doc_id = url_parts[-1] if url_parts else resource.id.url[:30]
-        with logfire.span(f"Extracting entities from: {doc_id}"):
+        # Use stable resource ID for span name
+        with logfire.span(f"Extracting entities from: {resource.id.id}"):
             usage = RunUsage()
 
             # Build prompt
