@@ -102,26 +102,24 @@ class ExtractionProgress:
         bright = "bold bright_yellow" if self._highlight == "pairs" else "bold yellow"
         table.add_row("Pairs found", f"[{bright}]{self.pairs_found}[/]")
 
-        # Assessment progress
-        if self.pairs_total > 0:
+        # Assessment progress (just show count, since pairs_found is above)
+        if self.pairs_assessed > 0:
             bright = (
                 "bold bright_yellow"
                 if self._highlight == "assessment"
                 else "bold yellow"
             )
-            table.add_row(
-                "Pairs assessed",
-                f"[{bright}]{self.pairs_assessed}/{self.pairs_total}[/]",
-            )
+            table.add_row("Pairs assessed", f"[{bright}]{self.pairs_assessed}[/]")
 
-        # Quote validation
-        quotes_total = self.quotes_validated + self.quotes_failed
+        # Quote validation (show validated count with invalid in parentheses)
         quote_style = "bold yellow"
         if self.quotes_failed > 0:
-            quote_text = f"{self.quotes_validated}/{quotes_total} [dim](⚠ {self.quotes_failed} failed)[/]"
+            quote_text = (
+                f"{self.quotes_validated} [dim]({self.quotes_failed} invalid)[/]"
+            )
         else:
-            quote_text = f"{self.quotes_validated}/{quotes_total}"
-        table.add_row("Quotes valid", f"[{quote_style}]{quote_text}[/]")
+            quote_text = f"{self.quotes_validated}"
+        table.add_row("Quotes", f"[{quote_style}]{quote_text}[/]")
 
         # Final counts
         table.add_row("Accepted", f"[bold green]{self.accepted}[/]")
