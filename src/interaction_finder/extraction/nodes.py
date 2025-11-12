@@ -51,7 +51,7 @@ from interaction_finder.extraction.utils import (
     strip_kind_annotation,
 )
 from interaction_finder.logging import logfire
-from interaction_finder.resources import Resource
+from interaction_finder.resources import QuoteValidationError, Resource
 
 
 def _classify_quote_error(error: Exception) -> str:
@@ -189,12 +189,8 @@ For each entity, provide: canonical name, all verbatim names from text, supporti
                         quote = resource.quote(quote_str)
                         all_quotes.append(quote)
                         ctx.state.quotes_validated += 1
-                    except Exception as e:
+                    except QuoteValidationError:
                         ctx.state.quotes_failed += 1
-                        ctx.deps.logger.warning(
-                            f"Failed to validate entity quote for '{normalized_name}' "
-                            f"in {resource.id.url}: {type(e).__name__}: {e}"
-                        )
             if all_quotes:  # Only store entity if we have valid quotes
                 # Use first entity's name (after stripping kind annotation) as canonical name
                 # This preserves original casing (e.g., "BRCA1" not "brca1")
