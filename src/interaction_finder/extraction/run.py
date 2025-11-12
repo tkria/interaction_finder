@@ -50,7 +50,7 @@ async def run_extraction(
         >>> accepted = [j for j in result.judgments if j.accepted]
         >>> print(f"Found {len(accepted)} associations")
     """
-    with logfire.span("run_extraction", topic=topic):
+    with logfire.span(f"Extraction: {topic}"):
         # Load config or use defaults
         if config is None:
             config = IfetcherConfig()

@@ -110,7 +110,10 @@ class ExtractEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
         self, resource: Resource, ctx: GraphRunContext[State, Deps]
     ):
         """Process a single resource: extract entities."""
-        with logfire.span("process_resource", resource_url=resource.id.url):
+        # Extract short identifier from URL for span name
+        url_parts = resource.id.url.split("/")
+        doc_id = url_parts[-1] if url_parts else resource.id.url[:30]
+        with logfire.span(f"Extracting entities from: {doc_id}"):
             usage = RunUsage()
 
             # Build prompt
@@ -455,7 +458,12 @@ class ExtractPairsFromProximalSetsNode(BaseNode[State, Deps, ExtractionResult]):
         ctx: GraphRunContext[State, Deps],
     ) -> tuple:
         """Process a single proximal set to extract pairs."""
-        with logfire.span("process_proximal_set"):
+        # Build readable entity list for span name
+        entity_names = sorted(proximal_set.entities)[:3]  # Show up to 3 entities
+        entities_str = ", ".join(entity_names)
+        if len(proximal_set.entities) > 3:
+            entities_str += f" (+{len(proximal_set.entities) - 3} more)"
+        with logfire.span(f"Proximal set: {entities_str}"):
             # Get padding from config (default 1)
             padding = getattr(
                 ctx.deps.config.tools.extraction, "region_padding_chunks", 1
@@ -653,7 +661,7 @@ class AssessPairsNode(BaseNode[State, Deps, ExtractionResult]):
         entity1 = pair_info["entity1"]
         entity2 = pair_info["entity2"]
 
-        with logfire.span("assess_pair", pair=f"{entity1.name}-{entity2.name}"):
+        with logfire.span(f"Assessing: {entity1.name} ⇔ {entity2.name}"):
             # Get padding from config
             padding = getattr(
                 ctx.deps.config.tools.extraction, "region_padding_chunks", 1
@@ -813,7 +821,7 @@ class JudgeCrossDocumentNode(BaseNode[State, Deps, ExtractionResult]):
     ) -> tuple[EntityPairKey, PairJudgment]:
         """Make final judgment on a single pair."""
         with logfire.span(
-            "judge_pair", pair=f"{pair_key.entity1_name}-{pair_key.entity2_name}"
+            f"Judging: {pair_key.entity1_name} ⇔ {pair_key.entity2_name}"
         ):
             # Try deterministic accept
             can_accept, relationship, reasoning = self._can_accept_deterministically(
