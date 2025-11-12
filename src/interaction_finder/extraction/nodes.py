@@ -501,6 +501,24 @@ Provide exact supporting quotes."""
                     )
                     continue
 
+                # Validate pair kinds are permitted
+                e1_obj = entities.get(entity1)
+                e2_obj = entities.get(entity2)
+                if not e1_obj or not e2_obj:
+                    ctx.deps.logger.warning(
+                        f"Pair references unknown entity: {entity1}-{entity2}"
+                    )
+                    continue
+
+                # Check if this pair combination is permitted
+                allowed_partners = ctx.state.permitted_pairs.get(e1_obj.kind, set())
+                if e2_obj.kind not in allowed_partners:
+                    ctx.deps.logger.debug(
+                        f"Pair {entity1} ({e1_obj.kind}) - {entity2} ({e2_obj.kind}) "
+                        f"not permitted by kind constraints"
+                    )
+                    continue
+
                 # Validate quotes
                 quotes = []
                 for quote_str in pair_info.supporting_quotes:

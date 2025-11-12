@@ -11,6 +11,7 @@ from interaction_finder.extraction.graph import graph
 from interaction_finder.extraction.models import ExtractionResult
 from interaction_finder.extraction.nodes import ExtractEntitiesNode
 from interaction_finder.extraction.state import State
+from interaction_finder.extraction.utils import build_permitted_pairs
 from interaction_finder.logging import logfire
 from interaction_finder.resources import ResourcePool
 from interaction_finder.settings import IfetcherConfig
@@ -65,8 +66,15 @@ async def run_extraction(
             logger=logger,
         )
 
+        # Build permitted pairs map from target entity types
+        permitted_pairs = build_permitted_pairs(target_entity_types)
+
         # Create initial state
-        state = State(topic=topic, target_entity_types=target_entity_types)
+        state = State(
+            topic=topic,
+            target_entity_types=target_entity_types,
+            permitted_pairs=permitted_pairs,
+        )
 
         # Run graph
         result = await graph.run(ExtractEntitiesNode(), state=state, deps=deps)

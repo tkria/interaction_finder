@@ -4,6 +4,7 @@ import pytest
 
 from interaction_finder.extraction.models import EntityMention, ProximalEntitySet
 from interaction_finder.extraction.utils import (
+    build_permitted_pairs,
     build_text_region,
     collect_relevant_text_for_quotes,
     find_substring_entities,
@@ -13,6 +14,65 @@ from interaction_finder.extraction.utils import (
     strip_kind_annotation,
 )
 from interaction_finder.resources import ResourcePool
+
+
+class TestBuildPermittedPairs:
+    """Tests for build_permitted_pairs function."""
+
+    def test_two_different_kinds_no_self_pairs(self):
+        """Test that two different kinds only allow cross-pairs."""
+        result = build_permitted_pairs(["gene", "disease"])
+        assert result == {"gene": {"disease"}, "disease": {"gene"}}
+
+    def test_single_kind_allows_self_pairs(self):
+        """Test that a single kind allows self-pairs."""
+        result = build_permitted_pairs(["gene"])
+        assert result == {"gene": {"gene"}}
+
+    def test_repeated_kind_allows_self_pairs(self):
+        """Test that repeating a kind allows self-pairs."""
+        result = build_permitted_pairs(["gene", "gene", "disease"])
+        assert result == {"gene": {"gene", "disease"}, "disease": {"gene"}}
+
+    def test_multiple_repeated_kinds(self):
+        """Test multiple kinds with repetition."""
+        result = build_permitted_pairs(["gene", "gene", "disease", "disease"])
+        assert result == {"gene": {"gene", "disease"}, "disease": {"gene", "disease"}}
+
+    def test_three_different_kinds(self):
+        """Test three different kinds with no self-pairs."""
+        result = build_permitted_pairs(["gene", "disease", "protein"])
+        assert result == {
+            "gene": {"disease", "protein"},
+            "disease": {"gene", "protein"},
+            "protein": {"gene", "disease"},
+        }
+
+    def test_three_kinds_one_repeated(self):
+        """Test three kinds where one is repeated."""
+        result = build_permitted_pairs(["gene", "gene", "disease", "protein"])
+        assert result == {
+            "gene": {"gene", "disease", "protein"},
+            "disease": {"gene", "protein"},
+            "protein": {"gene", "disease"},
+        }
+
+    def test_order_independence(self):
+        """Test that input order doesn't affect result."""
+        result1 = build_permitted_pairs(["gene", "disease", "gene"])
+        result2 = build_permitted_pairs(["gene", "gene", "disease"])
+        result3 = build_permitted_pairs(["disease", "gene", "gene"])
+        assert result1 == result2 == result3
+
+    def test_empty_list(self):
+        """Test empty list returns empty dict."""
+        result = build_permitted_pairs([])
+        assert result == {}
+
+    def test_many_repetitions(self):
+        """Test that many repetitions still work (only need 2)."""
+        result = build_permitted_pairs(["gene"] * 5 + ["disease"])
+        assert result == {"gene": {"gene", "disease"}, "disease": {"gene"}}
 
 
 class TestStripKindAnnotation:

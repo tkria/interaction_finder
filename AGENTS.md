@@ -43,6 +43,26 @@ uv run interaction-finder widesearch keywords.json "pulmonary arterial hypertens
 
 # Stage 3: Extract entity associations from search results
 uv run interaction-finder extract searches.json "PAH genetics" -e gene -e disease -o results.json
+
+# Stage 3 with self-pair control: allow gene-gene and disease-disease pairs
+uv run interaction-finder extract searches.json "PAH genetics" -e gene -e gene -e disease -e disease -o results.json
+```
+
+**Entity Kind Pair Filtering**:
+The extraction stage filters pairs based on entity kinds. By default, specifying two different kinds (e.g., `-e gene -e disease`) only permits cross-kind pairs (gene-disease). To allow same-kind pairs (gene-gene, disease-disease), repeat the kind flag:
+
+```bash
+# Only gene-disease pairs allowed (no gene-gene or disease-disease)
+uv run interaction-finder extract searches.json "topic" -e gene -e disease -o results.json
+
+# Allow gene-gene AND gene-disease pairs (no disease-disease)
+uv run interaction-finder extract searches.json "topic" -e gene -e gene -e disease -o results.json
+
+# Allow all combinations: gene-gene, gene-disease, disease-disease
+uv run interaction-finder extract searches.json "topic" -e gene -e gene -e disease -e disease -o results.json
+
+# Single kind always allows self-pairs
+uv run interaction-finder extract searches.json "topic" -e gene -o results.json
 ```
 
 **Agent Configuration**: Configure LLM models for different pipeline stages:

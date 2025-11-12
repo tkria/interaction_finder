@@ -5,6 +5,7 @@ text region construction, and pair key generation.
 """
 
 import re
+from collections import Counter
 
 from interaction_finder.extraction.models import (
     EntityMention,
@@ -16,6 +17,52 @@ from interaction_finder.resources import (
     ResourceQuote,
     normalize_text_for_matching,
 )
+
+
+def build_permitted_pairs(entity_types: list[str]) -> dict[str, set[str]]:
+    """Build mapping of which entity kinds can pair with which.
+
+    The rule: a kind must appear at least twice in the input list to permit
+    self-pairs (kind-kind). Cross-pairs (kindA-kindB) are permitted if both
+    kinds appear at least once.
+
+    Special case: if only one unique kind is provided, self-pairs are allowed
+    regardless of count (otherwise no pairs would be possible).
+
+    Parameters:
+        entity_types: List of entity kinds (may contain duplicates)
+
+    Returns:
+        Dict mapping each kind to the set of kinds it can pair with
+
+    Examples:
+        >>> build_permitted_pairs(["gene", "disease"])
+        {'gene': {'disease'}, 'disease': {'gene'}}
+
+        >>> build_permitted_pairs(["gene", "gene", "disease"])
+        {'gene': {'gene', 'disease'}, 'disease': {'gene'}}
+
+        >>> build_permitted_pairs(["gene"])
+        {'gene': {'gene'}}
+
+        >>> build_permitted_pairs(["gene", "disease", "protein"])
+        {'gene': {'disease', 'protein'}, 'disease': {'gene', 'protein'}, 'protein': {'gene', 'disease'}}
+    """
+    # Count occurrences of each kind
+    counts = Counter(entity_types)
+    unique_kinds = set(entity_types)
+
+    # Build permitted pairs map
+    permitted: dict[str, set[str]] = {}
+    for kind in unique_kinds:
+        # Start with all other kinds
+        allowed = unique_kinds - {kind}
+        # Add self if kind appears at least twice OR if it's the only kind
+        if counts[kind] >= 2 or len(unique_kinds) == 1:
+            allowed.add(kind)
+        permitted[kind] = allowed
+
+    return permitted
 
 
 def strip_kind_annotation(entity_name: str) -> str:

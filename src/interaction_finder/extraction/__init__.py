@@ -12,6 +12,15 @@ Key models:
     PairAssessment - Per-document evidence assessment
     ExtractionMetadata - Summary statistics
 
+Entity kind pair filtering:
+    Pairs are filtered based on the target_entity_types list. A kind must appear
+    at least twice in the list to allow same-kind pairs (e.g., gene-gene).
+
+    Examples:
+        ["gene", "disease"] → only gene-disease pairs allowed
+        ["gene", "gene", "disease"] → gene-gene and gene-disease pairs allowed
+        ["gene", "gene", "disease", "disease"] → all combinations allowed
+
 Example:
     >>> from interaction_finder.extraction import run_extraction
     >>> from interaction_finder.resources import ResourcePool
@@ -19,6 +28,7 @@ Example:
     >>> pool = ResourcePool()
     >>> pool.add(url="...", title="...", document_text="...")
     >>>
+    >>> # Only extract gene-disease associations (no gene-gene or disease-disease)
     >>> result = await run_extraction(
     ...     topic="BRCA1 and breast cancer",
     ...     target_entity_types=["gene", "disease"],

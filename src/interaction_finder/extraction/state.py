@@ -35,6 +35,9 @@ class State:
     # === Required at initialization ===
     topic: str
     target_entity_types: list[str]
+    # Map of which entity kinds can pair with which (derived from target_entity_types)
+    # A kind must appear twice in target_entity_types to allow self-pairs
+    permitted_pairs: dict[str, set[str]]
 
     # === Stage 1: Entity Extraction ===
     # Raw entities per resource (before validation/merging)
