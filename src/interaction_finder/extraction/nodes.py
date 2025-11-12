@@ -335,12 +335,22 @@ class ValidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
                     f"  Child: '{child_name}' (type: {child.kind})"
                 )
 
-            prompt = f"""Topic: {ctx.state.topic}
+            # Format target entity types
+            entity_types_str = ", ".join(ctx.state.target_entity_types)
 
-You need to decide whether the following entity pairs should be merged.
+            prompt = f"""**Research topic:** {ctx.state.topic}
+
+**Target entity types for this research:** {entity_types_str}
+
+**Task:** Decide whether the following entity pairs should be merged.
 Each pair has one entity whose name is a substring of the other.
 
-Entity pairs to evaluate:
+Consider the research context: we're looking for associations between {entity_types_str}.
+Merge entities that represent the same concept for this research question, even if they
+differ in biological specificity (e.g., merge disease subtypes into the main disease,
+merge gene variants into the gene name).
+
+**Entity pairs to evaluate:**
 {chr(10).join(pairs_description)}
 
 For each pair, decide if they should be merged (child absorbed into parent) or kept separate."""
