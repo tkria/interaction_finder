@@ -12,6 +12,10 @@ import os
 def configure_logfire(verbose: bool = False) -> None:
     """Configure logfire if LOGFIRE_WRITE_TOKEN is available.
 
+    Disables inspect_arguments because the codebase already uses explicit
+    keyword arguments for structured logging, making f-string introspection
+    redundant while avoiding AST parsing overhead and warnings.
+
     Parameters:
         verbose: bool — enable verbose console output (default: False)
     """
@@ -28,6 +32,7 @@ def configure_logfire(verbose: bool = False) -> None:
         token=token,
         scrubbing=False,
         console=coptions,
+        inspect_arguments=False,
     )
     _ = logfire.instrument_pydantic_ai()
 
