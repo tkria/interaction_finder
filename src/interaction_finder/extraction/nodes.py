@@ -138,16 +138,21 @@ For each entity, provide: canonical name, all verbatim names from text, supporti
                 )
                 return
 
-            # Convert entities to EntityMention with ResourceQuotes, merging duplicates by name
-            entities_by_name: dict[str, list] = {}
+            # Convert entities to EntityMention with ResourceQuotes, merging duplicates by normalized name
+            # Group by normalized name to catch "PAH" vs "pah", "BRCA1" vs "brca1", etc.
+            entities_by_normalized_name: dict[str, list] = {}
             for entity_info in result.output.entities:
-                if entity_info.name not in entities_by_name:
-                    entities_by_name[entity_info.name] = []
-                entities_by_name[entity_info.name].append(entity_info)
+                # Normalize: strip kind annotation, then apply text normalization
+                normalized_name = normalize_for_comparison(
+                    strip_kind_annotation(entity_info.name)
+                )
+                if normalized_name not in entities_by_normalized_name:
+                    entities_by_normalized_name[normalized_name] = []
+                entities_by_normalized_name[normalized_name].append(entity_info)
 
             # Convert and merge each entity name
             entities_dict = {}
-            for entity_name, entity_infos in entities_by_name.items():
+            for normalized_name, entity_infos in entities_by_normalized_name.items():
                 # Validate all quotes from all instances
                 all_quotes = []
                 for entity_info in entity_infos:
@@ -159,28 +164,39 @@ For each entity, provide: canonical name, all verbatim names from text, supporti
                         except Exception as e:
                             ctx.state.quotes_failed += 1
                             ctx.deps.logger.warning(
-                                f"Failed to validate entity quote for '{entity_name}' "
+                                f"Failed to validate entity quote for '{normalized_name}' "
                                 f"in {resource.id.url}: {type(e).__name__}: {e}"
                             )
 
                 if all_quotes:  # Only store entity if we have valid quotes
-                    # Merge aliases (deduplicate)
+                    # Collect all original names and aliases
+                    # Skip original names that differ only in capitalization from normalized
                     all_aliases = []
-                    seen_aliases = set()
+                    seen_aliases_normalized = set()
                     for entity_info in entity_infos:
+                        # Add original name only if it differs beyond just capitalization
+                        name_normalized = normalize_for_comparison(entity_info.name)
+                        if name_normalized != normalized_name:
+                            # Name differs in more than just capitalization (e.g., punctuation)
+                            if name_normalized not in seen_aliases_normalized:
+                                all_aliases.append(entity_info.name)
+                                seen_aliases_normalized.add(name_normalized)
+                        # Add all aliases from this entity
                         for alias in entity_info.aliases:
-                            if alias not in seen_aliases:
+                            alias_normalized = normalize_for_comparison(alias)
+                            if alias_normalized not in seen_aliases_normalized:
                                 all_aliases.append(alias)
-                                seen_aliases.add(alias)
+                                seen_aliases_normalized.add(alias_normalized)
 
                     # Merge reasoning
                     merged_reasoning = " | ".join(
                         entity_info.reasoning for entity_info in entity_infos
                     )
 
-                    entities_dict[entity_name] = EntityMention(
+                    # Use normalized name as canonical name
+                    entities_dict[normalized_name] = EntityMention(
                         kind=entity_infos[0].kind,
-                        name=entity_name,
+                        name=normalized_name,
                         aliases=all_aliases,
                         quotes=all_quotes,
                         reasoning=merged_reasoning,

@@ -107,17 +107,18 @@ def normalize_for_comparison(text: str) -> str:
 def find_substring_entities(
     entities: dict[str, EntityMention],
 ) -> list[tuple[str, str]]:
-    """Find entity pairs where one name is a substring of another.
+    """Find entity pairs where normalized names are equal or one is a substring of another.
 
     Compares normalized lowercase versions of entity names to identify
-    potential merge candidates (e.g., "BRCA" and "BRCA1").
+    potential merge candidates (e.g., "BRCA" and "BRCA1", or "PAH" and "pah").
 
     Parameters:
         entities: Dict mapping canonical name to EntityMention
 
     Returns:
-        List of (parent_name, child_name) tuples where child is substring of parent.
-        Parent is the longer entity name that contains the child.
+        List of (parent_name, child_name) tuples where:
+        - For exact normalized matches: parent is the original (keeps first seen)
+        - For substring matches: parent is the longer name that contains the child
     """
     candidates = []
     entity_names = list(entities.keys())
@@ -129,8 +130,12 @@ def find_substring_entities(
         for name2 in entity_names[i + 1 :]:
             norm2 = normalize_for_comparison(name2)
 
-            # Check if either is a substring of the other
-            if norm1 in norm2:
+            # Check if normalized forms are identical
+            if norm1 == norm2:
+                # Exact match after normalization → keep first, merge second
+                candidates.append((name1, name2))
+            # Check if either is a substring of the other (but not equal)
+            elif norm1 in norm2:
                 # name1 is substring of name2 → name2 is parent
                 candidates.append((name2, name1))
             elif norm2 in norm1:

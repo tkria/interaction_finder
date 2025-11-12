@@ -229,6 +229,98 @@ class TestFindSubstringEntities:
         pairs = find_substring_entities({})
         assert len(pairs) == 0
 
+    def test_finds_exact_normalized_match(self):
+        """Test finding entities with identical normalized names."""
+        entities = {
+            "Pulmonary arterial hypertension": EntityMention(
+                kind="phenotype",
+                name="Pulmonary arterial hypertension",
+                aliases=["PAH"],
+                quotes=[],
+                reasoning="test",
+            ),
+            "Pulmonary Arterial Hypertension": EntityMention(
+                kind="phenotype",
+                name="Pulmonary Arterial Hypertension",
+                aliases=["PAH"],
+                quotes=[],
+                reasoning="test",
+            ),
+        }
+
+        pairs = find_substring_entities(entities)
+        assert len(pairs) == 1
+        # First entity in dict order is kept as parent
+        assert pairs[0] == (
+            "Pulmonary arterial hypertension",
+            "Pulmonary Arterial Hypertension",
+        )
+
+    def test_finds_exact_normalized_match_case_only(self):
+        """Test normalized match handles case-only differences."""
+        entities = {
+            "brca1": EntityMention(
+                kind="gene",
+                name="brca1",
+                aliases=["brca1"],
+                quotes=[],
+                reasoning="test",
+            ),
+            "BRCA1": EntityMention(
+                kind="gene",
+                name="BRCA1",
+                aliases=["BRCA1"],
+                quotes=[],
+                reasoning="test",
+            ),
+        }
+
+        pairs = find_substring_entities(entities)
+        assert len(pairs) == 1
+        # First entity in dict order is kept as parent
+        assert pairs[0] == ("brca1", "BRCA1")
+
+    def test_combines_exact_match_and_substring(self):
+        """Test handling mix of exact matches and substring relationships."""
+        entities = {
+            "pah": EntityMention(
+                kind="phenotype",
+                name="pah",
+                aliases=["pah"],
+                quotes=[],
+                reasoning="test",
+            ),
+            "PAH": EntityMention(
+                kind="phenotype",
+                name="PAH",
+                aliases=["PAH"],
+                quotes=[],
+                reasoning="test",
+            ),
+            "BRCA1": EntityMention(
+                kind="gene",
+                name="BRCA1",
+                aliases=["BRCA1"],
+                quotes=[],
+                reasoning="test",
+            ),
+            "BRCA": EntityMention(
+                kind="gene",
+                name="BRCA",
+                aliases=["BRCA"],
+                quotes=[],
+                reasoning="test",
+            ),
+        }
+
+        pairs = find_substring_entities(entities)
+        assert len(pairs) == 2
+        pair_set = set(pairs)
+        # Exact match: pah/PAH (first in dict order wins)
+        assert ("pah", "PAH") in pair_set
+        # Substring match: BRCA1 contains BRCA
+        assert ("BRCA1", "BRCA") in pair_set
+
 
 class TestIdentifyProximalSets:
     """Tests for identify_proximal_sets function."""
