@@ -852,64 +852,46 @@ class JudgeCrossDocumentNode(BaseNode[State, Deps, ExtractionResult]):
                 return (pair_key, judgment)
 
             # Need LLM investigation
-            # Collect all quotes and build combined text
-            all_quotes = []
-            for assessment in assessments:
-                all_quotes.extend(assessment.quotes)
+            # Build per-document sections with assessment + content together
+            padding = getattr(
+                ctx.deps.config.tools.extraction, "region_padding_chunks", 1
+            )
 
-            # Get unique resources
-            resource_ids = list({assessment.resource_id for assessment in assessments})
-
-            # Build combined text (one section per resource)
-            text_sections = []
-            for resource_id in resource_ids:
-                resource = ctx.deps.resource_pool.get(resource_id)
+            document_sections = []
+            for i, assessment in enumerate(assessments, 1):
+                resource = ctx.deps.resource_pool.get(assessment.resource_id)
                 if not resource:
                     continue
 
-                # Get quotes from this resource
-                resource_quotes = [
-                    q for q in all_quotes if q.resource.id == resource_id
-                ]
-
-                if resource_quotes:
-                    padding = getattr(
-                        ctx.deps.config.tools.extraction, "region_padding_chunks", 1
-                    )
-                    text = collect_relevant_text_for_quotes(
-                        resource, resource_quotes, padding
-                    )
-                    text_sections.append(
-                        f"**Document {resource_ids.index(resource_id) + 1}:** {resource.title}\n{text}"
-                    )
-
-            combined_text = "\n\n---\n\n".join(text_sections)
-
-            # Build assessment summary
-            assessment_summary = []
-            for i, assessment in enumerate(assessments):
-                assessment_summary.append(
-                    f"Document {resource_ids.index(assessment.resource_id) + 1}: "
-                    f"{assessment.confidence} confidence - {assessment.relationship}\n"
-                    f"  Reasoning: {assessment.reasoning}"
+                # Build document section with assessment first, then content
+                text = collect_relevant_text_for_quotes(
+                    resource, assessment.quotes, padding
                 )
+
+                section = f"""**Document {i}:** {resource.title}
+
+**Assessment:** {assessment.confidence} confidence - {assessment.relationship}
+**Reasoning:** {assessment.reasoning}
+
+**Evidence from document:**
+{text}"""
+                document_sections.append(section)
 
             # Get all relationship types mentioned
             relationships = {a.relationship for a in assessments}
-            relationships_str = ", ".join(f'"{r}"' for r in relationships)
+            relationships_str = ", ".join(f'"{r}"' for r in sorted(relationships))
 
             prompt = f"""Topic: {ctx.state.topic}
 
 **Pair:** {pair_key.entity1_name} ↔ {pair_key.entity2_name}
 
-**Per-document assessments:**
-{chr(10).join(assessment_summary)}
+**Relationship types found across documents:** {relationships_str}
 
-**Relationship types found:** {relationships_str}
+{chr(10).join(f"{chr(10)}---{chr(10)}{chr(10)}" + section for section in document_sections)}
 
-**Combined evidence from all documents:**
-{combined_text}
+---
 
+**Task:**
 Make a final judgment on whether to accept this association.
 Synthesize the evidence across documents, considering consistency, quality, and contradictions.
 Decide: accept or reject, with confidence level (high/medium/low) and detailed reasoning."""
