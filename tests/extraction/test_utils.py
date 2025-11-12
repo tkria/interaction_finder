@@ -175,8 +175,8 @@ class TestFindSubstringEntities:
 
         pairs = find_substring_entities(entities)
         assert len(pairs) == 1
-        # BRCA1 is parent (longer), BRCA is child (shorter)
-        assert pairs[0] == ("BRCA1", "BRCA")
+        # BRCA is parent (general), BRCA1 is child (specific)
+        assert pairs[0] == ("BRCA", "BRCA1")
 
     def test_finds_multiple_substrings(self):
         """Test finding multiple substring entities."""
@@ -201,10 +201,10 @@ class TestFindSubstringEntities:
 
         pairs = find_substring_entities(entities)
         assert len(pairs) == 2
-        # Check both pairs are found
+        # Check both pairs are found (general, specific)
         pair_set = set(pairs)
-        assert ("BRCA1", "BRCA") in pair_set
-        assert ("TP53", "TP") in pair_set
+        assert ("BRCA", "BRCA1") in pair_set
+        assert ("TP", "TP53") in pair_set
 
     def test_no_substrings_found(self):
         """Test when no substring relationships exist."""
@@ -318,8 +318,8 @@ class TestFindSubstringEntities:
         pair_set = set(pairs)
         # Exact match: pah/PAH (first in dict order wins)
         assert ("pah", "PAH") in pair_set
-        # Substring match: BRCA1 contains BRCA
-        assert ("BRCA1", "BRCA") in pair_set
+        # Substring match: BRCA is general, BRCA1 is specific
+        assert ("BRCA", "BRCA1") in pair_set
 
 
 class TestIdentifyProximalSets:

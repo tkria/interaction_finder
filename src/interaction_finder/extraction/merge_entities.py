@@ -49,8 +49,8 @@ in biological specificity.
 
 **Output format:**
 For each pair, provide:
-- parent_entity: The entity to keep (longer/more specific name)
-- child_entity: The entity to merge (shorter/less specific name)
+- parent_entity: The entity to keep (shorter/more general name)
+- child_entity: The entity to merge into parent (longer/more specific name)
 - should_merge: true if they should be merged, false otherwise
 - reasoning: Brief explanation of your decision in context of the research topic
 

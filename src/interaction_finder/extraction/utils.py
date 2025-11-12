@@ -118,7 +118,7 @@ def find_substring_entities(
     Returns:
         List of (parent_name, child_name) tuples where:
         - For exact normalized matches: parent is the original (keeps first seen)
-        - For substring matches: parent is the longer name that contains the child
+        - For substring matches: parent is the shorter/more general name, child is longer/more specific
     """
     candidates = []
     entity_names = list(entities.keys())
@@ -136,11 +136,11 @@ def find_substring_entities(
                 candidates.append((name1, name2))
             # Check if either is a substring of the other (but not equal)
             elif norm1 in norm2:
-                # name1 is substring of name2 → name2 is parent
-                candidates.append((name2, name1))
-            elif norm2 in norm1:
-                # name2 is substring of name1 → name1 is parent
+                # name1 is substring of name2 → name1 is parent (general), name2 is child (specific)
                 candidates.append((name1, name2))
+            elif norm2 in norm1:
+                # name2 is substring of name1 → name2 is parent (general), name1 is child (specific)
+                candidates.append((name2, name1))
 
     return candidates
 
