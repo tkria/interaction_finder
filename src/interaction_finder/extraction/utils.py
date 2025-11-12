@@ -4,6 +4,8 @@ Provides utilities for entity validation, proximal set identification,
 text region construction, and pair key generation.
 """
 
+import re
+
 from interaction_finder.extraction.models import (
     EntityMention,
     EntityPairKey,
@@ -14,6 +16,30 @@ from interaction_finder.resources import (
     ResourceQuote,
     normalize_text_for_matching,
 )
+
+
+def strip_kind_annotation(entity_name: str) -> str:
+    """Strip kind annotation from entity name if present.
+
+    Removes trailing patterns like " (gene)", " (phenotype)", etc. that may
+    have been incorrectly included by the LLM despite instructions.
+
+    Parameters:
+        entity_name: Entity name that may contain kind annotation
+
+    Returns:
+        Entity name with kind annotation removed
+
+    Examples:
+        >>> strip_kind_annotation("BRCA1 (gene)")
+        'BRCA1'
+        >>> strip_kind_annotation("Iron deficiency (phenotype)")
+        'Iron deficiency'
+        >>> strip_kind_annotation("BRCA1")
+        'BRCA1'
+    """
+    # Match pattern: " (word)" at end of string
+    return re.sub(r"\s+\([a-z_]+\)\s*$", "", entity_name).strip()
 
 
 def normalize_for_comparison(text: str) -> str:

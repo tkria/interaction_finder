@@ -47,6 +47,7 @@ from interaction_finder.extraction.utils import (
     identify_proximal_sets,
     make_entity_pair_key,
     normalize_for_comparison,
+    strip_kind_annotation,
 )
 from interaction_finder.logging import logfire
 from interaction_finder.resources import Resource
@@ -455,7 +456,7 @@ class ExtractPairsFromProximalSetsNode(BaseNode[State, Deps, ExtractionResult]):
                 if entity:
                     aliases_str = ", ".join(entity.aliases)
                     entity_list.append(
-                        f"- {entity_name} ({entity.kind}): aliases [{aliases_str}]"
+                        f"- **{entity_name}** [kind: {entity.kind}, aliases: {aliases_str}]"
                     )
 
             prompt = f"""Topic: {ctx.state.topic}
@@ -467,7 +468,8 @@ class ExtractPairsFromProximalSetsNode(BaseNode[State, Deps, ExtractionResult]):
 {text_region}
 
 Extract all binary associations between these entities that are clearly stated or implied in the text.
-Use canonical entity names (not aliases) and provide exact supporting quotes."""
+Use the canonical entity names as shown in bold (kind and aliases are metadata only).
+Provide exact supporting quotes."""
 
             # Call proximal pair agent
             usage = RunUsage()
@@ -484,14 +486,18 @@ Use canonical entity names (not aliases) and provide exact supporting quotes."""
             # Process extracted pairs
             pairs = []
             for pair_info in result.output.pairs:
+                # Sanitize entity names (strip kind annotations if present)
+                entity1 = strip_kind_annotation(pair_info.entity1)
+                entity2 = strip_kind_annotation(pair_info.entity2)
+
                 # Verify entities are in proximal set
                 if (
-                    pair_info.entity1 not in proximal_set.entities
-                    or pair_info.entity2 not in proximal_set.entities
+                    entity1 not in proximal_set.entities
+                    or entity2 not in proximal_set.entities
                 ):
                     ctx.deps.logger.warning(
                         f"Pair references entity not in proximal set: "
-                        f"{pair_info.entity1}-{pair_info.entity2}"
+                        f"{entity1}-{entity2}"
                     )
                     continue
 
@@ -510,10 +516,11 @@ Use canonical entity names (not aliases) and provide exact supporting quotes."""
 
                 if quotes:
                     # Store as tuple (will be converted to PairAssessment after dedup/assessment)
+                    # Use sanitized entity names
                     pairs.append(
                         (
-                            pair_info.entity1,
-                            pair_info.entity2,
+                            entity1,
+                            entity2,
                             pair_info.relationship_types,
                             quotes,
                         )

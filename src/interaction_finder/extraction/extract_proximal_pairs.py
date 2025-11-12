@@ -65,6 +65,8 @@ Always return both fields:
   "reasoning": "Brief explanation of extraction choices"
 }
 
+Use the canonical entity names exactly as shown (in bold) - the kind and aliases are just metadata.
+
 If no associations found, return empty pairs list with explanation in reasoning.""",
     default_model_settings=ModelSettings(parallel_tool_calls=False),
 )

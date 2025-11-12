@@ -10,8 +10,71 @@ from interaction_finder.extraction.utils import (
     identify_proximal_sets,
     make_entity_pair_key,
     normalize_for_comparison,
+    strip_kind_annotation,
 )
 from interaction_finder.resources import ResourcePool
+
+
+class TestStripKindAnnotation:
+    """Tests for strip_kind_annotation function."""
+
+    def test_strips_gene_annotation(self):
+        """Test stripping (gene) annotation."""
+        assert strip_kind_annotation("BRCA1 (gene)") == "BRCA1"
+        assert strip_kind_annotation("TP53 (gene)") == "TP53"
+
+    def test_strips_phenotype_annotation(self):
+        """Test stripping (phenotype) annotation."""
+        assert strip_kind_annotation("Iron deficiency (phenotype)") == "Iron deficiency"
+        assert (
+            strip_kind_annotation("Right ventricular hypertrophy (phenotype)")
+            == "Right ventricular hypertrophy"
+        )
+
+    def test_strips_disease_annotation(self):
+        """Test stripping (disease) annotation."""
+        assert strip_kind_annotation("breast cancer (disease)") == "breast cancer"
+
+    def test_strips_protein_annotation(self):
+        """Test stripping (protein) annotation."""
+        assert strip_kind_annotation("p53 (protein)") == "p53"
+
+    def test_handles_underscored_kinds(self):
+        """Test stripping annotations with underscores."""
+        assert strip_kind_annotation("test (some_kind)") == "test"
+
+    def test_preserves_name_without_annotation(self):
+        """Test that names without annotations are unchanged."""
+        assert strip_kind_annotation("BRCA1") == "BRCA1"
+        assert strip_kind_annotation("Iron deficiency") == "Iron deficiency"
+        assert strip_kind_annotation("TP53") == "TP53"
+
+    def test_handles_multiple_words(self):
+        """Test entities with multiple words."""
+        assert (
+            strip_kind_annotation("pulmonary arterial hypertension (phenotype)")
+            == "pulmonary arterial hypertension"
+        )
+
+    def test_handles_extra_whitespace(self):
+        """Test handling of extra whitespace."""
+        assert strip_kind_annotation("BRCA1  (gene)") == "BRCA1"
+        assert strip_kind_annotation("BRCA1 (gene) ") == "BRCA1"
+
+    def test_preserves_parentheses_in_middle(self):
+        """Test that parentheses not at end are preserved."""
+        # This should NOT match our pattern (not at end of string)
+        assert strip_kind_annotation("HIF2α (HIF2α)") == "HIF2α (HIF2α)"
+        # But if followed by kind annotation, strip only the kind
+        assert strip_kind_annotation("HIF2α (HIF2α) (gene)") == "HIF2α (HIF2α)"
+
+    def test_case_sensitivity(self):
+        """Test that only lowercase kind annotations are stripped."""
+        # Our pattern only matches lowercase
+        assert strip_kind_annotation("BRCA1 (Gene)") == "BRCA1 (Gene)"
+        assert strip_kind_annotation("BRCA1 (GENE)") == "BRCA1 (GENE)"
+        # Lowercase should be stripped
+        assert strip_kind_annotation("BRCA1 (gene)") == "BRCA1"
 
 
 class TestNormalizeForComparison:
