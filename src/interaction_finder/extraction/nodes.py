@@ -717,17 +717,13 @@ Provide exact supporting quotes."""
                 entity1 not in proximal_set.entities
                 or entity2 not in proximal_set.entities
             ):
-                ctx.deps.logger.warning(
-                    f"Pair references entity not in proximal set: {entity1}-{entity2}"
-                )
+                # Skip silently - this indicates LLM hallucination/error
                 continue
             # Validate pair kinds are permitted
             e1_obj = entities.get(entity1)
             e2_obj = entities.get(entity2)
             if not e1_obj or not e2_obj:
-                ctx.deps.logger.warning(
-                    f"Pair references unknown entity: {entity1}-{entity2}"
-                )
+                # Skip silently - this indicates LLM hallucination/error
                 continue
             # Check if this pair combination is permitted
             allowed_partners = ctx.state.permitted_pairs.get(e1_obj.kind, set())
@@ -744,11 +740,8 @@ Provide exact supporting quotes."""
                     quote = resource.quote(quote_str)
                     quotes.append(quote)
                     ctx.state.quotes_validated += 1
-                except Exception as e:
+                except QuoteValidationError:
                     ctx.state.quotes_failed += 1
-                    ctx.deps.logger.warning(
-                        f"Failed to validate pair quote: {type(e).__name__}: {e}"
-                    )
             if quotes:
                 # Store as tuple (will be converted to PairAssessment after dedup/assessment)
                 # Use sanitized entity names
