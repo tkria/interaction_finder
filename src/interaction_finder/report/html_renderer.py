@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Iterable, List, Sequence
+from typing import Any, Iterable, List, Mapping, Sequence
 
 from markdown_it import MarkdownIt
 from markdown_it.token import Token
@@ -198,11 +198,39 @@ class HTMLBuilder:
         # Final mapping guard
         self.position_offsets.append((self._html_len, len(self.text)))
 
-    def _format_attrs(self, attrs: list[tuple[str, str]] | None) -> str:
+    def _format_attrs(self, attrs: Any) -> str:
         if not attrs:
             return ""
-        joined = " ".join(f'{name}="{_escape_html_attr(value)}"' for name, value in attrs)
-        return f" {joined}" if joined else ""
+        if isinstance(attrs, Mapping):
+            attr_iter = attrs.items()
+        else:
+            attr_iter = attrs
+
+        normalized: list[tuple[str, Any]] = []
+        for item in attr_iter:
+            if isinstance(item, (list, tuple)):
+                if not item:
+                    continue
+                name = str(item[0])
+                value = item[1] if len(item) > 1 else ""
+            else:
+                name = str(item)
+                value = ""
+            normalized.append((name, value))
+
+        if not normalized:
+            return ""
+
+        parts: list[str] = []
+        for name, value in normalized:
+            if value is False:
+                continue
+            if value is None or value is True:
+                parts.append(name)
+            else:
+                parts.append(f'{name}="{_escape_html_attr(str(value))}"')
+
+        return f" {' '.join(parts)}" if parts else ""
 
     def _render_code_block(self, token: Token) -> None:
         start = self.line_offsets[token.map[0]] if token.map else 0
