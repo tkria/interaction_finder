@@ -593,6 +593,31 @@ header {
     font-size: 0.9rem;
 }
 
+.pair-header {
+    padding: var(--spacing-card);
+    margin-bottom: var(--spacing-card);
+    border: 1px solid var(--pico-muted-border-color);
+    border-radius: var(--pico-border-radius);
+    background: var(--pico-card-background-color);
+}
+
+.pair-header-entities {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    font-size: 1rem;
+    font-weight: 600;
+    margin-bottom: 0.25rem;
+}
+
+.pair-header-relation {
+    text-align: center;
+    font-size: 0.85rem;
+    font-style: italic;
+    color: var(--pico-muted-color);
+}
+
 .reasoning-title {
     font-weight: 600;
     margin-bottom: var(--spacing-compact);
@@ -1168,9 +1193,16 @@ function renderReasoning() {
 
         rightbar.innerHTML = `
             <div class="reasoning-panel">
+                <div class="pair-header">
+                    <div class="pair-header-entities">
+                        <span>${escapeHtml(pair.entity1.name)}</span>
+                        <span>⟷</span>
+                        <span>${escapeHtml(pair.entity2.name)}</span>
+                    </div>
+                    <div class="pair-header-relation">${escapeHtml(pair.relationship)}</div>
+                </div>
                 <div class="reasoning-title">Overall Assessment</div>
                 <div class="reasoning-content">
-                    <p><strong>Relationship:</strong> ${escapeHtml(pair.relationship)}</p>
                     <p><strong>Confidence:</strong> <span class="confidence-badge confidence-${pair.confidence}">${pair.confidence}</span></p>
                     <p>${highlightedReasoning}</p>
                 </div>
@@ -1243,6 +1275,14 @@ function renderReasoning() {
 
         rightbar.innerHTML = `
             <div class="reasoning-panel">
+                <div class="pair-header">
+                    <div class="pair-header-entities">
+                        <span>${escapeHtml(pair.entity1.name)}</span>
+                        <span>⟷</span>
+                        <span>${escapeHtml(pair.entity2.name)}</span>
+                    </div>
+                    <div class="pair-header-relation">${escapeHtml(pair.relationship)}</div>
+                </div>
                 <div class="reasoning-title">Document Assessment</div>
                 <div class="reasoning-content">
                     <p><strong>Document:</strong> ${escapeHtml(assess.title)}</p>
