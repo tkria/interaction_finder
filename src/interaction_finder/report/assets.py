@@ -145,10 +145,9 @@ body {
     display: grid;
     grid-template-areas:
         "header header header"
-        "sidebar content rightbar"
-        "footer footer footer";
+        "sidebar content rightbar";
     grid-template-columns: 320px 1fr 320px;
-    grid-template-rows: auto 1fr auto;
+    grid-template-rows: auto 1fr;
     height: 100vh;
     overflow: hidden;
 }
@@ -223,8 +222,9 @@ header {
     }
 
     .header-controls-wrapper {
-        flex-shrink: 0;
-        width: 400px;
+        flex: 0 1 auto;
+        min-width: 400px;
+        max-width: 600px;
     }
 
     .header-stats {
@@ -662,17 +662,6 @@ header {
     line-height: 1.4;
     color: var(--pico-color);
     font-size: 0.8rem;
-}
-
-/* Footer */
-footer {
-    grid-area: footer;
-    padding: var(--spacing-compact) var(--spacing-card);
-    border-top: 1px solid var(--pico-muted-border-color);
-    background: var(--pico-background-color);
-    font-size: 0.8rem;
-    color: var(--pico-muted-color);
-    text-align: center;
 }
 
 /* Utility classes */
