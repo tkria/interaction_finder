@@ -1,5 +1,7 @@
 """Tests for DocumentAnnotator."""
 
+from __future__ import annotations
+
 import pytest
 
 from interaction_finder.report.html_renderer import (
@@ -168,6 +170,63 @@ class TestDocumentAnnotator:
         result = annotator.annotate([quote1, quote2], {})
 
         assert len(result.quote_map) == 2
+
+    def test_overlapping_quotes_with_bmpr2_alias_entities(self):
+        """Ensure overlapping quotes keep entity spans inside quote boundaries."""
+        text = (
+            "Rare deleterious variants in BMPR2 contribute to pediatric-onset IPAH "
+            "and familial PAH with similar frequency as adult-onset disease "
+            "but rarely explain cases of PAH associated with other diseases."
+        )
+        resource = Resource(
+            id=ResourceId(url="http://example.com/doc-bmpr2", counter=5),
+            title="BMPR2 Snippet",
+            text=text,
+        )
+
+        renderer = MarkdownToHTMLRenderer(text)
+        renderer.render()
+
+        annotator = DocumentAnnotator(resource, renderer)
+
+        quotes = [
+            ResourceQuote(
+                resource=resource,
+                query_text=text,
+                spans=[(0, len(text))],
+                resource_id=resource.id,
+                fuzzy_corrected=False,
+            ),
+            ResourceQuote(
+                resource=resource,
+                query_text=text.split(" and ")[0],
+                spans=[(0, text.index(" and familial PAH"))],
+                resource_id=resource.id,
+                fuzzy_corrected=False,
+            ),
+        ]
+
+        entities = {
+            0: {
+                "entity1": {
+                    "name": "BMPR2",
+                    "kind": "gene",
+                    "aliases": [],
+                },
+                "entity2": {
+                    "name": "Pulmonary arterial hypertension",
+                    "kind": "phenotype",
+                    "aliases": ["PAH", "IPAH"],
+                },
+            }
+        }
+
+        result = annotator.annotate(quotes, entities)
+
+        html = result.html
+        assert '<abbr title="Pulmonary arterial hypertension">IPAH</abbr>' in html
+        assert 'IPAH</abbr></span></span><span class="quote-span' in html
+        assert '</abbr></span><span class="quote-span' not in html
 
     def test_entity_metadata(self):
         """Test that entity metadata is correctly populated."""

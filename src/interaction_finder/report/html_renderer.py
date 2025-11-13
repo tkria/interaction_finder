@@ -1,298 +1,351 @@
-"""HTML rendering with position tracking for report generation.
+"""HTML rendering with position tracking for report generation."""
 
-This module provides facilities to convert markdown documents to HTML while
-maintaining precise coordinate mappings between original and rendered text.
-This enables accurate placement of quote and entity annotations in the final HTML.
+from __future__ import annotations
 
-The rendering approach follows patterns established in resources.py:
-- Single-pass character-by-character processing
-- Simultaneous output generation and position offset tracking
-- Binary search for efficient coordinate lookup
-"""
+from dataclasses import dataclass
+from typing import Any, Iterable, List, Sequence
 
-import re
-from typing import Any
-
+from markdown_it import MarkdownIt
+from markdown_it.token import Token
 from pydantic import BaseModel
 
 from interaction_finder.resources import Resource, ResourceQuote
 
 
 class MarkdownToHTMLRenderer:
-    """Convert markdown to HTML while tracking position transformations.
-
-    Processes markdown character-by-character, building HTML output and
-    maintaining a coordinate mapping that allows translation of positions
-    from the original markdown text to the rendered HTML.
-
-    Follows the pattern established in Resource._build_normalized_text_and_offsets()
-    for simultaneous processing and position tracking.
-    """
+    """Markdown renderer that preserves original character offsets."""
 
     def __init__(self, text: str):
-        """Initialize renderer with markdown text.
-
-        Args:
-            text: Markdown text to render
-        """
         self.original_text = text
         self.html: str = ""
         self.position_offsets: list[tuple[int, int]] = []
+        self._md = MarkdownIt("commonmark", {"html": False, "typographer": False})
+        self._line_offsets = self._compute_line_offsets(text)
+        self._builder = HTMLBuilder(text, self._line_offsets)
 
     def render(self) -> tuple[str, list[tuple[int, int]]]:
-        """Render markdown to HTML with position tracking.
+        """Render markdown to HTML while tracking source offsets."""
+        tokens = self._md.parse(self.original_text)
+        self._builder.reset()
+        self._builder.render(tokens)
+        self.html = self._builder.html
+        self.position_offsets = self._builder.position_offsets
+        return self.html, self.position_offsets
 
-        Uses regex-based approach: find all markdown patterns, compute replacements,
-        track offset shifts, and build position mapping.
-
-        Returns:
-            Tuple of (html_string, position_offsets)
-            position_offsets maps HTML positions to original text positions:
-            [(html_pos, original_pos), ...]
-        """
-        text = self.original_text
-
-        # Collect all transformations to apply
-        # Format: (start, end, replacement_text, description)
-        transformations: list[tuple[int, int, str, str]] = []
-
-        # Find headers (### heading, ## heading, # heading)
-        # Match at line start only
-        for match in re.finditer(r"^(#{1,3})\s+(.+?)$", text, re.MULTILINE):
-            level = len(match.group(1))
-            content = match.group(2)
-            # Escape HTML first
-            content = _escape_html(content)
-            # Process inline formatting within header content (after escaping)
-            # Handle links first
-            content = re.sub(
-                r"\[([^\]]+)\]\(([^\)]+)\)",
-                lambda m: f'<a href="{m.group(2)}">{m.group(1)}</a>',
-                content,
+    def map_original_to_html_position(self, original_pos: int) -> int:
+        """Map a position in the original markdown to rendered HTML."""
+        if original_pos < 0 or original_pos > len(self.original_text):
+            raise ValueError(
+                f"Position {original_pos} out of bounds for text of length "
+                f"{len(self.original_text)}"
             )
-            # Handle bold
-            content = re.sub(r"\*\*([^\*]+)\*\*", r"<strong>\1</strong>", content)
-            # Handle italic
-            content = re.sub(r"(?<!\*)\*([^\*]+)\*(?!\*)", r"<em>\1</em>", content)
-            content = re.sub(r"_([^_]+)_", r"<em>\1</em>", content)
-            # Handle code
-            content = re.sub(r"`([^`]+)`", r"<code>\1</code>", content)
-            # Replace with <hN>content</hN>
-            replacement = f"<h{level}>{content}</h{level}>"
-            transformations.append(
-                (match.start(), match.end(), replacement, f"header-{level}")
-            )
+        if not self.position_offsets:
+            raise RuntimeError("No position offsets available. Call render() first.")
 
-        # Find bold (**text**)
-        # Allow content with single asterisks but not double asterisks
-        for match in re.finditer(r"\*\*(.+?)\*\*", text):
-            content = match.group(1)
-            # Skip if contains ** (would be nested bold, which we don't support)
-            if "**" in content:
-                continue
-            # Process inline formatting within bold
-            content_escaped = _escape_html(content)
-            # Handle links
-            content_escaped = re.sub(
-                r"\[([^\]]+)\]\(([^\)]+)\)",
-                lambda m: f'<a href="{m.group(2)}">{m.group(1)}</a>',
-                content_escaped,
-            )
-            content_escaped = re.sub(r"\*([^\*]+)\*", r"<em>\1</em>", content_escaped)
-            content_escaped = re.sub(r"_([^_]+)_", r"<em>\1</em>", content_escaped)
-            content_escaped = re.sub(r"`([^`]+)`", r"<code>\1</code>", content_escaped)
-            replacement = f"<strong>{content_escaped}</strong>"
-            transformations.append((match.start(), match.end(), replacement, "bold"))
+        offsets = self.position_offsets
+        if original_pos == 0:
+            for html_pos, orig_pos in offsets:
+                if orig_pos == 0:
+                    return html_pos
+            return 0
+        if original_pos >= offsets[-1][1]:
+            return offsets[-1][0]
 
-        # Find italic (*text* or _text_) - but not if part of **
-        for match in re.finditer(r"(?<!\*)\*([^\*]+)\*(?!\*)", text):
-            content = match.group(1)
-            # Process inline formatting within italic
-            content = _escape_html(content)
-            content = re.sub(r"\*\*([^\*]+)\*\*", r"<strong>\1</strong>", content)
-            content = re.sub(r"`([^`]+)`", r"<code>\1</code>", content)
-            replacement = f"<em>{content}</em>"
-            transformations.append((match.start(), match.end(), replacement, "italic"))
-
-        for match in re.finditer(r"_([^_]+)_", text):
-            content = match.group(1)
-            content = _escape_html(content)
-            content = re.sub(r"`([^`]+)`", r"<code>\1</code>", content)
-            replacement = f"<em>{content}</em>"
-            transformations.append(
-                (match.start(), match.end(), replacement, "italic_underscore")
-            )
-
-        # Find inline code (`code`)
-        for match in re.finditer(r"`([^`]+)`", text):
-            content = match.group(1)
-            replacement = f"<code>{content}</code>"  # No escaping in code
-            transformations.append((match.start(), match.end(), replacement, "code"))
-
-        # Find links ([text](url))
-        for match in re.finditer(r"\[([^\]]+)\]\(([^\)]+)\)", text):
-            link_text = match.group(1)
-            link_url = match.group(2)
-            replacement = (
-                f'<a href="{_escape_html(link_url)}">{_escape_html(link_text)}</a>'
-            )
-            transformations.append((match.start(), match.end(), replacement, "link"))
-
-        # Find list items (- item, * item, 1. item) at line start
-        for match in re.finditer(r"^[-\*]\s+(.+?)$", text, re.MULTILINE):
-            content = match.group(1)
-            # Process inline formatting within list items
-            content = _escape_html(content)
-            content = re.sub(r"\*\*([^\*]+)\*\*", r"<strong>\1</strong>", content)
-            content = re.sub(r"(?<!\*)\*([^\*]+)\*(?!\*)", r"<em>\1</em>", content)
-            content = re.sub(r"_([^_]+)_", r"<em>\1</em>", content)
-            content = re.sub(r"`([^`]+)`", r"<code>\1</code>", content)
-            replacement = f"<li>{content}</li>"
-            transformations.append(
-                (match.start(), match.end(), replacement, "list_unordered")
-            )
-
-        for match in re.finditer(r"^\d+\.\s+(.+?)$", text, re.MULTILINE):
-            content = match.group(1)
-            # Process inline formatting within list items
-            content = _escape_html(content)
-            content = re.sub(r"\*\*([^\*]+)\*\*", r"<strong>\1</strong>", content)
-            content = re.sub(r"(?<!\*)\*([^\*]+)\*(?!\*)", r"<em>\1</em>", content)
-            content = re.sub(r"_([^_]+)_", r"<em>\1</em>", content)
-            content = re.sub(r"`([^`]+)`", r"<code>\1</code>", content)
-            replacement = f"<li>{content}</li>"
-            transformations.append(
-                (match.start(), match.end(), replacement, "list_ordered")
-            )
-
-        # Sort transformations by position (apply in order)
-        # If overlapping, keep first one
-        transformations.sort(
-            key=lambda x: (x[0], -x[1])
-        )  # Sort by start, then by length (desc)
-
-        # Remove overlapping transformations (keep first match)
-        filtered_transformations = []
-        last_end = -1
-        for trans in transformations:
-            if trans[0] >= last_end:
-                filtered_transformations.append(trans)
-                last_end = trans[1]
-
-        # Build HTML and position offsets by applying transformations
-        position_offsets: list[tuple[int, int]] = []
-        html_parts: list[str] = []
-
-        current_pos = 0
-
-        for trans_start, trans_end, replacement, desc in filtered_transformations:
-            # Copy text before this transformation (with HTML escaping)
-            before_text = text[current_pos:trans_start]
-            for i, char in enumerate(before_text):
-                orig_pos = current_pos + i
-                html_pos = len("".join(html_parts))
-                position_offsets.append((html_pos, orig_pos))
-
-                # Escape HTML
-                if char == "<":
-                    html_parts.append("&lt;")
-                elif char == ">":
-                    html_parts.append("&gt;")
-                elif char == "&":
-                    html_parts.append("&amp;")
-                elif char == '"':
-                    html_parts.append("&quot;")
-                else:
-                    html_parts.append(char)
-
-            # Record position at start of transformed region
-            html_pos_before = len("".join(html_parts))
-            position_offsets.append((html_pos_before, trans_start))
-
-            # Add replacement
-            html_parts.append(replacement)
-
-            # Move past the transformed region
-            current_pos = trans_end
-
-        # Copy remaining text after last transformation
-        remaining_text = text[current_pos:]
-        for i, char in enumerate(remaining_text):
-            orig_pos = current_pos + i
-            html_pos = len("".join(html_parts))
-            position_offsets.append((html_pos, orig_pos))
-
-            # Escape HTML
-            if char == "<":
-                html_parts.append("&lt;")
-            elif char == ">":
-                html_parts.append("&gt;")
-            elif char == "&":
-                html_parts.append("&amp;")
-            elif char == '"':
-                html_parts.append("&quot;")
+        left, right = 0, len(offsets) - 1
+        while left < right:
+            mid = (left + right) // 2
+            if offsets[mid][1] < original_pos:
+                left = mid + 1
             else:
-                html_parts.append(char)
+                right = mid
+        if left > 0 and offsets[left][1] > original_pos:
+            left -= 1
+        return offsets[left][0]
 
-        html = "".join(html_parts)
+    @staticmethod
+    def _compute_line_offsets(text: str) -> list[int]:
+        offsets = [0]
+        for idx, char in enumerate(text):
+            if char == "\n":
+                offsets.append(idx + 1)
+        offsets.append(len(text))
+        return offsets
 
-        # Handle paragraphs by splitting on \n\n and wrapping each in <p> tags
-        # Track position shifts as we add paragraph tags
-        if "\n\n" in html:
-            # Split into paragraphs
-            paragraphs = html.split("\n\n")
-            new_html_parts = []
-            new_offsets = []
 
-            current_html_pos = 0
-            current_shift = 0
+@dataclass
+class InlineCursor:
+    """Tracks progress through the source substring for an inline token."""
 
-            for i, para in enumerate(paragraphs):
-                if not para.strip():
-                    current_html_pos += 2  # Skip \n\n
-                    continue
+    source: str
+    abs_start: int
+    pos: int = 0
 
-                # Add opening <p>
-                new_html_parts.append("<p>")
-                current_shift += 3
+    def advance(self, length: int) -> int:
+        start = self.abs_start + self.pos
+        self.pos += max(length, 0)
+        return start
 
-                # Update offsets for this paragraph
-                para_end = current_html_pos + len(para)
-                for html_pos, orig_pos in position_offsets:
-                    if current_html_pos <= html_pos < para_end:
-                        new_offsets.append((html_pos + current_shift, orig_pos))
+    def find(self, needle: str) -> int:
+        if not needle:
+            return self.pos
+        idx = self.source.find(needle, self.pos)
+        if idx == -1:
+            idx = self.pos
+        return idx
 
-                # Add paragraph content
-                new_html_parts.append(para)
+    def consume_markup(self, markup: str) -> int:
+        if not markup:
+            return self.abs_start + self.pos
+        if self.source.startswith(markup, self.pos):
+            start = self.abs_start + self.pos
+            self.pos += len(markup)
+            return start
+        idx = self.source.find(markup, self.pos)
+        if idx == -1:
+            start = self.abs_start + self.pos
+            return start
+        start = self.abs_start + idx
+        self.pos = idx + len(markup)
+        return start
 
-                # Add closing </p>
-                new_html_parts.append("</p>")
-                current_shift += 4
+    def consume_until(self, needle: str) -> int:
+        idx = self.source.find(needle, self.pos)
+        if idx == -1:
+            idx = len(self.source)
+        start = self.abs_start + self.pos
+        self.pos = idx
+        return start
 
-                if i < len(paragraphs) - 1:
-                    # Account for the \n\n separator we're skipping
-                    current_html_pos += len(para) + 2
-                else:
-                    current_html_pos += len(para)
 
-            html = "".join(new_html_parts)
-            position_offsets = new_offsets
-        else:
-            # Single paragraph - simple wrap
-            offset_shift = 3  # Length of "<p>"
-            position_offsets = [
-                (html_pos + offset_shift, orig_pos)
-                for html_pos, orig_pos in position_offsets
-            ]
-            html = "<p>" + html + "</p>"
+class HTMLBuilder:
+    """Incrementally builds HTML while tracking mapping back to original text."""
 
-        # Final position mapping
-        position_offsets.append((len(html), len(text)))
+    def __init__(self, text: str, line_offsets: Sequence[int]):
+        self.text = text
+        self.line_offsets = line_offsets
+        self.html_parts: list[str] = []
+        self._html_len = 0
+        self.position_offsets: list[tuple[int, int]] = []
+        self._last_orig_pos = 0
 
-        self.html = html
-        self.position_offsets = position_offsets
+    def reset(self) -> None:
+        self.html_parts = []
+        self._html_len = 0
+        self.position_offsets = []
+        self._last_orig_pos = 0
 
-        return html, position_offsets
+    @property
+    def html(self) -> str:
+        return "".join(self.html_parts)
+
+    # ------------------------------------------------------------------
+    # Rendering helpers
+    # ------------------------------------------------------------------
+
+    def _append_literal(self, text: str, orig_pos: int | None = None) -> None:
+        if not text:
+            return
+        if orig_pos is not None:
+            self.position_offsets.append((self._html_len, orig_pos))
+        self.html_parts.append(text)
+        self._html_len += len(text)
+
+    def _append_text(self, text: str, orig_start: int) -> None:
+        for idx, ch in enumerate(text):
+            html_fragment = _escape_html_char(ch)
+            self.position_offsets.append((self._html_len, orig_start + idx))
+            self.html_parts.append(html_fragment)
+            self._html_len += len(html_fragment)
+            self._last_orig_pos = orig_start + idx + 1
+
+    def _append_newline(self, orig_pos: int) -> None:
+        self.position_offsets.append((self._html_len, orig_pos))
+        self.html_parts.append("\n")
+        self._html_len += 1
+        self._last_orig_pos = orig_pos + 1
+
+    # ------------------------------------------------------------------
+    # Block rendering
+    # ------------------------------------------------------------------
+
+    def render(self, tokens: Sequence[Token]) -> None:
+        stack: list[str] = []
+        for token in tokens:
+            if token.type == "inline":
+                self._render_inline(token)
+                continue
+
+            if token.nesting == 1:
+                stack.append(token.tag)
+                attr_text = self._format_attrs(token.attrs)
+                self._append_literal(f"<{token.tag}{attr_text}>")
+                self._consume_block_markup(token)
+            elif token.nesting == -1:
+                if stack:
+                    stack.pop()
+                self._append_literal(f"</{token.tag}>")
+                self._consume_block_markup(token)
+            else:
+                if token.type == "hr":
+                    self._append_literal("<hr />")
+                elif token.type == "code_block":
+                    self._render_code_block(token)
+                elif token.type == "fence":
+                    self._render_fence(token)
+                elif token.type == "html_block":
+                    self._render_html_block(token)
+
+        # Final mapping guard
+        self.position_offsets.append((self._html_len, len(self.text)))
+
+    def _format_attrs(self, attrs: list[tuple[str, str]] | None) -> str:
+        if not attrs:
+            return ""
+        joined = " ".join(f'{name}="{_escape_html_attr(value)}"' for name, value in attrs)
+        return f" {joined}" if joined else ""
+
+    def _render_code_block(self, token: Token) -> None:
+        start = self.line_offsets[token.map[0]] if token.map else 0
+        end = self.line_offsets[token.map[1]] if token.map else start
+        content = self.text[start:end]
+        self._append_literal("<pre><code>")
+        self._append_text(content, start)
+        self._append_literal("</code></pre>", start)
+
+    def _render_fence(self, token: Token) -> None:
+        info = token.info.strip() if token.info else ""
+        class_attr = f' class="language-{_escape_html_attr(info)}"' if info else ""
+        start = self.line_offsets[token.map[0]] if token.map else 0
+        content_start = start
+        self._append_literal(f"<pre><code{class_attr}>")
+        self._append_text(token.content, content_start)
+        self._append_literal("</code></pre>", content_start + len(token.content))
+
+    def _render_html_block(self, token: Token) -> None:
+        start = self.line_offsets[token.map[0]] if token.map else 0
+        self._append_text(token.content, start)
+
+    def _consume_block_markup(self, token: Token) -> None:
+        """Advance cursor past block-level markup characters (e.g. '# ', '- ')."""
+        if not token.map or not token.markup:
+            return
+        start_line = token.map[0]
+        abs_pos = self.line_offsets[start_line]
+        markup = token.markup
+        idx = self.text.find(markup, abs_pos)
+        if idx != -1:
+            self._last_orig_pos = idx + len(markup)
+
+    # ------------------------------------------------------------------
+    # Inline rendering
+    # ------------------------------------------------------------------
+
+    def _render_inline(self, token: Token) -> None:
+        if not token.map:
+            return
+        start_line, end_line = token.map
+        start = self.line_offsets[start_line]
+        end = self.line_offsets[end_line]
+        block_text = self.text[start:end]
+        cursor = InlineCursor(block_text, start)
+        for child in token.children or []:
+            handler = getattr(self, f"_inline_{child.type}", self._inline_unknown)
+            handler(child, cursor)
+
+    def _inline_text(self, token: Token, cursor: InlineCursor) -> None:
+        idx = cursor.find(token.content)
+        abs_start = cursor.abs_start + idx
+        self._append_text(token.content, abs_start)
+        cursor.pos = idx + len(token.content)
+
+    def _inline_code_inline(self, token: Token, cursor: InlineCursor) -> None:
+        start_pos = cursor.consume_markup(token.markup or "`")
+        self._append_literal("<code>", start_pos)
+        idx = cursor.find(token.content)
+        abs_start = cursor.abs_start + idx
+        self._append_text(token.content, abs_start)
+        cursor.pos = idx + len(token.content)
+        end_pos = cursor.consume_markup(token.markup or "`")
+        self._append_literal("</code>", end_pos)
+
+    def _inline_strong_open(self, token: Token, cursor: InlineCursor) -> None:
+        pos = cursor.consume_markup(token.markup or "**")
+        self._append_literal("<strong>", pos)
+
+    def _inline_strong_close(self, token: Token, cursor: InlineCursor) -> None:
+        pos = cursor.consume_markup(token.markup or "**")
+        self._append_literal("</strong>", pos)
+
+    def _inline_em_open(self, token: Token, cursor: InlineCursor) -> None:
+        pos = cursor.consume_markup(token.markup or "*")
+        self._append_literal("<em>", pos)
+
+    def _inline_em_close(self, token: Token, cursor: InlineCursor) -> None:
+        pos = cursor.consume_markup(token.markup or "*")
+        self._append_literal("</em>", pos)
+
+    def _inline_softbreak(self, token: Token, cursor: InlineCursor) -> None:
+        idx = cursor.find("\n")
+        pos = cursor.abs_start + idx
+        self._append_newline(pos)
+        cursor.pos = idx + 1
+
+    def _inline_hardbreak(self, token: Token, cursor: InlineCursor) -> None:
+        space_idx = cursor.find("  ")
+        cursor.pos = min(space_idx + 2, len(cursor.source))
+        newline_idx = cursor.find("\n")
+        pos = cursor.abs_start + newline_idx
+        self._append_literal("<br />", pos)
+        cursor.pos = newline_idx + 1
+
+    def _inline_html_inline(self, token: Token, cursor: InlineCursor) -> None:
+        idx = cursor.find(token.content)
+        abs_start = cursor.abs_start + idx
+        self._append_literal(token.content, abs_start)
+        cursor.pos = idx + len(token.content)
+
+    def _inline_link_open(self, token: Token, cursor: InlineCursor) -> None:
+        pos = cursor.consume_markup("[")
+        href = token.attrGet("href") or ""
+        title = token.attrGet("title")
+        attr = f' href="{_escape_html_attr(str(href))}"'
+        if title:
+            attr += f' title="{_escape_html_attr(str(title))}"'
+        self._append_literal(f"<a{attr}>", pos)
+
+    def _inline_link_close(self, token: Token, cursor: InlineCursor) -> None:
+        pos = cursor.consume_markup("]")
+        if cursor.source.startswith("(", cursor.pos):
+            end = cursor.source.find(")", cursor.pos)
+            if end != -1:
+                cursor.pos = end + 1
+        self._append_literal("</a>", pos)
+
+    def _inline_unknown(self, token: Token, cursor: InlineCursor) -> None:
+        # Fallback: treat content as literal text
+        if token.content:
+            self._inline_text(token, cursor)
+
+
+def _escape_html_char(char: str) -> str:
+    if char == "<":
+        return "&lt;"
+    if char == ">":
+        return "&gt;"
+    if char == "&":
+        return "&amp;"
+    if char == '"':
+        return "&quot;"
+    return char
+
+
+def _escape_html_attr(value: str) -> str:
+    return (
+        value.replace("&", "&amp;")
+        .replace('"', "&quot;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+    )
 
     def map_original_to_html_position(self, original_pos: int) -> int:
         """Map position in original markdown to position in rendered HTML.
@@ -708,6 +761,8 @@ class DocumentAnnotator:
         html_parts = []
         current_pos = 0
 
+        consumed_boundary_events: set[tuple[int, str]] = set()
+
         # Group entity spans by their containing quote region
         for region_start, region_end, quote_ids in quote_regions:
             # Add any HTML before this region (unquoted)
@@ -718,6 +773,7 @@ class DocumentAnnotator:
                     region_start,
                     entity_span_positions,
                     entity_span_info,
+                    consumed_boundary_events,
                 )
                 html_parts.append(unquoted_html)
 
@@ -727,7 +783,11 @@ class DocumentAnnotator:
 
             # Add content with entity spans
             region_html = self._build_html_with_entities(
-                region_start, region_end, entity_span_positions, entity_span_info
+                region_start,
+                region_end,
+                entity_span_positions,
+                entity_span_info,
+                consumed_boundary_events,
             )
             html_parts.append(region_html)
 
@@ -743,6 +803,7 @@ class DocumentAnnotator:
                 len(self.renderer.html),
                 entity_span_positions,
                 entity_span_info,
+                consumed_boundary_events,
             )
             html_parts.append(remaining_html)
 
@@ -761,6 +822,7 @@ class DocumentAnnotator:
         end_pos: int,
         entity_span_positions: list[tuple[int, bool, str]],
         entity_span_info: dict[str, tuple[str, str]],
+        consumed_boundary_events: set[tuple[int, str]],
     ) -> str:
         """Build HTML for a region, inserting entity spans.
 
@@ -774,11 +836,20 @@ class DocumentAnnotator:
             HTML string with entity spans inserted
         """
         # Filter entity positions to those within this region
-        relevant_entities = [
-            (pos, is_opening, span_id)
-            for pos, is_opening, span_id in entity_span_positions
-            if start_pos <= pos < end_pos
-        ]
+        relevant_entities = []
+        for pos, is_opening, span_id in entity_span_positions:
+            boundary_key = (pos, span_id)
+            if (
+                not is_opening
+                and boundary_key in consumed_boundary_events
+                and pos == start_pos
+            ):
+                continue
+            if start_pos <= pos < end_pos:
+                relevant_entities.append((pos, is_opening, span_id))
+            elif not is_opening and pos == end_pos:
+                consumed_boundary_events.add(boundary_key)
+                relevant_entities.append((pos, is_opening, span_id))
 
         if not relevant_entities:
             # No entities in this region
