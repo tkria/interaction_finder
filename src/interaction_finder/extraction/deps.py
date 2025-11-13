@@ -17,14 +17,17 @@ class ProgressProtocol(Protocol):
     """Protocol for progress counters."""
 
     documents_processed: int
+    documents_in_progress: int
     documents_total: int
     entities_found: int
     pairs_found: int
     pairs_assessed: int
+    pairs_in_progress: int
     pairs_total: int
     quotes_validated: int
     quotes_failed: int
     unique_pairs: int
+    judgments_in_progress: int
     accepted: int
     rejected: int
 

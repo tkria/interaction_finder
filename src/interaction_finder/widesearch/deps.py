@@ -18,6 +18,15 @@ from interaction_finder.widesearch.reranker import Reranker
 class ProgressProtocol(Protocol):
     """Protocol for progress counters."""
 
+    searches_run: int
+    searches_run_this_round: int
+    searches_in_progress: int
+    searches_total_this_round: int
+    results_found: int
+    results_selected: int
+    current_round: int
+    max_rounds: int
+
     def increment_searches(self, count: int = 1) -> None: ...
     def add_results(self, count: int) -> None: ...
     def add_selected(self, count: int) -> None: ...
@@ -27,6 +36,7 @@ class ProgressProtocol(Protocol):
     def set_phase_reranking(self) -> None: ...
     def set_phase_selecting(self) -> None: ...
     def set_phase_idle(self) -> None: ...
+    def update(self) -> None: ...
 
 
 @dataclass

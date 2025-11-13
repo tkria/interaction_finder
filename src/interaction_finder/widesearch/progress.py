@@ -4,19 +4,16 @@ Provides an in-place updating counter showing searches run, results found,
 and results selected during widesearch execution.
 """
 
-from dataclasses import dataclass, field
-from time import time
-from typing import Optional
+from dataclasses import dataclass
 
-from rich.console import Console, Group, RenderableType
-from rich.live import Live
-from rich.spinner import Spinner
+from rich.console import RenderableType
 from rich.table import Table
-from rich.text import Text
+
+from interaction_finder.progress import LiveProgressCounter
 
 
 @dataclass
-class WidesearchProgress:
+class WidesearchProgress(LiveProgressCounter):
     """Live progress counter for widesearch operations.
 
     Displays real-time statistics with spinner showing current operation
@@ -24,91 +21,38 @@ class WidesearchProgress:
     """
 
     searches_run: int = 0
+    searches_run_this_round: int = 0
+    searches_in_progress: int = 0
+    searches_total_this_round: int = 0
     results_found: int = 0
     results_selected: int = 0
     current_round: int = 0
     max_rounds: int = 0
-    _status_msg: str = field(default="", init=False)  # Empty = idle, text = active
-    _highlight: str = field(default="", init=False)  # "search" or "select"
-    _start_time: float = field(default_factory=time, init=False)
-    _live: Optional[Live] = field(default=None, init=False, repr=False)
-    _console: Console = field(default_factory=Console, init=False, repr=False)
-    _enabled: bool = field(default=True, init=False)
-
-    def __post_init__(self):
-        """Check if display should be enabled based on TTY status."""
-        if not self._console.is_terminal:
-            self._enabled = False
-
-    def start(self) -> None:
-        """Start the live display."""
-        if not self._enabled:
-            return
-        self._live = Live(self._render(), console=self._console, refresh_per_second=4)
-        self._live.start()
-
-    def set_status(self, message: str, highlight: str = "") -> None:
-        """Set status message and which metrics to highlight.
-
-        Parameters:
-            message: str — status text (empty for idle, "✓ ..." for completed)
-            highlight: str — "search" or "select" to highlight those metrics
-        """
-        self._status_msg = message
-        self._highlight = highlight
-        self.update()
-
-    def set_completed(self) -> None:
-        """Show completion message with elapsed time."""
-        elapsed = int(time() - self._start_time)
-        mins, secs = divmod(elapsed, 60)
-        time_str = f"{mins}m {secs}s" if mins else f"{secs}s"
-        self.set_status(f"✓ Completed in {time_str}")
-
-    def stop(self) -> None:
-        """Stop the live display, showing completion status."""
-        if self._live:
-            self.set_completed()
-            self._live.stop()
-            self._live = None
 
     def _render(self) -> RenderableType:
-        """Render progress table with optional status header."""
-        # Build metrics table
+        """Render progress table with widesearch-specific layout."""
         table = Table.grid(padding=(0, 2))
         table.add_column(style="bold cyan")
         table.add_column(style="bold yellow", justify="right")
-
+        # Round indicator (conditional)
         if self.max_rounds > 0:
             table.add_row("Round", f"{self.current_round}/{self.max_rounds}")
-
-        # Apply highlighting based on active operation
+        # Search metrics (three-part format for this round)
+        searches_display = self._format_three_part(
+            complete=self.searches_run_this_round,
+            in_progress=self.searches_in_progress,
+            total=self.searches_total_this_round,
+            is_highlighted=(self._highlight == "search"),
+            total_is_final=True,  # Total for round known when queries generated
+        )
+        table.add_row("Searches run", searches_display)
+        # Results found (simple counter - cumulative)
         bright = "bold bright_yellow" if self._highlight == "search" else "bold yellow"
-        table.add_row("Searches run", f"[{bright}]{self.searches_run}[/]")
         table.add_row("Results found", f"[{bright}]{self.results_found}[/]")
-
+        # Selection metrics (simple counter)
         bright = "bold bright_yellow" if self._highlight == "select" else "bold yellow"
         table.add_row("Results selected", f"[{bright}]{self.results_selected}[/]")
-
-        # Add status header if active or completed
-        if self._status_msg:
-            if self._status_msg.startswith("✓"):
-                header = Text(self._status_msg, style="bold green")
-            else:
-                header = Spinner("dots", text=self._status_msg, style="cyan")
-            # Measure the header and table to determine separator width
-            header_width = self._console.measure(header).maximum
-            table_width = self._console.measure(table).maximum
-            separator_width = max(header_width, table_width)
-            # Create separator line using box drawing character
-            separator = Text("─" * separator_width, style="bold cyan")
-            return Group(header, separator, table)
-        return table
-
-    def update(self) -> None:
-        """Update the live display with current values."""
-        if self._live is not None:
-            self._live.update(self._render())
+        return self._render_with_header(table)
 
     def set_phase_searching(self, backend: str = "") -> None:
         """Show searching status with search metrics highlighted."""
@@ -122,10 +66,6 @@ class WidesearchProgress:
     def set_phase_selecting(self) -> None:
         """Show selecting status with selection metrics highlighted."""
         self.set_status("Selecting results", highlight="select")
-
-    def set_phase_idle(self) -> None:
-        """Clear status and highlighting."""
-        self.set_status("")
 
     def increment_searches(self, count: int = 1) -> None:
         """Increment the searches run counter."""
@@ -147,15 +87,6 @@ class WidesearchProgress:
         self.current_round = current
         self.max_rounds = max_rounds
         self.update()
-
-    def __enter__(self):
-        """Context manager entry."""
-        self.start()
-        return self
-
-    def __exit__(self, *args):
-        """Context manager exit."""
-        self.stop()
 
 
 class DummyProgress:

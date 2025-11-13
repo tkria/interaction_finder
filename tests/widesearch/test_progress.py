@@ -7,6 +7,9 @@ def test_widesearch_progress_initialization():
     """Progress counter initializes with zero values."""
     progress = WidesearchProgress()
     assert progress.searches_run == 0
+    assert progress.searches_run_this_round == 0
+    assert progress.searches_in_progress == 0
+    assert progress.searches_total_this_round == 0
     assert progress.results_found == 0
     assert progress.results_selected == 0
     assert progress.current_round == 0
@@ -88,6 +91,72 @@ def test_widesearch_progress_phase_transitions():
     assert progress._highlight == ""
 
 
+def test_per_round_tracking():
+    """Per-round counters track independently of cumulative."""
+    progress = WidesearchProgress()
+    # First round
+    progress.searches_run = 5
+    progress.searches_run_this_round = 5
+    progress.searches_in_progress = 0
+    progress.searches_total_this_round = 5
+    assert progress.searches_run == 5
+    assert progress.searches_run_this_round == 5
+    # Simulate reset for new round
+    progress.searches_run_this_round = 0
+    progress.searches_in_progress = 0
+    progress.searches_total_this_round = 0
+    # Second round
+    progress.searches_run = 10  # Cumulative
+    progress.searches_run_this_round = 5  # Just this round
+    progress.searches_total_this_round = 5
+    assert progress.searches_run == 10  # Total across rounds
+    assert progress.searches_run_this_round == 5  # Just this round
+
+
+def test_in_progress_tracking():
+    """In-progress counter tracks active searches."""
+    progress = WidesearchProgress()
+    progress.searches_total_this_round = 10
+    progress.searches_in_progress = 10
+    progress.searches_run_this_round = 0
+    # Simulate searches completing
+    progress.searches_in_progress = 7
+    progress.searches_run_this_round = 3
+    assert progress.searches_in_progress == 7
+    assert progress.searches_run_this_round == 3
+    assert progress.searches_total_this_round == 10
+
+
+def test_three_part_display_format():
+    """_render uses three-part format for searches this round."""
+    progress = WidesearchProgress()
+    progress.searches_run_this_round = 5
+    progress.searches_in_progress = 3
+    progress.searches_total_this_round = 8
+    progress.results_found = 87
+    progress.results_selected = 12
+    # Call render (should not raise)
+    result = progress._render()
+    assert result is not None
+
+
+def test_render_with_round_indicator():
+    """_render includes round indicator when max_rounds > 0."""
+    progress = WidesearchProgress()
+    progress.current_round = 2
+    progress.max_rounds = 5
+    result = progress._render()
+    assert result is not None
+
+
+def test_render_without_round_indicator():
+    """_render excludes round indicator when max_rounds = 0."""
+    progress = WidesearchProgress()
+    progress.max_rounds = 0
+    result = progress._render()
+    assert result is not None
+
+
 def test_dummy_progress_no_op():
     """DummyProgress accepts all operations without error."""
     progress = DummyProgress()
@@ -105,6 +174,11 @@ def test_dummy_progress_no_op():
     progress.set_phase_idle()
     progress.set_completed()
     progress.stop()
+    # New fields
+    progress.searches_run_this_round = 10
+    progress.searches_in_progress = 5
+    progress.searches_total_this_round = 10
+    progress.update()
     # Context manager should work
     with progress:
         progress.increment_searches()

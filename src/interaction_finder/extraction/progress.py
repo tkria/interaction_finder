@@ -4,19 +4,16 @@ Provides an in-place updating counter showing extraction progress through
 documents, entities, pairs, and quote validation.
 """
 
-from dataclasses import dataclass, field
-from time import time
-from typing import Optional
+from dataclasses import dataclass
 
-from rich.console import Console, Group, RenderableType
-from rich.live import Live
-from rich.spinner import Spinner
+from rich.console import RenderableType
 from rich.table import Table
-from rich.text import Text
+
+from interaction_finder.progress import LiveProgressCounter
 
 
 @dataclass
-class ExtractionProgress:
+class ExtractionProgress(LiveProgressCounter):
     """Live progress counter for extraction operations.
 
     Displays real-time statistics with spinner showing current operation
@@ -24,129 +21,79 @@ class ExtractionProgress:
     """
 
     documents_processed: int = 0
+    documents_in_progress: int = 0
     documents_total: int = 0
     entities_found: int = 0
     pairs_found: int = 0
     pairs_assessed: int = 0
+    pairs_in_progress: int = 0
     pairs_total: int = 0
     quotes_validated: int = 0
     quotes_failed: int = 0
-    unique_pairs: int = 0  # Cross-document deduplicated pairs
+    unique_pairs: int = 0
+    judgments_in_progress: int = 0
     accepted: int = 0
     rejected: int = 0
-    _status_msg: str = field(default="", init=False)
-    _highlight: str = field(default="", init=False)  # "docs", "pairs", "assessment"
-    _start_time: float = field(default_factory=time, init=False)
-    _live: Optional[Live] = field(default=None, init=False, repr=False)
-    _console: Console = field(default_factory=Console, init=False, repr=False)
-    _enabled: bool = field(default=True, init=False)
-
-    def __post_init__(self):
-        """Check if display should be enabled based on TTY status."""
-        if not self._console.is_terminal:
-            self._enabled = False
-
-    def start(self) -> None:
-        """Start the live display."""
-        if not self._enabled:
-            return
-        self._live = Live(self._render(), console=self._console, refresh_per_second=4)
-        self._live.start()
-
-    def set_status(self, message: str, highlight: str = "") -> None:
-        """Set status message and which metrics to highlight.
-
-        Parameters:
-            message: str — status text (empty for idle, "✓ ..." for completed)
-            highlight: str — "docs", "pairs", or "assessment" to highlight those metrics
-        """
-        self._status_msg = message
-        self._highlight = highlight
-        self.update()
-
-    def set_completed(self) -> None:
-        """Show completion message with elapsed time."""
-        elapsed = int(time() - self._start_time)
-        mins, secs = divmod(elapsed, 60)
-        time_str = f"{mins}m {secs}s" if mins else f"{secs}s"
-        self.set_status(f"✓ Extraction completed in {time_str}")
-
-    def stop(self) -> None:
-        """Stop the live display, showing completion status."""
-        if self._live:
-            self.set_completed()
-            self._live.stop()
-            self._live = None
 
     def _render(self) -> RenderableType:
-        """Render progress table with optional status header."""
+        """Render progress table with extraction-specific layout."""
         table = Table.grid(padding=(0, 2))
         table.add_column(style="bold cyan")
         table.add_column(style="bold yellow", justify="right")
-        table.add_column(style="dim", justify="left")  # Third column for annotations
-
+        table.add_column(style="dim", justify="left")
         # Documents section header
         table.add_row("[bold cyan]Documents[/]", "", "")
-
-        # Documents processed
-        bright = "bold bright_yellow" if self._highlight == "docs" else "bold yellow"
-        table.add_row(
-            "  Processed",
-            f"[{bright}]{self.documents_processed}/{self.documents_total}[/]",
-            "",
+        # Documents processed (three-part format: complete/in-progress/total)
+        docs_display = self._format_three_part(
+            complete=self.documents_processed,
+            in_progress=self.documents_in_progress,
+            total=self.documents_total,
+            is_highlighted=(self._highlight == "docs"),
+            total_is_final=True,  # Total known upfront
         )
-
-        # Document-level metrics
+        table.add_row("  Processed", docs_display, "")
+        # Document-level metrics (simple counters)
+        bright = "bold bright_yellow" if self._highlight == "docs" else "bold yellow"
         table.add_row("  Entities", f"[{bright}]{self.entities_found}[/]", "")
-
         # Quote validation (show invalid count in third column)
-        if self.quotes_failed > 0:
-            quote_annotation = f"({self.quotes_failed} invalid)"
-        else:
-            quote_annotation = ""
+        quote_annotation = (
+            f"({self.quotes_failed} invalid)" if self.quotes_failed > 0 else ""
+        )
         table.add_row(
             "  Quotes", f"[bold yellow]{self.quotes_validated}[/]", quote_annotation
         )
-
-        # Pairs assessed (combined found + assessed as fraction)
-        bright = (
-            "bold bright_yellow"
-            if self._highlight in ("pairs", "assessment")
-            else "bold yellow"
+        # Pairs assessed (three-part format: assessed/in-progress/found?)
+        pairs_total_is_final = (
+            self.documents_in_progress == 0
+            and self.documents_processed == self.documents_total
         )
-        table.add_row(
-            "  Pairs assessed",
-            f"[{bright}]{self.pairs_assessed}/{self.pairs_found}[/]",
-            "",
+        pairs_display = self._format_three_part(
+            complete=self.pairs_assessed,
+            in_progress=self.pairs_in_progress,
+            total=self.pairs_found,
+            is_highlighted=(self._highlight in ("pairs", "assessment")),
+            total_is_final=pairs_total_is_final,
         )
-
+        table.add_row("  Pairs assessed", pairs_display, "")
         # Combined judgment section
-        table.add_row("", "", "")  # Blank line
+        table.add_row("", "", "")
         table.add_row("[bold cyan]Combined Judgment[/]", "", "")
-        table.add_row("  Unique pairs", f"[bold yellow]{self.unique_pairs}[/]", "")
+        # Unique pairs judgment (three-part format: judged/in-progress/total)
+        judged_count = self.accepted + self.rejected
+        judgments_total_is_final = (
+            self.judgments_in_progress == 0 and self.unique_pairs > 0
+        )
+        judgment_display = self._format_three_part(
+            complete=judged_count,
+            in_progress=self.judgments_in_progress,
+            total=self.unique_pairs,
+            is_highlighted=(self._highlight == "assessment"),
+            total_is_final=judgments_total_is_final,
+        )
+        table.add_row("  Unique pairs", judgment_display, "")
         table.add_row("  Accepted", f"[bold green]{self.accepted}[/]", "")
         table.add_row("  Rejected", f"[bold yellow]{self.rejected}[/]", "")
-
-        # Add status header if active or completed
-        if self._status_msg:
-            if self._status_msg.startswith("✓"):
-                header = Text(self._status_msg, style="bold green")
-            else:
-                header = Spinner("dots", text=self._status_msg, style="cyan")
-            # Measure the header and table to determine separator width
-            # Use console to measure rendered width
-            header_width = self._console.measure(header).maximum
-            table_width = self._console.measure(table).maximum
-            separator_width = max(header_width, table_width)
-            # Create separator line using box drawing character
-            separator = Text("─" * separator_width, style="bold cyan")
-            return Group(header, separator, table)
-        return table
-
-    def update(self) -> None:
-        """Update the live display with current values."""
-        if self._live is not None:
-            self._live.update(self._render())
+        return self._render_with_header(table)
 
     def set_phase_extracting(self) -> None:
         """Show entity extraction status."""
@@ -175,19 +122,6 @@ class ExtractionProgress:
     def set_phase_finalizing(self) -> None:
         """Show finalization status."""
         self.set_status("Finalizing results")
-
-    def set_phase_idle(self) -> None:
-        """Clear status and highlighting."""
-        self.set_status("")
-
-    def __enter__(self):
-        """Context manager entry."""
-        self.start()
-        return self
-
-    def __exit__(self, *args):
-        """Context manager exit."""
-        self.stop()
 
 
 class DummyProgress:

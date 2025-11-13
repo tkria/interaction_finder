@@ -5,6 +5,7 @@ return type annotations. All branching and looping happens in nodes;
 agents only produce typed data.
 """
 
+import asyncio
 from dataclasses import dataclass
 from typing import Union
 
@@ -68,8 +69,11 @@ class GenerateQueriesNode(BaseNode[State, Deps, list[SearchResult]]):
         """Generate queries for current round."""
         # Increment round counter
         ctx.state.current_round += 1
-        # Update progress display with round info
+        # Reset per-round counters and update progress display
         if ctx.deps.progress:
+            ctx.deps.progress.searches_run_this_round = 0
+            ctx.deps.progress.searches_in_progress = 0
+            ctx.deps.progress.searches_total_this_round = 0
             ctx.deps.progress.set_round(ctx.state.current_round, ctx.state.max_rounds)
         logfire.info(f"Starting round {ctx.state.current_round}/{ctx.state.max_rounds}")
         # Prepare context for agent
@@ -126,23 +130,36 @@ class SearchNode(BaseNode[State, Deps, list[SearchResult]]):
             num_queries=len(ctx.state.current_queries),
             round=ctx.state.current_round,
         ):
-            # Set phase to searching with backend name
+            # Set phase to searching with backend name and initialize progress
             if ctx.deps.progress:
                 backend_name = ctx.deps.search_backend.name
+                ctx.deps.progress.searches_total_this_round = len(
+                    ctx.state.current_queries
+                )
+                ctx.deps.progress.searches_in_progress = len(ctx.state.current_queries)
                 ctx.deps.progress.set_phase_searching(backend=backend_name)
-            # Execute all searches
-            all_results = []
-            for query_text in ctx.state.current_queries:
+
+            # Execute all searches concurrently, tracking progress as they complete
+            async def execute_search(query_text: str):
                 query = SearchQuery(
                     query=query_text,
                     max_results=ctx.deps.config.tools.widesearch.results_per_query,
                 )
-                results = await ctx.deps.search_backend.search(query)
+                return await ctx.deps.search_backend.search(query)
+
+            all_results = []
+            tasks = [execute_search(q) for q in ctx.state.current_queries]
+            for coro in asyncio.as_completed(tasks):
+                results = await coro
                 all_results.extend(results)
 
                 # Update progress display
                 if ctx.deps.progress:
                     ctx.deps.progress.increment_searches()
+                    ctx.deps.progress.searches_run_this_round += 1
+                    ctx.deps.progress.searches_in_progress = max(
+                        0, ctx.deps.progress.searches_in_progress - 1
+                    )
                     ctx.deps.progress.add_results(len(results))
 
             # Store in state

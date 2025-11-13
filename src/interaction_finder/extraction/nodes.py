@@ -79,11 +79,21 @@ class ProcessDocumentsNode(BaseNode[State, Deps, ExtractionResult]):
             # Set up progress tracking
             if ctx.deps.progress:
                 ctx.deps.progress.documents_total = len(resources)
+                ctx.deps.progress.documents_in_progress = len(resources)
                 ctx.deps.progress.set_phase_extracting()
 
-            # Process all documents in parallel
+            # Process all documents in parallel, tracking progress as they complete
             tasks = [self._process_document(resource, ctx) for resource in resources]
-            await asyncio.gather(*tasks)
+            for coro in asyncio.as_completed(tasks):
+                await coro
+                # Update progress: decrement in-progress as each document completes
+                if ctx.deps.progress:
+                    # documents_processed is incremented inside _process_document
+                    # Here we just need to decrement in_progress
+                    ctx.deps.progress.documents_in_progress = max(
+                        0, ctx.deps.progress.documents_in_progress - 1
+                    )
+                    ctx.deps.progress.update()
 
             # Check if we found any validated entities
             if not ctx.state.validated_entities_by_resource:
@@ -209,6 +219,7 @@ class ProcessDocumentsNode(BaseNode[State, Deps, ExtractionResult]):
                 # Update pairs_found counter
                 if ctx.deps.progress:
                     ctx.deps.progress.pairs_found += len(pairs)
+                    ctx.deps.progress.pairs_in_progress += len(pairs)
                     ctx.deps.progress.update()
 
                 # Stage 5: Deduplicate and assess pairs
@@ -227,9 +238,19 @@ class ProcessDocumentsNode(BaseNode[State, Deps, ExtractionResult]):
                 if assessments:
                     ctx.state.pair_assessments_by_resource[resource.id] = assessments
 
-                    # Update progress
+                    # Update progress: increment assessed, decrement in-progress
                     if ctx.deps.progress:
                         ctx.deps.progress.pairs_assessed += len(assessments)
+                        ctx.deps.progress.pairs_in_progress = max(
+                            0, ctx.deps.progress.pairs_in_progress - len(assessments)
+                        )
+                        ctx.deps.progress.update()
+                else:
+                    # No assessments means pairs were filtered out, still need to decrement in-progress
+                    if ctx.deps.progress:
+                        ctx.deps.progress.pairs_in_progress = max(
+                            0, ctx.deps.progress.pairs_in_progress - len(pairs)
+                        )
                         ctx.deps.progress.update()
 
             except Exception as e:
@@ -674,9 +695,10 @@ class JudgeCrossDocumentNode(BaseNode[State, Deps, ExtractionResult]):
                     )
                     assessments_by_pair[pair_key].append(assessment)
 
-            # Update unique pairs count
+            # Update unique pairs count and set in-progress
             if ctx.deps.progress:
                 ctx.deps.progress.unique_pairs = len(assessments_by_pair)
+                ctx.deps.progress.judgments_in_progress = len(assessments_by_pair)
                 ctx.deps.progress.update()
 
             # Judge each pair
@@ -684,18 +706,20 @@ class JudgeCrossDocumentNode(BaseNode[State, Deps, ExtractionResult]):
             for pair_key, assessments in assessments_by_pair.items():
                 tasks.append(self._judge_pair(pair_key, assessments, ctx))
 
-            # Run all judgments in parallel
+            # Run all judgments in parallel, tracking progress as they complete
             if tasks:
-                judgments = await asyncio.gather(*tasks)
-
-                for pair_key, judgment in judgments:
+                for coro in asyncio.as_completed(tasks):
+                    pair_key, judgment = await coro
                     ctx.state.pair_judgments[pair_key] = judgment
-                    # Update accepted/rejected counts
+                    # Update accepted/rejected counts and decrement in-progress
                     if ctx.deps.progress:
                         if judgment.accepted:
                             ctx.deps.progress.accepted += 1
                         else:
                             ctx.deps.progress.rejected += 1
+                        ctx.deps.progress.judgments_in_progress = max(
+                            0, ctx.deps.progress.judgments_in_progress - 1
+                        )
                         ctx.deps.progress.update()
 
             return FinalizeNode()
