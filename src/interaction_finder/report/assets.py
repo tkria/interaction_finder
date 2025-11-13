@@ -1234,9 +1234,8 @@ function renderReasoning() {
 
 // Scroll to quote with emphasis
 function scrollToQuote(quoteIdx) {
-    // Find the quote element - we need to search for it in the document
-    // The quote elements have IDs like "doc-{hash}-quote-{n}"
-    // We need to find which one corresponds to this index
+    // Find the quote element for the Nth quote in THIS assessment
+    // Need to match the quote text from assess.quotes to a quote ID in doc.quote_map
 
     const filtered = getFilteredPairs();
     const pair = filtered[state.selectedPairIdx];
@@ -1246,22 +1245,38 @@ function scrollToQuote(quoteIdx) {
         b.quotes.length - a.quotes.length
     );
     const assess = sortedAssessments[state.openDocumentIdx];
-    const doc = state.data.documents[assess.resource_id];
 
+    // Get the quote text from this assessment
+    if (quoteIdx < 0 || quoteIdx >= assess.quotes.length) return;
+    const targetQuote = assess.quotes[quoteIdx];
+
+    const doc = state.data.documents[assess.resource_id];
     if (!doc || !doc.quote_map) return;
 
-    // Get the Nth quote span from quote_map
-    const quoteIds = Object.keys(doc.quote_map);
-    if (quoteIdx < 0 || quoteIdx >= quoteIds.length) return;
+    // Find the quote ID in doc.quote_map that matches this quote's text
+    // Match by original spans since quote text might have ellipsis
+    let matchingQuoteId = null;
+    for (const [quoteId, quoteMeta] of Object.entries(doc.quote_map)) {
+        // Compare original spans - they should match exactly
+        if (quoteMeta.original_spans.length === targetQuote.spans.length) {
+            const spansMatch = quoteMeta.original_spans.every((span, i) =>
+                span[0] === targetQuote.spans[i][0] && span[1] === targetQuote.spans[i][1]
+            );
+            if (spansMatch) {
+                matchingQuoteId = quoteId;
+                break;
+            }
+        }
+    }
 
-    const quoteId = quoteIds[quoteIdx];
+    if (!matchingQuoteId) return;
 
     // Find the first quote span that has this quote ID in its class list
     const docElement = document.querySelector('.document-text');
     if (!docElement) return;
 
     const quoteEl = Array.from(docElement.querySelectorAll('.quote-span')).find(spanEl =>
-        spanEl.classList.contains(quoteId)
+        spanEl.classList.contains(matchingQuoteId)
     );
 
     if (quoteEl) {
