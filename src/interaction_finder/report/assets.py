@@ -961,20 +961,29 @@ function highlightQuotesForAssessment(assess) {
         el.classList.remove('quote-highlight', 'quote-blink');
     });
 
-    // Add quote-highlight class to quotes from this assessment
-    assess.quotes.forEach((quote, idx) => {
-        // Find quote spans by looking through the quote_map in the document
-        const doc = state.data.documents[assess.resource_id];
-        if (!doc || !doc.quote_map) return;
+    // Get quote IDs from this assessment
+    const doc = state.data.documents[assess.resource_id];
+    if (!doc || !doc.quote_map) return;
 
-        // Search for quote spans in quote_map that match this assessment
-        Object.entries(doc.quote_map).forEach(([quoteId, quoteMeta]) => {
-            const quoteEl = document.getElementById(quoteId);
-            if (quoteEl) {
-                // Apply highlight class to all quotes in this document
-                quoteEl.classList.add('quote-highlight');
-            }
-        });
+    // Get all quote IDs that belong to this assessment
+    const assessmentQuoteIds = new Set();
+    Object.keys(doc.quote_map).forEach(quoteId => {
+        assessmentQuoteIds.add(quoteId);
+    });
+
+    // Find all quote spans in the document and highlight those containing our quote IDs
+    const docElement = document.querySelector('.document-text');
+    if (!docElement) return;
+
+    docElement.querySelectorAll('.quote-span').forEach(spanEl => {
+        // Check if this span has any of our quote IDs in its class list
+        const hasMatchingQuote = Array.from(spanEl.classList).some(className =>
+            assessmentQuoteIds.has(className)
+        );
+
+        if (hasMatchingQuote) {
+            spanEl.classList.add('quote-highlight');
+        }
     });
 }
 
@@ -1246,7 +1255,14 @@ function scrollToQuote(quoteIdx) {
     if (quoteIdx < 0 || quoteIdx >= quoteIds.length) return;
 
     const quoteId = quoteIds[quoteIdx];
-    const quoteEl = document.getElementById(quoteId);
+
+    // Find the first quote span that has this quote ID in its class list
+    const docElement = document.querySelector('.document-text');
+    if (!docElement) return;
+
+    const quoteEl = Array.from(docElement.querySelectorAll('.quote-span')).find(spanEl =>
+        spanEl.classList.contains(quoteId)
+    );
 
     if (quoteEl) {
         // Scroll into view

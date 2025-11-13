@@ -461,8 +461,8 @@ class DocumentAnnotator:
                 )
 
         # Step 2: Find entity mentions within quotes
-        # First pass: collect all entity positions and which pairs reference them
-        # Key: (start_pos, end_pos, entity_name, matched_term)
+        # First pass: collect all entity positions in ORIGINAL TEXT and which pairs reference them
+        # Key: (start_pos, end_pos, entity_name, matched_term) in ORIGINAL text coordinates
         entity_position_map: dict[tuple[int, int, str, str], dict[str, Any]] = {}
 
         for pair_idx, pair_entities in entities.items():
@@ -472,7 +472,7 @@ class DocumentAnnotator:
             if not entity1 or not entity2:
                 continue
 
-            # Search for entity mentions within quote boundaries
+            # Search for entity mentions within quote boundaries in ORIGINAL text
             for entity in [entity1, entity2]:
                 entity_name = entity.get("name", "")
                 entity_kind = entity.get("kind", "")
@@ -481,29 +481,32 @@ class DocumentAnnotator:
                 if not entity_name:
                     continue
 
-                # Search for entity name and aliases in HTML
+                # Search for entity name and aliases in ORIGINAL text
                 search_terms = [entity_name] + entity_aliases
 
                 for term in search_terms:
-                    # Simple case-insensitive search in HTML
-                    html = self.renderer.html.lower()
+                    # Case-insensitive search in original text
+                    original_text = self.resource.text.lower()
                     term_lower = term.lower()
 
                     pos = 0
                     while True:
-                        pos = html.find(term_lower, pos)
+                        pos = original_text.find(term_lower, pos)
                         if pos == -1:
                             break
 
-                        # Check if this position is within any quote span
+                        # Check if this position is within any quote span (in original coordinates)
                         in_quote = False
-                        for q_start, q_end, _, _ in html_quote_spans:
-                            if q_start <= pos < q_end:
-                                in_quote = True
+                        for quote_meta in quote_map.values():
+                            for q_start, q_end in quote_meta.original_spans:
+                                if q_start <= pos < q_end:
+                                    in_quote = True
+                                    break
+                            if in_quote:
                                 break
 
                         if in_quote:
-                            # Create key for this position (include matched term)
+                            # Create key for this position in ORIGINAL coordinates (include matched term)
                             position_key = (pos, pos + len(term), entity_name, term)
 
                             if position_key not in entity_position_map:
@@ -528,24 +531,31 @@ class DocumentAnnotator:
 
                         pos += len(term)
 
-        # Second pass: resolve overlapping entity spans
-        # Convert to list and sort by position, then by length (longer first for overlap resolution)
-        entity_positions = [
-            (start, end, entity_name, matched_term, entity_data)
-            for (
-                start,
-                end,
-                entity_name,
-                matched_term,
-            ), entity_data in entity_position_map.items()
-        ]
-        entity_positions.sort(
+        # Second pass: Map entity positions from original text to HTML coordinates
+        # Then resolve overlapping entity spans in HTML coordinates
+        entity_positions_html = []
+        for (
+            orig_start,
+            orig_end,
+            entity_name,
+            matched_term,
+        ), entity_data in entity_position_map.items():
+            # Map positions from original text to HTML
+            html_start = self.renderer.map_original_to_html_position(orig_start)
+            html_end = self.renderer.map_original_to_html_position(orig_end)
+
+            entity_positions_html.append(
+                (html_start, html_end, entity_name, matched_term, entity_data)
+            )
+
+        # Sort by position, then by length (longer first for overlap resolution)
+        entity_positions_html.sort(
             key=lambda x: (x[0], -(x[1] - x[0]))
         )  # Sort by start, then by length descending
 
         # Remove overlapping spans (keep the first/longest match at each position)
         non_overlapping_entities = []
-        for start, end, entity_name, matched_term, entity_data in entity_positions:
+        for start, end, entity_name, matched_term, entity_data in entity_positions_html:
             # Check if this span overlaps with any already selected span
             overlaps = False
             for existing_start, existing_end, _, _, _ in non_overlapping_entities:
@@ -560,6 +570,7 @@ class DocumentAnnotator:
                 )
 
         # Third pass: create entity spans from non-overlapping positions
+        # Skip empty spans (where start == end from position mapping)
         entity_counter = 0
         html_entity_spans: list[
             tuple[int, int, str, str, str, list[int]]
@@ -572,6 +583,10 @@ class DocumentAnnotator:
             matched_term,
             entity_data,
         ) in non_overlapping_entities:
+            # Skip empty spans (position mapping can collapse ranges to a single point)
+            if start >= end:
+                continue
+
             # Generate unique entity span ID
             entity_id = f"doc-{doc_hash}-entity-{entity_counter}"
             entity_counter += 1
@@ -604,23 +619,83 @@ class DocumentAnnotator:
             for _, _, span_id, entity_name, matched_term, _ in html_entity_spans
         }
 
-        # Collect all span positions (quotes and entities)
-        # Format: (position, is_opening, span_id, span_type)
-        span_positions: list[tuple[int, bool, str, str]] = []
+        # New approach: Use flat quote spans with CSS classes (no nesting)
+        # Collect all quote boundaries to create regions
+        quote_boundaries: list[
+            tuple[int, bool, str]
+        ] = []  # (position, is_start, quote_id)
 
+        # Find HTML block closing tags to constrain span boundaries
+        block_tags = [
+            "</p>",
+            "</h1>",
+            "</h2>",
+            "</h3>",
+            "</h4>",
+            "</h5>",
+            "</h6>",
+            "</div>",
+            "</section>",
+        ]
+        block_boundaries = []
+        for tag in block_tags:
+            pos = 0
+            while True:
+                pos = self.renderer.html.find(tag, pos)
+                if pos == -1:
+                    break
+                block_boundaries.append(pos)
+                pos += len(tag)
+
+        # Collect quote boundaries, adjusting end positions to respect block boundaries
         for start, end, span_id, _ in html_quote_spans:
-            span_positions.append((start, True, span_id, "quote"))
-            span_positions.append((end, False, span_id, "quote"))
+            quote_boundaries.append((start, True, span_id))
+
+            # Adjust end position to not go past block boundaries
+            adjusted_end = end
+            for boundary in block_boundaries:
+                if start < boundary <= end:
+                    adjusted_end = min(adjusted_end, boundary)
+
+            quote_boundaries.append((adjusted_end, False, span_id))
+
+        # Sort boundaries
+        quote_boundaries.sort(
+            key=lambda x: (x[0], not x[1])
+        )  # Sort by position, starts before ends
+
+        # Build quote regions - each region has a set of active quotes
+        # Format: [(start_pos, end_pos, set of active quote_ids)]
+        quote_regions: list[tuple[int, int, set[str]]] = []
+        active_quotes: set[str] = set()
+        prev_pos = 0
+
+        for pos, is_start, quote_id in quote_boundaries:
+            # If we have active quotes and position changed, save current region
+            if active_quotes and pos > prev_pos:
+                quote_regions.append((prev_pos, pos, active_quotes.copy()))
+
+            # Update active quotes
+            if is_start:
+                active_quotes.add(quote_id)
+            else:
+                active_quotes.discard(quote_id)
+
+            prev_pos = pos
+
+        # Now build entity span positions (still using IDs)
+        entity_span_positions: list[
+            tuple[int, bool, str]
+        ] = []  # (position, is_opening, span_id)
 
         for start, end, span_id, _, _, _ in html_entity_spans:
-            span_positions.append((start, True, span_id, "entity"))
-            span_positions.append((end, False, span_id, "entity"))
+            entity_span_positions.append((start, True, span_id))
+            entity_span_positions.append((end, False, span_id))
 
-        # Sort by position, then by type (opening before closing at same position)
-        span_positions.sort(key=lambda x: (x[0], not x[1]))
+        entity_span_positions.sort(key=lambda x: (x[0], not x[1]))
 
-        # Build annotated HTML
-        if not span_positions:
+        # Build annotated HTML using quote regions and entity spans
+        if not quote_regions and not entity_span_positions:
             # No annotations, return as-is
             return PrerenderedDocument(
                 doc_id=self.resource.id.id,
@@ -629,20 +704,97 @@ class DocumentAnnotator:
                 entity_map=entity_map,
             )
 
+        # Process HTML by quote regions, inserting entity spans within each region
         html_parts = []
         current_pos = 0
 
-        for pos, is_opening, span_id, span_type in span_positions:
-            # Add HTML before this span
+        # Group entity spans by their containing quote region
+        for region_start, region_end, quote_ids in quote_regions:
+            # Add any HTML before this region (unquoted)
+            if region_start > current_pos:
+                # Check for entity spans in the unquoted region
+                unquoted_html = self._build_html_with_entities(
+                    current_pos,
+                    region_start,
+                    entity_span_positions,
+                    entity_span_info,
+                )
+                html_parts.append(unquoted_html)
+
+            # Open quote span with classes for all active quotes
+            quote_classes = " ".join(sorted(quote_ids))
+            html_parts.append(f'<span class="quote-span {quote_classes}">')
+
+            # Add content with entity spans
+            region_html = self._build_html_with_entities(
+                region_start, region_end, entity_span_positions, entity_span_info
+            )
+            html_parts.append(region_html)
+
+            # Close quote span
+            html_parts.append("</span>")
+
+            current_pos = region_end
+
+        # Add any remaining HTML after last quote region
+        if current_pos < len(self.renderer.html):
+            remaining_html = self._build_html_with_entities(
+                current_pos,
+                len(self.renderer.html),
+                entity_span_positions,
+                entity_span_info,
+            )
+            html_parts.append(remaining_html)
+
+        annotated_html = "".join(html_parts)
+
+        return PrerenderedDocument(
+            doc_id=self.resource.id.id,
+            html=annotated_html,
+            quote_map=quote_map,
+            entity_map=entity_map,
+        )
+
+    def _build_html_with_entities(
+        self,
+        start_pos: int,
+        end_pos: int,
+        entity_span_positions: list[tuple[int, bool, str]],
+        entity_span_info: dict[str, tuple[str, str]],
+    ) -> str:
+        """Build HTML for a region, inserting entity spans.
+
+        Args:
+            start_pos: Start position in HTML
+            end_pos: End position in HTML
+            entity_span_positions: List of (position, is_opening, span_id) tuples
+            entity_span_info: Map of span_id -> (entity_name, matched_term)
+
+        Returns:
+            HTML string with entity spans inserted
+        """
+        # Filter entity positions to those within this region
+        relevant_entities = [
+            (pos, is_opening, span_id)
+            for pos, is_opening, span_id in entity_span_positions
+            if start_pos <= pos < end_pos
+        ]
+
+        if not relevant_entities:
+            # No entities in this region
+            return self.renderer.html[start_pos:end_pos]
+
+        html_parts = []
+        current_pos = start_pos
+
+        for pos, is_opening, span_id in relevant_entities:
+            # Add HTML before this entity span
             if pos > current_pos:
                 html_parts.append(self.renderer.html[current_pos:pos])
 
-            # Add span tag
+            # Add entity span tag
             if is_opening:
-                if span_type == "quote":
-                    html_parts.append(f'<span id="{span_id}" class="quote-span">')
-                else:  # entity
-                    # Check if we should add <abbr> tag for shortened forms
+                if span_id in entity_span_info:
                     entity_name, matched_term = entity_span_info[span_id]
                     use_abbr = len(matched_term) < len(entity_name)
 
@@ -657,30 +809,21 @@ class DocumentAnnotator:
                         html_parts.append(f'<span id="{span_id}" class="entity-span">')
             else:
                 # Closing tag
-                if span_type == "entity" and span_id in entity_span_info:
+                if span_id in entity_span_info:
                     entity_name, matched_term = entity_span_info[span_id]
                     use_abbr = len(matched_term) < len(entity_name)
                     if use_abbr:
                         html_parts.append("</abbr></span>")
                     else:
                         html_parts.append("</span>")
-                else:
-                    html_parts.append("</span>")
 
             current_pos = pos
 
-        # Add remaining HTML
-        if current_pos < len(self.renderer.html):
-            html_parts.append(self.renderer.html[current_pos:])
+        # Add remaining HTML in this region
+        if current_pos < end_pos:
+            html_parts.append(self.renderer.html[current_pos:end_pos])
 
-        annotated_html = "".join(html_parts)
-
-        return PrerenderedDocument(
-            doc_id=self.resource.id.id,
-            html=annotated_html,
-            quote_map=quote_map,
-            entity_map=entity_map,
-        )
+        return "".join(html_parts)
 
 
 def _escape_html(text: str) -> str:

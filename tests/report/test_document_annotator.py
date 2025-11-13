@@ -64,7 +64,9 @@ class TestDocumentAnnotator:
         assert len(result.entity_map) >= 2  # At least two entities
 
         # Verify HTML contains spans
-        assert 'class="quote-span"' in result.html
+        assert (
+            'class="quote-span' in result.html
+        )  # Quote spans now have additional CSS classes
         assert 'class="entity-span"' in result.html
 
     def test_no_quotes_or_entities(self):
