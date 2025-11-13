@@ -10,7 +10,6 @@ from typing import Optional
 
 from rich.console import Console, Group, RenderableType
 from rich.live import Live
-from rich.rule import Rule
 from rich.spinner import Spinner
 from rich.table import Table
 from rich.text import Text
@@ -84,66 +83,64 @@ class ExtractionProgress:
         table = Table.grid(padding=(0, 2))
         table.add_column(style="bold cyan")
         table.add_column(style="bold yellow", justify="right")
+        table.add_column(style="dim", justify="left")  # Third column for annotations
 
         # Documents section header
-        table.add_row("[bold cyan]Documents[/]", "")
+        table.add_row("[bold cyan]Documents[/]", "", "")
 
         # Documents processed
-        if self.documents_total > 0:
-            bright = (
-                "bold bright_yellow" if self._highlight == "docs" else "bold yellow"
-            )
-            table.add_row(
-                "  Processed",
-                f"[{bright}]{self.documents_processed}/{self.documents_total}[/]",
-            )
-
-        # Document-level metrics (indented)
         bright = "bold bright_yellow" if self._highlight == "docs" else "bold yellow"
-        table.add_row("  Entities", f"[{bright}]{self.entities_found}[/]")
+        table.add_row(
+            "  Processed",
+            f"[{bright}]{self.documents_processed}/{self.documents_total}[/]",
+            "",
+        )
 
-        # Quote validation (show validated count with invalid in parentheses)
-        quote_style = "bold yellow"
+        # Document-level metrics
+        table.add_row("  Entities", f"[{bright}]{self.entities_found}[/]", "")
+
+        # Quote validation (show invalid count in third column)
         if self.quotes_failed > 0:
-            quote_text = (
-                f"{self.quotes_validated} [dim]({self.quotes_failed} invalid)[/]"
-            )
+            quote_annotation = f"({self.quotes_failed} invalid)"
         else:
-            quote_text = f"{self.quotes_validated}"
-        table.add_row("  Quotes", f"[{quote_style}]{quote_text}[/]")
+            quote_annotation = ""
+        table.add_row(
+            "  Quotes", f"[bold yellow]{self.quotes_validated}[/]", quote_annotation
+        )
 
         # Pairs assessed (combined found + assessed as fraction)
-        if self.pairs_assessed > 0 or self.pairs_found > 0:
-            bright = (
-                "bold bright_yellow"
-                if self._highlight in ("pairs", "assessment")
-                else "bold yellow"
-            )
-            # Show as fraction: assessed/found
-            table.add_row(
-                "  Pairs assessed",
-                f"[{bright}]{self.pairs_assessed}/{self.pairs_found}[/]",
-            )
+        bright = (
+            "bold bright_yellow"
+            if self._highlight in ("pairs", "assessment")
+            else "bold yellow"
+        )
+        table.add_row(
+            "  Pairs assessed",
+            f"[{bright}]{self.pairs_assessed}/{self.pairs_found}[/]",
+            "",
+        )
 
-        # Combined judgment section (only show if we have cross-document results)
-        if self.unique_pairs > 0 or self.accepted > 0 or self.rejected > 0:
-            table.add_row("", "")  # Blank line
-            table.add_row("[bold cyan]Combined Judgment[/]", "")
-            if self.unique_pairs > 0:
-                table.add_row("  Unique pairs", f"[bold yellow]{self.unique_pairs}[/]")
-            if self.accepted > 0:
-                table.add_row("  Accepted", f"[bold green]{self.accepted}[/]")
-            if self.rejected > 0:
-                table.add_row("  Rejected", f"[bold yellow]{self.rejected}[/]")
+        # Combined judgment section
+        table.add_row("", "", "")  # Blank line
+        table.add_row("[bold cyan]Combined Judgment[/]", "", "")
+        table.add_row("  Unique pairs", f"[bold yellow]{self.unique_pairs}[/]", "")
+        table.add_row("  Accepted", f"[bold green]{self.accepted}[/]", "")
+        table.add_row("  Rejected", f"[bold yellow]{self.rejected}[/]", "")
 
         # Add status header if active or completed
         if self._status_msg:
-            rule = Rule(style="dim", characters="─")
             if self._status_msg.startswith("✓"):
                 header = Text(self._status_msg, style="bold green")
             else:
                 header = Spinner("dots", text=self._status_msg, style="cyan")
-            return Group(header, rule, table)
+            # Measure the header and table to determine separator width
+            # Use console to measure rendered width
+            header_width = self._console.measure(header).maximum
+            table_width = self._console.measure(table).maximum
+            separator_width = max(header_width, table_width)
+            # Create separator line using box drawing character
+            separator = Text("─" * separator_width, style="bold cyan")
+            return Group(header, separator, table)
         return table
 
     def update(self) -> None:

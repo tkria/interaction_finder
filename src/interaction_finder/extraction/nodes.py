@@ -574,6 +574,10 @@ class IdentifyProximalSetsNode(BaseNode[State, Deps, ExtractionResult]):
     ) -> "ExtractPairsFromProximalSetsNode":
         """Identify proximal sets in all resources."""
         with logfire.span("IdentifyProximalSetsNode"):
+            # Set phase
+            if ctx.deps.progress:
+                ctx.deps.progress.set_phase_proximal()
+
             # Get proximity threshold from config (default 2)
             threshold = getattr(
                 ctx.deps.config.tools.extraction, "proximal_window_chunks", 2
@@ -612,6 +616,10 @@ class ExtractPairsFromProximalSetsNode(BaseNode[State, Deps, ExtractionResult]):
     async def run(self, ctx: GraphRunContext[State, Deps]) -> "AssessPairsNode":
         """Extract pairs from all proximal sets in parallel."""
         with logfire.span("ExtractPairsFromProximalSetsNode"):
+            # Set phase
+            if ctx.deps.progress:
+                ctx.deps.progress.set_phase_extracting_pairs()
+
             # Collect all proximal sets with their resource context
             tasks = []
             for (
@@ -645,6 +653,14 @@ class ExtractPairsFromProximalSetsNode(BaseNode[State, Deps, ExtractionResult]):
                 # Store temporarily (will be deduplicated and assessed in next node)
                 # Store as list of (entity1, entity2, relationship_candidates, quotes) tuples
                 ctx.state._temp_pairs_by_resource = dict(pairs_by_resource)
+
+                # Update progress with total pairs found
+                if ctx.deps.progress:
+                    total_pairs = sum(
+                        len(pairs) for pairs in pairs_by_resource.values()
+                    )
+                    ctx.deps.progress.pairs_found = total_pairs
+                    ctx.deps.progress.update()
 
             return AssessPairsNode()
 
@@ -767,6 +783,10 @@ class AssessPairsNode(BaseNode[State, Deps, ExtractionResult]):
     async def run(self, ctx: GraphRunContext[State, Deps]) -> "JudgeCrossDocumentNode":
         """Assess all pairs per resource."""
         with logfire.span("AssessPairsNode"):
+            # Set phase
+            if ctx.deps.progress:
+                ctx.deps.progress.set_phase_assessing()
+
             # Get temporary pairs from previous node
             temp_pairs = getattr(ctx.state, "_temp_pairs_by_resource", {})
 
@@ -814,7 +834,7 @@ class AssessPairsNode(BaseNode[State, Deps, ExtractionResult]):
             if tasks:
                 assessments = await asyncio.gather(*tasks)
 
-                # Organize by resource
+                # Organize by resource and update progress
                 for resource_id, assessment in assessments:
                     if assessment:
                         if resource_id not in ctx.state.pair_assessments_by_resource:
@@ -822,6 +842,10 @@ class AssessPairsNode(BaseNode[State, Deps, ExtractionResult]):
                         ctx.state.pair_assessments_by_resource[resource_id].append(
                             assessment
                         )
+                        # Update progress counter
+                        if ctx.deps.progress:
+                            ctx.deps.progress.pairs_assessed += 1
+                            ctx.deps.progress.update()
 
             # Clean up temporary data
             if hasattr(ctx.state, "_temp_pairs_by_resource"):

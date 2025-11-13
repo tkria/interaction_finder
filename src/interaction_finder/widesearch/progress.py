@@ -10,7 +10,6 @@ from typing import Optional
 
 from rich.console import Console, Group, RenderableType
 from rich.live import Live
-from rich.rule import Rule
 from rich.spinner import Spinner
 from rich.table import Table
 from rich.text import Text
@@ -93,12 +92,17 @@ class WidesearchProgress:
 
         # Add status header if active or completed
         if self._status_msg:
-            rule = Rule(style="dim", characters="─")
             if self._status_msg.startswith("✓"):
                 header = Text(self._status_msg, style="bold green")
             else:
                 header = Spinner("dots", text=self._status_msg, style="cyan")
-            return Group(header, rule, table)
+            # Measure the header and table to determine separator width
+            header_width = self._console.measure(header).maximum
+            table_width = self._console.measure(table).maximum
+            separator_width = max(header_width, table_width)
+            # Create separator line using box drawing character
+            separator = Text("─" * separator_width, style="bold cyan")
+            return Group(header, separator, table)
         return table
 
     def update(self) -> None:
