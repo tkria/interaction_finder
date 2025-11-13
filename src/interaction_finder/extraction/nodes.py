@@ -507,14 +507,55 @@ For each pair, decide if they should be merged (child absorbed into parent) or k
 
         return merge_rules
 
+    def _resolve_transitive_merges(
+        self, merge_rules: dict[tuple[str, str], str]
+    ) -> dict[tuple[str, str], str]:
+        """Resolve transitive merge chains.
+
+        If A→B and B→C, resolve to A→C (and B→C).
+        This ensures all entities in a chain ultimately point to the final parent.
+
+        Algorithm:
+        1. For each child in merge_rules, follow parent chain until we find
+           a parent that isn't itself a child
+        2. Update rule to point directly to final parent
+
+        Returns:
+            Resolved merge rules with transitive chains collapsed
+        """
+        resolved = {}
+
+        for (child_norm, kind), parent_norm in merge_rules.items():
+            # Follow the chain: child → parent → parent's parent → ...
+            final_parent = parent_norm
+            visited = {child_norm}  # Prevent infinite loops
+
+            while (final_parent, kind) in merge_rules:
+                if final_parent in visited:
+                    # Cycle detected - stop here
+                    break
+                visited.add(final_parent)
+                final_parent = merge_rules[(final_parent, kind)]
+
+            resolved[(child_norm, kind)] = final_parent
+
+        return resolved
+
     def _apply_merge_rules_globally(
         self,
         merge_rules: dict[tuple[str, str], str],
         ctx: GraphRunContext[State, Deps],
     ) -> None:
-        """Apply merge rules to all documents using normalized lookups."""
+        """Apply merge rules to all documents using normalized lookups.
+
+        Merge rules are resolved transitively before application, so if A→B→C,
+        we apply A→C directly.
+        """
         if not merge_rules:
             return
+
+        # Resolve transitive chains first
+        resolved_rules = self._resolve_transitive_merges(merge_rules)
 
         for resource_id, entities in ctx.state.validated_entities_by_resource.items():
             entities_to_merge = []
@@ -524,8 +565,8 @@ For each pair, decide if they should be merged (child absorbed into parent) or k
                 child_norm = normalize_for_comparison(child_canonical)
                 rule_key = (child_norm, child_entity.kind)
 
-                if rule_key in merge_rules:
-                    parent_norm = merge_rules[rule_key]
+                if rule_key in resolved_rules:
+                    parent_norm = resolved_rules[rule_key]
 
                     # Find parent in this document by normalized lookup
                     parent_canonical = None
@@ -541,8 +582,12 @@ For each pair, decide if they should be merged (child absorbed into parent) or k
                     if parent_canonical and parent_canonical != child_canonical:
                         entities_to_merge.append((parent_canonical, child_canonical))
 
-            # Apply merges
+            # Apply merges - with transitive resolution, no entity should be missing
             for parent_name, child_name in entities_to_merge:
+                if parent_name not in entities or child_name not in entities:
+                    # This shouldn't happen with transitive resolution, but check anyway
+                    continue
+
                 parent = entities[parent_name]
                 child = entities[child_name]
 

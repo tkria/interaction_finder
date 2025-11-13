@@ -500,6 +500,121 @@ class TestGetGlobalMergeDecisions:
             nodes_module.get_entity_merge_agent = original_getter
 
 
+class TestResolveTransitiveMerges:
+    """Test _resolve_transitive_merges method."""
+
+    def test_resolves_simple_chain(self):
+        """Should resolve A→B→C to A→C, B→C."""
+        node = MergeEntitiesNode()
+
+        merge_rules = {
+            ("a", "gene"): "b",
+            ("b", "gene"): "c",
+        }
+
+        resolved = node._resolve_transitive_merges(merge_rules)
+
+        # Both should point to final parent 'c'
+        assert resolved[("a", "gene")] == "c"
+        assert resolved[("b", "gene")] == "c"
+
+    def test_resolves_long_chain(self):
+        """Should resolve A→B→C→D to A→D, B→D, C→D."""
+        node = MergeEntitiesNode()
+
+        merge_rules = {
+            ("a", "gene"): "b",
+            ("b", "gene"): "c",
+            ("c", "gene"): "d",
+        }
+
+        resolved = node._resolve_transitive_merges(merge_rules)
+
+        # All should point to final parent 'd'
+        assert resolved[("a", "gene")] == "d"
+        assert resolved[("b", "gene")] == "d"
+        assert resolved[("c", "gene")] == "d"
+
+    def test_handles_multiple_independent_chains(self):
+        """Should handle multiple independent merge chains."""
+        node = MergeEntitiesNode()
+
+        merge_rules = {
+            ("a", "gene"): "b",
+            ("b", "gene"): "c",
+            ("x", "gene"): "y",
+        }
+
+        resolved = node._resolve_transitive_merges(merge_rules)
+
+        # First chain
+        assert resolved[("a", "gene")] == "c"
+        assert resolved[("b", "gene")] == "c"
+
+        # Second chain (no transitivity)
+        assert resolved[("x", "gene")] == "y"
+
+    def test_handles_no_chains(self):
+        """Should pass through rules with no chains."""
+        node = MergeEntitiesNode()
+
+        merge_rules = {
+            ("a", "gene"): "b",
+            ("c", "gene"): "d",
+        }
+
+        resolved = node._resolve_transitive_merges(merge_rules)
+
+        # No changes - no chains to resolve
+        assert resolved[("a", "gene")] == "b"
+        assert resolved[("c", "gene")] == "d"
+
+    def test_handles_empty_rules(self):
+        """Should handle empty merge rules."""
+        node = MergeEntitiesNode()
+
+        merge_rules = {}
+        resolved = node._resolve_transitive_merges(merge_rules)
+
+        assert resolved == {}
+
+    def test_handles_circular_reference(self):
+        """Should detect and stop at circular references."""
+        node = MergeEntitiesNode()
+
+        # Create artificial cycle: a→b, b→c, c→a
+        merge_rules = {
+            ("a", "gene"): "b",
+            ("b", "gene"): "c",
+            ("c", "gene"): "a",
+        }
+
+        resolved = node._resolve_transitive_merges(merge_rules)
+
+        # Should detect cycle and stop - exact behavior depends on traversal order
+        # Just verify it doesn't crash and produces some result
+        assert len(resolved) == 3
+
+    def test_respects_entity_kinds(self):
+        """Should handle different entity kinds independently."""
+        node = MergeEntitiesNode()
+
+        merge_rules = {
+            ("a", "gene"): "b",
+            ("b", "gene"): "c",
+            ("a", "disease"): "b",  # Different kind, no chain
+        }
+
+        resolved = node._resolve_transitive_merges(merge_rules)
+
+        # Gene chain resolved
+        assert resolved[("a", "gene")] == "c"
+        assert resolved[("b", "gene")] == "c"
+
+        # Disease - no chain
+        assert resolved[("a", "disease")] == "b"
+
+
 class TestApplyMergeRulesGlobally:
     """Test _apply_merge_rules_globally method."""
 
@@ -753,6 +868,78 @@ class TestApplyMergeRulesGlobally:
         assert "BRCA1" not in entities
         assert "PAH" in entities
         assert "Pulmonary Arterial Hypertension" not in entities
+
+        assert ctx.state.entities_merged == 2
+
+    def test_resolves_transitive_merge_chains(self, mock_deps):
+        """Should resolve transitive merge chains (A→B→C becomes A→C).
+
+        When we have a chain like:
+        - "Associated pulmonary arterial hypertension" → "pulmonary arterial hypertension"
+        - "pulmonary arterial hypertension" → "PAH"
+
+        The transitive resolution should make:
+        - "Associated pulmonary arterial hypertension" → "PAH"
+        - "pulmonary arterial hypertension" → "PAH"
+
+        So everything merges directly to the final parent.
+        """
+        node = MergeEntitiesNode()
+        state = State(
+            topic="test",
+            target_entity_types=["disease"],
+            permitted_pairs=build_permitted_pairs(["disease"]),
+        )
+        ctx = GraphRunContext(state=state, deps=mock_deps)
+
+        resource1 = ResourceId(url="https://example.com/doc1", counter=0)
+        ctx.state.validated_entities_by_resource = {
+            resource1: {
+                "PAH": EntityMention(
+                    kind="disease",
+                    name="PAH",
+                    aliases=["PAH"],
+                    quotes=[],
+                    reasoning="short form",
+                ),
+                "pulmonary arterial hypertension": EntityMention(
+                    kind="disease",
+                    name="pulmonary arterial hypertension",
+                    aliases=["pulmonary arterial hypertension"],
+                    quotes=[],
+                    reasoning="full form",
+                ),
+                "Associated pulmonary arterial hypertension": EntityMention(
+                    kind="disease",
+                    name="Associated pulmonary arterial hypertension",
+                    aliases=["Associated pulmonary arterial hypertension"],
+                    quotes=[],
+                    reasoning="specific variant",
+                ),
+            }
+        }
+
+        # Create merge chain: A→B→C
+        merge_rules = {
+            (
+                "associated pulmonary arterial hypertension",
+                "disease",
+            ): "pulmonary arterial hypertension",
+            ("pulmonary arterial hypertension", "disease"): "pah",
+        }
+
+        node._apply_merge_rules_globally(merge_rules, ctx)
+
+        entities = ctx.state.validated_entities_by_resource[resource1]
+
+        # Both should merge directly into PAH (the final parent)
+        assert "PAH" in entities
+        assert "pulmonary arterial hypertension" not in entities
+        assert "Associated pulmonary arterial hypertension" not in entities
+
+        # Both entities should be in PAH's aliases
+        assert "pulmonary arterial hypertension" in entities["PAH"].aliases
+        assert "Associated pulmonary arterial hypertension" in entities["PAH"].aliases
 
         assert ctx.state.entities_merged == 2
 
