@@ -836,17 +836,28 @@ class ResourceId(BaseModel):
     id: str = Field(description="Stable hash-based resource identifier")
     url: str = Field(description="Original URL of the resource")
 
-    def __init__(self, url: str, counter: int, **data):
+    def __init__(self, url: str = None, counter: int = None, **data):
         """
-        Create ResourceId with automatic ID generation.
+        Create ResourceId with automatic ID generation or from serialized data.
+
+        Two modes:
+        1. Construction: ResourceId(url="...", counter=1) - generates id
+        2. Deserialization: ResourceId(id="1_abc", url="...") - uses provided id
 
         Args:
             url: Document URL
-            counter: Sequential counter for this resource
+            counter: Sequential counter (required for construction mode)
         """
-        # Generate stable ID using same scheme as cache hashing:
-        # sha256(normalize_url(url)) first 4 bytes → 8 hex chars
-        # Normalize URL inline (remove fragment) to align with cache hashing behavior
+        # Mode 1: Deserialization (id already in data)
+        if "id" in data:
+            super().__init__(url=url, **data)
+            return
+
+        # Mode 2: Construction (generate id from url + counter)
+        if url is None or counter is None:
+            raise ValueError("ResourceId requires either (url, counter) or (id, url)")
+
+        # Generate stable ID using same scheme as cache hashing
         parsed = urlparse(url)
         url_to_hash = urlunparse(parsed._replace(fragment=""))
 
