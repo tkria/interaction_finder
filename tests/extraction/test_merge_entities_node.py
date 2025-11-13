@@ -1,0 +1,848 @@
+"""Tests for MergeEntitiesNode global cross-document merging.
+
+Tests the new global merging architecture that:
+1. Collects all unique normalized entities across documents
+2. Finds substring relationships globally
+3. Queries LLM once per unique normalized pair (with caching)
+4. Applies merge rules consistently across all documents
+"""
+
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+from pydantic_ai.usage import RunUsage
+from pydantic_graph import GraphRunContext
+
+from interaction_finder.extraction.models import (
+    EntityMention,
+    EntityMergeDecision,
+    EntityMergeDecisions,
+)
+from interaction_finder.extraction.nodes import MergeEntitiesNode
+from interaction_finder.extraction.state import State
+from interaction_finder.extraction.utils import build_permitted_pairs
+from interaction_finder.resources import ResourceId, ResourcePool
+
+
+def create_mock_agent_with_override(run_return_value):
+    """Create a mock agent with working rename_agent() support."""
+    mock_agent = MagicMock()
+    mock_agent.run = AsyncMock(return_value=run_return_value)
+    mock_agent._name = "mock_agent"
+    return mock_agent
+
+
+@pytest.fixture
+def mock_deps():
+    """Create mock dependencies."""
+    deps = MagicMock()
+    deps.config = MagicMock()
+    deps.config.tools.extraction.merge_batch_size = 50
+    deps.logger = MagicMock()
+    deps.resource_pool = ResourcePool()
+    return deps
+
+
+class TestCollectUniqueEntities:
+    """Test _collect_unique_entities method."""
+
+    def test_collects_from_single_document(self, mock_deps):
+        """Should collect entities from a single document."""
+        node = MergeEntitiesNode()
+        state = State(
+            topic="test",
+            target_entity_types=["gene"],
+            permitted_pairs=build_permitted_pairs(["gene"]),
+        )
+        ctx = GraphRunContext(state=state, deps=mock_deps)
+
+        # Add entities to state
+        resource1 = ResourceId(url="https://example.com/doc1", counter=0)
+        ctx.state.validated_entities_by_resource = {
+            resource1: {
+                "BRCA1": EntityMention(
+                    kind="gene",
+                    name="BRCA1",
+                    aliases=["BRCA1"],
+                    quotes=[],
+                    reasoning="test",
+                ),
+                "TP53": EntityMention(
+                    kind="gene",
+                    name="TP53",
+                    aliases=["TP53"],
+                    quotes=[],
+                    reasoning="test",
+                ),
+            }
+        }
+
+        unique = node._collect_unique_entities(ctx)
+
+        assert "gene" in unique
+        assert "brca1" in unique["gene"]
+        assert "tp53" in unique["gene"]
+        assert "BRCA1" in unique["gene"]["brca1"]
+        assert "TP53" in unique["gene"]["tp53"]
+
+    def test_collects_from_multiple_documents(self, mock_deps):
+        """Should collect entities across multiple documents."""
+        node = MergeEntitiesNode()
+        state = State(
+            topic="test",
+            target_entity_types=["gene"],
+            permitted_pairs=build_permitted_pairs(["gene"]),
+        )
+        ctx = GraphRunContext(state=state, deps=mock_deps)
+
+        resource1 = ResourceId(url="https://example.com/doc1", counter=0)
+        resource2 = ResourceId(url="https://example.com/doc2", counter=1)
+
+        ctx.state.validated_entities_by_resource = {
+            resource1: {
+                "BRCA1": EntityMention(
+                    kind="gene",
+                    name="BRCA1",
+                    aliases=["BRCA1"],
+                    quotes=[],
+                    reasoning="test",
+                )
+            },
+            resource2: {
+                "brca1": EntityMention(
+                    kind="gene",
+                    name="brca1",
+                    aliases=["brca1"],
+                    quotes=[],
+                    reasoning="test",
+                )
+            },
+        }
+
+        unique = node._collect_unique_entities(ctx)
+
+        # Both variants should be under same normalized key
+        assert "gene" in unique
+        assert "brca1" in unique["gene"]
+        assert len(unique["gene"]["brca1"]) == 2
+        assert "BRCA1" in unique["gene"]["brca1"]
+        assert "brca1" in unique["gene"]["brca1"]
+
+    def test_tracks_canonical_variants_globally(self, mock_deps):
+        """Should track all canonical name variants in state."""
+        node = MergeEntitiesNode()
+        state = State(
+            topic="test",
+            target_entity_types=["gene"],
+            permitted_pairs=build_permitted_pairs(["gene"]),
+        )
+        ctx = GraphRunContext(state=state, deps=mock_deps)
+
+        resource1 = ResourceId(url="https://example.com/doc1", counter=0)
+        resource2 = ResourceId(url="https://example.com/doc2", counter=1)
+
+        ctx.state.validated_entities_by_resource = {
+            resource1: {
+                "BRCA1": EntityMention(
+                    kind="gene",
+                    name="BRCA1",
+                    aliases=["BRCA1"],
+                    quotes=[],
+                    reasoning="test",
+                )
+            },
+            resource2: {
+                "brca1": EntityMention(
+                    kind="gene",
+                    name="brca1",
+                    aliases=["brca1"],
+                    quotes=[],
+                    reasoning="test",
+                ),
+                "Brca1": EntityMention(
+                    kind="gene",
+                    name="Brca1",
+                    aliases=["Brca1"],
+                    quotes=[],
+                    reasoning="test",
+                ),
+            },
+        }
+
+        node._collect_unique_entities(ctx)
+
+        # Check canonical_name_variants tracking
+        norm_key = ("brca1", "gene")
+        assert norm_key in ctx.state.canonical_name_variants
+        assert ctx.state.canonical_name_variants[norm_key] == {
+            "BRCA1",
+            "brca1",
+            "Brca1",
+        }
+
+    def test_handles_multiple_entity_kinds(self, mock_deps):
+        """Should separate entities by kind."""
+        node = MergeEntitiesNode()
+        state = State(
+            topic="test",
+            target_entity_types=["gene", "disease"],
+            permitted_pairs=build_permitted_pairs(["gene", "disease"]),
+        )
+        ctx = GraphRunContext(state=state, deps=mock_deps)
+
+        resource1 = ResourceId(url="https://example.com/doc1", counter=0)
+        ctx.state.validated_entities_by_resource = {
+            resource1: {
+                "BRCA1": EntityMention(
+                    kind="gene",
+                    name="BRCA1",
+                    aliases=["BRCA1"],
+                    quotes=[],
+                    reasoning="test",
+                ),
+                "breast cancer": EntityMention(
+                    kind="disease",
+                    name="breast cancer",
+                    aliases=["breast cancer"],
+                    quotes=[],
+                    reasoning="test",
+                ),
+            }
+        }
+
+        unique = node._collect_unique_entities(ctx)
+
+        assert "gene" in unique
+        assert "disease" in unique
+        assert "brca1" in unique["gene"]
+        assert "breast cancer" in unique["disease"]
+
+
+class TestFindGlobalSubstringPairs:
+    """Test _find_global_substring_pairs method."""
+
+    def test_finds_simple_substring(self):
+        """Should find substring relationships."""
+        node = MergeEntitiesNode()
+
+        unique_entities = {"gene": {"brca": {"BRCA"}, "brca1": {"BRCA1"}}}
+
+        pairs = node._find_global_substring_pairs(unique_entities)
+
+        assert "gene" in pairs
+        assert len(pairs["gene"]) == 1
+        assert ("brca", "brca1") in pairs["gene"]
+
+    def test_finds_multiple_substrings(self):
+        """Should find multiple substring relationships."""
+        node = MergeEntitiesNode()
+
+        unique_entities = {
+            "gene": {
+                "brca": {"BRCA"},
+                "brca1": {"BRCA1"},
+                "tp": {"TP"},
+                "tp53": {"TP53"},
+            }
+        }
+
+        pairs = node._find_global_substring_pairs(unique_entities)
+
+        assert "gene" in pairs
+        assert len(pairs["gene"]) == 2
+        pair_set = set(pairs["gene"])
+        assert ("brca", "brca1") in pair_set
+        assert ("tp", "tp53") in pair_set
+
+    def test_no_substrings_found(self):
+        """Should return empty dict when no substrings exist."""
+        node = MergeEntitiesNode()
+
+        unique_entities = {"gene": {"brca1": {"BRCA1"}, "tp53": {"TP53"}}}
+
+        pairs = node._find_global_substring_pairs(unique_entities)
+
+        assert pairs == {}
+
+    def test_handles_exact_normalized_match(self):
+        """Should not create pairs for identical normalized names."""
+        node = MergeEntitiesNode()
+
+        unique_entities = {"gene": {"brca1": {"BRCA1", "brca1", "Brca1"}}}
+
+        pairs = node._find_global_substring_pairs(unique_entities)
+
+        # No pairs since all are same normalized form
+        assert pairs == {}
+
+    def test_bidirectional_substring_detection(self):
+        """Should detect substrings in both directions."""
+        node = MergeEntitiesNode()
+
+        unique_entities = {
+            "gene": {
+                "short": {"short"},
+                "short name": {"short name"},
+                "name": {"name"},
+            }
+        }
+
+        pairs = node._find_global_substring_pairs(unique_entities)
+
+        assert "gene" in pairs
+        pair_set = set(pairs["gene"])
+        # "short" is in "short name"
+        assert ("short", "short name") in pair_set
+        # "name" is in "short name"
+        assert ("name", "short name") in pair_set
+
+
+class TestGetGlobalMergeDecisions:
+    """Test _get_global_merge_decisions method."""
+
+    @pytest.mark.asyncio
+    async def test_cache_miss_queries_llm(self, mock_deps):
+        """First encounter should query LLM."""
+        node = MergeEntitiesNode()
+        state = State(
+            topic="test",
+            target_entity_types=["gene"],
+            permitted_pairs=build_permitted_pairs(["gene"]),
+        )
+        ctx = GraphRunContext(state=state, deps=mock_deps)
+
+        substring_pairs = {"gene": [("brca", "brca1")]}
+
+        # Mock LLM response
+        mock_result = MagicMock()
+        mock_result.output = EntityMergeDecisions(
+            decisions=[
+                EntityMergeDecision(
+                    parent_entity="brca",
+                    child_entity="brca1",
+                    should_merge=True,
+                    reasoning="BRCA1 is specific gene, BRCA is shorthand",
+                )
+            ]
+        )
+        mock_agent = create_mock_agent_with_override(mock_result)
+
+        import interaction_finder.extraction.nodes as nodes_module
+
+        original_getter = nodes_module.get_entity_merge_agent
+        nodes_module.get_entity_merge_agent = lambda config: mock_agent
+
+        try:
+            merge_rules = await node._get_global_merge_decisions(substring_pairs, ctx)
+
+            # Should have called LLM
+            assert mock_agent.run.called
+            assert len(merge_rules) == 1
+            assert ("brca1", "gene") in merge_rules
+            assert merge_rules[("brca1", "gene")] == "brca"
+
+            # Cache should be populated
+            assert ctx.state.merge_decision_cache[("brca", "brca1", "gene")] is True
+            assert ctx.state.merge_cache_misses == 1
+            assert ctx.state.merge_cache_hits == 0
+
+        finally:
+            nodes_module.get_entity_merge_agent = original_getter
+
+    @pytest.mark.asyncio
+    async def test_cache_hit_skips_llm(self, mock_deps):
+        """Second encounter should use cache."""
+        node = MergeEntitiesNode()
+        state = State(
+            topic="test",
+            target_entity_types=["gene"],
+            permitted_pairs=build_permitted_pairs(["gene"]),
+        )
+        ctx = GraphRunContext(state=state, deps=mock_deps)
+
+        # Pre-populate cache
+        ctx.state.merge_decision_cache[("brca", "brca1", "gene")] = True
+
+        substring_pairs = {"gene": [("brca", "brca1")]}
+
+        # Mock LLM (should not be called)
+        mock_agent = create_mock_agent_with_override(None)
+
+        import interaction_finder.extraction.nodes as nodes_module
+
+        original_getter = nodes_module.get_entity_merge_agent
+        nodes_module.get_entity_merge_agent = lambda config: mock_agent
+
+        try:
+            merge_rules = await node._get_global_merge_decisions(substring_pairs, ctx)
+
+            # Should NOT have called LLM
+            assert not mock_agent.run.called
+
+            # Should return merge rule from cache
+            assert len(merge_rules) == 1
+            assert ("brca1", "gene") in merge_rules
+
+            # Metrics
+            assert ctx.state.merge_cache_hits == 1
+            assert ctx.state.merge_cache_misses == 0
+
+        finally:
+            nodes_module.get_entity_merge_agent = original_getter
+
+    @pytest.mark.asyncio
+    async def test_respects_reject_decisions(self, mock_deps):
+        """Should not create merge rule when cache says no merge."""
+        node = MergeEntitiesNode()
+        state = State(
+            topic="test",
+            target_entity_types=["gene"],
+            permitted_pairs=build_permitted_pairs(["gene"]),
+        )
+        ctx = GraphRunContext(state=state, deps=mock_deps)
+
+        # Cache says NOT to merge
+        ctx.state.merge_decision_cache[("tp", "tp53", "gene")] = False
+
+        substring_pairs = {"gene": [("tp", "tp53")]}
+
+        merge_rules = await node._get_global_merge_decisions(substring_pairs, ctx)
+
+        # No merge rules created
+        assert len(merge_rules) == 0
+        assert ctx.state.merge_cache_hits == 1
+
+    @pytest.mark.asyncio
+    async def test_mixed_cached_and_uncached(self, mock_deps):
+        """Should handle mix of cached and uncached pairs efficiently."""
+        node = MergeEntitiesNode()
+        state = State(
+            topic="test",
+            target_entity_types=["gene"],
+            permitted_pairs=build_permitted_pairs(["gene"]),
+        )
+        ctx = GraphRunContext(state=state, deps=mock_deps)
+
+        # Pre-populate cache for one pair
+        ctx.state.merge_decision_cache[("brca", "brca1", "gene")] = True
+
+        substring_pairs = {"gene": [("brca", "brca1"), ("tp", "tp53")]}
+
+        # Mock LLM for uncached pair only
+        mock_result = MagicMock()
+        mock_result.output = EntityMergeDecisions(
+            decisions=[
+                EntityMergeDecision(
+                    parent_entity="tp",
+                    child_entity="tp53",
+                    should_merge=False,
+                    reasoning="TP and TP53 are different proteins with distinct functions",
+                )
+            ]
+        )
+        mock_agent = create_mock_agent_with_override(mock_result)
+
+        import interaction_finder.extraction.nodes as nodes_module
+
+        original_getter = nodes_module.get_entity_merge_agent
+        nodes_module.get_entity_merge_agent = lambda config: mock_agent
+
+        try:
+            merge_rules = await node._get_global_merge_decisions(substring_pairs, ctx)
+
+            # Should call LLM only for uncached pair
+            assert mock_agent.run.called
+
+            # Should have merge rule only for cached pair
+            assert len(merge_rules) == 1
+            assert ("brca1", "gene") in merge_rules
+
+            # Metrics
+            assert ctx.state.merge_cache_hits == 1
+            assert ctx.state.merge_cache_misses == 1
+
+        finally:
+            nodes_module.get_entity_merge_agent = original_getter
+
+    @pytest.mark.asyncio
+    async def test_handles_llm_errors_gracefully(self, mock_deps):
+        """Should continue if LLM call fails."""
+        node = MergeEntitiesNode()
+        state = State(
+            topic="test",
+            target_entity_types=["gene"],
+            permitted_pairs=build_permitted_pairs(["gene"]),
+        )
+        ctx = GraphRunContext(state=state, deps=mock_deps)
+
+        substring_pairs = {"gene": [("brca", "brca1")]}
+
+        # Mock LLM to raise error
+        mock_agent = MagicMock()
+        mock_agent.run = AsyncMock(side_effect=TimeoutError("LLM timeout"))
+        mock_agent._name = "mock_agent"
+
+        import interaction_finder.extraction.nodes as nodes_module
+
+        original_getter = nodes_module.get_entity_merge_agent
+        nodes_module.get_entity_merge_agent = lambda config: mock_agent
+
+        try:
+            merge_rules = await node._get_global_merge_decisions(substring_pairs, ctx)
+
+            # Should return empty (no merge rules)
+            assert len(merge_rules) == 0
+
+            # Logger should have been called
+            assert mock_deps.logger.error.called
+
+        finally:
+            nodes_module.get_entity_merge_agent = original_getter
+
+
+class TestApplyMergeRulesGlobally:
+    """Test _apply_merge_rules_globally method."""
+
+    def test_applies_merge_to_single_document(self, mock_deps):
+        """Should merge entities within a document."""
+        node = MergeEntitiesNode()
+        state = State(
+            topic="test",
+            target_entity_types=["gene"],
+            permitted_pairs=build_permitted_pairs(["gene"]),
+        )
+        ctx = GraphRunContext(state=state, deps=mock_deps)
+
+        resource1 = ResourceId(url="https://example.com/doc1", counter=0)
+        ctx.state.validated_entities_by_resource = {
+            resource1: {
+                "BRCA": EntityMention(
+                    kind="gene",
+                    name="BRCA",
+                    aliases=["BRCA"],
+                    quotes=[],
+                    reasoning="parent",
+                ),
+                "BRCA1": EntityMention(
+                    kind="gene",
+                    name="BRCA1",
+                    aliases=["BRCA1"],
+                    quotes=[],
+                    reasoning="child",
+                ),
+            }
+        }
+
+        merge_rules = {("brca1", "gene"): "brca"}
+
+        node._apply_merge_rules_globally(merge_rules, ctx)
+
+        # Child should be merged into parent
+        entities = ctx.state.validated_entities_by_resource[resource1]
+        assert "BRCA" in entities
+        assert "BRCA1" not in entities
+        assert "BRCA1" in entities["BRCA"].aliases
+        assert "MERGED_GLOBAL(BRCA1)" in entities["BRCA"].reasoning
+        assert ctx.state.entities_merged == 1
+
+    def test_applies_merge_across_multiple_documents(self, mock_deps):
+        """Should apply same rule consistently across documents."""
+        node = MergeEntitiesNode()
+        state = State(
+            topic="test",
+            target_entity_types=["gene"],
+            permitted_pairs=build_permitted_pairs(["gene"]),
+        )
+        ctx = GraphRunContext(state=state, deps=mock_deps)
+
+        resource1 = ResourceId(url="https://example.com/doc1", counter=0)
+        resource2 = ResourceId(url="https://example.com/doc2", counter=1)
+
+        ctx.state.validated_entities_by_resource = {
+            resource1: {
+                "BRCA": EntityMention(
+                    kind="gene",
+                    name="BRCA",
+                    aliases=["BRCA"],
+                    quotes=[],
+                    reasoning="parent1",
+                ),
+                "BRCA1": EntityMention(
+                    kind="gene",
+                    name="BRCA1",
+                    aliases=["BRCA1"],
+                    quotes=[],
+                    reasoning="child1",
+                ),
+            },
+            resource2: {
+                "brca": EntityMention(
+                    kind="gene",
+                    name="brca",
+                    aliases=["brca"],
+                    quotes=[],
+                    reasoning="parent2",
+                ),
+                "brca1": EntityMention(
+                    kind="gene",
+                    name="brca1",
+                    aliases=["brca1"],
+                    quotes=[],
+                    reasoning="child2",
+                ),
+            },
+        }
+
+        merge_rules = {("brca1", "gene"): "brca"}
+
+        node._apply_merge_rules_globally(merge_rules, ctx)
+
+        # Both documents should have merges applied
+        entities1 = ctx.state.validated_entities_by_resource[resource1]
+        entities2 = ctx.state.validated_entities_by_resource[resource2]
+
+        assert "BRCA" in entities1
+        assert "BRCA1" not in entities1
+
+        assert "brca" in entities2
+        assert "brca1" not in entities2
+
+        assert ctx.state.entities_merged == 2
+
+    def test_only_merges_when_both_present(self, mock_deps):
+        """Should only merge when both parent and child exist in document."""
+        node = MergeEntitiesNode()
+        state = State(
+            topic="test",
+            target_entity_types=["gene"],
+            permitted_pairs=build_permitted_pairs(["gene"]),
+        )
+        ctx = GraphRunContext(state=state, deps=mock_deps)
+
+        resource1 = ResourceId(url="https://example.com/doc1", counter=0)
+        resource2 = ResourceId(url="https://example.com/doc2", counter=1)
+
+        ctx.state.validated_entities_by_resource = {
+            resource1: {
+                "BRCA": EntityMention(
+                    kind="gene",
+                    name="BRCA",
+                    aliases=["BRCA"],
+                    quotes=[],
+                    reasoning="parent",
+                ),
+                "BRCA1": EntityMention(
+                    kind="gene",
+                    name="BRCA1",
+                    aliases=["BRCA1"],
+                    quotes=[],
+                    reasoning="child",
+                ),
+            },
+            resource2: {
+                # Only has child, no parent
+                "BRCA1": EntityMention(
+                    kind="gene",
+                    name="BRCA1",
+                    aliases=["BRCA1"],
+                    quotes=[],
+                    reasoning="child",
+                )
+            },
+        }
+
+        merge_rules = {("brca1", "gene"): "brca"}
+
+        node._apply_merge_rules_globally(merge_rules, ctx)
+
+        # Doc1 should merge
+        assert "BRCA" in ctx.state.validated_entities_by_resource[resource1]
+        assert "BRCA1" not in ctx.state.validated_entities_by_resource[resource1]
+
+        # Doc2 should NOT merge (no parent)
+        assert "BRCA1" in ctx.state.validated_entities_by_resource[resource2]
+
+        assert ctx.state.entities_merged == 1
+
+    def test_handles_empty_merge_rules(self, mock_deps):
+        """Should handle empty merge rules gracefully."""
+        node = MergeEntitiesNode()
+        state = State(
+            topic="test",
+            target_entity_types=["gene"],
+            permitted_pairs=build_permitted_pairs(["gene"]),
+        )
+        ctx = GraphRunContext(state=state, deps=mock_deps)
+
+        resource1 = ResourceId(url="https://example.com/doc1", counter=0)
+        ctx.state.validated_entities_by_resource = {
+            resource1: {
+                "BRCA1": EntityMention(
+                    kind="gene",
+                    name="BRCA1",
+                    aliases=["BRCA1"],
+                    quotes=[],
+                    reasoning="test",
+                )
+            }
+        }
+
+        merge_rules = {}
+
+        node._apply_merge_rules_globally(merge_rules, ctx)
+
+        # Nothing should change
+        assert "BRCA1" in ctx.state.validated_entities_by_resource[resource1]
+        assert ctx.state.entities_merged == 0
+
+    def test_handles_multiple_entity_kinds(self, mock_deps):
+        """Should apply merges for different entity kinds independently."""
+        node = MergeEntitiesNode()
+        state = State(
+            topic="test",
+            target_entity_types=["gene", "disease"],
+            permitted_pairs=build_permitted_pairs(["gene", "disease"]),
+        )
+        ctx = GraphRunContext(state=state, deps=mock_deps)
+
+        resource1 = ResourceId(url="https://example.com/doc1", counter=0)
+        ctx.state.validated_entities_by_resource = {
+            resource1: {
+                "BRCA": EntityMention(
+                    kind="gene",
+                    name="BRCA",
+                    aliases=["BRCA"],
+                    quotes=[],
+                    reasoning="gene_parent",
+                ),
+                "BRCA1": EntityMention(
+                    kind="gene",
+                    name="BRCA1",
+                    aliases=["BRCA1"],
+                    quotes=[],
+                    reasoning="gene_child",
+                ),
+                "PAH": EntityMention(
+                    kind="disease",
+                    name="PAH",
+                    aliases=["PAH"],
+                    quotes=[],
+                    reasoning="disease_parent",
+                ),
+                "Pulmonary Arterial Hypertension": EntityMention(
+                    kind="disease",
+                    name="Pulmonary Arterial Hypertension",
+                    aliases=["PAH"],
+                    quotes=[],
+                    reasoning="disease_child",
+                ),
+            }
+        }
+
+        merge_rules = {
+            ("brca1", "gene"): "brca",
+            ("pulmonary arterial hypertension", "disease"): "pah",
+        }
+
+        node._apply_merge_rules_globally(merge_rules, ctx)
+
+        entities = ctx.state.validated_entities_by_resource[resource1]
+
+        # Both merges should happen
+        assert "BRCA" in entities
+        assert "BRCA1" not in entities
+        assert "PAH" in entities
+        assert "Pulmonary Arterial Hypertension" not in entities
+
+        assert ctx.state.entities_merged == 2
+
+
+class TestIntegration:
+    """Integration tests for complete MergeEntitiesNode flow."""
+
+    @pytest.mark.asyncio
+    async def test_full_merge_flow(self, mock_deps):
+        """Test complete flow from collection to application."""
+        node = MergeEntitiesNode()
+        state = State(
+            topic="breast cancer genetics",
+            target_entity_types=["gene"],
+            permitted_pairs=build_permitted_pairs(["gene"]),
+        )
+        ctx = GraphRunContext(state=state, deps=mock_deps)
+
+        resource1 = ResourceId(url="https://example.com/doc1", counter=0)
+        resource2 = ResourceId(url="https://example.com/doc2", counter=1)
+
+        ctx.state.validated_entities_by_resource = {
+            resource1: {
+                "BRCA": EntityMention(
+                    kind="gene",
+                    name="BRCA",
+                    aliases=["BRCA"],
+                    quotes=[],
+                    reasoning="parent",
+                ),
+                "BRCA1": EntityMention(
+                    kind="gene",
+                    name="BRCA1",
+                    aliases=["BRCA1"],
+                    quotes=[],
+                    reasoning="child",
+                ),
+            },
+            resource2: {
+                "brca": EntityMention(
+                    kind="gene",
+                    name="brca",
+                    aliases=["brca"],
+                    quotes=[],
+                    reasoning="parent",
+                ),
+                "brca1": EntityMention(
+                    kind="gene",
+                    name="brca1",
+                    aliases=["brca1"],
+                    quotes=[],
+                    reasoning="child",
+                ),
+            },
+        }
+
+        # Mock LLM to approve merge
+        mock_result = MagicMock()
+        mock_result.output = EntityMergeDecisions(
+            decisions=[
+                EntityMergeDecision(
+                    parent_entity="brca",
+                    child_entity="brca1",
+                    should_merge=True,
+                    reasoning="BRCA1 is specific gene",
+                )
+            ]
+        )
+        mock_agent = create_mock_agent_with_override(mock_result)
+
+        import interaction_finder.extraction.nodes as nodes_module
+
+        original_getter = nodes_module.get_entity_merge_agent
+        nodes_module.get_entity_merge_agent = lambda config: mock_agent
+
+        try:
+            result = await node.run(ctx)
+
+            # Should return next node
+            from interaction_finder.extraction.nodes import IdentifyProximalSetsNode
+
+            assert isinstance(result, IdentifyProximalSetsNode)
+
+            # Both documents should have merges
+            assert "BRCA" in ctx.state.validated_entities_by_resource[resource1]
+            assert "BRCA1" not in ctx.state.validated_entities_by_resource[resource1]
+            assert "brca" in ctx.state.validated_entities_by_resource[resource2]
+            assert "brca1" not in ctx.state.validated_entities_by_resource[resource2]
+
+            assert ctx.state.entities_merged == 2
+
+        finally:
+            nodes_module.get_entity_merge_agent = original_getter
