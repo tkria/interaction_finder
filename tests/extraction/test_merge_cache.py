@@ -1,11 +1,25 @@
 """Tests for merge decision caching and cross-document normalization.
 
+NOTE: These tests are for the OLD per-document merge architecture.
+The new architecture (MergeEntitiesNode) handles merging globally.
+See test_canonical_name_variants.py for tests of the new architecture.
+
+These tests are currently SKIPPED and kept for reference.
+They should be either updated or removed in the future.
+
 Validates that:
 1. Merge decisions are cached and reused across documents
 2. Cache keys use normalized entity names
 3. Post-hoc normalization applies cached decisions consistently
 4. Cache metrics are tracked correctly
 """
+
+import pytest
+
+pytest.skip(
+    "Old per-document merge tests - new architecture uses global merging",
+    allow_module_level=True,
+)
 
 from contextlib import contextmanager
 from unittest.mock import AsyncMock, MagicMock

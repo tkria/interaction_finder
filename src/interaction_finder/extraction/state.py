@@ -5,11 +5,12 @@ Fields are precisely typed and organized by pipeline stage for clarity.
 
 Pipeline flow:
 1. ExtractEntitiesNode → entities_by_resource
-2. ValidateEntitiesNode → validated_entities_by_resource, entities_merged
-3. IdentifyProximalSetsNode → proximal_sets_by_resource
-4. ExtractPairsFromProximalSetsNode + AssessPairsNode → pair_assessments_by_resource
-5. JudgeCrossDocumentNode → pair_judgments
-6. FinalizeNode → ExtractionResult
+2. ValidateEntitiesNode → validated_entities_by_resource (kind filtering only)
+3. MergeEntitiesNode → entities_merged, canonical_name_variants (global merging)
+4. IdentifyProximalSetsNode → proximal_sets_by_resource
+5. ExtractPairsFromProximalSetsNode + AssessPairsNode → pair_assessments_by_resource
+6. JudgeCrossDocumentNode → pair_judgments
+7. FinalizeNode → ExtractionResult
 """
 
 from dataclasses import dataclass, field
@@ -70,6 +71,12 @@ class State:
     # Memoization cache for merge decisions: maps (norm_parent, norm_child, kind) → should_merge
     # Used to avoid duplicate LLM calls and ensure consistency across documents
     merge_decision_cache: dict[tuple[str, str, str], bool] = field(default_factory=dict)
+    # Track all canonical name variants for each normalized entity name
+    # Maps (normalized_name, kind) → set of all canonical (un-normalized) variants seen
+    # Used to apply merge decisions correctly across documents with different capitalizations
+    canonical_name_variants: dict[tuple[str, str], set[str]] = field(
+        default_factory=dict
+    )
     # Cache hits/misses for metrics
     merge_cache_hits: int = 0
     merge_cache_misses: int = 0

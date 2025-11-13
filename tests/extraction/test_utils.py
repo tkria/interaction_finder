@@ -129,12 +129,20 @@ class TestStripKindAnnotation:
         assert strip_kind_annotation("HIF2α (HIF2α) (gene)") == "HIF2α (HIF2α)"
 
     def test_case_sensitivity(self):
-        """Test that only lowercase kind annotations are stripped."""
-        # Our pattern only matches lowercase
-        assert strip_kind_annotation("BRCA1 (Gene)") == "BRCA1 (Gene)"
-        assert strip_kind_annotation("BRCA1 (GENE)") == "BRCA1 (GENE)"
-        # Lowercase should be stripped
+        """Test that all kinds of annotations are stripped regardless of case."""
+        # Pattern now matches any alphanumeric string in parentheses
+        assert strip_kind_annotation("BRCA1 (Gene)") == "BRCA1"
+        assert strip_kind_annotation("BRCA1 (GENE)") == "BRCA1"
         assert strip_kind_annotation("BRCA1 (gene)") == "BRCA1"
+
+    def test_strips_uppercase_abbreviations(self):
+        """Test that uppercase abbreviations in parentheses are stripped."""
+        assert (
+            strip_kind_annotation("Pulmonary arterial hypertension (PAH)")
+            == "Pulmonary arterial hypertension"
+        )
+        assert strip_kind_annotation("Breast cancer (BC)") == "Breast cancer"
+        assert strip_kind_annotation("TP53 (P53)") == "TP53"
 
 
 class TestNormalizeForComparison:

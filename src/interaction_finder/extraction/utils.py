@@ -68,8 +68,9 @@ def build_permitted_pairs(entity_types: list[str]) -> dict[str, set[str]]:
 def strip_kind_annotation(entity_name: str) -> str:
     """Strip kind annotation from entity name if present.
 
-    Removes trailing patterns like " (gene)", " (phenotype)", etc. that may
-    have been incorrectly included by the LLM despite instructions.
+    Removes trailing patterns like " (gene)", " (phenotype)", " (PAH)", etc. that may
+    have been incorrectly included by the LLM despite instructions. Now handles both
+    lowercase kind annotations and uppercase abbreviations in parentheses.
 
     Parameters:
         entity_name: Entity name that may contain kind annotation
@@ -82,11 +83,14 @@ def strip_kind_annotation(entity_name: str) -> str:
         'BRCA1'
         >>> strip_kind_annotation("Iron deficiency (phenotype)")
         'Iron deficiency'
+        >>> strip_kind_annotation("Pulmonary arterial hypertension (PAH)")
+        'Pulmonary arterial hypertension'
         >>> strip_kind_annotation("BRCA1")
         'BRCA1'
     """
-    # Match pattern: " (word)" at end of string
-    return re.sub(r"\s+\([a-z_]+\)\s*$", "", entity_name).strip()
+    # Match pattern: " (word/abbreviation)" at end of string
+    # Handles lowercase kind names and uppercase abbreviations
+    return re.sub(r"\s+\([a-zA-Z0-9_\s-]+\)\s*$", "", entity_name).strip()
 
 
 def normalize_for_comparison(text: str) -> str:

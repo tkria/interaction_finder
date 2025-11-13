@@ -1,7 +1,8 @@
 """Graph assembly for association extraction pipeline.
 
 The graph defines the flow from entity extraction through validation,
-proximal set identification, pair extraction, assessment, and final judgment.
+cross-document merging, proximal set identification, pair extraction,
+assessment, and final judgment.
 """
 
 from pydantic_graph import Graph
@@ -13,6 +14,7 @@ from interaction_finder.extraction.nodes import (
     FinalizeNode,
     IdentifyProximalSetsNode,
     JudgeCrossDocumentNode,
+    MergeEntitiesNode,
     ValidateEntitiesNode,
 )
 
@@ -21,6 +23,7 @@ graph = Graph(
     nodes=[
         ExtractEntitiesNode,
         ValidateEntitiesNode,
+        MergeEntitiesNode,
         IdentifyProximalSetsNode,
         ExtractPairsFromProximalSetsNode,
         AssessPairsNode,
