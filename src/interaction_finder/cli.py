@@ -915,6 +915,102 @@ def extract(
         raise typer.Exit(1)
 
 
+@app.command()
+def report(
+    extraction_file: Path = typer.Argument(help="Path to extraction results JSON file"),
+    output: Optional[Path] = typer.Option(
+        None, "-o", "--output", help="Output HTML file path"
+    ),
+    include_rejected: bool = typer.Option(
+        False, "--include-rejected", help="Include rejected pairs in report"
+    ),
+    title: Optional[str] = typer.Option(
+        None, "-t", "--title", help="Custom report title"
+    ),
+    verbose: bool = typer.Option(False, "-v", "--verbose", help="Verbose output"),
+):
+    """
+    Generate interactive HTML report from extraction results.
+
+    Creates a self-contained HTML file with an interactive explorer for
+    entity pairs, including full provenance tracking, document viewing,
+    and filtering capabilities.
+
+    Example:
+        interaction-finder report results.json -o report.html
+
+        interaction-finder report pah-results.json -o pah-report.html --include-rejected
+    """
+    try:
+        # Validate extraction file exists
+        if not extraction_file.exists():
+            raise FileNotFoundError(f"Extraction file not found: {extraction_file}")
+
+        # Load extraction results
+        from interaction_finder.extraction.models import ExtractionResult
+        from pydantic import ValidationError
+
+        console.print(
+            f"\n[bold]Loading extraction results:[/bold] {extraction_file.name}"
+        )
+        extraction_data = json.loads(extraction_file.read_text())
+        result = ExtractionResult.model_validate(extraction_data)
+
+        # Display summary
+        console.print(f"Topic: {result.metadata.topic}")
+        console.print(f"Total pairs: {result.metadata.total_pairs_found}")
+        console.print(f"Accepted: {result.metadata.pairs_accepted}")
+        console.print(f"Rejected: {result.metadata.pairs_rejected}")
+        console.print(f"Resources: {result.metadata.resource_count}")
+
+        # Generate output path if not specified
+        if output is None:
+            output = extraction_file.with_suffix(".html")
+
+        # Generate report
+        console.print(f"\n[bold]Generating report...[/bold]")
+        from interaction_finder.report import generate_report
+
+        output_path = generate_report(
+            result=result,
+            output=output,
+            include_rejected=include_rejected,
+            title=title,
+        )
+
+        console.print(f"[green]✓[/green] Report generated: {output_path}")
+
+        # Show statistics
+        pairs_shown = result.metadata.pairs_accepted
+        if include_rejected:
+            pairs_shown = result.metadata.total_pairs_found
+
+        console.print(f"\n[bold]Report contains:[/bold]")
+        console.print(f"  • {pairs_shown} pairs")
+        console.print(f"  • {result.metadata.resource_count} documents")
+        console.print(f"  • Interactive filtering and search")
+        console.print(f"  • Full provenance tracking")
+
+    except FileNotFoundError as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+    except (json.JSONDecodeError, ValidationError) as e:
+        console.print(f"[red]Invalid extraction file:[/red] {e}")
+        if verbose:
+            console.print_exception()
+        raise typer.Exit(1)
+    except ValueError as e:
+        console.print(f"[red]Error:[/red] {e}")
+        if verbose:
+            console.print_exception()
+        raise typer.Exit(1)
+    except Exception as e:
+        console.print(f"\n[red]Error:[/red] {e}")
+        if verbose:
+            console.print_exception()
+        raise typer.Exit(1)
+
+
 def main():
     """Entry point for the CLI."""
     app()
