@@ -39,16 +39,18 @@ def generate_report(
     if not result.judgments:
         raise ValueError("ExtractionResult contains no judgments")
 
-    # Prepare data
-    data = prepare_report_data(result, include_rejected=include_rejected)
+    # Prepare data (returns tuple of json_data and document_html map)
+    json_data, document_html = prepare_report_data(
+        result, include_rejected=include_rejected
+    )
 
     # Generate title if not provided
     if title is None:
         topic = result.metadata.topic
         title = f"Extraction Report: {topic}"
 
-    # Render HTML
-    html = render_template(data, title=title)
+    # Render HTML with both JSON data and document templates
+    html = render_template(json_data, document_html, title=title)
 
     # Write to file
     output_path = Path(output)

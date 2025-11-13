@@ -418,6 +418,12 @@ header {
     margin: 0.5rem 0;
 }
 
+.quote-blink {
+    background: var(--pico-color-amber-200);
+    border-left: 3px solid var(--pico-color-amber-600);
+    transition: background 0.5s ease-out, border-color 0.5s ease-out;
+}
+
 /* Right sidebar */
 #rightbar {
     grid-area: rightbar;
@@ -570,26 +576,9 @@ footer {
 REPORT_JS = """
 // Report interactivity
 
-// Simple markdown to HTML converter
-function markdownToHtml(text) {
-    // Headers (increased by 1 level: h1->h2, h2->h3, h3->h4)
-    text = text.replace(/^### (.*$)/gim, '<h4>$1</h4>');
-    text = text.replace(/^## (.*$)/gim, '<h3>$1</h3>');
-    text = text.replace(/^# (.*$)/gim, '<h2>$1</h2>');
-
-    // Bold
-    text = text.replace(/\\*\\*([^\\*]+)\\*\\*/gim, '<strong>$1</strong>');
-
-    // Italic (both * and _ syntax)
-    text = text.replace(/\\*([^\\*]+)\\*/gim, '<em>$1</em>');
-    text = text.replace(/_([^_]+)_/gim, '<em>$1</em>');
-
-    // Line breaks
-    text = text.replace(/\\n\\n/g, '</p><p>');
-    text = '<p>' + text + '</p>';
-
-    return text;
-}
+// NOTE: Markdown rendering is done in Python during report generation.
+// Pre-rendered document HTML is embedded in <template> tags and cloned on-demand.
+// This approach provides fast initial page load and efficient DOM reuse.
 
 // Global state
 const state = {
@@ -831,127 +820,101 @@ function highlightEntities(text, entity1Terms, entity2Terms, entity1Kind, entity
     return text;
 }
 
-// Highlight entities in quotes (includes current pair + other entities)
-function highlightEntitiesInQuote(text, entity1Terms, entity2Terms, entity1Kind, entity2Kind, entity1Name, entity2Name, otherEntities, quoteIdx, docId) {
-    // DON'T escape HTML yet - we need to work with plain text first
-
-    // Build list of all entity matches with positions
-    const matches = [];
-
-    // Find entity1 matches
-    entity1Terms.forEach(term => {
-        const termLower = term.toLowerCase();
-        const textLower = text.toLowerCase();
-        let pos = 0;
-        while ((pos = textLower.indexOf(termLower, pos)) !== -1) {
-            matches.push({
-                start: pos,
-                end: pos + term.length,
-                type: 'entity1',
-                canonical: entity1Name,
-                term: text.substring(pos, pos + term.length)
-            });
-            pos += term.length;
-        }
+// Highlight quotes for the current assessment
+function highlightQuotesForAssessment(assess) {
+    // Remove all existing quote highlights first
+    document.querySelectorAll('.quote-highlight, .quote-blink').forEach(el => {
+        el.classList.remove('quote-highlight', 'quote-blink');
     });
 
-    // Find entity2 matches
-    entity2Terms.forEach(term => {
-        const termLower = term.toLowerCase();
-        const textLower = text.toLowerCase();
-        let pos = 0;
-        while ((pos = textLower.indexOf(termLower, pos)) !== -1) {
-            matches.push({
-                start: pos,
-                end: pos + term.length,
-                type: 'entity2',
-                canonical: entity2Name,
-                term: text.substring(pos, pos + term.length)
-            });
-            pos += term.length;
-        }
-    });
+    // Add quote-highlight class to quotes from this assessment
+    assess.quotes.forEach((quote, idx) => {
+        // Find quote spans by looking through the quote_map in the document
+        const doc = state.data.documents[assess.resource_id];
+        if (!doc || !doc.quote_map) return;
 
-    // Find other entity matches
-    otherEntities.forEach(entity => {
-        entity.terms.forEach(term => {
-            const termLower = term.toLowerCase();
-            const textLower = text.toLowerCase();
-            let pos = 0;
-            while ((pos = textLower.indexOf(termLower, pos)) !== -1) {
-                matches.push({
-                    start: pos,
-                    end: pos + term.length,
-                    type: 'other',
-                    canonical: entity.canonical,
-                    pairIdx: entity.pairIdx,
-                    term: text.substring(pos, pos + term.length)
-                });
-                pos += term.length;
+        // Search for quote spans in quote_map that match this assessment
+        Object.entries(doc.quote_map).forEach(([quoteId, quoteMeta]) => {
+            const quoteEl = document.getElementById(quoteId);
+            if (quoteEl) {
+                // Apply highlight class to all quotes in this document
+                quoteEl.classList.add('quote-highlight');
             }
         });
     });
+}
 
-    // Remove overlapping matches (keep first/longest)
-    matches.sort((a, b) => a.start - b.start || (b.end - b.start) - (a.end - a.start));
-    const filtered = [];
-    for (const match of matches) {
-        const overlaps = filtered.some(f =>
-            (match.start >= f.start && match.start < f.end) ||
-            (match.end > f.start && match.end <= f.end)
-        );
-        if (!overlaps) {
-            filtered.push(match);
-        }
-    }
+// Update highlighting classes on entity spans based on current pair selection
+function updateDocumentHighlights(docId, currentPairIdx) {
+    const doc = state.data.documents[docId];
+    if (!doc || !doc.entity_map) return;
 
-    // Build HTML by inserting highlights
-    if (filtered.length === 0) {
-        return escapeHtml(text);
-    }
+    const currentPair = state.data.pairs[currentPairIdx];
+    if (!currentPair) return;
 
-    // Build result by processing text segments and highlights
-    let result = '';
-    let lastPos = 0;
+    // Get current pair's entity names (normalized)
+    const entity1Name = currentPair.entity1.name.toLowerCase();
+    const entity2Name = currentPair.entity2.name.toLowerCase();
 
-    filtered.sort((a, b) => a.start - b.start);
+    // Update classes on all entity spans in the document
+    Object.entries(doc.entity_map).forEach(([entityId, entityMeta]) => {
+        const spanElement = document.getElementById(entityId);
+        if (!spanElement) return;
 
-    filtered.forEach(match => {
-        // Add escaped text before this match
-        if (match.start > lastPos) {
-            result += escapeHtml(text.substring(lastPos, match.start));
-        }
+        // Clear existing classes
+        spanElement.className = 'entity-highlight';
 
-        // Add the highlight span
-        if (match.type === 'other') {
-            result += `<span class="entity-highlight other" title="${escapeHtml(match.canonical)}" onclick="selectPairByEntityAndQuote('${escapeHtml(match.canonical)}', ${match.pairIdx}, '${escapeHtml(docId)}', ${quoteIdx})">${escapeHtml(match.term)}</span>`;
+        // Determine entity type relative to current pair
+        const entityName = entityMeta.name.toLowerCase();
+        if (entityName === entity1Name) {
+            spanElement.classList.add('entity1');
+        } else if (entityName === entity2Name) {
+            spanElement.classList.add('entity2');
         } else {
-            result += `<span class="entity-highlight ${match.type}" title="${escapeHtml(match.canonical)}">${escapeHtml(match.term)}</span>`;
+            // Entity from a different pair
+            spanElement.classList.add('other');
+
+            // Add click handler to navigate to the pair containing this entity
+            if (entityMeta.pair_indices && entityMeta.pair_indices.length > 0) {
+                spanElement.style.cursor = 'pointer';
+                spanElement.onclick = () => {
+                    // Navigate to the first pair that contains this entity
+                    // Note: pair_indices are indices into the FULL state.data.pairs array
+                    const fullArrayIdx = entityMeta.pair_indices[0];
+
+                    // Convert from full array index to filtered array index
+                    const filtered = getFilteredPairs();
+                    const targetPair = state.data.pairs[fullArrayIdx];
+                    const filteredIdx = filtered.findIndex(p => p === targetPair);
+
+                    if (filteredIdx !== -1) {
+                        // Found in filtered list - select it and try to keep document open
+                        selectPairByEntity(entityMeta.name, filteredIdx);
+                    } else {
+                        // Not in filtered list (maybe rejected and hidden) - still navigate
+                        // but need to ensure the pair is visible first
+                        console.warn('Target pair not in filtered list - may be hidden by filters');
+                    }
+                };
+            }
         }
-
-        lastPos = match.end;
     });
-
-    // Add any remaining text after the last match
-    if (lastPos < text.length) {
-        result += escapeHtml(text.substring(lastPos));
-    }
-
-    return result;
 }
 
 // Navigate to pair by entity click
+// pairIdx is the index into the FILTERED pairs array
 function selectPairByEntity(entityName, pairIdx) {
     // Save current document if open
     const currentDocId = state.openDocumentIdx !== null ?
         getFilteredPairs()[state.selectedPairIdx]?.assessments[state.openDocumentIdx]?.resource_id : null;
 
-    // Select the new pair
+    // Select the new pair (using filtered index)
     state.selectedPairIdx = pairIdx;
 
     // Try to find and re-open the same document in the new pair
     if (currentDocId) {
-        const newPair = state.data.pairs[pairIdx];
+        const filtered = getFilteredPairs();
+        const newPair = filtered[pairIdx];
         const docIdx = newPair.assessments.findIndex(a => a.resource_id === currentDocId);
         state.openDocumentIdx = docIdx !== -1 ? docIdx : null;
     } else {
@@ -990,71 +953,31 @@ function renderDocument(assess) {
         return '<p>Document not found</p>';
     }
 
-    const filtered = getFilteredPairs();
-    const pair = filtered[state.selectedPairIdx];
+    // Get the pre-rendered document template
+    const templateId = `doc-template-${assess.resource_id}`;
+    const template = document.getElementById(templateId);
 
-    // Get all entity aliases to search for (current pair)
-    const entity1Terms = [pair.entity1.name, ...pair.entity1.aliases];
-    const entity2Terms = [pair.entity2.name, ...pair.entity2.aliases];
-
-    // Collect all OTHER entities from all pairs for highlighting
-    const otherEntities = [];
-    const currentEntityNames = new Set([pair.entity1.name.toLowerCase(), pair.entity2.name.toLowerCase()]);
-
-    state.data.pairs.forEach((p, pIdx) => {
-        if (pIdx !== state.selectedPairIdx) {
-            const e1Name = p.entity1.name;
-            const e2Name = p.entity2.name;
-            if (!currentEntityNames.has(e1Name.toLowerCase())) {
-                otherEntities.push({
-                    terms: [e1Name, ...p.entity1.aliases],
-                    kind: p.entity1.kind,
-                    canonical: e1Name,
-                    pairIdx: pIdx
-                });
-            }
-            if (!currentEntityNames.has(e2Name.toLowerCase())) {
-                otherEntities.push({
-                    terms: [e2Name, ...p.entity2.aliases],
-                    kind: p.entity2.kind,
-                    canonical: e2Name,
-                    pairIdx: pIdx
-                });
-            }
-        }
-    });
-
-    let html = '';
-    let lastEnd = 0;
-
-    // Sort quotes by position
-    const sortedQuotes = [...assess.quotes].sort((a, b) => a.spans[0][0] - b.spans[0][0]);
-
-    sortedQuotes.forEach((quote, qIdx) => {
-        const quoteStart = quote.spans[0][0];
-        const quoteEnd = quote.spans[quote.spans.length - 1][1];
-
-        // Add text before quote (rendered as markdown, no entity highlighting)
-        if (quoteStart > lastEnd) {
-            const beforeText = doc.text.substring(lastEnd, quoteStart);
-            html += markdownToHtml(beforeText);
-        }
-
-        // Process quote text with entity highlighting (current pair + other entities)
-        let quoteText = doc.text.substring(quoteStart, quoteEnd);
-        const highlightedQuote = highlightEntitiesInQuote(quoteText, entity1Terms, entity2Terms, pair.entity1.kind, pair.entity2.kind, pair.entity1.name, pair.entity2.name, otherEntities, qIdx, assess.resource_id);
-
-        html += `<div class="quote-highlight" id="quote-${qIdx}" data-quote-idx="${qIdx}">${highlightedQuote}</div>`;
-        lastEnd = quoteEnd;
-    });
-
-    // Add remaining text
-    if (lastEnd < doc.text.length) {
-        const remainingText = doc.text.substring(lastEnd);
-        html += markdownToHtml(remainingText);
+    if (!template) {
+        console.error(`Template not found: ${templateId}`);
+        return '<p>Document template not found</p>';
     }
 
-    return `<div class="document-text">${html}</div>`;
+    // Clone the template content to create a new document instance
+    const clone = template.content.cloneNode(true);
+
+    // Create a temporary container to get the HTML string
+    const tempContainer = document.createElement('div');
+    tempContainer.appendChild(clone);
+    const html = tempContainer.innerHTML;
+
+    // After rendering, update the highlighting classes based on current pair
+    // Use setTimeout to ensure DOM is updated
+    setTimeout(() => {
+        updateDocumentHighlights(assess.resource_id, state.selectedPairIdx);
+        highlightQuotesForAssessment(assess);
+    }, 0);
+
+    return html;
 }
 
 // Render reasoning sidebar
@@ -1166,15 +1089,41 @@ function renderReasoning() {
     }
 }
 
-// Scroll to quote
+// Scroll to quote with emphasis
 function scrollToQuote(quoteIdx) {
-    const quoteEl = document.getElementById(`quote-${quoteIdx}`);
+    // Find the quote element - we need to search for it in the document
+    // The quote elements have IDs like "doc-{hash}-quote-{n}"
+    // We need to find which one corresponds to this index
+
+    const filtered = getFilteredPairs();
+    const pair = filtered[state.selectedPairIdx];
+    if (!pair || state.openDocumentIdx === null) return;
+
+    const sortedAssessments = [...pair.assessments].sort((a, b) =>
+        b.quotes.length - a.quotes.length
+    );
+    const assess = sortedAssessments[state.openDocumentIdx];
+    const doc = state.data.documents[assess.resource_id];
+
+    if (!doc || !doc.quote_map) return;
+
+    // Get the Nth quote span from quote_map
+    const quoteIds = Object.keys(doc.quote_map);
+    if (quoteIdx < 0 || quoteIdx >= quoteIds.length) return;
+
+    const quoteId = quoteIds[quoteIdx];
+    const quoteEl = document.getElementById(quoteId);
+
     if (quoteEl) {
+        // Scroll into view
         quoteEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        // Highlight temporarily
-        quoteEl.style.background = 'var(--pico-color-zinc-250)';
+
+        // Add blink class for emphasis
+        quoteEl.classList.add('quote-blink');
+
+        // Remove blink class after animation completes
         setTimeout(() => {
-            quoteEl.style.background = '';
+            quoteEl.classList.remove('quote-blink');
         }, 2000);
     }
 }

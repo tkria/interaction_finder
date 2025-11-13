@@ -7,12 +7,25 @@ optimized for frontend rendering and filtering.
 from collections import defaultdict
 from typing import Any
 
+from rich.progress import (
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+    BarColumn,
+    TaskProgressColumn,
+    TimeElapsedColumn,
+)
+
 from interaction_finder.extraction.models import ExtractionResult
+from interaction_finder.report.html_renderer import (
+    DocumentAnnotator,
+    MarkdownToHTMLRenderer,
+)
 
 
 def prepare_report_data(
     result: ExtractionResult, include_rejected: bool = False
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], dict[str, str]]:
     """Transform ExtractionResult into report data structure.
 
     Args:
@@ -20,7 +33,9 @@ def prepare_report_data(
         include_rejected: Whether to include rejected pairs
 
     Returns:
-        JSON-serializable dict with pre-computed structures for frontend
+        Tuple of (json_data, document_html_map)
+        - json_data: JSON-serializable dict with metadata for frontend
+        - document_html_map: Mapping of doc_id -> pre-rendered HTML string
     """
     # Filter judgments based on accepted status
     judgments = (
@@ -30,8 +45,6 @@ def prepare_report_data(
     )
 
     # Group judgments by entity pair (merge different relationships)
-    from collections import defaultdict
-
     pair_groups = defaultdict(list)
     for judgment in judgments:
         # Create canonical pair key (sorted entity names)
@@ -122,10 +135,6 @@ def prepare_report_data(
             if resource is None:
                 continue
 
-            # Extract entity mentions with their quote positions
-            entity1_mentions = _extract_entity_mentions(assess.entity1, assess.quotes)
-            entity2_mentions = _extract_entity_mentions(assess.entity2, assess.quotes)
-
             # Transform quotes with spans
             quote_data = [
                 {
@@ -145,8 +154,6 @@ def prepare_report_data(
                     "reasoning": assess.reasoning,
                     "relationship": assess.relationship,
                     "quotes": quote_data,
-                    "entity1_mentions": entity1_mentions,
-                    "entity2_mentions": entity2_mentions,
                 }
             )
 
@@ -194,16 +201,120 @@ def prepare_report_data(
 
     pairs.sort(key=pair_sort_key)
 
-    # Build document index: resource_id -> document data
+    # Build document index with pre-rendered HTML
+    # Collect document references directly from judgments
+    doc_to_quotes: dict[str, list[Any]] = defaultdict(
+        list
+    )  # doc_id -> [ResourceQuote objects]
+    doc_to_entities: dict[str, dict[int, dict[str, Any]]] = defaultdict(
+        dict
+    )  # doc_id -> {pair_idx: {entity1, entity2}}
+
+    # Map from sorted (entity1, entity2) to pair_idx for tracking
+    # Use sorted names to handle different orderings
+    pair_idx_map = {}
+    for pair_idx, pair in enumerate(pairs):
+        # Create sorted key for matching
+        e1, e2 = sorted([pair["entity1"]["name"], pair["entity2"]["name"]])
+        pair_idx_map[(e1, e2)] = pair_idx
+
+    # Go back to original judgments to get ResourceQuote objects
+    for judgment in judgments:
+        # Create sorted key to match against pair_idx_map
+        e1, e2 = sorted([judgment.entity1.name, judgment.entity2.name])
+        pair_idx = pair_idx_map.get((e1, e2))
+
+        if pair_idx is None:
+            continue
+
+        # Collect quotes and entities from each assessment
+        for assess in judgment.assessments:
+            doc_id = assess.resource_id.id
+
+            # Store the actual ResourceQuote objects
+            for quote in assess.quotes:
+                if quote not in doc_to_quotes[doc_id]:
+                    doc_to_quotes[doc_id].append(quote)
+
+            # Store entities for this pair in this document
+            if pair_idx not in doc_to_entities[doc_id]:
+                doc_to_entities[doc_id][pair_idx] = {
+                    "entity1": {
+                        "name": judgment.entity1.name,
+                        "kind": judgment.entity1.kind,
+                        "aliases": judgment.entity1.aliases,
+                    },
+                    "entity2": {
+                        "name": judgment.entity2.name,
+                        "kind": judgment.entity2.kind,
+                        "aliases": judgment.entity2.aliases,
+                    },
+                }
+
+    # Pre-render each document with annotations
+    # Separate HTML content from metadata for template-based rendering
     documents = {}
-    for resource in result.resources.resources:
-        doc_id = resource.id.id
-        documents[doc_id] = {
-            "id": doc_id,
-            "url": resource.id.url,
-            "title": resource.title or "Untitled",
-            "text": resource.text,
-        }
+    document_html = {}
+
+    # Count how many documents need rendering
+    docs_to_render = [r for r in result.resources.resources if r.id.id in doc_to_quotes]
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        TimeElapsedColumn(),
+    ) as progress:
+        task = progress.add_task(
+            f"Rendering {len(docs_to_render)} documents...", total=len(docs_to_render)
+        )
+
+        for resource in docs_to_render:
+            doc_id = resource.id.id
+
+            # Render markdown to HTML
+            renderer = MarkdownToHTMLRenderer(resource.text)
+            renderer.render()
+
+            # Get quotes and entities for this document
+            doc_quotes = doc_to_quotes[doc_id]
+            doc_entities = doc_to_entities[doc_id]
+
+            # Annotate HTML with quotes and entities
+            annotator = DocumentAnnotator(resource, renderer)
+            prerendered = annotator.annotate(doc_quotes, doc_entities)
+
+            # Store HTML separately for template rendering
+            document_html[doc_id] = prerendered.html
+
+            # Store metadata in JSON-serializable format (without HTML)
+            documents[doc_id] = {
+                "id": doc_id,
+                "url": resource.id.url,
+                "title": resource.title or "Untitled",
+                "quote_map": {
+                    quote_id: {
+                        "span_id": quote_meta.span_id,
+                        "pair_indices": quote_meta.pair_indices,
+                        "original_spans": quote_meta.original_spans,
+                        "html_spans": quote_meta.html_spans,
+                    }
+                    for quote_id, quote_meta in prerendered.quote_map.items()
+                },
+                "entity_map": {
+                    entity_id: {
+                        "span_id": entity_meta.span_id,
+                        "name": entity_meta.name,
+                        "kind": entity_meta.kind,
+                        "aliases": entity_meta.aliases,
+                        "pair_indices": entity_meta.pair_indices,
+                    }
+                    for entity_id, entity_meta in prerendered.entity_map.items()
+                },
+            }
+
+            progress.update(task, advance=1)
 
     # Build comprehensive entity-to-pair mapping (including aliases)
     # Maps entity name/alias -> list of pair indices
@@ -219,7 +330,7 @@ def prepare_report_data(
         for alias in pair["entity2"]["aliases"]:
             entity_to_pairs[alias.lower()].append(pair_idx)
 
-    return {
+    json_data = {
         "metadata": {
             "topic": result.metadata.topic,
             "total_pairs": len(judgments),
@@ -235,45 +346,4 @@ def prepare_report_data(
         "entity_to_pairs": dict(entity_to_pairs),
     }
 
-
-def _extract_entity_mentions(
-    entity_mention,
-    quotes: list,
-) -> list[dict[str, Any]]:
-    """Extract entity mention positions from quotes.
-
-    Scans quote text for entity name and aliases, recording positions.
-
-    Args:
-        entity_mention: EntityMention from assessment
-        quotes: ResourceQuote objects for the pair
-
-    Returns:
-        List of mention dicts with name, spans, and quote_idx
-    """
-    mentions = []
-    search_terms = [entity_mention.name] + entity_mention.aliases
-
-    # For each quote, find entity mentions
-    for quote_idx, quote in enumerate(quotes):
-        text = quote.query_text.lower()
-
-        for term in search_terms:
-            term_lower = term.lower()
-            start = 0
-
-            while True:
-                pos = text.find(term_lower, start)
-                if pos == -1:
-                    break
-
-                mentions.append(
-                    {
-                        "text": term,
-                        "quote_idx": quote_idx,
-                        "span": [pos, pos + len(term)],
-                    }
-                )
-                start = pos + len(term)
-
-    return mentions
+    return json_data, document_html
