@@ -12,6 +12,133 @@ REPORT_CSS = """
     --spacing-card: 0.75rem;
 }
 
+/* Light theme colors (default, explicit, and prefers-color-scheme: light) */
+:root:not([data-theme=dark]),
+[data-theme=light] {
+    /* Semantic color mappings for theming */
+    /* Entity highlighting colors */
+    --entity1-bg: var(--pico-color-violet-200);
+    --entity1-bg-hover: var(--pico-color-violet-300);
+    --entity1-text: var(--pico-color-violet-450);
+    --entity2-bg: var(--pico-color-lime-100);
+    --entity2-bg-hover: var(--pico-color-lime-200);
+    --entity2-text: var(--pico-color-lime-450);
+    --entity-other-bg: var(--pico-color-slate-150);
+    --entity-other-bg-hover: var(--pico-color-slate-250);
+    --entity-fallback-bg: var(--pico-color-slate-100);
+    --entity-fallback-bg-hover: var(--pico-color-slate-200);
+
+    /* State colors */
+    --selected-bg: var(--pico-color-azure-100);
+    --selected-hover-bg: var(--pico-color-azure-50);
+    --rejected-bg: var(--pico-color-red-50);
+    --rejected-border: var(--pico-color-red-600);
+
+    /* Confidence badge colors */
+    --confidence-high-bg: var(--pico-color-green-600);
+    --confidence-medium-bg: var(--pico-color-pumpkin-400);
+    --confidence-low-bg: var(--pico-color-red-600);
+
+    /* Quote colors */
+    --quote-bg: var(--pico-color-zinc-100);
+    --quote-border: var(--pico-color-zinc-400);
+    --quote-emphasis-bg: var(--pico-color-amber-200);
+    --quote-emphasis-border: var(--pico-color-amber-600);
+
+    /* Navigation colors */
+    --nav-hover-bg: var(--pico-color-cyan-50);
+    --nav-active-bg: var(--pico-color-cyan-100);
+    --nav-border: var(--pico-color-cyan-600);
+    --nav-badge-bg: var(--pico-color-zinc-400);
+
+    /* Connection/decoration colors */
+    --connection-stroke: var(--pico-color-azure-600);
+}
+
+/* Dark theme colors (prefers-color-scheme: dark without explicit theme) */
+@media only screen and (prefers-color-scheme: dark) {
+    :root:not([data-theme]) {
+        /* Entity highlighting colors (flipped shades: 200->800, 300->700, 450->550) */
+        --entity1-bg: var(--pico-color-violet-800);
+        --entity1-bg-hover: var(--pico-color-violet-700);
+        --entity1-text: var(--pico-color-violet-550);
+        --entity2-bg: var(--pico-color-lime-900);
+        --entity2-bg-hover: var(--pico-color-lime-800);
+        --entity2-text: var(--pico-color-lime-550);
+        --entity-other-bg: var(--pico-color-slate-850);
+        --entity-other-bg-hover: var(--pico-color-slate-750);
+        --entity-fallback-bg: var(--pico-color-slate-900);
+        --entity-fallback-bg-hover: var(--pico-color-slate-800);
+
+        /* State colors (flipped: 100->900, 50->950, 600->400) */
+        --selected-bg: var(--pico-color-azure-900);
+        --selected-hover-bg: var(--pico-color-azure-950);
+        --rejected-bg: var(--pico-color-red-950);
+        --rejected-border: var(--pico-color-red-400);
+
+        /* Confidence badge colors (flipped: 600->400, 400->600) */
+        --confidence-high-bg: var(--pico-color-green-400);
+        --confidence-medium-bg: var(--pico-color-pumpkin-600);
+        --confidence-low-bg: var(--pico-color-red-400);
+
+        /* Quote colors (flipped: 100->900, 400->600, 200->800, 600->400) */
+        --quote-bg: var(--pico-color-zinc-900);
+        --quote-border: var(--pico-color-zinc-600);
+        --quote-emphasis-bg: var(--pico-color-amber-800);
+        --quote-emphasis-border: var(--pico-color-amber-400);
+
+        /* Navigation colors (flipped: 50->950, 100->900, 600->400, 400->600) */
+        --nav-hover-bg: var(--pico-color-cyan-950);
+        --nav-active-bg: var(--pico-color-cyan-900);
+        --nav-border: var(--pico-color-cyan-400);
+        --nav-badge-bg: var(--pico-color-zinc-600);
+
+        /* Connection/decoration colors (flipped: 600->400) */
+        --connection-stroke: var(--pico-color-azure-400);
+    }
+}
+
+/* Dark theme colors (explicit [data-theme=dark]) */
+[data-theme=dark] {
+    /* Entity highlighting colors (flipped shades) */
+    --entity1-bg: var(--pico-color-violet-800);
+    --entity1-bg-hover: var(--pico-color-violet-700);
+    --entity1-text: var(--pico-color-violet-550);
+    --entity2-bg: var(--pico-color-lime-900);
+    --entity2-bg-hover: var(--pico-color-lime-800);
+    --entity2-text: var(--pico-color-lime-550);
+    --entity-other-bg: var(--pico-color-slate-850);
+    --entity-other-bg-hover: var(--pico-color-slate-750);
+    --entity-fallback-bg: var(--pico-color-slate-900);
+    --entity-fallback-bg-hover: var(--pico-color-slate-800);
+
+    /* State colors */
+    --selected-bg: var(--pico-color-azure-900);
+    --selected-hover-bg: var(--pico-color-azure-950);
+    --rejected-bg: var(--pico-color-red-950);
+    --rejected-border: var(--pico-color-red-400);
+
+    /* Confidence badge colors */
+    --confidence-high-bg: var(--pico-color-green-400);
+    --confidence-medium-bg: var(--pico-color-pumpkin-600);
+    --confidence-low-bg: var(--pico-color-red-400);
+
+    /* Quote colors */
+    --quote-bg: var(--pico-color-zinc-900);
+    --quote-border: var(--pico-color-zinc-600);
+    --quote-emphasis-bg: var(--pico-color-amber-800);
+    --quote-emphasis-border: var(--pico-color-amber-400);
+
+    /* Navigation colors */
+    --nav-hover-bg: var(--pico-color-cyan-950);
+    --nav-active-bg: var(--pico-color-cyan-900);
+    --nav-border: var(--pico-color-cyan-400);
+    --nav-badge-bg: var(--pico-color-zinc-600);
+
+    /* Connection/decoration colors */
+    --connection-stroke: var(--pico-color-azure-400);
+}
+
 body {
     margin: 0;
     padding: 0;
@@ -135,12 +262,12 @@ header {
 
 .pair-card.selected {
     border-color: var(--pico-primary);
-    background: var(--pico-color-azure-100);
+    background: var(--selected-bg);
 }
 
 .pair-card.rejected {
-    background: var(--pico-color-red-50);
-    border-color: var(--pico-color-red-600);
+    background: var(--rejected-bg);
+    border-color: var(--rejected-border);
 }
 
 .pair-entities {
@@ -241,17 +368,17 @@ header {
 }
 
 .confidence-high {
-    background: var(--pico-color-green-600);
+    background: var(--confidence-high-bg);
     color: white;
 }
 
 .confidence-medium {
-    background: var(--pico-color-pumpkin-400);
+    background: var(--confidence-medium-bg);
     color: white;
 }
 
 .confidence-low {
-    background: var(--pico-color-red-600);
+    background: var(--confidence-low-bg);
     color: white;
 }
 
@@ -289,14 +416,14 @@ header {
 
 .document-header:hover {
     border-color: var(--pico-primary);
-    background: var(--pico-color-azure-50);
+    background: var(--selected-hover-bg);
 }
 
 .document-header.open {
     border-bottom-left-radius: 0;
     border-bottom-right-radius: 0;
     border-color: var(--pico-primary);
-    background: var(--pico-color-azure-100);
+    background: var(--selected-bg);
 }
 
 .document-title {
@@ -346,29 +473,33 @@ header {
 
 /* Entity position-specific colors (entity1 vs entity2 in current pair) */
 .entity-highlight.entity1 {
-    background: var(--pico-color-violet-200);
+    background: var(--entity1-bg);
 }
 
 .entity-highlight.entity1:hover {
-    background: var(--pico-color-violet-300);
+    background: var(--entity1-bg-hover);
 }
 
 .entity-highlight.entity2 {
-    background: var(--pico-color-lime-100);
+    background: var(--entity2-bg);
 }
 
 .entity-highlight.entity2:hover {
-    background: var(--pico-color-lime-200);
+    background: var(--entity2-bg-hover);
 }
 
 /* Entities from other pairs */
 .entity-highlight.other {
-    background: var(--pico-color-slate-150);
+    background: var(--entity-other-bg);
     font-weight: normal;
 }
 
 .entity-highlight.other:hover {
-    background: var(--pico-color-slate-250);
+    background: var(--entity-other-bg-hover);
+}
+
+.entity-highlight.clickable {
+    cursor: pointer;
 }
 
 /* Entities in reasoning panel - use color instead of background, lighter weight */
@@ -378,11 +509,11 @@ header {
 }
 
 .reasoning-content .entity-highlight.entity1 {
-    color: var(--pico-color-violet-450);
+    color: var(--entity1-text);
 }
 
 .reasoning-content .entity-highlight.entity2 {
-    color: var(--pico-color-lime-450);
+    color: var(--entity2-text);
 }
 
 /* Disable hover effects on entities in reasoning panel */
@@ -392,35 +523,35 @@ header {
 
 .reasoning-content .entity-highlight.entity1:hover {
     background: none;
-    color: var(--pico-color-violet-450);
+    color: var(--entity1-text);
 }
 
 .reasoning-content .entity-highlight.entity2:hover {
     background: none;
-    color: var(--pico-color-lime-450);
+    color: var(--entity2-text);
 }
 
 /* Fallback for other entity kinds */
 .entity-highlight.other-entity {
-    background: var(--pico-color-slate-100);
+    background: var(--entity-fallback-bg);
     font-weight: normal;
     cursor: pointer;
 }
 
 .entity-highlight.other-entity:hover {
-    background: var(--pico-color-slate-200);
+    background: var(--entity-fallback-bg-hover);
 }
 
 .quote-highlight {
-    background: var(--pico-color-zinc-100);
-    border-left: 3px solid var(--pico-color-zinc-400);
+    background: var(--quote-bg);
+    border-left: 3px solid var(--quote-border);
     padding-left: 0.5rem;
     margin: 0.5rem 0;
 }
 
 .quote-blink {
-    background: var(--pico-color-amber-200);
-    border-left: 3px solid var(--pico-color-amber-600);
+    background: var(--quote-emphasis-bg);
+    border-left: 3px solid var(--quote-emphasis-border);
     transition: background 0.5s ease-out, border-color 0.5s ease-out;
 }
 
@@ -452,6 +583,20 @@ header {
     font-size: 0.85rem;
     color: var(--pico-muted-color);
     margin-top: 0.25rem;
+}
+
+.entity-details-section {
+    margin-top: 1rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--pico-muted-border-color);
+}
+
+.entity-detail-item {
+    margin-bottom: 1rem;
+}
+
+.entity-detail-item:last-child {
+    margin-bottom: 0;
 }
 
 .quote-navigation {
@@ -488,14 +633,14 @@ header {
 }
 
 .quote-nav-item:hover {
-    background: var(--pico-color-cyan-50);
-    border-color: var(--pico-color-cyan-600);
+    background: var(--nav-hover-bg);
+    border-color: var(--nav-border);
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
 }
 
 .quote-nav-item.active {
-    background: var(--pico-color-cyan-100);
-    border-color: var(--pico-color-cyan-600);
+    background: var(--nav-active-bg);
+    border-color: var(--nav-border);
 }
 
 .quote-number {
@@ -505,7 +650,7 @@ header {
     display: flex;
     align-items: center;
     justify-content: center;
-    background: var(--pico-color-zinc-400);
+    background: var(--nav-badge-bg);
     color: white;
     border-radius: 50%;
     font-weight: 600;
@@ -566,7 +711,7 @@ footer {
 }
 
 .connection-line {
-    stroke: var(--pico-color-azure-600);
+    stroke: var(--connection-stroke);
     stroke-width: 2;
     fill: none;
     opacity: 0.6;
@@ -876,7 +1021,7 @@ function updateDocumentHighlights(docId, currentPairIdx) {
 
             // Add click handler to navigate to the pair containing this entity
             if (entityMeta.pair_indices && entityMeta.pair_indices.length > 0) {
-                spanElement.style.cursor = 'pointer';
+                spanElement.classList.add('clickable');
                 spanElement.onclick = () => {
                     // Navigate to the first pair that contains this entity
                     // Note: pair_indices are indices into the FULL state.data.pairs array
@@ -1006,15 +1151,15 @@ function renderReasoning() {
                     <p><strong>Confidence:</strong> <span class="confidence-badge confidence-${pair.confidence}">${pair.confidence}</span></p>
                     <p>${highlightedReasoning}</p>
                 </div>
-                <div style="margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--pico-muted-border-color);">
+                <div class="entity-details-section">
                     <div class="reasoning-title">Entity Details</div>
-                    <div style="margin-bottom: 1rem;">
+                    <div class="entity-detail-item">
                         <strong>${escapeHtml(pair.entity1.name)}</strong> (${escapeHtml(pair.entity1.kind)})
                         ${pair.entity1.aliases.length > 0 ? `
                             <div class="alias-tooltip">Aliases: ${escapeHtml(pair.entity1.aliases.join(', '))}</div>
                         ` : ''}
                     </div>
-                    <div>
+                    <div class="entity-detail-item">
                         <strong>${escapeHtml(pair.entity2.name)}</strong> (${escapeHtml(pair.entity2.kind)})
                         ${pair.entity2.aliases.length > 0 ? `
                             <div class="alias-tooltip">Aliases: ${escapeHtml(pair.entity2.aliases.join(', '))}</div>
