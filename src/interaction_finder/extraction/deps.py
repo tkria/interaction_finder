@@ -4,6 +4,7 @@ The Deps dataclass holds external services instantiated once per pipeline run
 and passed to agents via ctx.deps.
 """
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from typing import Protocol
@@ -51,9 +52,11 @@ class Deps:
         config: Full configuration object
         logger: Logger for warnings and debugging
         progress: Optional progress counter for live display
+        agent_semaphore: Semaphore to limit concurrent agent calls
     """
 
     resource_pool: ResourcePool
     config: IfetcherConfig
     logger: logging.Logger
     progress: ProgressProtocol | None = None
+    agent_semaphore: asyncio.Semaphore = None  # type: ignore

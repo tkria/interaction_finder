@@ -267,6 +267,12 @@ class IfetcherConfig(BaseModel):
             enable_entity_kind_validation: bool = Field(
                 True, description="Filter entities not matching target kinds"
             )
+            agent_concurrency_limit: int = Field(
+                10,
+                ge=1,
+                le=100,
+                description="Maximum concurrent LLM agent calls to prevent rate limiting",
+            )
 
         extraction: Extraction = Field(
             default_factory=Extraction, description="Extraction configuration"

@@ -81,7 +81,8 @@ For each entity, provide: canonical name, all verbatim names from text, supporti
         with rename_agent(
             agent, name=f"ExtractDocumentEntities: {resource.title[:60]}"
         ):
-            result = await agent.run(prompt, deps=deps, usage=usage)
+            async with deps.agent_semaphore:
+                result = await agent.run(prompt, deps=deps, usage=usage)
     except (TimeoutError, ConnectionError, ValueError) as e:
         deps.logger.error(
             f"Entity extraction failed for {resource.id.url}: {type(e).__name__}: {e}"
@@ -266,7 +267,8 @@ Provide exact supporting quotes."""
     agent = get_proximal_pair_agent(config)
     try:
         with rename_agent(agent, name=f"ExtractProximalPairs: {entities_str}"):
-            result = await agent.run(prompt, deps=deps, usage=usage)
+            async with deps.agent_semaphore:
+                result = await agent.run(prompt, deps=deps, usage=usage)
     except (TimeoutError, ConnectionError, ValueError) as e:
         deps.logger.error(f"Proximal pair extraction failed: {type(e).__name__}: {e}")
         return ([], 0, 0)
@@ -438,7 +440,8 @@ Assign a confidence level (high/medium/low) and explain your reasoning."""
     agent = get_pair_judge_agent(config)
     try:
         with rename_agent(agent, name=f"AssessPair: {entity1.name} ⇌ {entity2.name}"):
-            result = await agent.run(prompt, deps=deps, usage=usage)
+            async with deps.agent_semaphore:
+                result = await agent.run(prompt, deps=deps, usage=usage)
     except (TimeoutError, ConnectionError, ValueError) as e:
         deps.logger.error(
             f"Pair assessment failed for {entity1.name}-{entity2.name}: "

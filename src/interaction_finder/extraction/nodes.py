@@ -437,7 +437,10 @@ For each pair, decide if they should be merged (child absorbed into parent) or k
                             agent,
                             name=f"MergeEntitiesNode (kind={kind}, batch {i // batch_size + 1})",
                         ):
-                            result = await agent.run(prompt, deps=ctx.deps, usage=usage)
+                            async with ctx.deps.agent_semaphore:
+                                result = await agent.run(
+                                    prompt, deps=ctx.deps, usage=usage
+                                )
 
                         # Store decisions in cache
                         for decision in result.output.decisions:
@@ -840,7 +843,8 @@ Decide: accept or reject, with confidence level (high/medium/low) and detailed r
                 agent,
                 name=f"JudgeCrossDocumentNode: {pair_key.entity1_name} ⇌ {pair_key.entity2_name}",
             ):
-                result = await agent.run(prompt, deps=ctx.deps, usage=usage)
+                async with ctx.deps.agent_semaphore:
+                    result = await agent.run(prompt, deps=ctx.deps, usage=usage)
         except (TimeoutError, ConnectionError, ValueError) as e:
             ctx.deps.logger.error(
                 f"Cross-document judgment failed for {pair_key}: "

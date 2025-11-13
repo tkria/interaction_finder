@@ -4,6 +4,7 @@ Provides the main run_extraction function that orchestrates the entire
 extraction process from resources to final pairs with provenance.
 """
 
+import asyncio
 import logging
 
 from interaction_finder.extraction.deps import Deps
@@ -60,12 +61,18 @@ async def run_extraction(
         if logger is None:
             logger = logging.getLogger(__name__)
 
+        # Create agent concurrency semaphore
+        agent_semaphore = asyncio.Semaphore(
+            config.tools.extraction.agent_concurrency_limit
+        )
+
         # Create dependencies
         deps = Deps(
             resource_pool=resource_pool,
             config=config,
             logger=logger,
             progress=progress,
+            agent_semaphore=agent_semaphore,
         )
 
         # Build permitted pairs map from target entity types
