@@ -769,6 +769,45 @@ def compute_chunk_spans(
     return spans
 
 
+def _expand_to_word_boundaries(text: str, start: int, end: int) -> Tuple[int, int]:
+    """
+    Expand span boundaries to align with word boundaries.
+
+    Ensures quotes don't begin or end mid-word by expanding outward to the
+    nearest word boundaries. A word boundary is defined as a transition between
+    alphanumeric and non-alphanumeric characters.
+
+    Args:
+        text: Full text content
+        start: Start position of span
+        end: End position of span
+
+    Returns:
+        Tuple of (adjusted_start, adjusted_end) aligned to word boundaries
+    """
+    text_length = len(text)
+    adjusted_start = start
+    adjusted_end = end
+
+    # Expand start backward if we're mid-word
+    while (
+        adjusted_start > 0
+        and text[adjusted_start - 1].isalnum()
+        and text[adjusted_start].isalnum()
+    ):
+        adjusted_start -= 1
+
+    # Expand end forward if we're mid-word
+    while (
+        adjusted_end < text_length
+        and text[adjusted_end - 1].isalnum()
+        and text[adjusted_end].isalnum()
+    ):
+        adjusted_end += 1
+
+    return adjusted_start, adjusted_end
+
+
 class ResourceId(BaseModel):
     """
     Lightweight identifier for a document resource.
@@ -1700,20 +1739,10 @@ class ResourceQuote(BaseModel):
             if orig_start is None or orig_end is None or orig_start >= orig_end:
                 continue
 
-            # Expand to cover whole word boundaries if we clipped mid-token
-            text_length = len(resource.text)
-            while (
-                orig_start > 0
-                and resource.text[orig_start - 1].isalnum()
-                and resource.text[orig_start].isalnum()
-            ):
-                orig_start -= 1
-            while (
-                orig_end < text_length
-                and resource.text[orig_end - 1].isalnum()
-                and resource.text[orig_end].isalnum()
-            ):
-                orig_end += 1
+            # Expand to word boundaries to avoid mid-word splits
+            orig_start, orig_end = _expand_to_word_boundaries(
+                resource.text, orig_start, orig_end
+            )
 
             candidate_spans.append((orig_start, orig_end))
 
@@ -1761,13 +1790,17 @@ class ResourceQuote(BaseModel):
     def _original_positions(
         self, resource: Resource, norm_spans: List[Tuple[int, int]]
     ) -> List[Tuple[int, int]]:
-        """Map normalized spans to original positions."""
+        """Map normalized spans to original positions with word boundary adjustment."""
         original_spans = []
         for norm_start, norm_end in norm_spans:
             orig_start, orig_end = resource.map_normalized_to_original_position(
                 norm_start, norm_end - norm_start
             )
             if orig_start is not None and orig_end is not None:
+                # Expand to word boundaries to avoid mid-word splits
+                orig_start, orig_end = _expand_to_word_boundaries(
+                    resource.text, orig_start, orig_end
+                )
                 original_spans.append((orig_start, orig_end))
         return original_spans
 

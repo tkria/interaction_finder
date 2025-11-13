@@ -1415,6 +1415,144 @@ class TestFuzzyMatchingExceptions:
             assert e.similarity_threshold == 0.85
             assert e.similarity >= FUZZY_SUGGESTION_THRESHOLD
 
+    def test_fuzzy_quote_word_boundary_alignment_via_normalized(self):
+        """Test word boundary adjustment when fuzzy match uses _find_normalized path."""
+        # Create a document where normalized mapping could produce mid-word boundaries
+        resource = Resource(
+            id=ResourceId(url="https://example.com/doc", counter=1),
+            title="Boundary Test",
+            text="The BRCA1-associated protein interacts with DNA-repair mechanisms.",
+        )
+
+        # Fuzzy quote that will match via _find_normalized after correction
+        # "BRCA1 associated" should fuzzy-match to "BRCA1-associated" in normalized text
+        quote = ResourceQuote(
+            resource,
+            "BRCA1 associated protein",
+            similarity_threshold=0.80,
+        )
+
+        # Verify the quote was created successfully
+        assert isinstance(quote, ResourceQuote)
+        assert quote.count >= 1
+
+        # Verify spans align to word boundaries (not mid-word)
+        for start, end in quote.spans:
+            # Check start is at word boundary (beginning of text or preceded by non-alnum)
+            if start > 0:
+                assert not (
+                    resource.text[start - 1].isalnum()
+                    and resource.text[start].isalnum()
+                ), (
+                    f"Start position {start} is mid-word in '{resource.text[start - 5 : start + 5]}'"
+                )
+
+            # Check end is at word boundary (end of text or followed by non-alnum)
+            if end < len(resource.text):
+                assert not (
+                    resource.text[end - 1].isalnum() and resource.text[end].isalnum()
+                ), (
+                    f"End position {end} is mid-word in '{resource.text[end - 5 : end + 5]}'"
+                )
+
+        # Extracted text should be complete words
+        quote_text = quote.get_quote_text(1)
+        # Should contain complete words like "BRCA1" not partial like "CA1"
+        assert "BRCA1" in quote_text or "brca1" in quote_text.lower()
+
+    def test_fuzzy_quote_word_boundary_alignment_via_fallback(self):
+        """Test word boundary adjustment when fuzzy match uses _spans_from_fuzzy_alignment fallback."""
+        # Create a scenario that forces the fuzzy alignment fallback path
+        # This happens when corrected_quote can't be found via _find_normalized
+        resource = Resource(
+            id=ResourceId(url="https://example.com/doc", counter=1),
+            title="Fallback Test",
+            text="Studies show that p53-mediated apoptosis is critical for tumor suppression in various cancer types including breast carcinoma.",
+        )
+
+        # Quote with slight modifications that will trigger fuzzy alignment fallback
+        quote = ResourceQuote(
+            resource,
+            "p53 mediated apoptosis critical tumor suppression cancer types breast",
+            similarity_threshold=0.70,
+        )
+
+        assert isinstance(quote, ResourceQuote)
+        assert quote.fuzzy_corrected
+
+        # Verify all spans respect word boundaries
+        for start, end in quote.spans:
+            # Check start boundary
+            if start > 0:
+                prev_char = resource.text[start - 1]
+                curr_char = resource.text[start]
+                assert not (prev_char.isalnum() and curr_char.isalnum()), (
+                    f"Start {start} splits word: ...{resource.text[start - 3 : start]}|{resource.text[start : start + 3]}..."
+                )
+
+            # Check end boundary
+            if end < len(resource.text):
+                prev_char = resource.text[end - 1]
+                curr_char = resource.text[end]
+                assert not (prev_char.isalnum() and curr_char.isalnum()), (
+                    f"End {end} splits word: ...{resource.text[end - 3 : end]}|{resource.text[end : end + 3]}..."
+                )
+
+    def test_word_boundary_with_hyphenated_terms(self):
+        """Test that word boundaries work correctly with hyphenated scientific terms."""
+        resource = Resource(
+            id=ResourceId(url="https://example.com/doc", counter=1),
+            title="Hyphenation Test",
+            text="The ATP-dependent chromatin-remodeling complex SWI/SNF regulates gene expression.",
+        )
+
+        # Quote part of a hyphenated term to test boundary expansion
+        quote = ResourceQuote(
+            resource,
+            "ATP dependent chromatin remodeling",
+            similarity_threshold=0.80,
+        )
+
+        assert quote.count >= 1
+
+        # The quote should expand to include complete hyphenated terms
+        quote_text = quote.get_quote_text(1)
+        # Should include "ATP-dependent" not just "TP-dependent"
+        # Check we got the complete word at the start
+        first_span_start = quote.spans[0][0]
+        if first_span_start > 0:
+            # Should not start mid-word
+            assert not resource.text[first_span_start - 1].isalnum()
+
+    def test_word_boundary_with_greek_letters(self):
+        """Test word boundaries when matching text with Greek letters."""
+        resource = Resource(
+            id=ResourceId(url="https://example.com/doc", counter=1),
+            title="Greek Letter Test",
+            text="The NFκB pathway and TNF-α signaling are inflammatory mediators.",
+        )
+
+        # Match with Greek letters normalized to ASCII
+        quote = ResourceQuote(
+            resource,
+            "NF kappa B pathway TNF alpha signaling",
+            similarity_threshold=0.75,
+        )
+
+        assert quote.count >= 1
+
+        # Verify word boundaries
+        for start, end in quote.spans:
+            if start > 0:
+                assert not (
+                    resource.text[start - 1].isalnum()
+                    and resource.text[start].isalnum()
+                )
+            if end < len(resource.text):
+                assert not (
+                    resource.text[end - 1].isalnum() and resource.text[end].isalnum()
+                )
+
     def test_backwards_compatibility_catching_value_error(self):
         """Test that existing code catching ValueError still works."""
         resource = Resource(
