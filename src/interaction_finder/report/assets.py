@@ -458,6 +458,25 @@ header {
     display: block;
 }
 
+.document-url-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.2rem 0.75rem;
+    margin-bottom: 0.75rem;
+    border-radius: 999px;
+    background: var(--pico-color-azure-600);
+    color: var(--pico-color-slate-50);
+    font-weight: 600;
+    font-size: 0.85rem;
+    text-decoration: none;
+}
+
+.document-url-badge:hover {
+    background: var(--pico-color-azure-700);
+    color: var(--pico-color-slate-25);
+}
+
 .document-text {
     white-space: pre-wrap;
     font-family: var(--pico-font-family);
@@ -1195,6 +1214,13 @@ function renderDocument(assess) {
     tempContainer.appendChild(clone);
     const html = tempContainer.innerHTML;
 
+    const urlBadge = doc.url ? `
+        <a class="document-url-badge" href="${escapeHtml(doc.url)}" target="_blank" rel="noreferrer noopener">
+            <span aria-hidden="true">&#128279;</span>
+            <span>View original</span>
+        </a>
+    ` : '';
+
     // After rendering, update the highlighting classes based on current pair
     // Use setTimeout to ensure DOM is updated
     setTimeout(() => {
@@ -1202,7 +1228,7 @@ function renderDocument(assess) {
         highlightQuotesForAssessment(assess);
     }, 0);
 
-    return html;
+    return `${urlBadge}${html}`;
 }
 
 // Render reasoning sidebar
