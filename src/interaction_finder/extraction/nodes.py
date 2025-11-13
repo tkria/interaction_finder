@@ -118,116 +118,126 @@ class ProcessDocumentsNode(BaseNode[State, Deps, ExtractionResult]):
         self, resource: Resource, ctx: GraphRunContext[State, Deps]
     ):
         """Process a single document through the full per-document pipeline."""
-        try:
-            # Stage 1: Extract entities with quote validation
-            entities, quotes_validated, quotes_failed = await extract_document_entities(
-                resource,
-                ctx.state.topic,
-                ctx.state.target_entity_types,
-                ctx.deps.config,
-                ctx.deps,
-            )
-
-            # Update quote counters
-            ctx.state.quotes_validated += quotes_validated
-            ctx.state.quotes_failed += quotes_failed
-
-            if not entities:
-                return  # No entities found in this document
-
-            # Store raw entities
-            ctx.state.entities_by_resource[resource.id] = entities
-
-            # Stage 2: Validate entity kinds
-            if ctx.deps.progress:
-                ctx.deps.progress.set_phase_validating()
-
-            validated = validate_entity_kinds(entities, ctx.state.target_entity_types)
-
-            if not validated:
-                return  # No valid entities after kind filtering
-
-            ctx.state.validated_entities_by_resource[resource.id] = validated
-
-            # Update progress
-            if ctx.deps.progress:
-                ctx.deps.progress.documents_processed += 1
-                ctx.deps.progress.entities_found = sum(
-                    len(e) for e in ctx.state.entities_by_resource.values()
+        with logfire.span(
+            f"Document {resource.id.id}: {resource.title[:60]}",
+            url=resource.id.url,
+        ):
+            try:
+                # Stage 1: Extract entities with quote validation
+                (
+                    entities,
+                    quotes_validated,
+                    quotes_failed,
+                ) = await extract_document_entities(
+                    resource,
+                    ctx.state.topic,
+                    ctx.state.target_entity_types,
+                    ctx.deps.config,
+                    ctx.deps,
                 )
-                ctx.deps.progress.quotes_validated = ctx.state.quotes_validated
-                ctx.deps.progress.quotes_failed = ctx.state.quotes_failed
-                ctx.deps.progress.update()
 
-            # Stage 3: Identify proximal entity sets
-            if ctx.deps.progress:
-                ctx.deps.progress.set_phase_proximal()
+                # Update quote counters
+                ctx.state.quotes_validated += quotes_validated
+                ctx.state.quotes_failed += quotes_failed
 
-            proximal_sets = identify_document_proximal_sets(
-                validated,
-                resource,
-                ctx.deps.config.tools.extraction.proximal_window_chunks,
-            )
+                if not entities:
+                    return  # No entities found in this document
 
-            if not proximal_sets:
-                return  # No co-occurring entities found
+                # Store raw entities
+                ctx.state.entities_by_resource[resource.id] = entities
 
-            ctx.state.proximal_sets_by_resource[resource.id] = proximal_sets
+                # Stage 2: Validate entity kinds
+                if ctx.deps.progress:
+                    ctx.deps.progress.set_phase_validating()
 
-            # Stage 4: Extract pairs from proximal sets
-            if ctx.deps.progress:
-                ctx.deps.progress.set_phase_extracting_pairs()
+                validated = validate_entity_kinds(
+                    entities, ctx.state.target_entity_types
+                )
 
-            pairs, pairs_validated, pairs_failed = await extract_document_pairs(
-                proximal_sets,
-                validated,
-                resource,
-                ctx.state.topic,
-                ctx.state.permitted_pairs,
-                ctx.deps.config.tools.extraction.region_padding_chunks,
-                ctx.deps.config,
-                ctx.deps,
-            )
+                if not validated:
+                    return  # No valid entities after kind filtering
 
-            # Update quote counters from pair extraction
-            ctx.state.quotes_validated += pairs_validated
-            ctx.state.quotes_failed += pairs_failed
-
-            if not pairs:
-                return  # No pairs found in proximal sets
-
-            # Update pairs_found counter
-            if ctx.deps.progress:
-                ctx.deps.progress.pairs_found += len(pairs)
-                ctx.deps.progress.update()
-
-            # Stage 5: Deduplicate and assess pairs
-            if ctx.deps.progress:
-                ctx.deps.progress.set_phase_assessing()
-            assessments = await assess_document_pairs(
-                pairs,
-                validated,
-                resource,
-                ctx.state.topic,
-                ctx.deps.config.tools.extraction.region_padding_chunks,
-                ctx.deps.config,
-                ctx.deps,
-            )
-
-            if assessments:
-                ctx.state.pair_assessments_by_resource[resource.id] = assessments
+                ctx.state.validated_entities_by_resource[resource.id] = validated
 
                 # Update progress
                 if ctx.deps.progress:
-                    ctx.deps.progress.pairs_assessed += len(assessments)
+                    ctx.deps.progress.documents_processed += 1
+                    ctx.deps.progress.entities_found = sum(
+                        len(e) for e in ctx.state.entities_by_resource.values()
+                    )
+                    ctx.deps.progress.quotes_validated = ctx.state.quotes_validated
+                    ctx.deps.progress.quotes_failed = ctx.state.quotes_failed
                     ctx.deps.progress.update()
 
-        except Exception as e:
-            # Log error but don't fail entire pipeline
-            ctx.deps.logger.error(
-                f"[red]Document processing failed for {resource.title}: {type(e).__name__}: {e}[/red]",
-                extra={"markup": True},
-            )
+                # Stage 3: Identify proximal entity sets
+                if ctx.deps.progress:
+                    ctx.deps.progress.set_phase_proximal()
+
+                proximal_sets = identify_document_proximal_sets(
+                    validated,
+                    resource,
+                    ctx.deps.config.tools.extraction.proximal_window_chunks,
+                )
+
+                if not proximal_sets:
+                    return  # No co-occurring entities found
+
+                ctx.state.proximal_sets_by_resource[resource.id] = proximal_sets
+
+                # Stage 4: Extract pairs from proximal sets
+                if ctx.deps.progress:
+                    ctx.deps.progress.set_phase_extracting_pairs()
+
+                pairs, pairs_validated, pairs_failed = await extract_document_pairs(
+                    proximal_sets,
+                    validated,
+                    resource,
+                    ctx.state.topic,
+                    ctx.state.permitted_pairs,
+                    ctx.deps.config.tools.extraction.region_padding_chunks,
+                    ctx.deps.config,
+                    ctx.deps,
+                )
+
+                # Update quote counters from pair extraction
+                ctx.state.quotes_validated += pairs_validated
+                ctx.state.quotes_failed += pairs_failed
+
+                if not pairs:
+                    return  # No pairs found in proximal sets
+
+                # Update pairs_found counter
+                if ctx.deps.progress:
+                    ctx.deps.progress.pairs_found += len(pairs)
+                    ctx.deps.progress.update()
+
+                # Stage 5: Deduplicate and assess pairs
+                if ctx.deps.progress:
+                    ctx.deps.progress.set_phase_assessing()
+                assessments = await assess_document_pairs(
+                    pairs,
+                    validated,
+                    resource,
+                    ctx.state.topic,
+                    ctx.deps.config.tools.extraction.region_padding_chunks,
+                    ctx.deps.config,
+                    ctx.deps,
+                )
+
+                if assessments:
+                    ctx.state.pair_assessments_by_resource[resource.id] = assessments
+
+                    # Update progress
+                    if ctx.deps.progress:
+                        ctx.deps.progress.pairs_assessed += len(assessments)
+                        ctx.deps.progress.update()
+
+            except Exception as e:
+                # Log error but don't fail entire pipeline
+                ctx.deps.logger.error(
+                    f"[red]Document processing failed for {resource.title}: {type(e).__name__}: {e}[/red]",
+                    extra={"markup": True},
+                )
 
 
 @dataclass
