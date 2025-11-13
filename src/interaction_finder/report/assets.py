@@ -62,7 +62,7 @@ REPORT_CSS = """
         --entity1-bg: var(--pico-color-violet-800);
         --entity1-bg-hover: var(--pico-color-violet-700);
         --entity1-text: var(--pico-color-violet-550);
-        --entity2-bg: var(--pico-color-lime-900);
+        --entity2-bg: var(--pico-color-lime-650);
         --entity2-bg-hover: var(--pico-color-lime-800);
         --entity2-text: var(--pico-color-lime-550);
         --entity-other-bg: var(--pico-color-slate-850);
@@ -82,7 +82,7 @@ REPORT_CSS = """
         --confidence-low-bg: var(--pico-color-red-400);
 
         /* Quote colors (flipped: 100->900, 400->600, 200->800, 600->400) */
-        --quote-bg: var(--pico-color-zinc-900);
+        --quote-bg: var(--pico-color-zinc-750);
         --quote-border: var(--pico-color-zinc-600);
         --quote-emphasis-bg: var(--pico-color-amber-800);
         --quote-emphasis-border: var(--pico-color-amber-400);
@@ -104,7 +104,7 @@ REPORT_CSS = """
     --entity1-bg: var(--pico-color-violet-800);
     --entity1-bg-hover: var(--pico-color-violet-700);
     --entity1-text: var(--pico-color-violet-550);
-    --entity2-bg: var(--pico-color-lime-900);
+    --entity2-bg: var(--pico-color-lime-650);
     --entity2-bg-hover: var(--pico-color-lime-800);
     --entity2-text: var(--pico-color-lime-550);
     --entity-other-bg: var(--pico-color-slate-850);
@@ -124,7 +124,7 @@ REPORT_CSS = """
     --confidence-low-bg: var(--pico-color-red-400);
 
     /* Quote colors */
-    --quote-bg: var(--pico-color-zinc-900);
+    --quote-bg: var(--pico-color-zinc-750);
     --quote-border: var(--pico-color-zinc-600);
     --quote-emphasis-bg: var(--pico-color-amber-800);
     --quote-emphasis-border: var(--pico-color-amber-400);
