@@ -76,11 +76,8 @@ def _render_document_worker(
                 },
             }
 
-            # Send result back
+            # Send result back (progress will be updated when result is received)
             output_queue.put(("result", (resource.id.id, prerendered.html, metadata)))
-
-            # Send progress update
-            output_queue.put(("progress", None))
 
         except Exception as e:
             # Send error back to main process
@@ -150,10 +147,8 @@ def render_documents_parallel(
             doc_id, html, metadata = msg_data
             document_html[doc_id] = html
             documents[doc_id] = metadata
-
-        elif msg_type == "progress":
+            # Increment progress when result is received
             completed += 1
-            # Call progress callback if provided
             if progress_callback:
                 progress_callback()
 
@@ -161,6 +156,8 @@ def render_documents_parallel(
             doc_id, error = msg_data
             errors.append((doc_id, error))
             completed += 1
+            if progress_callback:
+                progress_callback()
 
     # Wait for all workers to finish
     for worker in workers:

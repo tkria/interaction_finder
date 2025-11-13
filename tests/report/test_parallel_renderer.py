@@ -176,6 +176,6 @@ def test_parallel_rendering_quote_spans():
     doc_meta = documents[resource.id.id]
     assert len(doc_meta["quote_map"]) == 1
 
-    # Check HTML contains quote span
+    # Check HTML contains quote span (includes document-specific ID)
     html = document_html[resource.id.id]
-    assert 'class="quote-span"' in html
+    assert 'class="quote-span' in html
