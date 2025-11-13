@@ -907,6 +907,104 @@ class TestResourceQuote:
         assert fragment is not None
         # Quote is valid if constructor succeeded
 
+    def test_fuzzy_match_preserves_word_integrity(self):
+        """Test that fuzzy matching doesn't introduce erroneous spaces within words."""
+        # This was a regression where matching blocks were joined with spaces,
+        # causing words to be split (e.g., "Introduction" → "in t ro i")
+        resource = Resource(
+            id=ResourceId(url="https://example.com/doc", counter=1),
+            title="Test Doc",
+            text="Introduction: Ambrisentan, bosentan, and sildenafil are standard therapies for pulmonary arterial hypertension (PAH).",
+        )
+
+        # Fuzzy quote that might have minor differences
+        quote = ResourceQuote(
+            resource,
+            "Introduction: Ambrisentan, bosentan, and sildenafil are standard therapies for pulmonary arterial hypertension (PAH)",
+            similarity_threshold=0.85,
+        )
+
+        # Get the corrected quote text
+        quote_text = quote.get_quote_text(1)
+
+        # The quote should contain complete words, not fragmented ones
+        assert "introduction" in quote_text.lower()
+        assert "ambrisentan" in quote_text.lower()
+        # Should NOT have erroneous spaces like "in t ro i" or "a mbrisentan"
+        assert "in t ro" not in quote_text.lower()
+        assert "a mbrisentan" not in quote_text.lower()
+
+    def test_fuzzy_match_preserves_word_boundaries_with_punctuation(self):
+        """Test that fuzzy matching handles word boundaries correctly with punctuation."""
+        resource = Resource(
+            id=ResourceId(url="https://example.com/doc", counter=1),
+            title="Test Doc",
+            text="Also, children were tested for copy number variations.",
+        )
+
+        # Quote that might trigger fuzzy matching
+        quote = ResourceQuote(
+            resource,
+            "Also, children were tested for copy number variations",
+            similarity_threshold=0.85,
+        )
+
+        quote_text = quote.get_quote_text(1)
+
+        # Should contain complete words
+        assert "also" in quote_text.lower()
+        assert "children" in quote_text.lower()
+        # Should NOT have partial words like "al children"
+        assert quote_text.lower().startswith("also") or " also" in quote_text.lower()
+
+    def test_fuzzy_match_with_special_characters(self):
+        """Test fuzzy matching with special characters and scientific notation."""
+        resource = Resource(
+            id=ResourceId(url="https://example.com/doc", counter=1),
+            title="Test Doc",
+            text="Membranes were incubated with anti-IL-1β (A16288, 1:1000, Abclonal) at room temperature.",
+        )
+
+        # Quote with Greek letter and scientific notation
+        quote = ResourceQuote(
+            resource,
+            "Membranes were incubated with anti-IL-1β (A16288, 1:1000, Abclonal)",
+            similarity_threshold=0.65,  # Lower threshold for complex text
+        )
+
+        quote_text = quote.get_quote_text(1)
+
+        # Should preserve key identifiers
+        assert "anti" in quote_text.lower()
+        assert "il" in quote_text.lower()
+        assert "abclonal" in quote_text.lower() or "a 1 1000" in quote_text.lower()
+        # Should NOT have severely fragmented words like "membranes" → "an i"
+        assert len(quote_text.split()) >= 5  # Should have multiple words, not fragments
+
+    def test_fuzzy_match_ellipsis_handling(self):
+        """Test fuzzy matching with ellipsis and abbreviated text."""
+        resource = Resource(
+            id=ResourceId(url="https://example.com/doc", counter=1),
+            title="Test Doc",
+            text="This shift in metabolic profile occurs in response to BMP9 and BMP10 signaling pathways.",
+        )
+
+        # Quote with ellipsis (LLM often uses this for brevity)
+        quote = ResourceQuote(
+            resource,
+            "This shift... in response to BMP9 and BMP10",
+            similarity_threshold=0.70,
+        )
+
+        quote_text = quote.get_quote_text(1)
+
+        # Should preserve word integrity despite ellipsis
+        assert "shift" in quote_text.lower() or "response" in quote_text.lower()
+        # Should NOT fragment short words into single letters like "i s"
+        if "shift" in quote_text.lower():
+            # Check it's the complete word, not "s" or "i s"
+            assert "shift" in quote_text.lower().split()
+
 
 class TestIntegrationScenarios:
     """Integration tests combining multiple components."""

@@ -676,20 +676,38 @@ def _auto_correct_quote_from_alignment(
         - Uses get_matching_blocks() to identify aligned segments
         - Extracts text from window at aligned positions
         - Translates match blocks from window-relative to document-absolute coordinates
-        - Preserves word boundaries and spacing
+        - Preserves small gaps (single spaces) between consecutive blocks in window,
+          but omits larger gaps (these represent truly disjoint quote segments)
     """
     # Get matching blocks: (llm_pos, window_pos, length) tuples
     blocks = matcher.get_matching_blocks()
 
-    # Extract aligned segments from window
-    segments = []
-    for llm_pos, window_pos, length in blocks:
-        if length > 0:  # Skip dummy block at end
-            segment = window[window_pos : window_pos + length]
-            segments.append(segment)
+    # Build corrected quote by extracting matching segments
+    # Preserve small gaps (word boundaries) but not large omissions
+    corrected_parts = []
+    prev_window_end = None
 
-    # Join segments with single space
-    corrected = " ".join(segments)
+    for llm_pos, window_pos, length in blocks:
+        if length == 0:  # Skip dummy block at end
+            continue
+
+        # Check if there's a gap in the window between previous block and this one
+        if prev_window_end is not None and window_pos > prev_window_end:
+            gap = window[prev_window_end:window_pos]
+            # Only preserve very small gaps (1-2 spaces) that represent word boundaries
+            # Larger gaps represent content that was omitted (disjoint quotes)
+            if len(gap) <= 2 and gap.strip() == "":
+                # Single space or double space → preserve as word boundary
+                corrected_parts.append(" ")
+            # Larger gaps are skipped (represent disjoint sections)
+
+        # Extract the matching segment
+        segment = window[window_pos : window_pos + length]
+        corrected_parts.append(segment)
+        prev_window_end = window_pos + length
+
+    # Join all parts
+    corrected = "".join(corrected_parts)
 
     # Clean up multiple spaces and strip
     corrected = " ".join(corrected.split())
