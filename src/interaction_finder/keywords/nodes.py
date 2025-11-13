@@ -38,12 +38,13 @@ def _clean_and_rerank_keywords_for_display(
     """Clean, deduplicate, and rerank keywords by topic similarity.
 
     Filters noise, deduplicates variants, then reranks by semantic similarity
-    to the target topic. Returns top-ranked keywords with scores for LLM review.
+    to the target topic (if reranker provided). Returns top-ranked keywords
+    with scores for LLM review.
 
     Parameters:
         keywords: list[ScoredKeyword] — keywords from all extraction methods
         topic: str — target research topic
-        reranker — reranker instance with rerank_terms method
+        reranker — reranker instance with rerank_terms method (or None to skip reranking)
         max_keywords: int — maximum keywords to return (default: 50)
 
     Returns:
@@ -77,10 +78,16 @@ def _clean_and_rerank_keywords_for_display(
     unique_terms = [kw for kw, _ in terms_by_normalized.values()]
     if not unique_terms:
         return "(no keywords extracted)"
-    # Rerank by semantic similarity to topic
-    reranked = reranker.rerank_terms(topic, unique_terms, top_k=max_keywords)
-    # Return just the terms (already ranked by relevance)
-    terms_only = [term for term, _ in reranked]
+    # Rerank by semantic similarity to topic (if reranker available)
+    if reranker is not None:
+        reranked = reranker.rerank_terms(topic, unique_terms, top_k=max_keywords)
+        terms_only = [term for term, _ in reranked]
+    else:
+        # No reranking: take top-k by original scores
+        sorted_by_score = sorted(
+            terms_by_normalized.items(), key=lambda x: x[1][1], reverse=True
+        )
+        terms_only = [kw for _, (kw, _) in sorted_by_score[:max_keywords]]
     return ", ".join(terms_only)
 
 
@@ -158,11 +165,12 @@ class SearchNode(BaseNode[State, Deps, BridgingTermsOut]):
 class RerankNode(BaseNode[State, Deps, BridgingTermsOut]):
     """Rerank search results by semantic similarity to topic.
 
-    Uses the reranker from deps to improve result ordering.
+    Uses the reranker from deps to improve result ordering. Returns
+    top-k results based on configuration.
     """
 
     async def run(self, ctx: GraphRunContext[State, Deps]) -> "SelectResultsNode":
-        """Rerank results and update state."""
+        """Rerank results and update state (or skip if disabled)."""
         with logfire.span(
             f"Rerank: {len(ctx.state.all_search_results)} results",
             num_results=len(ctx.state.all_search_results),
@@ -175,9 +183,19 @@ class RerankNode(BaseNode[State, Deps, BridgingTermsOut]):
                     results=[],
                 )
                 return SelectResultsNode()
+            # Check if reranking is enabled (rerank_top_k > 0)
+            top_k = ctx.deps.config.tools.keywords.rerank_top_k
+            if top_k == 0 or ctx.deps.reranker is None:
+                logfire.info(
+                    f"Reranking disabled, passing {len(ctx.state.all_search_results)} results unchanged",
+                    input_count=len(ctx.state.all_search_results),
+                    output_count=len(ctx.state.all_search_results),
+                    reranking_enabled=False,
+                )
+                return SelectResultsNode()
             # Rerank using topic as query
             reranked = ctx.deps.reranker.rerank(
-                ctx.state.topic, ctx.state.all_search_results
+                ctx.state.topic, ctx.state.all_search_results, top_k=top_k
             )
             # Update state with reranked results
             ctx.state.all_search_results = reranked
@@ -186,6 +204,7 @@ class RerankNode(BaseNode[State, Deps, BridgingTermsOut]):
                 f"Reranked {len(reranked)} results",
                 input_count=len(ctx.state.all_search_results),
                 output_count=len(reranked),
+                top_k=top_k,
                 results=reranked,
             )
             return SelectResultsNode()
@@ -530,8 +549,9 @@ Decide whether coverage is sufficient (stop) or more searches are needed (contin
         # Use reflector agent with renamed span
         agent = get_reflector_agent(ctx.deps.config)
         usage = RunUsage()
-        with rename_agent(agent, 
-            name=f"ReflectNode (round {ctx.state.current_round}/{ctx.state.max_rounds})"
+        with rename_agent(
+            agent,
+            name=f"ReflectNode (round {ctx.state.current_round}/{ctx.state.max_rounds})",
         ):
             result = await agent.run(prompt, deps=ctx.deps, usage=usage)
         # Make decision
@@ -587,11 +607,17 @@ class FinalizeNode(BaseNode[State, Deps, BridgingTermsOut]):
                         resources=ctx.deps.resource_pool,
                     )
                 )
-            # Rerank terms by semantic similarity to topic
-            scored_terms = ctx.deps.reranker.rerank_terms(ctx.state.topic, all_terms)
-            # Extract terms and scores
-            final_terms = [term for term, _ in scored_terms]
-            final_scores = [score for _, score in scored_terms]
+            # Rerank terms by semantic similarity to topic (if reranker available)
+            if ctx.deps.reranker is not None:
+                scored_terms = ctx.deps.reranker.rerank_terms(
+                    ctx.state.topic, all_terms
+                )
+                final_terms = [term for term, _ in scored_terms]
+                final_scores = [score for _, score in scored_terms]
+            else:
+                # No reranking: use terms as-is with placeholder scores
+                final_terms = all_terms
+                final_scores = [1.0] * len(all_terms)
             # Create final assessment
             assessment = (
                 f"Completed {ctx.state.current_round} search round(s). "

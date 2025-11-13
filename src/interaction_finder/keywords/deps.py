@@ -1,7 +1,6 @@
 """External service dependencies for keyword research pipeline."""
 
 from dataclasses import dataclass
-from typing import Any
 
 import httpx
 
@@ -24,7 +23,7 @@ class Deps:
     http_client: httpx.AsyncClient  # HTTP client for API calls
     fetcher: PageFetcher  # Web content fetcher with caching
     search_backend: SearchBackend  # Search backend (PubMed, Perplexica, etc.)
-    reranker: Reranker  # Semantic reranker for search results
+    reranker: Reranker | None  # Semantic reranker for search results (None if disabled)
     extractors: dict[str, KeywordExtractor]  # name -> extractor instance
     resource_pool: ResourcePool  # Document pool with provenance tracking
     config: IfetcherConfig  # Full configuration object

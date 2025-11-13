@@ -137,6 +137,12 @@ class IfetcherConfig(BaseModel):
                 le=100,
                 description="Maximum keywords to show LLM after deduplication and reranking",
             )
+            rerank_top_k: int = Field(
+                0,
+                ge=0,
+                le=200,
+                description="Number of top results to keep after reranking (0 = disabled, pass all results to LLM)",
+            )
             reranker_model: str = Field(
                 "zeroentropy/zerank-1-small",
                 description="Reranking model name",

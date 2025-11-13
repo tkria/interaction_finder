@@ -63,10 +63,13 @@ async def run_keyword_research(
             # Initialize search backend (currently only PubMed is supported)
             # In future, add backend factory to support multiple backends
             search_backend = PubMedBackend(config={})
-            # Initialize reranker
-            reranker = Reranker(
-                model_name=kw_config.reranker_model, device=kw_config.reranker_device
-            )
+            # Initialize reranker if enabled (rerank_top_k > 0)
+            reranker = None
+            if kw_config.rerank_top_k > 0:
+                reranker = Reranker(
+                    model_name=kw_config.reranker_model,
+                    device=kw_config.reranker_device,
+                )
             # Initialize extractors
             extractors = {
                 "rake": RAKEExtractor(
