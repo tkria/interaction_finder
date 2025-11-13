@@ -17,10 +17,7 @@ from rich.progress import (
 )
 
 from interaction_finder.extraction.models import ExtractionResult
-from interaction_finder.report.html_renderer import (
-    DocumentAnnotator,
-    MarkdownToHTMLRenderer,
-)
+from interaction_finder.report.parallel_renderer import render_documents_parallel
 
 
 def prepare_report_data(
@@ -251,11 +248,7 @@ def prepare_report_data(
                     },
                 }
 
-    # Pre-render each document with annotations
-    # Separate HTML content from metadata for template-based rendering
-    documents = {}
-    document_html = {}
-
+    # Pre-render documents in parallel using multiprocessing
     # Count how many documents need rendering
     docs_to_render = [r for r in result.resources.resources if r.id.id in doc_to_quotes]
 
@@ -270,51 +263,17 @@ def prepare_report_data(
             f"Rendering {len(docs_to_render)} documents...", total=len(docs_to_render)
         )
 
-        for resource in docs_to_render:
-            doc_id = resource.id.id
-
-            # Render markdown to HTML
-            renderer = MarkdownToHTMLRenderer(resource.text)
-            renderer.render()
-
-            # Get quotes and entities for this document
-            doc_quotes = doc_to_quotes[doc_id]
-            doc_entities = doc_to_entities[doc_id]
-
-            # Annotate HTML with quotes and entities
-            annotator = DocumentAnnotator(resource, renderer)
-            prerendered = annotator.annotate(doc_quotes, doc_entities)
-
-            # Store HTML separately for template rendering
-            document_html[doc_id] = prerendered.html
-
-            # Store metadata in JSON-serializable format (without HTML)
-            documents[doc_id] = {
-                "id": doc_id,
-                "url": resource.id.url,
-                "title": resource.title or "Untitled",
-                "quote_map": {
-                    quote_id: {
-                        "span_id": quote_meta.span_id,
-                        "pair_indices": quote_meta.pair_indices,
-                        "original_spans": quote_meta.original_spans,
-                        "html_spans": quote_meta.html_spans,
-                    }
-                    for quote_id, quote_meta in prerendered.quote_map.items()
-                },
-                "entity_map": {
-                    entity_id: {
-                        "span_id": entity_meta.span_id,
-                        "name": entity_meta.name,
-                        "kind": entity_meta.kind,
-                        "aliases": entity_meta.aliases,
-                        "pair_indices": entity_meta.pair_indices,
-                    }
-                    for entity_id, entity_meta in prerendered.entity_map.items()
-                },
-            }
-
+        # Define progress callback for updating Rich progress bar
+        def update_progress():
             progress.update(task, advance=1)
+
+        # Render all documents in parallel
+        documents, document_html = render_documents_parallel(
+            docs_to_render,
+            doc_to_quotes,
+            doc_to_entities,
+            progress_callback=update_progress,
+        )
 
     # Build comprehensive entity-to-pair mapping (including aliases)
     # Maps entity name/alias -> list of pair indices

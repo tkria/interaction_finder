@@ -112,7 +112,7 @@ def test_prepare_report_data_basic():
     )
 
     # Prepare report data
-    data = prepare_report_data(result, include_rejected=False)
+    data, document_html = prepare_report_data(result, include_rejected=False)
 
     # Verify structure
     assert "metadata" in data
@@ -216,12 +216,12 @@ def test_prepare_report_data_filters_rejected():
     )
 
     # Test without rejected
-    data = prepare_report_data(result, include_rejected=False)
+    data, _ = prepare_report_data(result, include_rejected=False)
     assert len(data["pairs"]) == 1
     assert data["pairs"][0]["accepted"] is True
 
     # Test with rejected
-    data = prepare_report_data(result, include_rejected=True)
+    data, _ = prepare_report_data(result, include_rejected=True)
     assert len(data["pairs"]) == 2
     assert sum(1 for p in data["pairs"] if p["accepted"]) == 1
     assert sum(1 for p in data["pairs"] if not p["accepted"]) == 1
@@ -296,7 +296,7 @@ def test_prepare_report_data_multiple_assessments():
         ),
     )
 
-    data = prepare_report_data(result)
+    data, _ = prepare_report_data(result)
 
     # Verify multiple assessments
     assert len(data["pairs"]) == 1
@@ -381,7 +381,7 @@ def test_prepare_report_data_entity_index():
         ),
     )
 
-    data = prepare_report_data(result)
+    data, _ = prepare_report_data(result)
 
     # Verify entity index
     assert "A" in data["entity_index"]
@@ -421,7 +421,7 @@ def test_prepare_report_data_empty_result():
         ),
     )
 
-    data = prepare_report_data(result)
+    data, _ = prepare_report_data(result)
 
     assert data["metadata"]["total_pairs"] == 0
     assert len(data["pairs"]) == 0
