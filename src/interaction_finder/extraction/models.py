@@ -291,21 +291,21 @@ class ExtractionResult(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _rehydrate_quotes(cls, data):
-        """Restore Resource objects in quotes from resource_id references.
+        """Restore Resource objects in quotes from resource_url references.
 
-        During deserialization, ResourceQuotes contain resource_id instead of
+        During deserialization, ResourceQuotes contain resource_url instead of
         full Resource. This validator looks up resources from the pool and
         injects them into quote dicts before Pydantic validates the structure.
         """
         if not isinstance(data, dict) or "resources" not in data:
             return data
 
-        # Check if this is serialized data (judgments are dicts with resource_id in quotes)
+        # Check if this is serialized data (judgments are dicts with resource_url in quotes)
         judgments = data.get("judgments", [])
         if not judgments or not isinstance(judgments[0], dict):
             return data
 
-        # Check first assessment for resource_id (indicates serialized data)
+        # Check first assessment for resource_url (indicates serialized data)
         first_judgment = judgments[0]
         if not first_judgment.get("assessments"):
             return data
@@ -315,24 +315,20 @@ class ExtractionResult(BaseModel):
             return data
 
         first_quote = first_assessment["quotes"][0]
-        if not isinstance(first_quote, dict) or "resource_id" not in first_quote:
+        if not isinstance(first_quote, dict) or "resource_url" not in first_quote:
             return data
 
         # Deserialize pool and inject resources into all quotes
         pool = ResourcePool.model_validate(data["resources"])
 
         def inject_resource(quote_dict: dict) -> None:
-            """Replace resource_id with actual Resource from pool."""
-            rid_data = quote_dict["resource_id"]
-            counter = int(rid_data["id"].split("_")[0])
-            rid = ResourceId(url=rid_data["url"], counter=counter)
-
-            resource = pool.get(rid)
+            """Replace resource_url with actual Resource from pool."""
+            url = quote_dict["resource_url"]
+            resource = pool.get(url)
             if resource is None:
-                raise ValueError(f"Resource {rid.id} not found in pool")
-
+                raise ValueError(f"Resource with URL {url} not found in pool")
             quote_dict["resource"] = resource
-            del quote_dict["resource_id"]
+            del quote_dict["resource_url"]
 
         # Process all quotes in all assessments in all judgments
         for judgment in judgments:

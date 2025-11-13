@@ -1426,14 +1426,11 @@ class ResourceQuote(BaseModel):
 
     @model_serializer(mode="wrap")
     def _serialize(self, serializer, info):
-        """Replace Resource with resource_id reference during JSON serialization."""
+        """Replace Resource with resource_url reference during JSON serialization."""
         if info.mode == "json":
             data = serializer(self)
-            # Replace full resource with just ID reference
-            data["resource_id"] = {
-                "id": self.resource.id.id,
-                "url": self.resource.id.url,
-            }
+            # Replace full resource with just URL reference
+            data["resource_url"] = self.resource.id.url
             del data["resource"]
             return data
         else:
