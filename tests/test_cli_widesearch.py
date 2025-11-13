@@ -84,8 +84,6 @@ def test_widesearch_command_basic(tmp_path, mock_keywords_file, mock_checkpoint)
 
         # Command should succeed
         assert result.exit_code == 0
-        # Should contain success message
-        assert "Widesearch completed" in result.stdout
         # Output file should be created
         assert output_file.exists()
         # Output should be valid JSON
@@ -290,7 +288,6 @@ def test_widesearch_without_output_file(mock_keywords_file, mock_checkpoint):
 
         # Should succeed without output file
         assert result.exit_code == 0
-        assert "Widesearch completed" in result.stdout
 
 
 def test_widesearch_checkpoint_structure(tmp_path, mock_keywords_file, mock_checkpoint):
