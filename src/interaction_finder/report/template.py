@@ -129,9 +129,10 @@ def render_template(
     doc_templates_parts = []
     for doc_id, doc_html in document_html.items():
         # Wrap each document's HTML in a <template> tag with unique ID
+        escaped_doc_id = _escape_html(doc_id)
         doc_templates_parts.append(
-            f'        <template id="doc-template-{_escape_html(doc_id)}">\n'
-            f'            <div class="document-text">{doc_html}</div>\n'
+            f'        <template id="doc-template-{escaped_doc_id}">\n'
+            f'            <div class="document-text" data-doc-id="{escaped_doc_id}">{doc_html}</div>\n'
             f"        </template>"
         )
     document_templates_html = "\n".join(doc_templates_parts)

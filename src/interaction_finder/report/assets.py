@@ -44,6 +44,7 @@ REPORT_CSS = """
     --quote-border: var(--pico-color-zinc-400);
     --quote-emphasis-bg: var(--pico-color-amber-200);
     --quote-emphasis-border: var(--pico-color-amber-600);
+    --quote-dim-bg: var(--pico-color-zinc-50);
 
     /* Navigation colors */
     --nav-hover-bg: var(--pico-color-cyan-50);
@@ -86,6 +87,7 @@ REPORT_CSS = """
         --quote-border: var(--pico-color-zinc-600);
         --quote-emphasis-bg: var(--pico-color-amber-800);
         --quote-emphasis-border: var(--pico-color-amber-400);
+        --quote-dim-bg: var(--pico-color-zinc-850);
 
         /* Navigation colors (flipped: 50->950, 100->900, 600->400, 400->600) */
         --nav-hover-bg: var(--pico-color-cyan-950);
@@ -128,6 +130,7 @@ REPORT_CSS = """
     --quote-border: var(--pico-color-zinc-600);
     --quote-emphasis-bg: var(--pico-color-amber-800);
     --quote-emphasis-border: var(--pico-color-amber-400);
+    --quote-dim-bg: var(--pico-color-zinc-850);
 
     /* Navigation colors */
     --nav-hover-bg: var(--pico-color-cyan-950);
@@ -547,37 +550,28 @@ header {
     padding: 0.25rem 0;
 }
 
-/* First highlighted span in a quote run gets left border */
-.quote-highlight:not(.quote-span + .quote-highlight) {
-    border-left: 3px solid var(--quote-border);
-    padding-left: 0.5rem;
-    margin-left: -0.5rem;
-}
-
-/* Last highlighted span in a quote run gets right border */
-.quote-highlight:not(:has(+ .quote-highlight)) {
-    border-right: 3px solid var(--quote-border);
-    padding-right: 0.5rem;
-    margin-right: -0.5rem;
+.quote-dim {
+    background: var(--quote-dim-bg);
+    padding: 0.25rem 0;
 }
 
 .quote-blink {
     background: var(--quote-emphasis-bg);
-    transition: background 0.5s ease-out, border-color 0.5s ease-out;
+    transition: background 0.5s ease-out;
 }
 
-/* First blinked span gets left border */
+.quote-highlight:not(.quote-span + .quote-highlight),
+.quote-dim:not(.quote-span + .quote-dim),
 .quote-blink:not(.quote-span + .quote-blink) {
-    border-left: 3px solid var(--quote-emphasis-border);
-    padding-left: 0.5rem;
-    margin-left: -0.5rem;
+    padding-left: 0.2em;
+    margin-left: -0.2em;
 }
 
-/* Last blinked span gets right border */
+.quote-highlight:not(:has(+ .quote-highlight)),
+.quote-dim:not(:has(+ .quote-dim)),
 .quote-blink:not(:has(+ .quote-blink)) {
-    border-right: 3px solid var(--quote-emphasis-border);
-    padding-right: 0.5rem;
-    margin-right: -0.5rem;
+    padding-right: 0.2em;
+    margin-right: -0.2em;
 }
 
 /* Right sidebar */
@@ -1016,35 +1010,63 @@ function highlightEntities(text, entity1Terms, entity2Terms, entity1Kind, entity
 
 // Highlight quotes for the current assessment
 function highlightQuotesForAssessment(assess) {
-    // Remove all existing quote highlights first
-    document.querySelectorAll('.quote-highlight, .quote-blink').forEach(el => {
-        el.classList.remove('quote-highlight', 'quote-blink');
-    });
-
-    // Get quote IDs from this assessment
     const doc = state.data.documents[assess.resource_id];
     if (!doc || !doc.quote_map) return;
 
-    // Get all quote IDs that belong to this assessment
-    const assessmentQuoteIds = new Set();
-    Object.keys(doc.quote_map).forEach(quoteId => {
-        assessmentQuoteIds.add(quoteId);
-    });
-
-    // Find all quote spans in the document and highlight those containing our quote IDs
-    const docElement = document.querySelector('.document-text');
+    const docElement = Array.from(document.querySelectorAll('.document-text'))
+        .find(el => el.dataset.docId === assess.resource_id);
     if (!docElement) return;
 
+    // Remove previous highlighting/dimming inside this document
+    docElement.querySelectorAll('.quote-highlight, .quote-blink, .quote-dim').forEach(el => {
+        el.classList.remove('quote-highlight', 'quote-blink', 'quote-dim');
+    });
+
+    // Build a lookup from span signature -> quote IDs for this document
+    const spanKeyToQuoteIds = new Map();
+    Object.entries(doc.quote_map).forEach(([quoteId, meta]) => {
+        const key = createSpanKey(meta.original_spans);
+        if (!key) {
+            return;
+        }
+        if (!spanKeyToQuoteIds.has(key)) {
+            spanKeyToQuoteIds.set(key, []);
+        }
+        spanKeyToQuoteIds.get(key).push(quoteId);
+    });
+
+    // Determine which quote IDs belong to the current assessment
+    const matchingQuoteIds = new Set();
+    assess.quotes.forEach(quote => {
+        const key = createSpanKey(quote.spans);
+        if (!key) {
+            return;
+        }
+        const ids = spanKeyToQuoteIds.get(key);
+        if (ids) {
+            ids.forEach(id => matchingQuoteIds.add(id));
+        }
+    });
+
+    const shouldDimOthers = matchingQuoteIds.size > 0;
+
     docElement.querySelectorAll('.quote-span').forEach(spanEl => {
-        // Check if this span has any of our quote IDs in its class list
-        const hasMatchingQuote = Array.from(spanEl.classList).some(className =>
-            assessmentQuoteIds.has(className)
-        );
+        const quoteIds = Array.from(spanEl.classList).filter(className => doc.quote_map[className]);
+        const hasMatchingQuote = quoteIds.some(className => matchingQuoteIds.has(className));
 
         if (hasMatchingQuote) {
             spanEl.classList.add('quote-highlight');
+        } else if (shouldDimOthers) {
+            spanEl.classList.add('quote-dim');
         }
     });
+}
+
+function createSpanKey(spans) {
+    if (!spans || spans.length === 0) {
+        return null;
+    }
+    return spans.map(span => `${span[0]}-${span[1]}`).join('|');
 }
 
 // Update highlighting classes on entity spans based on current pair selection
