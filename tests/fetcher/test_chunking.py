@@ -505,3 +505,157 @@ class TestPerformance:
 
             # Should handle high dimensions efficiently
             assert len(result[0]["embedding"]) == dimension
+
+
+class TestBatchChunking:
+    """Test batch chunking functionality using chunk_batch()."""
+
+    @pytest.fixture
+    def web_client(self):
+        """Create WebClient instance."""
+        return WebClient(timeout=30, verbose=False)
+
+    def test_batch_chunking_basic(self, web_client):
+        """Test that batch chunking works with multiple documents."""
+        # Mock sentence and chunk objects for two documents
+        doc1_sentences = [
+            MockSentence("First document sentence.", [1.0, 0.0, 0.0]),
+        ]
+        doc1_chunks = [MockChunk("First document sentence.", doc1_sentences)]
+
+        doc2_sentences = [
+            MockSentence("Second document sentence.", [0.0, 1.0, 0.0]),
+        ]
+        doc2_chunks = [MockChunk("Second document sentence.", doc2_sentences)]
+
+        batch_results = [doc1_chunks, doc2_chunks]
+
+        with patch(
+            "interaction_finder.fetcher.web_client._get_chunker"
+        ) as mock_get_chunker:
+            mock_chunker = Mock()
+            mock_chunker.chunk_batch = Mock(return_value=batch_results)
+            mock_get_chunker.return_value = mock_chunker
+
+            # Call with list of documents
+            documents = ["Document 1 content", "Document 2 content"]
+            results = web_client.create_chunks(documents)
+
+            # Verify chunk_batch was called
+            mock_chunker.chunk_batch.assert_called_once_with(documents)
+
+            # Check results structure
+            assert len(results) == 2
+            assert len(results[0]) == 1  # First doc has 1 chunk
+            assert len(results[1]) == 1  # Second doc has 1 chunk
+
+            # Check first document chunk
+            assert results[0][0]["text"] == "First document sentence."
+            assert results[0][0]["embedding"] is not None
+
+            # Check second document chunk
+            assert results[1][0]["text"] == "Second document sentence."
+            assert results[1][0]["embedding"] is not None
+
+    def test_batch_vs_single_mode_detection(self, web_client):
+        """Test that batch vs single mode is correctly detected."""
+        with patch(
+            "interaction_finder.fetcher.web_client._get_chunker"
+        ) as mock_get_chunker:
+            mock_chunker = Mock()
+            mock_chunker.return_value = []  # Single mode
+            mock_chunker.chunk_batch = Mock(return_value=[[]])  # Batch mode
+            mock_get_chunker.return_value = mock_chunker
+
+            # Single mode
+            web_client.create_chunks("Single document")
+            mock_chunker.assert_called_once()
+            mock_chunker.chunk_batch.assert_not_called()
+
+            # Reset mocks
+            mock_chunker.reset_mock()
+            mock_chunker.chunk_batch.reset_mock()
+
+            # Batch mode
+            web_client.create_chunks(["Doc 1", "Doc 2"])
+            mock_chunker.chunk_batch.assert_called_once()
+            # In batch mode, the single-document call should not be made
+            mock_chunker.assert_not_called()
+
+    def test_batch_chunking_empty_list(self, web_client):
+        """Test batch chunking with empty list."""
+        with patch(
+            "interaction_finder.fetcher.web_client._get_chunker"
+        ) as mock_get_chunker:
+            mock_chunker = Mock()
+            mock_chunker.chunk_batch = Mock(return_value=[])
+            mock_get_chunker.return_value = mock_chunker
+
+            results = web_client.create_chunks([])
+            assert results == []
+
+    def test_batch_chunking_with_multiple_chunks_per_doc(self, web_client):
+        """Test batch processing when documents have multiple chunks."""
+        # Document 1: 2 chunks
+        doc1_chunk1_sentences = [
+            MockSentence("First chunk.", [1.0, 0.0, 0.0]),
+        ]
+        doc1_chunk2_sentences = [
+            MockSentence("Second chunk.", [0.0, 1.0, 0.0]),
+        ]
+        doc1_chunks = [
+            MockChunk("First chunk.", doc1_chunk1_sentences),
+            MockChunk("Second chunk.", doc1_chunk2_sentences),
+        ]
+
+        # Document 2: 1 chunk
+        doc2_chunk_sentences = [
+            MockSentence("Only chunk.", [0.0, 0.0, 1.0]),
+        ]
+        doc2_chunks = [MockChunk("Only chunk.", doc2_chunk_sentences)]
+
+        batch_results = [doc1_chunks, doc2_chunks]
+
+        with patch(
+            "interaction_finder.fetcher.web_client._get_chunker"
+        ) as mock_get_chunker:
+            mock_chunker = Mock()
+            mock_chunker.chunk_batch = Mock(return_value=batch_results)
+            mock_get_chunker.return_value = mock_chunker
+
+            documents = ["Doc 1", "Doc 2"]
+            results = web_client.create_chunks(documents)
+
+            assert len(results) == 2
+            assert len(results[0]) == 2  # First doc has 2 chunks
+            assert len(results[1]) == 1  # Second doc has 1 chunk
+
+            # Verify embeddings computed correctly
+            assert results[0][0]["embedding"] == [1.0, 0.0, 0.0]
+            assert results[0][1]["embedding"] == [0.0, 1.0, 0.0]
+            assert results[1][0]["embedding"] == [0.0, 0.0, 1.0]
+
+    def test_batch_chunking_preserves_individual_processing(self, web_client):
+        """Test that batch chunking still applies weighted averaging per chunk."""
+        # Create a document with multiple sentences for weighted averaging
+        sentences = [
+            MockSentence("First important.", [1.0, 0.0, 0.0]),  # First 20%
+            MockSentence("Middle sentence.", [0.0, 1.0, 0.0]),
+            MockSentence("Last important.", [0.0, 0.0, 1.0]),  # Last 20%
+        ]
+        chunks = [MockChunk("Combined text.", sentences)]
+
+        with patch(
+            "interaction_finder.fetcher.web_client._get_chunker"
+        ) as mock_get_chunker:
+            mock_chunker = Mock()
+            mock_chunker.chunk_batch = Mock(return_value=[chunks])
+            mock_get_chunker.return_value = mock_chunker
+
+            results = web_client.create_chunks(["Document"])
+
+            # Check that weighted averaging was applied
+            embedding = np.array(results[0][0]["embedding"])
+            # First and last sentences should have more influence
+            assert embedding[0] > 0  # First sentence influence
+            assert embedding[2] > 0  # Last sentence influence

@@ -47,9 +47,6 @@ class BatchOperations:
         # Calculate optimal domain width for consistent progress display
         self._domain_width = self._calculate_optimal_width(urls)
 
-        # Get fetcher function for content type
-        fetcher_func = self._get_fetcher_for_content_type(content_type)
-
         # Smart caching check - separate cached from uncached URLs
         cached_results = await self.cache.get_content_batch(urls, content_type)
         cached_urls = {
@@ -57,17 +54,28 @@ class BatchOperations:
         }
         uncached_urls = [url for url, content in cached_results if content is None]
 
-        # Fetch uncached URLs with semaphore limiting
+        # Fetch uncached URLs
         fetched_results = {}
         if uncached_urls:
-            fetched_results = await self._concurrent_fetch_with_progress(
-                uncached_urls,
-                fetcher_func,
-                content_type,
-                max_concurrent,
-                fail_fast,
-                **fetch_options,
-            )
+            # Use optimized batch path for chunks when fetching multiple URLs
+            if content_type == "chunks" and len(uncached_urls) > 1:
+                fetched_results = await self._fetch_chunks_batch(
+                    uncached_urls,
+                    max_concurrent,
+                    fail_fast,
+                    **fetch_options,
+                )
+            else:
+                # Standard path for other content types or single URL
+                fetcher_func = self._get_fetcher_for_content_type(content_type)
+                fetched_results = await self._concurrent_fetch_with_progress(
+                    uncached_urls,
+                    fetcher_func,
+                    content_type,
+                    max_concurrent,
+                    fail_fast,
+                    **fetch_options,
+                )
 
         # Combine and return in original order
         return [cached_urls.get(url) or fetched_results.get(url) for url in urls]
@@ -359,6 +367,98 @@ class BatchOperations:
         await self.cache.set_content(url, "chunks", chunks, final_url)
 
         return chunks
+
+    async def _fetch_chunks_batch(
+        self,
+        urls: List[str],
+        max_concurrent: int,
+        fail_fast: bool,
+        **options,
+    ) -> Dict[str, List[dict]]:
+        """
+        Batch chunk multiple URLs efficiently using chunk_batch().
+
+        Fetches all markdown in parallel, then processes all documents together
+        using chonkie's batch chunking for optimal embedding generation.
+        """
+        semaphore = asyncio.Semaphore(max_concurrent)
+
+        # Step 1: Fetch all markdown in parallel
+        async def fetch_markdown_with_semaphore(
+            url: str,
+        ) -> Tuple[str, str | Exception]:
+            async with semaphore:
+                try:
+                    retry = options.get("retry", False)
+                    # Ensure we have raw content
+                    if self.web_client._is_pdf_url(url):
+                        await self._fetch_pdf_and_cache(url, retry=retry)
+                    else:
+                        await self._fetch_html_and_cache(url, retry=retry)
+                    # Get processed markdown
+                    markdown = await self._fetch_markdown_and_cache(url, retry=retry)
+                    return url, markdown
+                except Exception as e:
+                    if fail_fast:
+                        raise
+                    return url, e
+
+        with self.progress_display.batch_progress(
+            len(urls), "Fetching content"
+        ) as progress:
+            tasks = [fetch_markdown_with_semaphore(url) for url in urls]
+
+            # Collect markdown results as they complete
+            markdown_results = {}
+            completed = 0
+            for coro in asyncio.as_completed(tasks):
+                url, result = await coro
+                markdown_results[url] = result
+                completed += 1
+                domain = self.format_domain(url)
+                progress.update(1, f"Fetching {domain}")
+
+            if completed > 0:
+                progress.update(0, f"Fetched {completed} sites")
+
+        # Step 2: Separate successful fetches from errors
+        successful_urls = []
+        successful_markdowns = []
+        error_results = {}
+
+        for url in urls:
+            result = markdown_results[url]
+            if isinstance(result, Exception):
+                error_results[url] = result
+            else:
+                successful_urls.append(url)
+                successful_markdowns.append(result)
+
+        # Step 3: Batch chunk all successful documents at once
+        chunk_results = {}
+        if successful_markdowns:
+            with self.progress_display.single_status("Chunking documents") as status:
+                status.update(
+                    f"Chunking {len(successful_markdowns)} documents with embeddings"
+                )
+
+                # Run batch chunking in thread pool to avoid blocking event loop
+                batch_chunks = await asyncio.to_thread(
+                    self.web_client.create_chunks, successful_markdowns
+                )
+
+                status.update(f"Chunked {len(successful_markdowns)} documents")
+
+            # Step 4: Cache individual results
+            for url, chunks in zip(successful_urls, batch_chunks):
+                final_url = await self.cache.get_redirect_info(url)
+                await self.cache.set_content(url, "chunks", chunks, final_url)
+                chunk_results[url] = chunks
+
+        # Merge error results
+        chunk_results.update(error_results)
+
+        return chunk_results
 
     async def prefetch_urls(
         self,

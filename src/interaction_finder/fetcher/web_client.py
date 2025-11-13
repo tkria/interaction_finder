@@ -496,12 +496,44 @@ class WebClient:
         processor = ContentProcessor()
         return processor.refine_article(result["markdown_content"])
 
-    def create_chunks(self, markdown_content: str) -> List[dict]:
-        """Chunk markdown content and return as list of chunk objects with embeddings."""
-        import numpy as np
+    def create_chunks(
+        self, markdown_content: str | List[str]
+    ) -> List[dict] | List[List[dict]]:
+        """
+        Chunk markdown content and return list of chunk objects with embeddings.
 
+        Supports both single document and batch processing for efficiency.
+
+        Parameters:
+            markdown_content: Single markdown string or list of markdown strings
+
+        Returns:
+            Single list of chunks (if input is str) or list of chunk lists (if input is List[str])
+        """
         chunker = _get_chunker()
-        chunk_objects = chunker(markdown_content)
+
+        # Detect batch vs single mode
+        is_batch = isinstance(markdown_content, list)
+
+        if is_batch:
+            # Batch mode - use chunk_batch() for efficient processing
+            batch_chunk_objects = chunker.chunk_batch(markdown_content)
+            return [
+                self._process_chunk_objects(chunks) for chunks in batch_chunk_objects
+            ]
+        else:
+            # Single mode - process one document
+            chunk_objects = chunker(markdown_content)
+            return self._process_chunk_objects(chunk_objects)
+
+    def _process_chunk_objects(self, chunk_objects) -> List[dict]:
+        """
+        Process chonkie chunk objects into our chunk format with weighted embeddings.
+
+        Computes chunk embeddings as weighted average of sentence embeddings,
+        with position-based and length-based weighting.
+        """
+        import numpy as np
 
         chunks_data = []
         for chunk_obj in chunk_objects:
