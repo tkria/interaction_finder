@@ -544,15 +544,40 @@ header {
 
 .quote-highlight {
     background: var(--quote-bg);
+    padding: 0.25rem 0;
+}
+
+/* First highlighted span in a quote run gets left border */
+.quote-highlight:not(.quote-span + .quote-highlight) {
     border-left: 3px solid var(--quote-border);
     padding-left: 0.5rem;
-    margin: 0.5rem 0;
+    margin-left: -0.5rem;
+}
+
+/* Last highlighted span in a quote run gets right border */
+.quote-highlight:not(:has(+ .quote-highlight)) {
+    border-right: 3px solid var(--quote-border);
+    padding-right: 0.5rem;
+    margin-right: -0.5rem;
 }
 
 .quote-blink {
     background: var(--quote-emphasis-bg);
-    border-left: 3px solid var(--quote-emphasis-border);
     transition: background 0.5s ease-out, border-color 0.5s ease-out;
+}
+
+/* First blinked span gets left border */
+.quote-blink:not(.quote-span + .quote-blink) {
+    border-left: 3px solid var(--quote-emphasis-border);
+    padding-left: 0.5rem;
+    margin-left: -0.5rem;
+}
+
+/* Last blinked span gets right border */
+.quote-blink:not(:has(+ .quote-blink)) {
+    border-right: 3px solid var(--quote-emphasis-border);
+    padding-right: 0.5rem;
+    margin-right: -0.5rem;
 }
 
 /* Right sidebar */
