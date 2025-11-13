@@ -81,6 +81,64 @@ def create_minimal_extraction_result() -> ExtractionResult:
     )
 
 
+def append_judgment(
+    result: ExtractionResult,
+    name_suffix: str,
+    accepted: bool,
+    confidence: str,
+) -> None:
+    """Append a new judgment to an existing ExtractionResult for testing."""
+    resource = result.resources.resources[0]
+    quote = ResourceQuote(resource=resource, query_text=name_suffix, spans=[(0, 4)])
+
+    from interaction_finder.extraction.models import EntityMention
+
+    entity1_name = f"{name_suffix}_A"
+    entity2_name = f"{name_suffix}_B"
+
+    entity1_mention = EntityMention(
+        name=entity1_name,
+        kind="type1",
+        aliases=[entity1_name],
+        quotes=[quote],
+        reasoning="test",
+    )
+    entity2_mention = EntityMention(
+        name=entity2_name,
+        kind="type2",
+        aliases=[entity2_name],
+        quotes=[quote],
+        reasoning="test",
+    )
+
+    assessment = PairAssessment(
+        resource_id=resource.id,
+        entity1=entity1_mention,
+        entity2=entity2_mention,
+        relationship="related_to",
+        quotes=[quote],
+        confidence=confidence,
+        reasoning="test",
+    )
+
+    judgment = PairJudgment(
+        entity1=SimpleEntity(name=entity1_name, kind="type1", aliases=[entity1_name]),
+        entity2=SimpleEntity(name=entity2_name, kind="type2", aliases=[entity2_name]),
+        relationship="related_to",
+        assessments=[assessment],
+        accepted=accepted,
+        confidence=confidence,
+        reasoning="test",
+    )
+
+    result.judgments.append(judgment)
+    result.metadata.total_pairs_found += 1
+    if accepted:
+        result.metadata.pairs_accepted += 1
+    else:
+        result.metadata.pairs_rejected += 1
+
+
 def test_generate_report_basic(tmp_path):
     """Test basic report generation."""
     result = create_minimal_extraction_result()
@@ -169,7 +227,7 @@ def test_generate_report_includes_rejected(tmp_path):
     result.metadata.pairs_rejected = 1
 
     output = tmp_path / "report.html"
-    generate_report(result, output, include_rejected=True)
+    generate_report(result, output)
 
     html = output.read_text()
 
@@ -185,6 +243,132 @@ def test_generate_report_includes_rejected(tmp_path):
     assert len(data["pairs"]) == 2
     assert sum(1 for p in data["pairs"] if p["accepted"]) == 1
     assert sum(1 for p in data["pairs"] if not p["accepted"]) == 1
+
+
+def test_generate_report_plain_format(tmp_path):
+    """Test that plain format outputs tuple lines."""
+    result = create_minimal_extraction_result()
+    output = tmp_path / "report.txt"
+
+    generate_report(result, output, format="plain")
+
+    content = output.read_text().strip().splitlines()
+    assert content == ["Entity1, associated_with, Entity2"]
+
+
+def test_generate_report_plain_kind_format(tmp_path):
+    """Test that plain:KIND format outputs unique entities of that kind."""
+    result = create_minimal_extraction_result()
+    output = tmp_path / "genes.txt"
+
+    generate_report(result, output, format="plain:TYPE1")
+
+    content = output.read_text().strip().splitlines()
+    assert content == ["Entity1"]
+
+
+def test_generate_report_plain_defaults_to_accepted(tmp_path):
+    """Plain format should include only accepted pairs by default."""
+    result = create_minimal_extraction_result()
+    append_judgment(result, "rejected_pair", accepted=False, confidence="low")
+
+    output = tmp_path / "plain.txt"
+    generate_report(result, output, format="plain")
+
+    content = output.read_text().strip().splitlines()
+    assert content == ["Entity1, associated_with, Entity2"]
+
+
+def test_generate_report_plain_accepts_any_filter(tmp_path):
+    """Accepted:any should include both accepted and rejected pairs."""
+    result = create_minimal_extraction_result()
+    append_judgment(result, "rejected_pair", accepted=False, confidence="low")
+
+    output = tmp_path / "plain_any.txt"
+    generate_report(result, output, format="plain", filters={"accepted": "any"})
+
+    content = output.read_text().strip().splitlines()
+    assert len(content) == 2
+    assert any("Entity1, associated_with, Entity2" == line for line in content)
+    assert any(
+        "rejected_pair_A, related_to, rejected_pair_B" == line for line in content
+    )
+
+
+def test_generate_report_plain_confidence_filter(tmp_path):
+    """Confidence filters should be honored for plain format."""
+    result = create_minimal_extraction_result()
+    append_judgment(result, "medium_pair", accepted=True, confidence="medium")
+    append_judgment(result, "low_pair", accepted=True, confidence="low")
+
+    output = tmp_path / "plain_conf.txt"
+    generate_report(
+        result,
+        output,
+        format="plain",
+        filters={"confidence": "medium+"},
+    )
+
+    content = output.read_text().strip().splitlines()
+    assert len(content) == 2
+    assert any("Entity1, associated_with, Entity2" == line for line in content)
+    assert any("medium_pair_A, related_to, medium_pair_B" == line for line in content)
+    assert all("low_pair" not in line for line in content)
+
+
+def test_generate_report_html_confidence_filter(tmp_path):
+    """Confidence filters should also apply to HTML output."""
+    result = create_minimal_extraction_result()
+    append_judgment(result, "low_pair", accepted=True, confidence="low")
+
+    output = tmp_path / "report_filtered.html"
+    generate_report(result, output, format="html", filters={"confidence": "high"})
+
+    html = output.read_text()
+    import re
+
+    match = re.search(r"window\.REPORT_DATA = ({.*?});", html, re.DOTALL)
+    assert match is not None
+    data = json.loads(match.group(1))
+
+    assert len(data["pairs"]) == 1
+    pair = data["pairs"][0]
+    assert pair["entity1"]["name"] == "Entity1"
+
+
+def test_generate_report_filters_no_match(tmp_path):
+    """If filters remove all judgments, raise ValueError."""
+    result = create_minimal_extraction_result()
+
+    with pytest.raises(ValueError, match="No judgments matched"):
+        generate_report(
+            result,
+            tmp_path / "plain_nomatch.txt",
+            format="plain",
+            filters={"confidence": "low"},
+        )
+
+
+def test_generate_report_plain_stdout(capsys):
+    """Plain format writes tuples to stdout when output is '-'."""
+    result = create_minimal_extraction_result()
+
+    output_path = generate_report(result, "-", format="plain")
+
+    captured = capsys.readouterr()
+    assert captured.out.strip() == "Entity1, associated_with, Entity2"
+    assert str(output_path) == "-"
+
+
+def test_generate_report_html_stdout(capsys):
+    """HTML format streams full document to stdout when requested."""
+    result = create_minimal_extraction_result()
+
+    output_path = generate_report(result, "-", format="html")
+
+    captured = capsys.readouterr()
+    assert captured.out.startswith("<!DOCTYPE html>")
+    assert str(output_path) == "-"
 
 
 def test_generate_report_rejects_empty_result(tmp_path):

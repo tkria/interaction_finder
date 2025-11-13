@@ -22,6 +22,8 @@ from interaction_finder.report.parallel_renderer import render_documents_paralle
 
 def prepare_report_data(
     result: ExtractionResult,
+    show_progress: bool = True,
+    judgments_override: list | None = None,
 ) -> tuple[dict[str, Any], dict[str, str]]:
     """Transform ExtractionResult into report data structure.
 
@@ -33,8 +35,8 @@ def prepare_report_data(
         - json_data: JSON-serializable dict with metadata for frontend
         - document_html_map: Mapping of doc_id -> pre-rendered HTML string
     """
-    # Include ALL judgments (both accepted and rejected) - filtering happens in frontend
-    judgments = result.judgments
+    # Use provided judgments list when filters were applied upstream
+    judgments = judgments_override if judgments_override is not None else result.judgments
 
     # Group judgments by entity pair (merge different relationships)
     pair_groups = defaultdict(list)
@@ -247,27 +249,33 @@ def prepare_report_data(
     # Count how many documents need rendering
     docs_to_render = [r for r in result.resources.resources if r.id.id in doc_to_quotes]
 
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TaskProgressColumn(),
-        TimeElapsedColumn(),
-    ) as progress:
-        task = progress.add_task(
-            f"Rendering {len(docs_to_render)} documents...", total=len(docs_to_render)
-        )
+    if show_progress and docs_to_render:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            TimeElapsedColumn(),
+        ) as progress:
+            task = progress.add_task(
+                f"Rendering {len(docs_to_render)} documents...", total=len(docs_to_render)
+            )
 
-        # Define progress callback for updating Rich progress bar
-        def update_progress():
-            progress.update(task, advance=1)
+            def update_progress():
+                progress.update(task, advance=1)
 
-        # Render all documents in parallel
+            documents, document_html = render_documents_parallel(
+                docs_to_render,
+                doc_to_quotes,
+                doc_to_entities,
+                progress_callback=update_progress,
+            )
+    else:
         documents, document_html = render_documents_parallel(
             docs_to_render,
             doc_to_quotes,
             doc_to_entities,
-            progress_callback=update_progress,
+            progress_callback=None,
         )
 
     # Build comprehensive entity-to-pair mapping (including aliases)

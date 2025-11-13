@@ -79,6 +79,40 @@ def get_options_with_fallback(
     return effective_config, effective_verbose, effective_overrides
 
 
+def _parse_filter_options(filter_args: List[str]) -> dict[str, str]:
+    parsed: dict[str, str] = {}
+    allowed_keys = {"accepted", "confidence"}
+
+    for raw in filter_args:
+        if ":" in raw:
+            key, value = raw.split(":", 1)
+        elif "=" in raw:
+            key, value = raw.split("=", 1)
+        else:
+            raise typer.BadParameter(
+                f"Invalid filter '{raw}'. Use key:value syntax, e.g., --filter accepted:yes",
+                param_hint="--filter",
+            )
+
+        key = key.strip().lower()
+        value = value.strip()
+
+        if not key or key not in allowed_keys:
+            raise typer.BadParameter(
+                f"Unsupported filter '{key}'. Supported keys: accepted, confidence.",
+                param_hint="--filter",
+            )
+        if not value:
+            raise typer.BadParameter(
+                f"Filter '{key}' requires a value.",
+                param_hint="--filter",
+            )
+
+        parsed[key] = value
+
+    return parsed
+
+
 def parse_config_override(override: str) -> tuple[str, Any]:
     """
     Parse a configuration override string in the format 'key.path=value'.
@@ -919,26 +953,42 @@ def extract(
 def report(
     extraction_file: Path = typer.Argument(help="Path to extraction results JSON file"),
     output: Optional[Path] = typer.Option(
-        None, "-o", "--output", help="Output HTML file path"
+        None, "-o", "--output", help="Output file path (defaults based on format)"
     ),
     title: Optional[str] = typer.Option(
         None, "-t", "--title", help="Custom report title"
     ),
+    format: str = typer.Option(
+        "html",
+        "-f",
+        "--format",
+        help="Output format ('html', 'plain', or 'plain:KIND' for entity lists)",
+        show_default=True,
+    ),
+    filters: List[str] = typer.Option(
+        [],
+        "--filter",
+        help="Filter pairs (key:value). Supported keys: accepted, confidence",
+    ),
     verbose: bool = typer.Option(False, "-v", "--verbose", help="Verbose output"),
 ):
     """
-    Generate interactive HTML report from extraction results.
+    Generate report output from extraction results.
 
-    Creates a self-contained HTML file with an interactive explorer for
-    entity pairs, including full provenance tracking, document viewing,
-    and filtering capabilities. All pairs (both accepted and rejected) are
-    included in the report; use the "Show rejected" toggle in the UI to filter.
+    HTML format creates a self-contained interactive explorer with provenance
+    tracking. Plain format emits simple "entity, relationship, entity" tuples
+    (one per line). Use "plain:KIND" to emit unique entity names of a specific
+    kind (e.g., genes, diseases) one per line. Apply filters with --filter
+    (e.g., --filter confidence:high, --filter accepted:any).
 
     Example:
         interaction-finder report results.json -o report.html
 
         interaction-finder report pah-results.json -o pah-report.html --title "PAH Report"
     """
+    output_is_stdout = output is not None and str(output) == "-"
+    log_console = console if not output_is_stdout else Console(stderr=True)
+
     try:
         # Validate extraction file exists
         if not extraction_file.exists():
@@ -948,61 +998,88 @@ def report(
         from interaction_finder.extraction.models import ExtractionResult
         from pydantic import ValidationError
 
-        console.print(
+        log_console.print(
             f"\n[bold]Loading extraction results:[/bold] {extraction_file.name}"
         )
         extraction_data = json.loads(extraction_file.read_text())
         result = ExtractionResult.model_validate(extraction_data)
 
+        normalized_format = format.lower()
+        supported_formats = {"html", "plain"}
+        plain_kind = normalized_format.startswith("plain:")
+        if normalized_format not in supported_formats and not plain_kind:
+            raise typer.BadParameter(
+                "Unsupported format '{format}'. Supported formats: 'html', 'plain', or 'plain:KIND'.".format(
+                    format=format
+                ),
+                param_hint="--format",
+            )
+
+        parsed_filters = _parse_filter_options(filters)
+        if normalized_format != "html" and "accepted" not in parsed_filters and not plain_kind:
+            parsed_filters["accepted"] = "yes"
+        elif plain_kind and "accepted" not in parsed_filters:
+            parsed_filters["accepted"] = "yes"
+
         # Display summary
-        console.print(f"Topic: {result.metadata.topic}")
-        console.print(f"Total pairs: {result.metadata.total_pairs_found}")
-        console.print(f"Accepted: {result.metadata.pairs_accepted}")
-        console.print(f"Rejected: {result.metadata.pairs_rejected}")
-        console.print(f"Resources: {result.metadata.resource_count}")
+        log_console.print(f"Topic: {result.metadata.topic}")
+        log_console.print(f"Total pairs: {result.metadata.total_pairs_found}")
+        log_console.print(f"Accepted: {result.metadata.pairs_accepted}")
+        log_console.print(f"Rejected: {result.metadata.pairs_rejected}")
+        log_console.print(f"Resources: {result.metadata.resource_count}")
 
         # Generate output path if not specified
         if output is None:
-            output = extraction_file.with_suffix(".html")
+            suffix = ".html" if normalized_format == "html" else ".txt"
+            output = extraction_file.with_suffix(suffix)
+        else:
+            output_is_stdout = str(output) == "-"
+            if output_is_stdout:
+                log_console = Console(stderr=True)
 
         # Generate report
-        console.print(f"\n[bold]Generating report...[/bold]")
+        log_console.print(f"\n[bold]Generating report ({normalized_format})...[/bold]")
         from interaction_finder.report import generate_report
 
         output_path = generate_report(
             result=result,
             output=output,
             title=title,
+            format=normalized_format,
+            filters=parsed_filters if parsed_filters else None,
         )
 
-        console.print(f"[green]✓[/green] Report generated: {output_path}")
+        destination_label = (
+            "stdout" if str(output_path) == "-" else str(output_path)
+        )
+        log_console.print(f"[green]✓[/green] Report generated: {destination_label}")
 
         # Show statistics (all pairs are included)
-        console.print(f"\n[bold]Report contains:[/bold]")
-        console.print(
+        log_console.print(f"\n[bold]Report contains:[/bold]")
+        log_console.print(
             f"  • {result.metadata.total_pairs_found} pairs ({result.metadata.pairs_accepted} accepted, {result.metadata.pairs_rejected} rejected)"
         )
-        console.print(f"  • {result.metadata.resource_count} documents")
-        console.print(f"  • Interactive filtering and search")
-        console.print(f"  • Full provenance tracking")
+        log_console.print(f"  • {result.metadata.resource_count} documents")
+        log_console.print(f"  • Interactive filtering and search")
+        log_console.print(f"  • Full provenance tracking")
 
     except FileNotFoundError as e:
-        console.print(f"[red]Error:[/red] {e}")
+        log_console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(1)
     except (json.JSONDecodeError, ValidationError) as e:
-        console.print(f"[red]Invalid extraction file:[/red] {e}")
+        log_console.print(f"[red]Invalid extraction file:[/red] {e}")
         if verbose:
-            console.print_exception()
+            log_console.print_exception()
         raise typer.Exit(1)
     except ValueError as e:
-        console.print(f"[red]Error:[/red] {e}")
+        log_console.print(f"[red]Error:[/red] {e}")
         if verbose:
-            console.print_exception()
+            log_console.print_exception()
         raise typer.Exit(1)
     except Exception as e:
-        console.print(f"\n[red]Error:[/red] {e}")
+        log_console.print(f"\n[red]Error:[/red] {e}")
         if verbose:
-            console.print_exception()
+            log_console.print_exception()
         raise typer.Exit(1)
 
 
