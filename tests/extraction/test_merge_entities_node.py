@@ -1019,9 +1019,9 @@ class TestIntegration:
             result = await node.run(ctx)
 
             # Should return next node
-            from interaction_finder.extraction.nodes import IdentifyProximalSetsNode
+            from interaction_finder.extraction.nodes import JudgeCrossDocumentNode
 
-            assert isinstance(result, IdentifyProximalSetsNode)
+            assert isinstance(result, JudgeCrossDocumentNode)
 
             # Both documents should have merges
             assert "BRCA" in ctx.state.validated_entities_by_resource[resource1]

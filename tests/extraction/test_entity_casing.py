@@ -12,9 +12,8 @@ import pytest
 from pydantic_ai.usage import RunUsage
 from pydantic_graph import GraphRunContext
 
+from interaction_finder.extraction.document_pipeline import extract_document_entities
 from interaction_finder.extraction.models import EntityExtractionOut, EntityInfo
-from interaction_finder.extraction.nodes import ExtractEntitiesNode
-from interaction_finder.extraction.state import State
 from interaction_finder.extraction.utils import build_permitted_pairs
 from interaction_finder.resources import Resource, ResourceId, ResourcePool
 
@@ -50,14 +49,6 @@ class TestEntityCasing:
     @pytest.mark.asyncio
     async def test_preserves_uppercase_gene_names(self, mock_deps):
         """Entity names should preserve uppercase (e.g., BRCA1, not brca1)."""
-        node = ExtractEntitiesNode()
-        state = State(
-            topic="breast cancer genetics",
-            target_entity_types=["gene"],
-            permitted_pairs=build_permitted_pairs(["gene"]),
-        )
-        ctx = GraphRunContext(state=state, deps=mock_deps)
-
         # Mock LLM response with uppercase gene name
         mock_result = MagicMock()
         mock_result.output = EntityExtractionOut(
@@ -74,17 +65,20 @@ class TestEntityCasing:
         mock_agent = create_mock_agent_with_override(mock_result)
 
         # Patch the agent getter
-        import interaction_finder.extraction.nodes as nodes_module
+        import interaction_finder.extraction.document_pipeline as pipeline_module
 
-        original_getter = nodes_module.get_entity_extractor_agent
-        nodes_module.get_entity_extractor_agent = lambda config: mock_agent
+        original_getter = pipeline_module.get_entity_extractor_agent
+        pipeline_module.get_entity_extractor_agent = lambda config: mock_agent
 
         try:
-            await node.run(ctx)
-
-            # Check that entity is stored with uppercase name
-            resource_id = list(ctx.state.entities_by_resource.keys())[0]
-            entities = ctx.state.entities_by_resource[resource_id]
+            resource = list(mock_deps.resource_pool.resources)[0]
+            entities, _, _ = await extract_document_entities(
+                resource,
+                "breast cancer genetics",
+                ["gene"],
+                mock_deps.config,
+                mock_deps,
+            )
 
             # Should have exactly one entity
             assert len(entities) == 1
@@ -98,20 +92,12 @@ class TestEntityCasing:
             assert entity.name != "brca1"
 
         finally:
-            nodes_module.get_entity_extractor_agent = original_getter
+            pipeline_module.get_entity_extractor_agent = original_getter
 
     @pytest.mark.asyncio
     async def test_preserves_mixed_case_disease_names(self, mock_deps):
         """Disease names with mixed case should be preserved."""
-        node = ExtractEntitiesNode()
-        state = State(
-            topic="cardiovascular diseases",
-            target_entity_types=["disease"],
-            permitted_pairs=build_permitted_pairs(["disease"]),
-        )
-        ctx = GraphRunContext(state=state, deps=mock_deps)
-
-        # Mock LLM response with mixed-case disease name
+        # Mock LLM response
         mock_result = MagicMock()
         mock_result.output = EntityExtractionOut(
             entities=[
@@ -126,16 +112,20 @@ class TestEntityCasing:
         )
         mock_agent = create_mock_agent_with_override(mock_result)
 
-        import interaction_finder.extraction.nodes as nodes_module
+        import interaction_finder.extraction.document_pipeline as pipeline_module
 
-        original_getter = nodes_module.get_entity_extractor_agent
-        nodes_module.get_entity_extractor_agent = lambda config: mock_agent
+        original_getter = pipeline_module.get_entity_extractor_agent
+        pipeline_module.get_entity_extractor_agent = lambda config: mock_agent
 
         try:
-            await node.run(ctx)
-
-            resource_id = list(ctx.state.entities_by_resource.keys())[0]
-            entities = ctx.state.entities_by_resource[resource_id]
+            resource = list(mock_deps.resource_pool.resources)[0]
+            entities, _, _ = await extract_document_entities(
+                resource,
+                "cardiovascular diseases",
+                ["disease"],
+                mock_deps.config,
+                mock_deps,
+            )
 
             # Should preserve mixed case
             assert "Alzheimer's disease" in entities
@@ -144,20 +134,12 @@ class TestEntityCasing:
             assert entity.name != "alzheimer's disease"
 
         finally:
-            nodes_module.get_entity_extractor_agent = original_getter
+            pipeline_module.get_entity_extractor_agent = original_getter
 
     @pytest.mark.asyncio
     async def test_groups_case_variants_by_normalization(self, mock_deps):
         """Entities differing only in case should be grouped together."""
-        node = ExtractEntitiesNode()
-        state = State(
-            topic="genetics",
-            target_entity_types=["gene"],
-            permitted_pairs=build_permitted_pairs(["gene"]),
-        )
-        ctx = GraphRunContext(state=state, deps=mock_deps)
-
-        # Mock LLM response with multiple case variants
+        # Mock LLM response
         mock_result = MagicMock()
         mock_result.output = EntityExtractionOut(
             entities=[
@@ -186,16 +168,20 @@ class TestEntityCasing:
         )
         mock_agent = create_mock_agent_with_override(mock_result)
 
-        import interaction_finder.extraction.nodes as nodes_module
+        import interaction_finder.extraction.document_pipeline as pipeline_module
 
-        original_getter = nodes_module.get_entity_extractor_agent
-        nodes_module.get_entity_extractor_agent = lambda config: mock_agent
+        original_getter = pipeline_module.get_entity_extractor_agent
+        pipeline_module.get_entity_extractor_agent = lambda config: mock_agent
 
         try:
-            await node.run(ctx)
-
-            resource_id = list(ctx.state.entities_by_resource.keys())[0]
-            entities = ctx.state.entities_by_resource[resource_id]
+            resource = list(mock_deps.resource_pool.resources)[0]
+            entities, _, _ = await extract_document_entities(
+                resource,
+                "genetics",
+                ["gene"],
+                mock_deps.config,
+                mock_deps,
+            )
 
             # Should have exactly one entity (all variants merged)
             assert len(entities) == 1
@@ -214,20 +200,12 @@ class TestEntityCasing:
             assert "Third mention" in entity.reasoning
 
         finally:
-            nodes_module.get_entity_extractor_agent = original_getter
+            pipeline_module.get_entity_extractor_agent = original_getter
 
     @pytest.mark.asyncio
     async def test_preserves_casing_in_acronyms(self, mock_deps):
         """Acronyms should preserve their specific casing."""
-        node = ExtractEntitiesNode()
-        state = State(
-            topic="hypertension",
-            target_entity_types=["disease"],
-            permitted_pairs=build_permitted_pairs(["disease"]),
-        )
-        ctx = GraphRunContext(state=state, deps=mock_deps)
-
-        # Mock LLM response with acronym
+        # Mock LLM response
         mock_result = MagicMock()
         mock_result.output = EntityExtractionOut(
             entities=[
@@ -242,16 +220,20 @@ class TestEntityCasing:
         )
         mock_agent = create_mock_agent_with_override(mock_result)
 
-        import interaction_finder.extraction.nodes as nodes_module
+        import interaction_finder.extraction.document_pipeline as pipeline_module
 
-        original_getter = nodes_module.get_entity_extractor_agent
-        nodes_module.get_entity_extractor_agent = lambda config: mock_agent
+        original_getter = pipeline_module.get_entity_extractor_agent
+        pipeline_module.get_entity_extractor_agent = lambda config: mock_agent
 
         try:
-            await node.run(ctx)
-
-            resource_id = list(ctx.state.entities_by_resource.keys())[0]
-            entities = ctx.state.entities_by_resource[resource_id]
+            resource = list(mock_deps.resource_pool.resources)[0]
+            entities, _, _ = await extract_document_entities(
+                resource,
+                "hypertension",
+                ["disease"],
+                mock_deps.config,
+                mock_deps,
+            )
 
             # Should preserve uppercase acronym
             assert "PAH" in entities
@@ -260,4 +242,4 @@ class TestEntityCasing:
             assert entity.name != "pah"
 
         finally:
-            nodes_module.get_entity_extractor_agent = original_getter
+            pipeline_module.get_entity_extractor_agent = original_getter

@@ -278,7 +278,7 @@ class TestCrossDocumentCanonicalMerging:
         assert len(entities) == 2  # No merge happens
 
         # This is actually a limitation: abbreviation stripping should happen
-        # before ValidateEntitiesNode, not during name comparison
+        # during entity extraction, not during name comparison
 
 
 class TestMergeWithMissingParent:

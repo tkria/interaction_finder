@@ -9,7 +9,7 @@ import logging
 from interaction_finder.extraction.deps import Deps
 from interaction_finder.extraction.graph import graph
 from interaction_finder.extraction.models import ExtractionResult
-from interaction_finder.extraction.nodes import ExtractEntitiesNode
+from interaction_finder.extraction.nodes import ProcessDocumentsNode
 from interaction_finder.extraction.state import State
 from interaction_finder.extraction.utils import build_permitted_pairs
 from interaction_finder.logging import logfire
@@ -79,6 +79,6 @@ async def run_extraction(
         )
 
         # Run graph
-        result = await graph.run(ExtractEntitiesNode(), state=state, deps=deps)
+        result = await graph.run(ProcessDocumentsNode(), state=state, deps=deps)
 
         return result.output

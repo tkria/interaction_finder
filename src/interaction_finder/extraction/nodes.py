@@ -5,13 +5,10 @@ return type annotations. All branching and looping happens in nodes;
 agents only produce typed data.
 
 Pipeline stages:
-1. ExtractEntitiesNode - Extract entities from documents
-2. ValidateEntitiesNode - Validate entity kinds and merge substring duplicates
-3. IdentifyProximalSetsNode - Find groups of proximal entities
-4. ExtractPairsFromProximalSetsNode - Extract pairs from proximal regions
-5. AssessPairsNode - Judge evidence for each pair per document
-6. JudgeCrossDocumentNode - Make final accept/reject decisions
-7. FinalizeNode - Build final output
+1. ProcessDocumentsNode - Process all documents concurrently (entities → pairs → assessments)
+2. MergeEntitiesNode - Merge entities globally + update pair references
+3. JudgeCrossDocumentNode - Make final accept/reject decisions
+4. FinalizeNode - Build final output
 """
 
 import asyncio
@@ -24,12 +21,16 @@ from pydantic_graph import BaseNode, End, GraphRunContext
 
 from interaction_finder.agent_utils import rename_agent
 from interaction_finder.extraction.deps import Deps
-from interaction_finder.extraction.extract import get_entity_extractor_agent
-from interaction_finder.extraction.extract_proximal_pairs import get_proximal_pair_agent
+from interaction_finder.extraction.document_pipeline import (
+    assess_document_pairs,
+    extract_document_entities,
+    extract_document_pairs,
+    identify_document_proximal_sets,
+    validate_entity_kinds,
+)
 from interaction_finder.extraction.judge_cross_document import (
     get_cross_document_judge_agent,
 )
-from interaction_finder.extraction.judge_pair_evidence import get_pair_judge_agent
 from interaction_finder.extraction.merge_entities import get_entity_merge_agent
 from interaction_finder.extraction.models import (
     EntityMention,
@@ -42,57 +43,33 @@ from interaction_finder.extraction.models import (
 )
 from interaction_finder.extraction.state import State
 from interaction_finder.extraction.utils import (
-    build_text_region,
     collect_relevant_text_for_quotes,
-    find_substring_entities,
-    identify_proximal_sets,
     make_entity_pair_key,
     normalize_for_comparison,
-    strip_kind_annotation,
 )
 from interaction_finder.logging import logfire
-from interaction_finder.resources import QuoteValidationError, Resource
-
-
-def _classify_quote_error(error: Exception) -> str:
-    """Classify quote validation error by type."""
-    error_name = type(error).__name__
-    if "Paraphrase" in error_name:
-        return "paraphrased"
-    elif "Missing" in error_name or "NotFound" in error_name:
-        return "missing"
-    else:
-        return "fuzzy_match_failed"
-
-
-def _extract_similarity(error: Exception) -> float | None:
-    """Extract similarity percentage from error message if available."""
-    error_str = str(error)
-    # Look for "Similarity: XX.X%" pattern
-    import re
-
-    match = re.search(r"Similarity:\s*([\d.]+)%", error_str)
-    if match:
-        return float(match.group(1))
-    return None
+from interaction_finder.resources import Resource
 
 
 @dataclass
-class ExtractEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
-    """Extract entities from all resources in parallel.
+class ProcessDocumentsNode(BaseNode[State, Deps, ExtractionResult]):
+    """Process all documents concurrently through the per-document pipeline.
 
-    For each resource:
-    1. Call entity_extractor_agent to get entities with quotes
-    2. Convert all quote strings to ResourceQuote objects via fuzzy matching
-    3. Merge entities with same canonical name
-    4. Store validated results in State.entities_by_resource
+    For each document (in parallel):
+    1. Extract entities with quote validation
+    2. Filter by target entity kinds
+    3. Identify proximal entity sets
+    4. Extract pairs from proximal regions
+    5. Deduplicate and assess pairs
+
+    Documents that fail processing are logged but don't block other documents.
     """
 
     async def run(
         self, ctx: GraphRunContext[State, Deps]
-    ) -> Union["ValidateEntitiesNode", End[ExtractionResult]]:
-        """Process all resources in parallel."""
-        with logfire.span("ExtractEntitiesNode"):
+    ) -> Union["MergeEntitiesNode", End[ExtractionResult]]:
+        """Process all resources concurrently."""
+        with logfire.span("ProcessDocumentsNode"):
             resources = ctx.deps.resource_pool.resources
 
             if not resources:
@@ -104,16 +81,16 @@ class ExtractEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
                 ctx.deps.progress.documents_total = len(resources)
                 ctx.deps.progress.set_phase_extracting()
 
-            # Process all resources in parallel
-            tasks = [self._process_resource(resource, ctx) for resource in resources]
+            # Process all documents in parallel
+            tasks = [self._process_document(resource, ctx) for resource in resources]
             await asyncio.gather(*tasks)
 
-            # Check if we found any entities
-            if not ctx.state.entities_by_resource:
+            # Check if we found any validated entities
+            if not ctx.state.validated_entities_by_resource:
                 ctx.deps.logger.warning("No entities extracted from documents")
                 return End(self._empty_result(ctx))
 
-            return ValidateEntitiesNode()
+            return MergeEntitiesNode()
 
     def _empty_result(self, ctx: GraphRunContext[State, Deps]) -> ExtractionResult:
         """Create empty result for early termination."""
@@ -137,97 +114,40 @@ class ExtractEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
             ),
         )
 
-    async def _process_resource(
+    async def _process_document(
         self, resource: Resource, ctx: GraphRunContext[State, Deps]
     ):
-        """Process a single resource: extract entities."""
-        usage = RunUsage()
-        # Build prompt
-        entity_types_str = ", ".join(ctx.state.target_entity_types)
-        prompt = f"""Extract entities from this document relevant to: {ctx.state.topic}
-
-**Target entity types:** {entity_types_str}
-
-**Document title:** {resource.title}
-
-**Document text:**
-{resource.text[:15000]}
-
-Extract all entities of the specified types that are relevant to the topic.
-For each entity, provide: canonical name, all verbatim names from text, supporting quotes, and reasoning."""
-        # Extract entities with renamed span
-        agent = get_entity_extractor_agent(ctx.deps.config)
+        """Process a single document through the full per-document pipeline."""
         try:
-            with rename_agent(
-                agent, name=f"ExtractEntitiesNode: {resource.title[:60]}"
-            ):
-                result = await agent.run(prompt, deps=ctx.deps, usage=usage)
-        except (TimeoutError, ConnectionError, ValueError) as e:
-            ctx.deps.logger.error(
-                f"Entity extraction failed for {resource.id.url}: {type(e).__name__}: {e}"
+            # Stage 1: Extract entities with quote validation
+            entities, quotes_validated, quotes_failed = await extract_document_entities(
+                resource,
+                ctx.state.topic,
+                ctx.state.target_entity_types,
+                ctx.deps.config,
+                ctx.deps,
             )
-            return
-        # Convert entities to EntityMention with ResourceQuotes, merging duplicates by normalized name
-        # Group by normalized name to catch "PAH" vs "pah", "BRCA1" vs "brca1", etc.
-        entities_by_normalized_name: dict[str, list] = {}
-        for entity_info in result.output.entities:
-            # Normalize: strip kind annotation, then apply text normalization
-            normalized_name = normalize_for_comparison(
-                strip_kind_annotation(entity_info.name)
-            )
-            if normalized_name not in entities_by_normalized_name:
-                entities_by_normalized_name[normalized_name] = []
-            entities_by_normalized_name[normalized_name].append(entity_info)
-        # Convert and merge each entity name
-        entities_dict = {}
-        for normalized_name, entity_infos in entities_by_normalized_name.items():
-            # Validate all quotes from all instances
-            all_quotes = []
-            for entity_info in entity_infos:
-                for quote_str in entity_info.quotes:
-                    try:
-                        quote = resource.quote(quote_str)
-                        all_quotes.append(quote)
-                        ctx.state.quotes_validated += 1
-                    except QuoteValidationError:
-                        ctx.state.quotes_failed += 1
-            if all_quotes:  # Only store entity if we have valid quotes
-                # Use first entity's name (after stripping kind annotation) as canonical name
-                # This preserves original casing (e.g., "BRCA1" not "brca1")
-                canonical_name = strip_kind_annotation(entity_infos[0].name)
-                # Collect all original names and aliases
-                all_aliases = []
-                seen_aliases_normalized = set()
-                for entity_info in entity_infos:
-                    # Add original name as alias if it differs from canonical
-                    stripped_name = strip_kind_annotation(entity_info.name)
-                    if stripped_name != canonical_name:
-                        name_normalized = normalize_for_comparison(stripped_name)
-                        if name_normalized not in seen_aliases_normalized:
-                            all_aliases.append(stripped_name)
-                            seen_aliases_normalized.add(name_normalized)
-                    # Add all aliases from this entity
-                    for alias in entity_info.aliases:
-                        alias_normalized = normalize_for_comparison(alias)
-                        if alias_normalized not in seen_aliases_normalized:
-                            all_aliases.append(alias)
-                            seen_aliases_normalized.add(alias_normalized)
-                # Merge reasoning
-                merged_reasoning = " | ".join(
-                    entity_info.reasoning for entity_info in entity_infos
-                )
-                # Store with canonical name as both key and in entity object
-                # Normalized name is only used for grouping during extraction
-                entities_dict[canonical_name] = EntityMention(
-                    kind=entity_infos[0].kind,
-                    name=canonical_name,
-                    aliases=all_aliases,
-                    quotes=all_quotes,
-                    reasoning=merged_reasoning,
-                )
-        # Store entities for this resource
-        if entities_dict:
-            ctx.state.entities_by_resource[resource.id] = entities_dict
+
+            # Update quote counters
+            ctx.state.quotes_validated += quotes_validated
+            ctx.state.quotes_failed += quotes_failed
+
+            if not entities:
+                return  # No entities found in this document
+
+            # Store raw entities
+            ctx.state.entities_by_resource[resource.id] = entities
+
+            # Stage 2: Validate entity kinds
+            if ctx.deps.progress:
+                ctx.deps.progress.set_phase_validating()
+
+            validated = validate_entity_kinds(entities, ctx.state.target_entity_types)
+
+            if not validated:
+                return  # No valid entities after kind filtering
+
+            ctx.state.validated_entities_by_resource[resource.id] = validated
 
             # Update progress
             if ctx.deps.progress:
@@ -239,68 +159,75 @@ For each entity, provide: canonical name, all verbatim names from text, supporti
                 ctx.deps.progress.quotes_failed = ctx.state.quotes_failed
                 ctx.deps.progress.update()
 
+            # Stage 3: Identify proximal entity sets
+            if ctx.deps.progress:
+                ctx.deps.progress.set_phase_proximal()
 
-@dataclass
-class ValidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
-    """Validate entity kinds only - filtering by target_entity_types.
+            proximal_sets = identify_document_proximal_sets(
+                validated,
+                resource,
+                ctx.deps.config.tools.extraction.proximal_window_chunks,
+            )
 
-    For each resource:
-    1. Remove entities not matching target_entity_types
-    2. Store validated entities
+            if not proximal_sets:
+                return  # No co-occurring entities found
 
-    Note: Entity merging happens in the subsequent MergeEntitiesNode.
-    """
+            ctx.state.proximal_sets_by_resource[resource.id] = proximal_sets
 
-    async def run(
-        self, ctx: GraphRunContext[State, Deps]
-    ) -> Union["MergeEntitiesNode", End[ExtractionResult]]:
-        """Validate entity kinds across all resources."""
-        with logfire.span("ValidateEntitiesNode"):
-            # Process each resource - filter by kind only
-            for resource_id, entities in ctx.state.entities_by_resource.items():
-                # Filter by kind
-                valid_entities = {
-                    name: entity
-                    for name, entity in entities.items()
-                    if entity.kind in ctx.state.target_entity_types
-                }
+            # Stage 4: Extract pairs from proximal sets
+            if ctx.deps.progress:
+                ctx.deps.progress.set_phase_extracting_pairs()
 
-                # Store validated entities (even if empty dict for this resource)
-                if valid_entities:
-                    ctx.state.validated_entities_by_resource[resource_id] = (
-                        valid_entities
-                    )
+            pairs, pairs_validated, pairs_failed = await extract_document_pairs(
+                proximal_sets,
+                validated,
+                resource,
+                ctx.state.topic,
+                ctx.state.permitted_pairs,
+                ctx.deps.config.tools.extraction.region_padding_chunks,
+                ctx.deps.config,
+                ctx.deps,
+            )
 
-            # Check if we have any validated entities
-            if not ctx.state.validated_entities_by_resource:
-                ctx.deps.logger.warning("No entities after kind validation")
-                total_found = sum(
-                    len(entities)
-                    for entities in ctx.state.entities_by_resource.values()
-                )
-                return End(
-                    ExtractionResult(
-                        resources=ctx.deps.resource_pool,
-                        judgments=[],
-                        metadata=ExtractionMetadata(
-                            topic=ctx.state.topic,
-                            resource_count=len(ctx.deps.resource_pool.resources),
-                            total_entities_found=total_found,
-                            entities_after_validation=0,
-                            entities_merged=0,
-                            merge_cache_hits=0,
-                            merge_cache_misses=0,
-                            proximal_sets_found=0,
-                            total_pairs_found=0,
-                            pairs_accepted=0,
-                            pairs_rejected=0,
-                            quotes_validated=ctx.state.quotes_validated,
-                            quotes_failed=ctx.state.quotes_failed,
-                        ),
-                    )
-                )
+            # Update quote counters from pair extraction
+            ctx.state.quotes_validated += pairs_validated
+            ctx.state.quotes_failed += pairs_failed
 
-            return MergeEntitiesNode()
+            if not pairs:
+                return  # No pairs found in proximal sets
+
+            # Update pairs_found counter
+            if ctx.deps.progress:
+                ctx.deps.progress.pairs_found += len(pairs)
+                ctx.deps.progress.update()
+
+            # Stage 5: Deduplicate and assess pairs
+            if ctx.deps.progress:
+                ctx.deps.progress.set_phase_assessing()
+            assessments = await assess_document_pairs(
+                pairs,
+                validated,
+                resource,
+                ctx.state.topic,
+                ctx.deps.config.tools.extraction.region_padding_chunks,
+                ctx.deps.config,
+                ctx.deps,
+            )
+
+            if assessments:
+                ctx.state.pair_assessments_by_resource[resource.id] = assessments
+
+                # Update progress
+                if ctx.deps.progress:
+                    ctx.deps.progress.pairs_assessed += len(assessments)
+                    ctx.deps.progress.update()
+
+        except Exception as e:
+            # Log error but don't fail entire pipeline
+            ctx.deps.logger.error(
+                f"[red]Document processing failed for {resource.title}: {type(e).__name__}: {e}[/red]",
+                extra={"markup": True},
+            )
 
 
 @dataclass
@@ -319,10 +246,8 @@ class MergeEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
     - Consistency (same canonical name across documents)
     """
 
-    async def run(
-        self, ctx: GraphRunContext[State, Deps]
-    ) -> "IdentifyProximalSetsNode":
-        """Merge entities globally across all documents."""
+    async def run(self, ctx: GraphRunContext[State, Deps]) -> "JudgeCrossDocumentNode":
+        """Merge entities globally and update pair references."""
         with logfire.span("MergeEntitiesNode"):
             # Step 1: Collect unique normalized entities with canonical variants
             unique_entities = self._collect_unique_entities(ctx)
@@ -333,15 +258,21 @@ class MergeEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
             # Step 3: Get merge decisions from LLM (with caching)
             merge_rules = await self._get_global_merge_decisions(substring_pairs, ctx)
 
-            # Step 4: Apply merge rules to all documents
-            self._apply_merge_rules_globally(merge_rules, ctx)
+            # Step 4: Resolve transitive merge chains (A→B→C becomes A→C)
+            resolved_rules = self._resolve_transitive_merges(merge_rules)
+
+            # Step 5: Apply merge rules to entity dictionaries
+            self._apply_merge_rules_globally(resolved_rules, ctx)
+
+            # Step 6: Update entity references in all pair assessments
+            self._update_pair_entity_references(resolved_rules, ctx)
 
             ctx.deps.logger.info(
-                f"Global merging: {len(merge_rules)} rules applied, "
+                f"Global merging: {len(resolved_rules)} rules applied, "
                 f"{ctx.state.entities_merged} entities merged"
             )
 
-            return IdentifyProximalSetsNode()
+            return JudgeCrossDocumentNode()
 
     def _collect_unique_entities(
         self, ctx: GraphRunContext[State, Deps]
@@ -435,9 +366,7 @@ class MergeEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
 
             # Query LLM for uncached pairs in batches
             if uncached_pairs:
-                batch_size = getattr(
-                    ctx.deps.config.tools.extraction, "merge_batch_size", 50
-                )
+                batch_size = ctx.deps.config.tools.extraction.merge_batch_size
 
                 for i in range(0, len(uncached_pairs), batch_size):
                     batch = uncached_pairs[i : i + batch_size]
@@ -604,368 +533,102 @@ For each pair, decide if they should be merged (child absorbed into parent) or k
                 del entities[child_name]
                 ctx.state.entities_merged += 1
 
-
-@dataclass
-class IdentifyProximalSetsNode(BaseNode[State, Deps, ExtractionResult]):
-    """Identify groups of entities found in close proximity.
-
-    For each resource:
-    1. Use sliding window algorithm to find entity co-occurrence regions
-    2. Store ProximalEntitySet objects
-    """
-
-    async def run(
-        self, ctx: GraphRunContext[State, Deps]
-    ) -> "ExtractPairsFromProximalSetsNode":
-        """Identify proximal sets in all resources."""
-        with logfire.span("IdentifyProximalSetsNode"):
-            # Set phase
-            if ctx.deps.progress:
-                ctx.deps.progress.set_phase_proximal()
-
-            # Get proximity threshold from config (default 2)
-            threshold = getattr(
-                ctx.deps.config.tools.extraction, "proximal_window_chunks", 2
-            )
-
-            # Process each resource
-            for (
-                resource_id,
-                entities,
-            ) in ctx.state.validated_entities_by_resource.items():
-                resource = ctx.deps.resource_pool.get(resource_id)
-                if not resource:
-                    continue
-
-                # Identify proximal sets
-                proximal_sets = identify_proximal_sets(entities, threshold, resource)
-
-                if proximal_sets:
-                    ctx.state.proximal_sets_by_resource[resource_id] = proximal_sets
-
-            return ExtractPairsFromProximalSetsNode()
-
-
-@dataclass
-class ExtractPairsFromProximalSetsNode(BaseNode[State, Deps, ExtractionResult]):
-    """Extract pairs from proximal entity regions.
-
-    For each proximal set:
-    1. Build text region (first quote chunk to last + padding)
-    2. Call proximal_pair_agent to extract associations
-    3. Validate entities in response are in proximal set
-    4. Validate quotes and create pair objects
-    5. Store pairs temporarily per resource (deduplication happens in next node)
-    """
-
-    async def run(self, ctx: GraphRunContext[State, Deps]) -> "AssessPairsNode":
-        """Extract pairs from all proximal sets in parallel."""
-        with logfire.span("ExtractPairsFromProximalSetsNode"):
-            # Set phase
-            if ctx.deps.progress:
-                ctx.deps.progress.set_phase_extracting_pairs()
-
-            # Collect all proximal sets with their resource context
-            tasks = []
-            for (
-                resource_id,
-                proximal_sets,
-            ) in ctx.state.proximal_sets_by_resource.items():
-                resource = ctx.deps.resource_pool.get(resource_id)
-                if not resource:
-                    continue
-
-                entities = ctx.state.validated_entities_by_resource[resource_id]
-
-                for proximal_set in proximal_sets:
-                    tasks.append(
-                        self._process_proximal_set(
-                            proximal_set, entities, resource, resource_id, ctx
-                        )
-                    )
-
-            # Run all extractions in parallel
-            if tasks:
-                # Results is list of (resource_id, list[pair_tuples])
-                results = await asyncio.gather(*tasks)
-
-                # Organize by resource for next stage
-                pairs_by_resource = defaultdict(list)
-                for resource_id, pairs in results:
-                    if pairs:
-                        pairs_by_resource[resource_id].extend(pairs)
-
-                # Store temporarily (will be deduplicated and assessed in next node)
-                # Store as list of (entity1, entity2, relationship_candidates, quotes) tuples
-                ctx.state._temp_pairs_by_resource = dict(pairs_by_resource)
-
-                # Update progress with total pairs found
-                if ctx.deps.progress:
-                    total_pairs = sum(
-                        len(pairs) for pairs in pairs_by_resource.values()
-                    )
-                    ctx.deps.progress.pairs_found = total_pairs
-                    ctx.deps.progress.update()
-
-            return AssessPairsNode()
-
-    async def _process_proximal_set(
+    def _update_pair_entity_references(
         self,
-        proximal_set,
+        merge_rules: dict[tuple[str, str], str],
+        ctx: GraphRunContext[State, Deps],
+    ) -> None:
+        """Update EntityMention references in PairAssessments after merging.
+
+        After entities are merged, pair assessments may reference old entity names.
+        This method updates those references to use the canonical merged names.
+
+        Parameters:
+            merge_rules: Mapping of (normalized_child, kind) → normalized_parent
+            ctx: Graph run context with state containing assessments
+        """
+        if not merge_rules:
+            return
+
+        for resource_id, assessments in ctx.state.pair_assessments_by_resource.items():
+            entities = ctx.state.validated_entities_by_resource.get(resource_id, {})
+
+            for assessment in assessments:
+                # Check if entity1 was merged
+                e1_norm = normalize_for_comparison(assessment.entity1.name)
+                e1_key = (e1_norm, assessment.entity1.kind)
+
+                if e1_key in merge_rules:
+                    merged_name = self._find_canonical_name(
+                        merge_rules[e1_key], entities, assessment.entity1.kind
+                    )
+                    if merged_name and merged_name != assessment.entity1.name:
+                        self._update_entity_in_assessment(
+                            assessment, "entity1", merged_name
+                        )
+
+                # Check if entity2 was merged
+                e2_norm = normalize_for_comparison(assessment.entity2.name)
+                e2_key = (e2_norm, assessment.entity2.kind)
+
+                if e2_key in merge_rules:
+                    merged_name = self._find_canonical_name(
+                        merge_rules[e2_key], entities, assessment.entity2.kind
+                    )
+                    if merged_name and merged_name != assessment.entity2.name:
+                        self._update_entity_in_assessment(
+                            assessment, "entity2", merged_name
+                        )
+
+    def _find_canonical_name(
+        self,
+        normalized_target: str,
         entities: dict[str, EntityMention],
-        resource: Resource,
-        resource_id,
-        ctx: GraphRunContext[State, Deps],
-    ) -> tuple:
-        """Process a single proximal set to extract pairs."""
-        # Build readable entity list for span name
-        entity_names = sorted(proximal_set.entities)[:3]  # Show up to 3 entities
-        entities_str = ", ".join(entity_names)
-        if len(proximal_set.entities) > 3:
-            entities_str += f" (+{len(proximal_set.entities) - 3} more)"
-        # Get padding from config (default 1)
-        padding = getattr(ctx.deps.config.tools.extraction, "region_padding_chunks", 1)
-        # Build text region
-        chunk_start, chunk_end = proximal_set.chunk_range
-        text_region = build_text_region(resource, chunk_start, chunk_end, padding)
-        # Build entity list with aliases
-        entity_list = []
-        for entity_name in proximal_set.entities:
-            entity = entities.get(entity_name)
-            if entity:
-                aliases_str = ", ".join(entity.aliases)
-                entity_list.append(
-                    f"- **{entity_name}** [kind: {entity.kind}, aliases: {aliases_str}]"
-                )
-        prompt = f"""Topic: {ctx.state.topic}
+        kind: str,
+    ) -> str | None:
+        """Find canonical entity name matching normalized target.
 
-**Entities in this region:**
-{chr(10).join(entity_list)}
+        Parameters:
+            normalized_target: Normalized name to find
+            entities: Entity dictionary to search
+            kind: Entity kind to match
 
-**Text region:**
-{text_region}
-
-Extract all binary associations between these entities that are clearly stated or implied in the text.
-Use the canonical entity names as shown in bold (kind and aliases are metadata only).
-Provide exact supporting quotes."""
-        # Call proximal pair agent with renamed span
-        agent = get_proximal_pair_agent(ctx.deps.config)
-        usage = RunUsage()
-        try:
-            with rename_agent(
-                agent, name=f"ExtractPairsFromProximalSetsNode: {entities_str}"
-            ):
-                result = await agent.run(prompt, deps=ctx.deps, usage=usage)
-        except (TimeoutError, ConnectionError, ValueError) as e:
-            ctx.deps.logger.error(
-                f"Proximal pair extraction failed: {type(e).__name__}: {e}"
-            )
-            return (resource_id, [])
-        # Process extracted pairs
-        pairs = []
-        for pair_info in result.output.pairs:
-            # Sanitize entity names (strip kind annotations if present)
-            entity1 = strip_kind_annotation(pair_info.entity1)
-            entity2 = strip_kind_annotation(pair_info.entity2)
-            # Verify entities are in proximal set
+        Returns:
+            Canonical name if found, None otherwise
+        """
+        for name, entity in entities.items():
             if (
-                entity1 not in proximal_set.entities
-                or entity2 not in proximal_set.entities
+                normalize_for_comparison(name) == normalized_target
+                and entity.kind == kind
             ):
-                # Skip silently - this indicates LLM hallucination/error
-                continue
-            # Validate pair kinds are permitted
-            e1_obj = entities.get(entity1)
-            e2_obj = entities.get(entity2)
-            if not e1_obj or not e2_obj:
-                # Skip silently - this indicates LLM hallucination/error
-                continue
-            # Check if this pair combination is permitted
-            allowed_partners = ctx.state.permitted_pairs.get(e1_obj.kind, set())
-            if e2_obj.kind not in allowed_partners:
-                ctx.deps.logger.debug(
-                    f"Pair {entity1} ({e1_obj.kind}) - {entity2} ({e2_obj.kind}) "
-                    f"not permitted by kind constraints"
-                )
-                continue
-            # Validate quotes
-            quotes = []
-            for quote_str in pair_info.supporting_quotes:
-                try:
-                    quote = resource.quote(quote_str)
-                    quotes.append(quote)
-                    ctx.state.quotes_validated += 1
-                except QuoteValidationError:
-                    ctx.state.quotes_failed += 1
-            if quotes:
-                # Store as tuple (will be converted to PairAssessment after dedup/assessment)
-                # Use sanitized entity names
-                pairs.append(
-                    (
-                        entity1,
-                        entity2,
-                        pair_info.relationship_types,
-                        quotes,
-                    )
-                )
-        return (resource_id, pairs)
+                return name
+        return None
 
-
-@dataclass
-class AssessPairsNode(BaseNode[State, Deps, ExtractionResult]):
-    """Deduplicate pairs and assess evidence per document.
-
-    For each resource:
-    1. Deduplicate pairs (same entity pair may appear in multiple proximal sets)
-    2. For each unique pair:
-       - Collect all quotes
-       - Build relevant text region
-       - Call pair_judge_agent
-       - Create PairAssessment with full EntityMention objects
-    3. Store assessments
-    """
-
-    async def run(self, ctx: GraphRunContext[State, Deps]) -> "JudgeCrossDocumentNode":
-        """Assess all pairs per resource."""
-        with logfire.span("AssessPairsNode"):
-            # Set phase
-            if ctx.deps.progress:
-                ctx.deps.progress.set_phase_assessing()
-
-            # Get temporary pairs from previous node
-            temp_pairs = getattr(ctx.state, "_temp_pairs_by_resource", {})
-
-            # Process each resource
-            tasks = []
-            for resource_id, pairs_list in temp_pairs.items():
-                resource = ctx.deps.resource_pool.get(resource_id)
-                if not resource:
-                    continue
-
-                entities = ctx.state.validated_entities_by_resource[resource_id]
-
-                # Deduplicate pairs by (entity1, entity2)
-                pairs_dict = {}
-                for entity1_name, entity2_name, rel_types, quotes in pairs_list:
-                    # Get entity objects
-                    entity1 = entities[entity1_name]
-                    entity2 = entities[entity2_name]
-
-                    # Create ordered key (determines canonical ordering)
-                    pair_key = make_entity_pair_key(entity1, entity2)
-
-                    if pair_key not in pairs_dict:
-                        # Store entities in the canonical order determined by pair_key
-                        ordered_entity1 = entities[pair_key.entity1_name]
-                        ordered_entity2 = entities[pair_key.entity2_name]
-
-                        pairs_dict[pair_key] = {
-                            "entity1": ordered_entity1,
-                            "entity2": ordered_entity2,
-                            "relationship_candidates": set(),
-                            "quotes": [],
-                        }
-
-                    pairs_dict[pair_key]["relationship_candidates"].update(rel_types)
-                    pairs_dict[pair_key]["quotes"].extend(quotes)
-
-                # Assess each unique pair
-                for pair_info in pairs_dict.values():
-                    tasks.append(
-                        self._assess_pair(pair_info, resource, resource_id, ctx)
-                    )
-
-            # Run all assessments in parallel
-            if tasks:
-                assessments = await asyncio.gather(*tasks)
-
-                # Organize by resource and update progress
-                for resource_id, assessment in assessments:
-                    if assessment:
-                        if resource_id not in ctx.state.pair_assessments_by_resource:
-                            ctx.state.pair_assessments_by_resource[resource_id] = []
-                        ctx.state.pair_assessments_by_resource[resource_id].append(
-                            assessment
-                        )
-                        # Update progress counter
-                        if ctx.deps.progress:
-                            ctx.deps.progress.pairs_assessed += 1
-                            ctx.deps.progress.update()
-
-            # Clean up temporary data
-            if hasattr(ctx.state, "_temp_pairs_by_resource"):
-                delattr(ctx.state, "_temp_pairs_by_resource")
-
-            return JudgeCrossDocumentNode()
-
-    async def _assess_pair(
+    def _update_entity_in_assessment(
         self,
-        pair_info: dict,
-        resource: Resource,
-        resource_id,
-        ctx: GraphRunContext[State, Deps],
-    ) -> tuple:
-        """Assess a single pair in a single resource."""
-        entity1 = pair_info["entity1"]
-        entity2 = pair_info["entity2"]
-        # Get padding from config
-        padding = getattr(ctx.deps.config.tools.extraction, "region_padding_chunks", 1)
-        # Build relevant text for all quotes
-        all_quotes = pair_info["quotes"]
-        text_region = collect_relevant_text_for_quotes(resource, all_quotes, padding)
-        # Build quote list for prompt
-        quotes_str = "\n".join(
-            f"[{i}] {q.get_quote_text()}" for i, q in enumerate(all_quotes)
-        )
-        # Build relationship candidates string
-        candidates = list(pair_info["relationship_candidates"])
-        candidates_str = ", ".join(f'"{c}"' for c in candidates)
-        prompt = f"""Topic: {ctx.state.topic}
+        assessment: PairAssessment,
+        attr: str,
+        new_name: str,
+    ) -> None:
+        """Update entity reference in assessment (mutates in place).
 
-**Pair:** {entity1.name} ({entity1.kind}) <-> {entity2.name} ({entity2.kind})
+        Parameters:
+            assessment: PairAssessment to update
+            attr: Attribute name ("entity1" or "entity2")
+            new_name: New canonical name to use
+        """
+        entity = getattr(assessment, attr)
+        old_name = entity.name
 
-**Relationship type candidates:** {candidates_str}
+        # Add old name to aliases if not already present
+        if old_name not in entity.aliases:
+            entity.aliases.append(old_name)
 
-**Relevant text from document:**
-{text_region}
+        # Update name
+        entity.name = new_name
 
-**Supporting quotes:**
-{quotes_str}
-
-Assess the strength of evidence for this association in this document.
-Select the most appropriate relationship type (from candidates or propose a more specific one).
-Assign a confidence level (high/medium/low) and explain your reasoning."""
-        # Call pair judge agent with renamed span
-        agent = get_pair_judge_agent(ctx.deps.config)
-        usage = RunUsage()
-        try:
-            with rename_agent(
-                agent, name=f"AssessPairsNode: {entity1.name} ⇌ {entity2.name}"
-            ):
-                result = await agent.run(prompt, deps=ctx.deps, usage=usage)
-        except (TimeoutError, ConnectionError, ValueError) as e:
-            ctx.deps.logger.error(
-                f"Pair assessment failed for {entity1.name}-{entity2.name}: "
-                f"{type(e).__name__}: {e}"
-            )
-            return (resource_id, None)
-        # Extract referenced quotes
-        referenced_quotes = [
-            all_quotes[i]
-            for i in result.output.supporting_quote_ids
-            if i < len(all_quotes)
-        ]
-        # Create assessment
-        assessment = PairAssessment(
-            resource_id=resource_id,
-            entity1=entity1,
-            entity2=entity2,
-            relationship=result.output.relationship,
-            quotes=referenced_quotes if referenced_quotes else all_quotes,
-            confidence=result.output.confidence,
-            reasoning=result.output.reasoning,
-        )
-        return (resource_id, assessment)
+        # Update reasoning to show merge
+        entity.reasoning += f" | MERGED_FROM({old_name})"
 
 
 @dataclass

@@ -4,13 +4,14 @@ The State dataclass holds all mutable data shared across pipeline nodes.
 Fields are precisely typed and organized by pipeline stage for clarity.
 
 Pipeline flow:
-1. ExtractEntitiesNode → entities_by_resource
-2. ValidateEntitiesNode → validated_entities_by_resource (kind filtering only)
-3. MergeEntitiesNode → entities_merged, canonical_name_variants (global merging)
-4. IdentifyProximalSetsNode → proximal_sets_by_resource
-5. ExtractPairsFromProximalSetsNode + AssessPairsNode → pair_assessments_by_resource
-6. JudgeCrossDocumentNode → pair_judgments
-7. FinalizeNode → ExtractionResult
+1. ProcessDocumentsNode (per-document, concurrent):
+   - Extract entities → entities_by_resource
+   - Validate kinds → validated_entities_by_resource
+   - Identify proximal sets → proximal_sets_by_resource
+   - Extract & assess pairs → pair_assessments_by_resource
+2. MergeEntitiesNode → entities_merged, canonical_name_variants (global merging + pair reference updates)
+3. JudgeCrossDocumentNode → pair_judgments
+4. FinalizeNode → ExtractionResult
 """
 
 from dataclasses import dataclass, field
