@@ -115,6 +115,20 @@ class IfetcherConfig(BaseModel):
             default_factory=Fetcher, description="Fetcher configuration"
         )
 
+        class Search(BaseModel):
+            """Configuration for search backends."""
+
+            timeout: int = Field(
+                60,
+                description="Request timeout in seconds for search operations",
+                ge=1,
+                le=600,
+            )
+
+        search: Search = Field(
+            default_factory=Search, description="Search backend configuration"
+        )
+
         class Keywords(BaseModel):
             """Configuration for keyword research module."""
 

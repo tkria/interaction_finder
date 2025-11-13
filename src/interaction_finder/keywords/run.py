@@ -62,7 +62,9 @@ async def run_keyword_research(
             )
             # Initialize search backend (currently only PubMed is supported)
             # In future, add backend factory to support multiple backends
-            search_backend = PubMedBackend(config={})
+            search_backend = PubMedBackend(
+                config={"timeout": config.tools.search.timeout}
+            )
             # Initialize reranker if enabled (rerank_top_k > 0)
             reranker = None
             if kw_config.rerank_top_k > 0:

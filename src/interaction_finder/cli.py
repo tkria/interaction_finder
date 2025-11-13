@@ -549,7 +549,7 @@ def extract_keywords(
             # Import backend to check for API key
             from interaction_finder.search.backends.pubmed import PubMedBackend
 
-            test_backend = PubMedBackend(config={})
+            test_backend = PubMedBackend(config={"timeout": cfg.tools.search.timeout})
             if test_backend.should_show_api_key_warning():
                 console.print(
                     "[yellow]Note:[/yellow] PubMed API key not configured. "
@@ -674,7 +674,7 @@ def widesearch(
         if not backend_class:
             valid = ", ".join(BACKENDS.keys())
             raise ValueError(f"Unknown backend '{backend_name}'. Valid: {valid}")
-        search_backend = backend_class(config={})
+        search_backend = backend_class(config={"timeout": cfg.tools.search.timeout})
         # Show PubMed API key warning if applicable
         if (
             backend_name == "pubmed"
