@@ -21,25 +21,20 @@ from interaction_finder.report.parallel_renderer import render_documents_paralle
 
 
 def prepare_report_data(
-    result: ExtractionResult, include_rejected: bool = False
+    result: ExtractionResult,
 ) -> tuple[dict[str, Any], dict[str, str]]:
     """Transform ExtractionResult into report data structure.
 
     Args:
         result: Extraction pipeline output
-        include_rejected: Whether to include rejected pairs
 
     Returns:
         Tuple of (json_data, document_html_map)
         - json_data: JSON-serializable dict with metadata for frontend
         - document_html_map: Mapping of doc_id -> pre-rendered HTML string
     """
-    # Filter judgments based on accepted status
-    judgments = (
-        result.judgments
-        if include_rejected
-        else [j for j in result.judgments if j.accepted]
-    )
+    # Include ALL judgments (both accepted and rejected) - filtering happens in frontend
+    judgments = result.judgments
 
     # Group judgments by entity pair (merge different relationships)
     pair_groups = defaultdict(list)

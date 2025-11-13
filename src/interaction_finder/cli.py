@@ -921,9 +921,6 @@ def report(
     output: Optional[Path] = typer.Option(
         None, "-o", "--output", help="Output HTML file path"
     ),
-    include_rejected: bool = typer.Option(
-        False, "--include-rejected", help="Include rejected pairs in report"
-    ),
     title: Optional[str] = typer.Option(
         None, "-t", "--title", help="Custom report title"
     ),
@@ -934,12 +931,13 @@ def report(
 
     Creates a self-contained HTML file with an interactive explorer for
     entity pairs, including full provenance tracking, document viewing,
-    and filtering capabilities.
+    and filtering capabilities. All pairs (both accepted and rejected) are
+    included in the report; use the "Show rejected" toggle in the UI to filter.
 
     Example:
         interaction-finder report results.json -o report.html
 
-        interaction-finder report pah-results.json -o pah-report.html --include-rejected
+        interaction-finder report pah-results.json -o pah-report.html --title "PAH Report"
     """
     try:
         # Validate extraction file exists
@@ -974,19 +972,16 @@ def report(
         output_path = generate_report(
             result=result,
             output=output,
-            include_rejected=include_rejected,
             title=title,
         )
 
         console.print(f"[green]✓[/green] Report generated: {output_path}")
 
-        # Show statistics
-        pairs_shown = result.metadata.pairs_accepted
-        if include_rejected:
-            pairs_shown = result.metadata.total_pairs_found
-
+        # Show statistics (all pairs are included)
         console.print(f"\n[bold]Report contains:[/bold]")
-        console.print(f"  • {pairs_shown} pairs")
+        console.print(
+            f"  • {result.metadata.total_pairs_found} pairs ({result.metadata.pairs_accepted} accepted, {result.metadata.pairs_rejected} rejected)"
+        )
         console.print(f"  • {result.metadata.resource_count} documents")
         console.print(f"  • Interactive filtering and search")
         console.print(f"  • Full provenance tracking")

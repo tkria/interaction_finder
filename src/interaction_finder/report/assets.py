@@ -782,7 +782,8 @@ function initReport() {
     document.getElementById('search-input').addEventListener('input', handleSearch);
     document.getElementById('show-rejected').addEventListener('change', handleToggleRejected);
 
-    // Initial render
+    // Initial render with header counts
+    updateHeaderCounts();
     renderPairList();
     renderContent();
     renderReasoning();
@@ -791,6 +792,7 @@ function initReport() {
 // Search handler
 function handleSearch(e) {
     state.searchQuery = e.target.value.toLowerCase();
+    updateHeaderCounts();
     renderPairList();
 }
 
@@ -818,6 +820,14 @@ function updateHeaderCounts() {
         entityKinds[pair.entity2.kind].add(pair.entity2.name);
     });
 
+    // Count unique documents in filtered pairs
+    const documentIds = new Set();
+    filtered.forEach(pair => {
+        pair.assessments.forEach(assess => {
+            documentIds.add(assess.resource_id);
+        });
+    });
+
     // Update the stats display
     const statsEl = document.querySelector('.header-stats');
     if (statsEl) {
@@ -828,7 +838,7 @@ function updateHeaderCounts() {
             statsItems.push(`<span class="stat-item"><span class="stat-label">${escapeHtml(kind)}:</span> <span>${names.size}</span></span>`);
         }
 
-        statsItems.push(`<span class="stat-item"><span class="stat-label">Documents:</span> <span>${state.data.metadata.resource_count}</span></span>`);
+        statsItems.push(`<span class="stat-item"><span class="stat-label">Documents:</span> <span>${documentIds.size}</span></span>`);
 
         statsEl.innerHTML = statsItems.join('\\n');
     }

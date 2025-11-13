@@ -14,18 +14,18 @@ from interaction_finder.report.template import render_template
 def generate_report(
     result: ExtractionResult,
     output: Path,
-    include_rejected: bool = False,
     title: str | None = None,
 ) -> Path:
     """Generate interactive HTML report from extraction results.
 
     Creates a self-contained HTML file with embedded data, CSS, and JavaScript
     that provides an interactive explorer for entity pairs with full provenance.
+    All pairs (both accepted and rejected) are included in the report; filtering
+    is performed in the frontend JavaScript.
 
     Args:
         result: ExtractionResult from pipeline
         output: Path where HTML file should be written
-        include_rejected: Whether to include rejected pairs (default: False)
         title: Report title (default: auto-generated from topic)
 
     Returns:
@@ -40,9 +40,8 @@ def generate_report(
         raise ValueError("ExtractionResult contains no judgments")
 
     # Prepare data (returns tuple of json_data and document_html map)
-    json_data, document_html = prepare_report_data(
-        result, include_rejected=include_rejected
-    )
+    # Always includes all judgments (accepted and rejected)
+    json_data, document_html = prepare_report_data(result)
 
     # Generate title if not provided
     if title is None:
