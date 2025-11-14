@@ -27,40 +27,14 @@ from pydantic import (
 from pydantic_core import core_schema
 from rapidfuzz import fuzz
 
-from interaction_finder.text_mapping import NormalizedTextMapper
+from interaction_finder.text_mapping import (
+    NormalizedTextMapper,
+    normalize_text_for_matching,
+)
 
 if TYPE_CHECKING:
     pass  # For forward references
 
-
-# Greek letter mappings for scientific text normalization (lowercase only)
-GREEK_LETTER_MAP = {
-    "α": "alpha",
-    "β": "beta",
-    "γ": "gamma",
-    "δ": "delta",
-    "ε": "epsilon",
-    "ζ": "zeta",
-    "η": "eta",
-    "θ": "theta",
-    "ι": "iota",
-    "κ": "kappa",
-    "λ": "lambda",
-    "μ": "mu",
-    "ν": "nu",
-    "ξ": "xi",
-    "ο": "omicron",
-    "π": "pi",
-    "ρ": "rho",
-    "σ": "sigma",
-    "ς": "sigma",
-    "τ": "tau",
-    "υ": "upsilon",
-    "φ": "phi",
-    "χ": "chi",
-    "ψ": "psi",
-    "ω": "omega",
-}
 
 # Fuzzy matching thresholds
 FUZZY_SUGGESTION_THRESHOLD: float = 0.75  # Minimum similarity for suggestions
@@ -352,77 +326,6 @@ class ReorderingError(QuoteNearMatchError):
             f"Quote has words in wrong order: {self.quote_text!r}\n"
             f"Suggested (with correct order): {self.best_suggestion().text!r}"
         )
-
-
-def normalize_text_for_matching(text: str) -> str:
-    """
-    Normalize text for fuzzy quote matching.
-
-    Converts to lowercase, handles Unicode normalization, converts Greek letters
-    to ASCII equivalents, removes punctuation, and normalizes whitespace to make
-    quote matching more robust against formatting differences.
-
-    Args:
-        text: Raw text to normalize
-
-    Returns:
-        Normalized text suitable for comparison
-    """
-    # Apply Unicode normalization first
-    unicode_text = unicodedata.normalize("NFD", text)
-    unicode_text = "".join(c for c in unicode_text if unicodedata.category(c) != "Mn")
-
-    normalized = []
-    text_len = len(unicode_text)
-    last_was_space = True
-
-    for i, char in enumerate(unicode_text):
-        char_lower = char.lower()
-
-        # ASCII alphanumeric - fast path
-        if char_lower.isascii() and char_lower.isalnum():
-            normalized.append(char_lower)
-            last_was_space = False
-
-        # Greek letters
-        elif 0x0370 <= ord(char) <= 0x03FF and char_lower in GREEK_LETTER_MAP:
-            # Add space before if needed
-            if normalized and normalized[-1].isalnum():
-                normalized.append(" ")
-            # Add Greek name
-            normalized.extend(GREEK_LETTER_MAP[char_lower])
-            # Add space after if needed
-            if i + 1 < text_len and unicode_text[i + 1].isalnum():
-                normalized.append(" ")
-            last_was_space = False
-
-        # Skip contractions and decimals
-        elif (
-            char == "'"
-            and i > 0
-            and i < text_len - 1
-            and unicode_text[i - 1].isalnum()
-            and unicode_text[i + 1].isalnum()
-        ) or (
-            char == "."
-            and i > 0
-            and i < text_len - 1
-            and unicode_text[i - 1].isdigit()
-            and unicode_text[i + 1].isdigit()
-        ):
-            continue
-
-        # Other alphanumeric
-        elif char_lower.isalnum():
-            normalized.append(char_lower)
-            last_was_space = False
-
-        # Everything else becomes space
-        elif not last_was_space:
-            normalized.append(" ")
-            last_was_space = True
-
-    return "".join(normalized).strip()
 
 
 def expand_scientific_shorthand(text: str) -> List[str]:
