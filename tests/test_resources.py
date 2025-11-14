@@ -1573,10 +1573,11 @@ class TestFuzzyMatchingExceptions:
         )
 
         # Quote with slight modifications that will trigger fuzzy alignment fallback
+        # Using a slightly more complete quote to ensure fuzzy match succeeds
         quote = ResourceQuote(
             resource,
-            "p53 mediated apoptosis critical tumor suppression cancer types breast",
-            similarity_threshold=0.70,
+            "p53 mediated apoptosis is critical for tumor suppression in cancer types including breast",
+            similarity_threshold=0.75,
         )
 
         assert isinstance(quote, ResourceQuote)

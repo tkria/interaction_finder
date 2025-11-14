@@ -7,6 +7,7 @@ get results in target coordinate space. Useful for text transformations
 
 import bisect
 import re
+import unicodedata
 from typing import List, Optional, Pattern, Tuple, Union
 
 
@@ -167,3 +168,285 @@ class TextPositionMapper:
                 matches.append(self.targetspan(source_start, source_end))
 
         return matches
+
+
+# Greek letter mapping for normalization
+GREEK_LETTER_MAP = {
+    "α": "alpha",
+    "β": "beta",
+    "γ": "gamma",
+    "δ": "delta",
+    "ε": "epsilon",
+    "ζ": "zeta",
+    "η": "eta",
+    "θ": "theta",
+    "ι": "iota",
+    "κ": "kappa",
+    "λ": "lambda",
+    "μ": "mu",
+    "ν": "nu",
+    "ξ": "xi",
+    "ο": "omicron",
+    "π": "pi",
+    "ρ": "rho",
+    "ς": "sigma",
+    "σ": "sigma",
+    "τ": "tau",
+    "υ": "upsilon",
+    "φ": "phi",
+    "χ": "chi",
+    "ψ": "psi",
+    "ω": "omega",
+}
+
+
+def normalize_text_for_matching(text: str) -> str:
+    """Normalize text for case-insensitive matching with Greek letter support.
+
+    Converts to lowercase, expands Greek letters to ASCII names, removes
+    punctuation (except contractions/decimals), and normalizes whitespace.
+
+    Args:
+        text: Text to normalize
+
+    Returns:
+        Normalized text suitable for fuzzy matching
+    """
+    # Apply Unicode normalization
+    text = unicodedata.normalize("NFD", text)
+    text = "".join(c for c in text if unicodedata.category(c) != "Mn")
+
+    normalized = []
+    text_len = len(text)
+    last_was_space = True
+
+    def _should_skip_char(char: str, pos: int) -> bool:
+        """Check if character should be skipped (contractions, decimals)."""
+        if pos == 0 or pos >= text_len - 1:
+            return False
+        prev_char, next_char = text[pos - 1], text[pos + 1]
+        return (char == "'" and prev_char.isalnum() and next_char.isalnum()) or (
+            char == "." and prev_char.isdigit() and next_char.isdigit()
+        )
+
+    i = 0
+    while i < text_len:
+        char = text[i]
+
+        # Fast path for ASCII alphanumeric
+        if "a" <= char <= "z" or "0" <= char <= "9":
+            normalized.append(char)
+            last_was_space = False
+        elif "A" <= char <= "Z":
+            normalized.append(char.lower())
+            last_was_space = False
+        # Greek letters
+        elif 0x0370 <= ord(char) <= 0x03FF:
+            char_lower = char.lower()
+            if char_lower in GREEK_LETTER_MAP:
+                # Add space before if needed
+                if normalized and normalized[-1].isalnum():
+                    normalized.append(" ")
+                # Add Greek name
+                normalized.extend(GREEK_LETTER_MAP[char_lower])
+                # Add space after if needed
+                if i + 1 < text_len and text[i + 1].isalnum():
+                    normalized.append(" ")
+                last_was_space = False
+            else:
+                if char.isalnum():
+                    normalized.append(char_lower)
+                    last_was_space = False
+                elif not last_was_space:
+                    normalized.append(" ")
+                    last_was_space = True
+        # Skip contractions and decimal points
+        elif _should_skip_char(char, i):
+            pass
+        # Other alphanumeric
+        elif char.isalnum():
+            normalized.append(char.lower())
+            last_was_space = False
+        # Convert everything else to single space
+        elif not last_was_space:
+            normalized.append(" ")
+            last_was_space = True
+
+        i += 1
+
+    return "".join(normalized).strip()
+
+
+class NormalizedTextMapper(TextPositionMapper):
+    """Position mapper with automatic normalization for Greek letter support.
+
+    Extends TextPositionMapper to automatically normalize search terms before
+    searching, enabling Greek letter equivalence (α ↔ alpha) without requiring
+    callers to manually normalize terms.
+
+    The mapper stores normalized text as source and original text as target,
+    with position offsets for efficient coordinate translation.
+    """
+
+    @classmethod
+    def from_text(
+        cls, original_text: str, offsets: Optional[List[Tuple[int, int]]] = None
+    ) -> "NormalizedTextMapper":
+        """Create mapper from original text with automatic normalization.
+
+        Args:
+            original_text: Original document text
+            offsets: Optional pre-computed offsets. If not provided, will be
+                    computed from scratch.
+
+        Returns:
+            NormalizedTextMapper instance
+
+        Example:
+            >>> mapper = NormalizedTextMapper.from_text("TGF-α receptor")
+            >>> mapper.find("alpha")  # Automatically finds "α"
+            (4, 5)
+        """
+        if offsets is None:
+            normalized_text, offsets = cls._build_normalized_offsets(original_text)
+        else:
+            normalized_text = normalize_text_for_matching(original_text)
+
+        return cls(source=normalized_text, target=original_text, offsets=offsets)
+
+    @staticmethod
+    def _build_normalized_offsets(
+        original_text: str,
+    ) -> Tuple[str, List[Tuple[int, int]]]:
+        """Build normalized text and delta-based position offsets.
+
+        Args:
+            original_text: Original document text
+
+        Returns:
+            Tuple of (normalized_text, offsets) where offsets is a list of
+            (normalized_pos, delta) tuples with delta = original_pos - normalized_pos
+        """
+        # Apply Unicode normalization
+        unicode_text = unicodedata.normalize("NFD", original_text)
+        unicode_text = "".join(
+            c for c in unicode_text if unicodedata.category(c) != "Mn"
+        )
+
+        normalized = []
+        position_offsets = []
+        text_len = len(unicode_text)
+        last_was_space = True
+        last_delta: Optional[int] = None
+
+        def _should_skip_char(char: str, pos: int) -> bool:
+            """Check if character should be skipped (contractions, decimals)."""
+            if pos == 0 or pos >= text_len - 1:
+                return False
+            prev_char, next_char = unicode_text[pos - 1], unicode_text[pos + 1]
+            return (char == "'" and prev_char.isalnum() and next_char.isalnum()) or (
+                char == "." and prev_char.isdigit() and next_char.isdigit()
+            )
+
+        i = 0
+        while i < text_len:
+            char = unicode_text[i]
+            # Calculate delta: target (original) - source (normalized)
+            current_delta = i - len(normalized)
+
+            # Record delta change (sparse representation)
+            if last_delta is None or current_delta != last_delta:
+                position_offsets.append((len(normalized), current_delta))
+                last_delta = current_delta
+
+            # Fast path for ASCII alphanumeric
+            if "a" <= char <= "z" or "0" <= char <= "9":
+                normalized.append(char)
+                last_was_space = False
+            elif "A" <= char <= "Z":
+                normalized.append(char.lower())
+                last_was_space = False
+            # Greek letters
+            elif 0x0370 <= ord(char) <= 0x03FF:
+                char_lower = char.lower()
+                if char_lower in GREEK_LETTER_MAP:
+                    # Add space before if needed
+                    if normalized and normalized[-1].isalnum():
+                        normalized.append(" ")
+                    # Add Greek name
+                    normalized.extend(GREEK_LETTER_MAP[char_lower])
+                    # Add space after if needed
+                    if i + 1 < text_len and unicode_text[i + 1].isalnum():
+                        normalized.append(" ")
+                    last_was_space = False
+                else:
+                    if char.isalnum():
+                        normalized.append(char_lower)
+                        last_was_space = False
+                    elif not last_was_space:
+                        normalized.append(" ")
+                        last_was_space = True
+            # Skip contractions and decimal points
+            elif _should_skip_char(char, i):
+                pass
+            # Other alphanumeric
+            elif char.isalnum():
+                normalized.append(char.lower())
+                last_was_space = False
+            # Convert everything else to single space
+            elif not last_was_space:
+                normalized.append(" ")
+                last_was_space = True
+
+            i += 1
+
+        normalized_text = "".join(normalized).strip()
+        return normalized_text, position_offsets
+
+    def find(self, pattern: Union[str, Pattern]) -> Optional[Tuple[int, int]]:
+        """Search with automatic normalization for string patterns.
+
+        String patterns are automatically normalized before searching, enabling
+        Greek letter matching. Regex patterns are used as-is.
+
+        Args:
+            pattern: String or compiled regex to search for
+
+        Returns:
+            (start, end) in target (original) coordinates, or None if not found
+
+        Example:
+            >>> mapper = NormalizedTextMapper.from_text("TGF-α receptor")
+            >>> mapper.find("TGF-alpha")  # Finds "TGF-α" automatically
+            (0, 5)
+        """
+        if isinstance(pattern, str):
+            # Auto-normalize string searches
+            pattern = normalize_text_for_matching(pattern)
+        # Regex patterns used as-is (must match normalized space)
+        return super().find(pattern)
+
+    def findall(self, pattern: Union[str, Pattern]) -> List[Tuple[int, int]]:
+        """Search all with automatic normalization for string patterns.
+
+        String patterns are automatically normalized before searching, enabling
+        Greek letter matching. Regex patterns are used as-is.
+
+        Args:
+            pattern: String or compiled regex to search for
+
+        Returns:
+            List of (start, end) tuples in target (original) coordinates
+
+        Example:
+            >>> mapper = NormalizedTextMapper.from_text("α and β receptors")
+            >>> mapper.findall("alpha")
+            [(0, 1)]
+            >>> mapper.findall("beta")
+            [(6, 7)]
+        """
+        if isinstance(pattern, str):
+            # Auto-normalize string searches
+            pattern = normalize_text_for_matching(pattern)
+        # Regex patterns used as-is (must match normalized space)
+        return super().findall(pattern)

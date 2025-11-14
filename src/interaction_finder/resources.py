@@ -27,7 +27,7 @@ from pydantic import (
 from pydantic_core import core_schema
 from rapidfuzz import fuzz
 
-from interaction_finder.text_mapping import TextPositionMapper
+from interaction_finder.text_mapping import NormalizedTextMapper
 
 if TYPE_CHECKING:
     pass  # For forward references
@@ -921,8 +921,8 @@ class Resource(BaseModel):
         description="List of (start, end) character positions for document chunks",
     )
 
-    # Private attribute for position mapping
-    _position_mapper: Optional[TextPositionMapper] = PrivateAttr(default=None)
+    # Private attribute for position mapping with normalization
+    _position_mapper: Optional[NormalizedTextMapper] = PrivateAttr(default=None)
 
     def __init__(
         self,
@@ -942,10 +942,8 @@ class Resource(BaseModel):
             chunks: Optional list of (start, end) positions for document chunks.
                    Defaults to single chunk spanning entire document.
         """
-        # Build normalized text with Greek letter support
-        normalized_text, position_offsets = self._build_normalized_text_and_offsets(
-            text
-        )
+        # Create normalized text mapper (handles Greek letters automatically)
+        mapper = NormalizedTextMapper.from_text(text)
 
         # Default chunks to entire document if not provided
         if chunks is None:
@@ -955,114 +953,12 @@ class Resource(BaseModel):
             id=id,
             title=title,
             text=text,
-            normalized_text=normalized_text,
+            normalized_text=mapper.source,  # Get normalized text from mapper
             chunks=chunks,
             **data,
         )
-        # Create position mapper (source=normalized, target=original)
-        self._position_mapper = TextPositionMapper(
-            source=normalized_text, target=text, offsets=position_offsets
-        )
-
-    @staticmethod
-    def _build_normalized_text_and_offsets(
-        original_text: str,
-    ) -> Tuple[str, List[Tuple[int, int]]]:
-        """
-        Build normalized text and position offset mapping simultaneously.
-
-        Args:
-            original_text: Original document text
-
-        Returns:
-            Tuple of (normalized_text, position_offsets) where position_offsets
-            is a list of (original_pos, delta) tuples where delta = normalized_pos - original_pos.
-            Only records entries where delta changes.
-        """
-        # Apply Unicode normalization first
-        unicode_text = unicodedata.normalize("NFD", original_text)
-        unicode_text = "".join(
-            c for c in unicode_text if unicodedata.category(c) != "Mn"
-        )
-
-        normalized = []
-        position_offsets = []
-        text_len = len(unicode_text)
-        last_was_space = True  # Start as True to avoid leading spaces
-        last_delta = None  # Track last delta to detect changes
-
-        def _should_skip_char(char: str, pos: int) -> bool:
-            """Check if character should be skipped (contractions, decimals)."""
-            if pos == 0 or pos >= text_len - 1:
-                return False
-            prev_char, next_char = unicode_text[pos - 1], unicode_text[pos + 1]
-            return (char == "'" and prev_char.isalnum() and next_char.isalnum()) or (
-                char == "." and prev_char.isdigit() and next_char.isdigit()
-            )
-
-        i = 0
-        while i < text_len:
-            char = unicode_text[i]
-            # Calculate current delta: target (original) - source (normalized)
-            # At this normalized position, what's the offset to get to original position?
-            current_delta = i - len(normalized)
-
-            # Record delta change (source=normalized, so use normalized position)
-            if last_delta is None or current_delta != last_delta:
-                position_offsets.append((len(normalized), current_delta))
-                last_delta = current_delta
-
-            # Fast path for ASCII alphanumeric (most common case)
-            if "a" <= char <= "z" or "0" <= char <= "9":
-                normalized.append(char)
-                last_was_space = False
-
-            elif "A" <= char <= "Z":
-                normalized.append(char.lower())
-                last_was_space = False
-
-            # Greek letters (Unicode range check first for performance)
-            elif 0x0370 <= ord(char) <= 0x03FF:
-                char_lower = char.lower()
-                if char_lower in GREEK_LETTER_MAP:
-                    # Add space before if needed
-                    if normalized and normalized[-1].isalnum():
-                        normalized.append(" ")
-                    # Add Greek name
-                    normalized.extend(GREEK_LETTER_MAP[char_lower])
-                    # Add space after if needed
-                    if i + 1 < text_len and unicode_text[i + 1].isalnum():
-                        normalized.append(" ")
-                    last_was_space = False
-                else:
-                    # Non-Greek unicode letter
-                    if char.isalnum():
-                        normalized.append(char_lower)
-                        last_was_space = False
-                    elif not last_was_space:
-                        normalized.append(" ")
-                        last_was_space = True
-
-            # Skip contractions and decimal points
-            elif _should_skip_char(char, i):
-                pass
-
-            # Other alphanumeric characters
-            elif char.isalnum():
-                normalized.append(char.lower())
-                last_was_space = False
-
-            # Convert everything else to single space
-            elif not last_was_space:
-                normalized.append(" ")
-                last_was_space = True
-
-            i += 1
-
-        # Final result - no need for final offset entry as TextPositionMapper handles end positions
-        normalized_text = "".join(normalized).strip()
-
-        return normalized_text, position_offsets
+        # Store the mapper
+        self._position_mapper = mapper
 
     def quote(self, text: str, similarity_threshold: float = 0.8) -> "ResourceQuote":
         """

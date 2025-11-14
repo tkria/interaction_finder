@@ -9,11 +9,7 @@ from markdown_it import MarkdownIt
 from markdown_it.token import Token
 from pydantic import BaseModel
 
-from interaction_finder.resources import (
-    Resource,
-    ResourceQuote,
-    normalize_text_for_matching,
-)
+from interaction_finder.resources import Resource, ResourceQuote
 from interaction_finder.text_mapping import TextPositionMapper
 
 
@@ -575,13 +571,10 @@ class DocumentAnnotator:
                 search_terms = [entity_name] + entity_aliases
 
                 for term in search_terms:
-                    # Normalize the search term to match against normalized text
-                    # This handles Greek letters, punctuation, etc.
-                    normalized_term = normalize_text_for_matching(term)
-
-                    # Use Resource's position mapper to search normalized text
+                    # Use Resource's NormalizedTextMapper to search
+                    # Automatically normalizes search term (Greek letters, punctuation, etc.)
                     # Returns positions in original text coordinates
-                    matches = self.resource._position_mapper.findall(normalized_term)
+                    matches = self.resource._position_mapper.findall(term)
 
                     for orig_start, orig_end in matches:
                         # Check if this position is within any quote span (in original coordinates)
