@@ -206,75 +206,18 @@ def normalize_text_for_matching(text: str) -> str:
     Converts to lowercase, expands Greek letters to ASCII names, removes
     punctuation (except contractions/decimals), and normalizes whitespace.
 
+    This is a convenience function that delegates to NormalizedTextMapper's
+    internal normalization logic.
+
     Args:
         text: Text to normalize
 
     Returns:
         Normalized text suitable for fuzzy matching
     """
-    # Apply Unicode normalization
-    text = unicodedata.normalize("NFD", text)
-    text = "".join(c for c in text if unicodedata.category(c) != "Mn")
-
-    normalized = []
-    text_len = len(text)
-    last_was_space = True
-
-    def _should_skip_char(char: str, pos: int) -> bool:
-        """Check if character should be skipped (contractions, decimals)."""
-        if pos == 0 or pos >= text_len - 1:
-            return False
-        prev_char, next_char = text[pos - 1], text[pos + 1]
-        return (char == "'" and prev_char.isalnum() and next_char.isalnum()) or (
-            char == "." and prev_char.isdigit() and next_char.isdigit()
-        )
-
-    i = 0
-    while i < text_len:
-        char = text[i]
-
-        # Fast path for ASCII alphanumeric
-        if "a" <= char <= "z" or "0" <= char <= "9":
-            normalized.append(char)
-            last_was_space = False
-        elif "A" <= char <= "Z":
-            normalized.append(char.lower())
-            last_was_space = False
-        # Greek letters
-        elif 0x0370 <= ord(char) <= 0x03FF:
-            char_lower = char.lower()
-            if char_lower in GREEK_LETTER_MAP:
-                # Add space before if needed
-                if normalized and normalized[-1].isalnum():
-                    normalized.append(" ")
-                # Add Greek name
-                normalized.extend(GREEK_LETTER_MAP[char_lower])
-                # Add space after if needed
-                if i + 1 < text_len and text[i + 1].isalnum():
-                    normalized.append(" ")
-                last_was_space = False
-            else:
-                if char.isalnum():
-                    normalized.append(char_lower)
-                    last_was_space = False
-                elif not last_was_space:
-                    normalized.append(" ")
-                    last_was_space = True
-        # Skip contractions and decimal points
-        elif _should_skip_char(char, i):
-            pass
-        # Other alphanumeric
-        elif char.isalnum():
-            normalized.append(char.lower())
-            last_was_space = False
-        # Convert everything else to single space
-        elif not last_was_space:
-            normalized.append(" ")
-            last_was_space = True
-
-        i += 1
-
-    return "".join(normalized).strip()
+    # Delegate to the mapper's normalization logic
+    normalized_text, _ = NormalizedTextMapper._build_normalized_offsets(text)
+    return normalized_text
 
 
 class NormalizedTextMapper(TextPositionMapper):
