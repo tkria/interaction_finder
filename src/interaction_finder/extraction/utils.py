@@ -13,7 +13,7 @@ from interaction_finder.extraction.models import (
     ProximalEntitySet,
 )
 from interaction_finder.resources import Resource, ResourceQuote
-from interaction_finder.text_mapping import normalize_text_for_matching
+from interaction_finder.text_mapping import NormalizedTextMapper
 
 
 def build_permitted_pairs(entity_types: list[str]) -> dict[str, set[str]]:
@@ -102,7 +102,7 @@ def normalize_for_comparison(text: str) -> str:
     Returns:
         Normalized lowercase text
     """
-    return normalize_text_for_matching(text)
+    return NormalizedTextMapper.normalize(text)
 
 
 def find_substring_entities(

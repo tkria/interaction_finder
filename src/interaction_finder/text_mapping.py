@@ -200,21 +200,6 @@ GREEK_LETTER_MAP = {
 }
 
 
-def normalize_text_for_matching(text: str) -> str:
-    """Normalize text for case-insensitive matching with Greek letter support.
-
-    This is a convenience function that delegates to NormalizedTextMapper.normalize().
-    Prefer using NormalizedTextMapper.normalize() directly for clarity.
-
-    Args:
-        text: Text to normalize
-
-    Returns:
-        Normalized text suitable for fuzzy matching
-    """
-    return NormalizedTextMapper.normalize(text)
-
-
 class NormalizedTextMapper(TextPositionMapper):
     """Position mapper with automatic normalization for Greek letter support.
 
@@ -271,7 +256,7 @@ class NormalizedTextMapper(TextPositionMapper):
         if offsets is None:
             normalized_text, offsets = cls._build_normalized_offsets(original_text)
         else:
-            normalized_text = normalize_text_for_matching(original_text)
+            normalized_text = cls.normalize(original_text)
 
         return cls(source=normalized_text, target=original_text, offsets=offsets)
 

@@ -3,7 +3,7 @@ Term normalization for bridging term deduplication.
 
 Provides a multi-stage normalization pipeline that handles:
 1. Parenthetical abbreviations (PAH, IPAH, SNP)
-2. Greek letters, punctuation, whitespace (via resources.normalize_text_for_matching)
+2. Greek letters, punctuation, whitespace (via NormalizedTextMapper.normalize)
 3. Singular/plural via lemmatization
 4. Domain-specific suffixes (pathway, signaling, in PAH)
 """
@@ -12,9 +12,6 @@ import re
 from functools import lru_cache
 
 from interaction_finder.text_mapping import NormalizedTextMapper
-
-# Convenience alias
-normalize_text_for_matching = NormalizedTextMapper.normalize
 
 
 # Common biomedical/scientific suffixes to strip for deduplication
@@ -173,7 +170,7 @@ def normalize_term_for_deduplication(term: str) -> str:
 
     Applies multi-stage pipeline:
     1. Strip parenthetical abbreviations (PAH, IPAH, etc.)
-    2. Text normalization (case, punctuation, Greek letters via resources.py)
+    2. Text normalization (case, punctuation, Greek letters via NormalizedTextMapper)
     3. Lemmatization (singular/plural)
     4. Strip common suffixes (pathway, signaling, etc.)
 
@@ -195,8 +192,8 @@ def normalize_term_for_deduplication(term: str) -> str:
     """
     # Stage 1: Strip parenthetical abbreviations
     text = strip_parenthetical_abbreviations(term)
-    # Stage 2: Apply resource.py text normalization (case, punctuation, Greek, whitespace)
-    text = normalize_text_for_matching(text)
+    # Stage 2: Apply text normalization (case, punctuation, Greek, whitespace)
+    text = NormalizedTextMapper.normalize(text)
     # Stage 3: Lemmatize to handle plurals
     text = lemmatize_term(text)
     # Stage 4: Strip common domain suffixes
