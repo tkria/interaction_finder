@@ -36,7 +36,7 @@ uv sync
 
 ```bash
 # Stage 1: Extract bridging terms (keywords) from review articles
-uv run interaction-finder extract-keywords "pulmonary arterial hypertension" -o keywords.json
+uv run interaction-finder keywords "pulmonary arterial hypertension" -o keywords.json
 
 # Stage 2: Wide search using extracted keywords
 uv run interaction-finder widesearch keywords.json "pulmonary arterial hypertension" -o searches.json

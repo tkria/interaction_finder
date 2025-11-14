@@ -541,7 +541,7 @@ def fetch(
 
 
 @app.command()
-def extract_keywords(
+def keywords(
     topic: str = typer.Argument(help="Research topic to find bridging terms for"),
     output: Optional[Path] = typer.Option(
         None, "-o", "--output", help="Output file for results (JSON)"
@@ -561,9 +561,9 @@ def extract_keywords(
     search coverage but don't appear in the original topic name.
 
     Example:
-        interaction-finder extract-keywords "pulmonary arterial hypertension"
+        interaction-finder keywords "pulmonary arterial hypertension"
 
-        interaction-finder extract-keywords "machine learning" -o keywords.json
+        interaction-finder keywords "machine learning" -o keywords.json
     """
     try:
         # Load configuration
@@ -630,7 +630,7 @@ def extract_keywords(
 @app.command()
 def widesearch(
     keywords_file: Path = typer.Argument(
-        help="Path to keywords JSON file from extract-keywords command"
+        help="Path to keywords JSON file from keywords command"
     ),
     topic: str = typer.Argument(help="Research topic being investigated"),
     output: Optional[Path] = typer.Option(
@@ -658,7 +658,7 @@ def widesearch(
     ),
 ):
     """
-    Execute widesearch using keywords from extract-keywords command.
+    Execute widesearch using keywords from keywords command.
 
     Performs iterative query expansion and search using provided keyphrases,
     saving complete checkpoint (results, queries, resource pool) to JSON.
@@ -1016,7 +1016,11 @@ def report(
             )
 
         parsed_filters = _parse_filter_options(filters)
-        if normalized_format != "html" and "accepted" not in parsed_filters and not plain_kind:
+        if (
+            normalized_format != "html"
+            and "accepted" not in parsed_filters
+            and not plain_kind
+        ):
             parsed_filters["accepted"] = "yes"
         elif plain_kind and "accepted" not in parsed_filters:
             parsed_filters["accepted"] = "yes"
@@ -1049,9 +1053,7 @@ def report(
             filters=parsed_filters if parsed_filters else None,
         )
 
-        destination_label = (
-            "stdout" if str(output_path) == "-" else str(output_path)
-        )
+        destination_label = "stdout" if str(output_path) == "-" else str(output_path)
         log_console.print(f"[green]✓[/green] Report generated: {destination_label}")
 
         # Show statistics (all pairs are included)
