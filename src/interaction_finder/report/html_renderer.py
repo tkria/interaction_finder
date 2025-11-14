@@ -9,7 +9,12 @@ from markdown_it import MarkdownIt
 from markdown_it.token import Token
 from pydantic import BaseModel
 
-from interaction_finder.resources import Resource, ResourceQuote
+from interaction_finder.resources import (
+    Resource,
+    ResourceQuote,
+    normalize_text_for_matching,
+)
+from interaction_finder.text_mapping import TextPositionMapper
 
 
 class MarkdownToHTMLRenderer:
@@ -18,49 +23,39 @@ class MarkdownToHTMLRenderer:
     def __init__(self, text: str):
         self.original_text = text
         self.html: str = ""
-        self.position_offsets: list[tuple[int, int]] = []
+        self._position_mapper: TextPositionMapper | None = None
         self._md = MarkdownIt("commonmark", {"html": False, "typographer": False})
         self._line_offsets = self._compute_line_offsets(text)
         self._builder = HTMLBuilder(text, self._line_offsets)
 
-    def render(self) -> tuple[str, list[tuple[int, int]]]:
-        """Render markdown to HTML while tracking source offsets."""
+    def render(self) -> TextPositionMapper:
+        """Render markdown to HTML and return position mapper.
+
+        Returns:
+            TextPositionMapper for mapping original markdown positions to HTML
+        """
         tokens = self._md.parse(self.original_text)
         self._builder.reset()
         self._builder.render(tokens)
         self.html = self._builder.html
-        self.position_offsets = self._builder.position_offsets
-        return self.html, self.position_offsets
+
+        # Create position mapper for original -> HTML mapping
+        # Offsets are (original_pos, delta) where delta = HTML - original
+        # So: source=original, target=HTML
+        offsets = self._builder.position_offsets
+        if not offsets:
+            offsets = [(0, 0)]
+
+        self._position_mapper = TextPositionMapper(
+            source=self.original_text, target=self.html, offsets=offsets
+        )
+        return self._position_mapper
 
     def map_original_to_html_position(self, original_pos: int) -> int:
         """Map a position in the original markdown to rendered HTML."""
-        if original_pos < 0 or original_pos > len(self.original_text):
-            raise ValueError(
-                f"Position {original_pos} out of bounds for text of length "
-                f"{len(self.original_text)}"
-            )
-        if not self.position_offsets:
-            raise RuntimeError("No position offsets available. Call render() first.")
-
-        offsets = self.position_offsets
-        if original_pos == 0:
-            for html_pos, orig_pos in offsets:
-                if orig_pos == 0:
-                    return html_pos
-            return 0
-        if original_pos >= offsets[-1][1]:
-            return offsets[-1][0]
-
-        left, right = 0, len(offsets) - 1
-        while left < right:
-            mid = (left + right) // 2
-            if offsets[mid][1] < original_pos:
-                left = mid + 1
-            else:
-                right = mid
-        if left > 0 and offsets[left][1] > original_pos:
-            left -= 1
-        return offsets[left][0]
+        if self._position_mapper is None:
+            raise RuntimeError("Position mapper not available. Call render() first.")
+        return self._position_mapper.targetpos(original_pos)
 
     @staticmethod
     def _compute_line_offsets(text: str) -> list[int]:
@@ -127,12 +122,14 @@ class HTMLBuilder:
         self._html_len = 0
         self.position_offsets: list[tuple[int, int]] = []
         self._last_orig_pos = 0
+        self._last_delta: int | None = None
 
     def reset(self) -> None:
         self.html_parts = []
         self._html_len = 0
         self.position_offsets = []
         self._last_orig_pos = 0
+        self._last_delta = None
 
     @property
     def html(self) -> str:
@@ -142,24 +139,38 @@ class HTMLBuilder:
     # Rendering helpers
     # ------------------------------------------------------------------
 
+    def _record_position(self, orig_pos: int) -> None:
+        """Record position mapping using delta encoding.
+
+        Maps original markdown position to HTML position.
+        Only records when delta changes (sparse representation).
+        Delta = target_pos - source_pos (HTML - original).
+
+        Offsets are stored as (source_pos, delta) where source=original, target=HTML.
+        """
+        current_delta = self._html_len - orig_pos
+        if self._last_delta is None or current_delta != self._last_delta:
+            self.position_offsets.append((orig_pos, current_delta))
+            self._last_delta = current_delta
+
     def _append_literal(self, text: str, orig_pos: int | None = None) -> None:
         if not text:
             return
         if orig_pos is not None:
-            self.position_offsets.append((self._html_len, orig_pos))
+            self._record_position(orig_pos)
         self.html_parts.append(text)
         self._html_len += len(text)
 
     def _append_text(self, text: str, orig_start: int) -> None:
         for idx, ch in enumerate(text):
             html_fragment = _escape_html_char(ch)
-            self.position_offsets.append((self._html_len, orig_start + idx))
+            self._record_position(orig_start + idx)
             self.html_parts.append(html_fragment)
             self._html_len += len(html_fragment)
             self._last_orig_pos = orig_start + idx + 1
 
     def _append_newline(self, orig_pos: int) -> None:
-        self.position_offsets.append((self._html_len, orig_pos))
+        self._record_position(orig_pos)
         self.html_parts.append("\n")
         self._html_len += 1
         self._last_orig_pos = orig_pos + 1
@@ -194,9 +205,6 @@ class HTMLBuilder:
                     self._render_fence(token)
                 elif token.type == "html_block":
                     self._render_html_block(token)
-
-        # Final mapping guard
-        self.position_offsets.append((self._html_len, len(self.text)))
 
     def _format_attrs(self, attrs: Any) -> str:
         if not attrs:
@@ -480,7 +488,7 @@ class DocumentAnnotator:
         self.resource = resource
         self.renderer = renderer
 
-        if not renderer.position_offsets:
+        if renderer._position_mapper is None:
             raise ValueError("Renderer must have called render() before annotation")
 
     def annotate(
@@ -542,7 +550,7 @@ class DocumentAnnotator:
                 )
 
         # Step 2: Find entity mentions within quotes
-        # First pass: collect all entity positions in ORIGINAL TEXT and which pairs reference them
+        # Use normalized search via Resource._position_mapper for Greek letter support
         # Key: (start_pos, end_pos, entity_name, matched_term) in ORIGINAL text coordinates
         entity_position_map: dict[tuple[int, int, str, str], dict[str, Any]] = {}
 
@@ -553,7 +561,7 @@ class DocumentAnnotator:
             if not entity1 or not entity2:
                 continue
 
-            # Search for entity mentions within quote boundaries in ORIGINAL text
+            # Search for entity mentions within quote boundaries
             for entity in [entity1, entity2]:
                 entity_name = entity.get("name", "")
                 entity_kind = entity.get("kind", "")
@@ -562,33 +570,38 @@ class DocumentAnnotator:
                 if not entity_name:
                     continue
 
-                # Search for entity name and aliases in ORIGINAL text
+                # Search for entity name and aliases in NORMALIZED text
+                # This handles Greek letters (α ↔ alpha) automatically
                 search_terms = [entity_name] + entity_aliases
 
                 for term in search_terms:
-                    # Case-insensitive search in original text
-                    original_text = self.resource.text.lower()
-                    term_lower = term.lower()
+                    # Normalize the search term to match against normalized text
+                    # This handles Greek letters, punctuation, etc.
+                    normalized_term = normalize_text_for_matching(term)
 
-                    pos = 0
-                    while True:
-                        pos = original_text.find(term_lower, pos)
-                        if pos == -1:
-                            break
+                    # Use Resource's position mapper to search normalized text
+                    # Returns positions in original text coordinates
+                    matches = self.resource._position_mapper.findall(normalized_term)
 
+                    for orig_start, orig_end in matches:
                         # Check if this position is within any quote span (in original coordinates)
                         in_quote = False
                         for quote_meta in quote_map.values():
                             for q_start, q_end in quote_meta.original_spans:
-                                if q_start <= pos < q_end:
+                                if q_start <= orig_start < q_end:
                                     in_quote = True
                                     break
                             if in_quote:
                                 break
 
                         if in_quote:
-                            # Create key for this position in ORIGINAL coordinates (include matched term)
-                            position_key = (pos, pos + len(term), entity_name, term)
+                            # Extract the actual matched text from original document
+                            actual_matched_text = self.resource.text[
+                                orig_start:orig_end
+                            ]
+
+                            # Create key for this position in ORIGINAL coordinates
+                            position_key = (orig_start, orig_end, entity_name, term)
 
                             if position_key not in entity_position_map:
                                 entity_position_map[position_key] = {
@@ -596,7 +609,7 @@ class DocumentAnnotator:
                                     "kind": entity_kind,
                                     "aliases": entity_aliases,
                                     "pair_indices": [pair_idx],
-                                    "matched_term": term,
+                                    "matched_term": actual_matched_text,
                                 }
                             else:
                                 # Same position, add pair index if not already present
@@ -610,23 +623,27 @@ class DocumentAnnotator:
                                         "pair_indices"
                                     ].append(pair_idx)
 
-                        pos += len(term)
-
         # Second pass: Map entity positions from original text to HTML coordinates
         # Then resolve overlapping entity spans in HTML coordinates
         entity_positions_html = []
         for (
-            orig_start,
-            orig_end,
-            entity_name,
-            matched_term,
-        ), entity_data in entity_position_map.items():
+            (
+                orig_start,
+                orig_end,
+                entity_name,
+                _search_term,  # Ignore - this is the search term, not the actual matched text
+            ),
+            entity_data,
+        ) in entity_position_map.items():
             # Map positions from original text to HTML
             html_start = self.renderer.map_original_to_html_position(orig_start)
             html_end = self.renderer.map_original_to_html_position(orig_end)
 
+            # Use the actual matched text from entity_data
+            actual_matched_text = entity_data["matched_term"]
+
             entity_positions_html.append(
-                (html_start, html_end, entity_name, matched_term, entity_data)
+                (html_start, html_end, entity_name, actual_matched_text, entity_data)
             )
 
         # Sort by position, then by length (longer first for overlap resolution)

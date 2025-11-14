@@ -11,10 +11,11 @@ class TestMarkdownToHTMLRenderer:
     def test_plain_text(self):
         """Plain text should be wrapped in paragraph and HTML-escaped."""
         renderer = MarkdownToHTMLRenderer("Hello, world!")
-        html, offsets = renderer.render()
+        renderer.render()
+        html = renderer.html
 
         assert html == "<p>Hello, world!</p>"
-        assert len(offsets) > 0
+        assert renderer._position_mapper is not None
         # Verify we can map back
         assert renderer.map_original_to_html_position(0) == 3  # After "<p>"
         assert renderer.map_original_to_html_position(5) == 8  # After "<p>Hello"
@@ -22,7 +23,8 @@ class TestMarkdownToHTMLRenderer:
     def test_html_escaping(self):
         """HTML special characters should be escaped."""
         renderer = MarkdownToHTMLRenderer('Test <tag> & "quote"')
-        html, offsets = renderer.render()
+        renderer.render()
+        html = renderer.html
 
         assert "&lt;tag&gt;" in html
         assert "&amp;" in html
@@ -35,7 +37,8 @@ class TestMarkdownToHTMLRenderer:
 ## Heading 2
 ### Heading 3"""
         renderer = MarkdownToHTMLRenderer(text)
-        html, offsets = renderer.render()
+        renderer.render()
+        html = renderer.html
 
         assert "<h1>Heading 1</h1>" in html
         assert "<h2>Heading 2</h2>" in html
@@ -44,7 +47,8 @@ class TestMarkdownToHTMLRenderer:
     def test_bold_text(self):
         """Bold markdown should be converted to <strong> tags."""
         renderer = MarkdownToHTMLRenderer("This is **bold text** here.")
-        html, offsets = renderer.render()
+        renderer.render()
+        html = renderer.html
 
         assert "<strong>bold text</strong>" in html
         assert "**" not in html
@@ -52,7 +56,8 @@ class TestMarkdownToHTMLRenderer:
     def test_italic_text(self):
         """Italic markdown should be converted to <em> tags."""
         renderer = MarkdownToHTMLRenderer("This is *italic text* here.")
-        html, offsets = renderer.render()
+        renderer.render()
+        html = renderer.html
 
         assert "<em>italic text</em>" in html
         # Should not have standalone * (but may have in escaped form)
@@ -61,7 +66,8 @@ class TestMarkdownToHTMLRenderer:
     def test_inline_code(self):
         """Inline code should be converted to <code> tags."""
         renderer = MarkdownToHTMLRenderer("Use the `print()` function.")
-        html, offsets = renderer.render()
+        renderer.render()
+        html = renderer.html
 
         assert "<code>print()</code>" in html
         assert "`" not in html or "&#" in html  # Backticks removed or escaped
@@ -69,7 +75,8 @@ class TestMarkdownToHTMLRenderer:
     def test_links(self):
         """Links should be converted to <a> tags."""
         renderer = MarkdownToHTMLRenderer("Visit [Google](https://google.com) now.")
-        html, offsets = renderer.render()
+        renderer.render()
+        html = renderer.html
 
         assert '<a href="https://google.com">Google</a>' in html
         assert "[" not in html
@@ -81,7 +88,8 @@ class TestMarkdownToHTMLRenderer:
 - Item 2
 * Item 3"""
         renderer = MarkdownToHTMLRenderer(text)
-        html, offsets = renderer.render()
+        renderer.render()
+        html = renderer.html
 
         assert html.count("<li>") == 3
         assert "Item 1" in html
@@ -94,7 +102,8 @@ class TestMarkdownToHTMLRenderer:
 2. Second
 3. Third"""
         renderer = MarkdownToHTMLRenderer(text)
-        html, offsets = renderer.render()
+        renderer.render()
+        html = renderer.html
 
         assert html.count("<li>") == 3
         assert "First" in html
@@ -107,7 +116,8 @@ class TestMarkdownToHTMLRenderer:
 
 Second paragraph."""
         renderer = MarkdownToHTMLRenderer(text)
-        html, offsets = renderer.render()
+        renderer.render()
+        html = renderer.html
 
         assert html.count("<p>") >= 2
         assert "First paragraph" in html
@@ -116,7 +126,8 @@ Second paragraph."""
     def test_position_mapping_simple(self):
         """Position mapping should be accurate for simple text."""
         renderer = MarkdownToHTMLRenderer("Hello")
-        html, offsets = renderer.render()
+        renderer.render()
+        html = renderer.html
 
         # "Hello" starts at position 0 in original
         # After "<p>", it starts at position 3 in HTML
@@ -126,7 +137,8 @@ Second paragraph."""
     def test_position_mapping_with_escaping(self):
         """Position mapping should handle HTML escaping."""
         renderer = MarkdownToHTMLRenderer("A < B")
-        html, offsets = renderer.render()
+        renderer.render()
+        html = renderer.html
 
         # Original: "A < B"
         # HTML: "<p>A &lt; B</p>"
@@ -141,7 +153,8 @@ Second paragraph."""
     def test_position_mapping_with_bold(self):
         """Position mapping should handle bold formatting."""
         renderer = MarkdownToHTMLRenderer("Start **bold** end")
-        html, offsets = renderer.render()
+        renderer.render()
+        html = renderer.html
 
         # Original positions:
         # 0-5: "Start "
@@ -162,20 +175,23 @@ Second paragraph."""
     def test_position_offsets_always_increasing(self):
         """Position offsets should be monotonically increasing."""
         renderer = MarkdownToHTMLRenderer("Test **bold** and *italic* text.")
-        html, offsets = renderer.render()
+        renderer.render()
+        html = renderer.html
 
-        # Original positions should be strictly increasing
-        orig_positions = [orig for html_pos, orig in offsets]
-        assert orig_positions == sorted(orig_positions)
+        # Source positions (original markdown) should be strictly increasing
+        mapper = renderer._position_mapper
+        source_positions = [source_pos for source_pos, delta in mapper._offsets]
+        assert source_positions == sorted(source_positions)
 
     def test_empty_text(self):
         """Empty text should render to empty paragraph."""
         renderer = MarkdownToHTMLRenderer("")
-        html, offsets = renderer.render()
+        renderer.render()
+        html = renderer.html
 
         # Should have some output (even if just tags)
         assert isinstance(html, str)
-        assert len(offsets) >= 1
+        assert renderer._position_mapper is not None
 
     def test_complex_formatting(self):
         """Complex nested formatting should work."""
@@ -188,7 +204,8 @@ Visit [example](https://example.com) for more info.
 - Item 1
 - Item 2"""
         renderer = MarkdownToHTMLRenderer(text)
-        html, offsets = renderer.render()
+        renderer.render()
+        html = renderer.html
 
         # Verify all elements are present
         assert "<h1>" in html
@@ -201,7 +218,8 @@ Visit [example](https://example.com) for more info.
     def test_map_position_out_of_bounds(self):
         """Mapping out-of-bounds position should raise ValueError."""
         renderer = MarkdownToHTMLRenderer("Hello")
-        html, offsets = renderer.render()
+        renderer.render()
+        html = renderer.html
 
         with pytest.raises(ValueError, match="out of bounds"):
             renderer.map_original_to_html_position(100)
@@ -220,7 +238,8 @@ Visit [example](https://example.com) for more info.
         """Greek letters and special characters should be preserved."""
         text = "The α-helix and β-sheet structures"
         renderer = MarkdownToHTMLRenderer(text)
-        html, offsets = renderer.render()
+        renderer.render()
+        html = renderer.html
 
         # Greek letters should be in HTML (not normalized)
         assert "α" in html
@@ -230,7 +249,8 @@ Visit [example](https://example.com) for more info.
         """Unicode characters should be preserved."""
         text = "Café résumé naïve"
         renderer = MarkdownToHTMLRenderer(text)
-        html, offsets = renderer.render()
+        renderer.render()
+        html = renderer.html
 
         # Unicode should be preserved
         assert "Café" in html
@@ -245,7 +265,8 @@ Second paragraph with *italic*.
 
 Third paragraph."""
         renderer = MarkdownToHTMLRenderer(text)
-        html, offsets = renderer.render()
+        renderer.render()
+        html = renderer.html
 
         assert html.count("<p>") >= 3
         assert "<strong>bold</strong>" in html
@@ -255,7 +276,8 @@ Third paragraph."""
         """Headings can contain formatting."""
         text = "# Title with **bold** text"
         renderer = MarkdownToHTMLRenderer(text)
-        html, offsets = renderer.render()
+        renderer.render()
+        html = renderer.html
 
         assert "<h1>" in html
         assert "<strong>bold</strong>" in html
@@ -267,7 +289,8 @@ Third paragraph."""
 Line 2
 Line 3"""
         renderer = MarkdownToHTMLRenderer(text)
-        html, offsets = renderer.render()
+        renderer.render()
+        html = renderer.html
 
         # Single newlines should be preserved within paragraph
         assert "\n" in html or "Line 1" in html
@@ -278,7 +301,8 @@ Line 3"""
         """Mapping end position should work correctly."""
         text = "Hello"
         renderer = MarkdownToHTMLRenderer(text)
-        html, offsets = renderer.render()
+        renderer.render()
+        html = renderer.html
 
         # End of text position
         end_pos = renderer.map_original_to_html_position(len(text))
@@ -288,7 +312,8 @@ Line 3"""
         """URLs with special characters should be escaped."""
         text = "[Link](https://example.com?foo=1&bar=2)"
         renderer = MarkdownToHTMLRenderer(text)
-        html, offsets = renderer.render()
+        renderer.render()
+        html = renderer.html
 
         # URL should be escaped
         assert "&amp;" in html
@@ -298,7 +323,8 @@ Line 3"""
         """Incomplete bold markers should be treated as literals."""
         text = "This has **incomplete bold"
         renderer = MarkdownToHTMLRenderer(text)
-        html, offsets = renderer.render()
+        renderer.render()
+        html = renderer.html
 
         # Should not have <strong> since bold is incomplete
         # The ** should be escaped or remain as-is
@@ -308,7 +334,8 @@ Line 3"""
         """Incomplete italic markers should be treated as literals."""
         text = "This has *incomplete italic"
         renderer = MarkdownToHTMLRenderer(text)
-        html, offsets = renderer.render()
+        renderer.render()
+        html = renderer.html
 
         # Should not have <em> since italic is incomplete
         assert "incomplete italic" in html
@@ -317,7 +344,8 @@ Line 3"""
         """Incomplete links should be treated as literals."""
         text = "This has [incomplete link"
         renderer = MarkdownToHTMLRenderer(text)
-        html, offsets = renderer.render()
+        renderer.render()
+        html = renderer.html
 
         # Should not have <a> since link is incomplete
         assert "incomplete link" in html
@@ -328,7 +356,8 @@ Line 3"""
         """Nested bold and italic should work."""
         text = "This is ***bold and italic*** text"
         renderer = MarkdownToHTMLRenderer(text)
-        html, offsets = renderer.render()
+        renderer.render()
+        html = renderer.html
 
         # Should have both tags (order may vary)
         assert "<strong>" in html or "<em>" in html

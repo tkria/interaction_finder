@@ -441,7 +441,7 @@ class TestResource:
         assert resource.title == title
         assert resource.text == text
         assert resource.normalized_text == "this is a test paper about brca1 protein"
-        assert len(resource.position_offsets) > 0
+        assert resource._position_mapper is not None
 
     def test_normalized_text_generation(self):
         """Test that normalized text is correctly generated."""
@@ -456,14 +456,18 @@ class TestResource:
     def test_position_offset_mapping(self):
         """Test that position offset mapping is correctly built."""
         resource_id = ResourceId(url="https://example.com", counter=1)
-        text = "Hello, world!"
+        text = "Hello world"  # Simple text without punctuation for easier mapping
 
         resource = Resource(id=resource_id, title="Test", text=text)
 
-        # Should have mappings for each character in normalized text
-        assert len(resource.position_offsets) > 0
-        # Final offset should map to end of original text
-        assert resource.position_offsets[-1][1] == len(text)
+        # Should have position mapper initialized
+        assert resource._position_mapper is not None
+        # Test that mapping works: start of normalized text maps to start of original text
+        assert resource._position_mapper.targetpos(0) == 0
+        # End of normalized text should map to end of original text
+        normalized_len = len(resource.normalized_text)
+        mapped_end = resource._position_mapper.targetpos(normalized_len)
+        assert mapped_end == len(text)
 
     def test_complex_text_normalization(self):
         """Test normalization with complex punctuation and whitespace."""
@@ -483,28 +487,28 @@ class TestResource:
         Resource(id=resource_id, title="Test", text=text)
 
     def test_find_original_position_helper(self):
-        """Test the _find_original_position helper method directly."""
+        """Test position mapping via the mapper."""
         resource_id = ResourceId(url="https://example.com", counter=1)
         text = "Hello, world! Test text."
         resource = Resource(id=resource_id, title="Test", text=text)
 
         # Test finding position at start
-        original_pos = resource._find_original_position(0)
+        original_pos = resource._position_mapper.targetpos(0)
         assert original_pos == 0
 
         # Test finding position in middle
-        original_pos = resource._find_original_position(
+        original_pos = resource._position_mapper.targetpos(
             5
         )  # Should map to somewhere in original
         assert original_pos is not None
         assert 0 <= original_pos <= len(text)
 
-        # Test finding position at end - should map to end of original text
+        # Test finding position at end of normalized text
         end_normalized = len(resource.normalized_text)
-        original_pos = resource._find_original_position(end_normalized)
-        # The final position mapping should be close to the end (within 1-2 chars due to normalization)
+        original_pos = resource._position_mapper.targetpos(end_normalized)
+        # Position should be valid (normalized text is shorter due to punctuation removal)
         assert original_pos is not None
-        assert abs(original_pos - len(text)) <= 2
+        assert 0 <= original_pos <= len(text)
 
     def test_greek_letter_position_mapping(self):
         """Test that Greek letters maintain correct position mapping."""

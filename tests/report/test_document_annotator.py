@@ -26,7 +26,7 @@ class TestDocumentAnnotator:
 
         # Render to HTML
         renderer = MarkdownToHTMLRenderer(text)
-        html, offsets = renderer.render()
+        renderer.render()
 
         # Create annotator
         annotator = DocumentAnnotator(resource, renderer)
@@ -81,7 +81,7 @@ class TestDocumentAnnotator:
         )
 
         renderer = MarkdownToHTMLRenderer(text)
-        html, offsets = renderer.render()
+        renderer.render()
 
         annotator = DocumentAnnotator(resource, renderer)
 
@@ -103,7 +103,7 @@ class TestDocumentAnnotator:
         )
 
         renderer = MarkdownToHTMLRenderer(text)
-        html, offsets = renderer.render()
+        renderer.render()
 
         annotator = DocumentAnnotator(resource, renderer)
 
@@ -147,7 +147,7 @@ class TestDocumentAnnotator:
         )
 
         renderer = MarkdownToHTMLRenderer(text)
-        html, offsets = renderer.render()
+        renderer.render()
 
         annotator = DocumentAnnotator(resource, renderer)
 
@@ -238,7 +238,7 @@ class TestDocumentAnnotator:
         )
 
         renderer = MarkdownToHTMLRenderer(text)
-        html, offsets = renderer.render()
+        renderer.render()
 
         annotator = DocumentAnnotator(resource, renderer)
 

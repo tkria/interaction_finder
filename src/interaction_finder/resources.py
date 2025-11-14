@@ -18,6 +18,7 @@ from typing import List, Optional, Tuple, Union, TYPE_CHECKING
 from pydantic import (
     BaseModel,
     Field,
+    PrivateAttr,
     field_validator,
     ValidationInfo,
     model_serializer,
@@ -25,6 +26,8 @@ from pydantic import (
 )
 from pydantic_core import core_schema
 from rapidfuzz import fuzz
+
+from interaction_finder.text_mapping import TextPositionMapper
 
 if TYPE_CHECKING:
     pass  # For forward references
@@ -913,15 +916,13 @@ class Resource(BaseModel):
     normalized_text: str = Field(
         description="Precomputed normalized text for quote matching"
     )
-    position_offsets: List[Tuple[int, int]] = Field(
-        default_factory=list,
-        exclude=True,
-        description="Binary-searchable list of (normalized_pos, original_pos) for position mapping",
-    )
     chunks: List[Tuple[int, int]] = Field(
         default_factory=list,
         description="List of (start, end) character positions for document chunks",
     )
+
+    # Private attribute for position mapping
+    _position_mapper: Optional[TextPositionMapper] = PrivateAttr(default=None)
 
     def __init__(
         self,
@@ -958,7 +959,10 @@ class Resource(BaseModel):
             chunks=chunks,
             **data,
         )
-        self.position_offsets = position_offsets
+        # Create position mapper (source=normalized, target=original)
+        self._position_mapper = TextPositionMapper(
+            source=normalized_text, target=text, offsets=position_offsets
+        )
 
     @staticmethod
     def _build_normalized_text_and_offsets(
@@ -972,7 +976,8 @@ class Resource(BaseModel):
 
         Returns:
             Tuple of (normalized_text, position_offsets) where position_offsets
-            is a list of (normalized_pos, original_pos) tuples for binary search
+            is a list of (original_pos, delta) tuples where delta = normalized_pos - original_pos.
+            Only records entries where delta changes.
         """
         # Apply Unicode normalization first
         unicode_text = unicodedata.normalize("NFD", original_text)
@@ -984,6 +989,7 @@ class Resource(BaseModel):
         position_offsets = []
         text_len = len(unicode_text)
         last_was_space = True  # Start as True to avoid leading spaces
+        last_delta = None  # Track last delta to detect changes
 
         def _should_skip_char(char: str, pos: int) -> bool:
             """Check if character should be skipped (contractions, decimals)."""
@@ -997,15 +1003,21 @@ class Resource(BaseModel):
         i = 0
         while i < text_len:
             char = unicode_text[i]
+            # Calculate current delta: target (original) - source (normalized)
+            # At this normalized position, what's the offset to get to original position?
+            current_delta = i - len(normalized)
+
+            # Record delta change (source=normalized, so use normalized position)
+            if last_delta is None or current_delta != last_delta:
+                position_offsets.append((len(normalized), current_delta))
+                last_delta = current_delta
 
             # Fast path for ASCII alphanumeric (most common case)
             if "a" <= char <= "z" or "0" <= char <= "9":
-                position_offsets.append((len(normalized), i))
                 normalized.append(char)
                 last_was_space = False
 
             elif "A" <= char <= "Z":
-                position_offsets.append((len(normalized), i))
                 normalized.append(char.lower())
                 last_was_space = False
 
@@ -1015,10 +1027,8 @@ class Resource(BaseModel):
                 if char_lower in GREEK_LETTER_MAP:
                     # Add space before if needed
                     if normalized and normalized[-1].isalnum():
-                        position_offsets.append((len(normalized), i))
                         normalized.append(" ")
                     # Add Greek name
-                    position_offsets.append((len(normalized), i))
                     normalized.extend(GREEK_LETTER_MAP[char_lower])
                     # Add space after if needed
                     if i + 1 < text_len and unicode_text[i + 1].isalnum():
@@ -1027,11 +1037,9 @@ class Resource(BaseModel):
                 else:
                     # Non-Greek unicode letter
                     if char.isalnum():
-                        position_offsets.append((len(normalized), i))
                         normalized.append(char_lower)
                         last_was_space = False
                     elif not last_was_space:
-                        position_offsets.append((len(normalized), i))
                         normalized.append(" ")
                         last_was_space = True
 
@@ -1041,21 +1049,18 @@ class Resource(BaseModel):
 
             # Other alphanumeric characters
             elif char.isalnum():
-                position_offsets.append((len(normalized), i))
                 normalized.append(char.lower())
                 last_was_space = False
 
             # Convert everything else to single space
             elif not last_was_space:
-                position_offsets.append((len(normalized), i))
                 normalized.append(" ")
                 last_was_space = True
 
             i += 1
 
-        # Final result and position mapping
+        # Final result - no need for final offset entry as TextPositionMapper handles end positions
         normalized_text = "".join(normalized).strip()
-        position_offsets.append((len(normalized_text), len(original_text)))
 
         return normalized_text, position_offsets
 
@@ -1087,46 +1092,24 @@ class Resource(BaseModel):
             f"text='{text_preview}', {len(self.text)} chars)"
         )
 
-    def _find_original_position(self, normalized_pos: int) -> Optional[int]:
-        """
-        Find original text position for a normalized text position using binary search.
-
-        Args:
-            normalized_pos: Position in normalized text
-
-        Returns:
-            Original text position or None if mapping fails
-        """
-        idx = bisect.bisect_left(self.position_offsets, (normalized_pos, 0))
-        if idx < len(self.position_offsets):
-            # Check if we have exact match or need closest
-            if (
-                idx > 0
-                and self.position_offsets[idx][0] != normalized_pos
-                and self.position_offsets[idx - 1][0] <= normalized_pos
-            ):
-                idx -= 1
-            return self.position_offsets[idx][1]
-        return None
-
     def map_normalized_to_original_position(
         self, norm_start: int, norm_length: int
-    ) -> Tuple[Optional[int], Optional[int]]:
+    ) -> Tuple[int, int]:
         """
-        Map character positions from normalized text back to original text using binary search.
+        Map character positions from normalized text back to original text.
 
-        Uses the precomputed position offset list for efficient O(log n) lookups.
+        Uses the precomputed position mapper for efficient O(log n) lookups.
 
         Args:
             norm_start: Start position in normalized text
             norm_length: Length of span in normalized text
 
         Returns:
-            Tuple of (original_start, original_end) or (None, None) if mapping fails
+            Tuple of (original_start, original_end)
         """
-        original_start = self._find_original_position(norm_start)
-        original_end = self._find_original_position(norm_start + norm_length)
-        return original_start, original_end
+        if self._position_mapper is None:
+            raise RuntimeError("Position mapper not initialized")
+        return self._position_mapper.targetspan(norm_start, norm_start + norm_length)
 
     def get_chunk_for_position(self, pos: int) -> Optional[int]:
         """
