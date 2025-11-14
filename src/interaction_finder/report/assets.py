@@ -567,11 +567,16 @@ header {
 .quote-highlight {
     background: var(--quote-bg);
     padding: 0.25rem 0;
+    border-left: 4px solid var(--quote-border);
+}
+
+.quote-highlight + .quote-highlight {
+    border-left: none;
 }
 
 .quote-dim {
     background: var(--quote-dim-bg);
-    padding: 0.25rem 0;
+    padding: 0.05em 0 0.25em 0;
 }
 
 .quote-blink {
