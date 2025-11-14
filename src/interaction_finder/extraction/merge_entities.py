@@ -47,12 +47,10 @@ in biological specificity.
    - Merging would conflate scientifically distinct concepts (e.g., PH vs PAH)
    - Child provides important distinguishing information the parent lacks
 
-**Output format:**
-For each pair, provide:
-- parent_entity: The entity to keep (shorter/more general name)
-- child_entity: The entity to merge into parent (longer/more specific name)
-- should_merge: true if they should be merged, false otherwise
-- reasoning: Brief explanation of your decision in context of the research topic
+**Output requirements:**
+For each pair, decide whether the child entity should be merged into the parent entity
+(where parent is typically the shorter/more general name and child is the longer/more
+specific name). Provide reasoning for your decision in context of the research topic.
 
 Bias toward merging when entities are clearly related and merging serves the research goal.""",
     default_model_settings=ModelSettings(parallel_tool_calls=False),

@@ -51,22 +51,9 @@ You will be given:
 - Co-occurrence alone is not sufficient - there must be stated/implied connection
 - Prefer specific relationship types over generic "associated_with"
 
-**Output format:**
-Always return both fields:
-{
-  "pairs": [
-    {
-      "entity1": "CANONICAL_NAME_1",
-      "entity2": "CANONICAL_NAME_2",
-      "relationship_types": ["type1", "type2"],
-      "supporting_quotes": ["quote 1...", "quote 2..."]
-    }
-  ],
-  "reasoning": "Brief explanation of extraction choices"
-}
-
-Use the canonical entity names exactly as shown (in bold) - the kind and aliases are just metadata.
-
-If no associations found, return empty pairs list with explanation in reasoning.""",
+**Output requirements:**
+- Use canonical entity names exactly as shown (in bold) - the kind and aliases are just metadata
+- If no associations found, return empty pairs list with explanation in reasoning
+- Always provide reasoning for your extraction choices""",
     default_model_settings=ModelSettings(parallel_tool_calls=False),
 )
