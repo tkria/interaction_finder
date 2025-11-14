@@ -117,6 +117,7 @@ class BridgingTermsOut(BaseModel):
     Returned at the end of the keyword research pipeline.
     """
 
+    topic: str = Field(description="Research topic that was investigated")
     terms: list[str] = Field(
         description="Unique bridging terms discovered, sorted by relevance to topic (descending)"
     )

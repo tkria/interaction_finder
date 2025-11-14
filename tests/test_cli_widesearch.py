@@ -21,6 +21,7 @@ def mock_keywords_file(tmp_path):
     """Create a mock keywords JSON file."""
     keywords_file = tmp_path / "keywords.json"
     bridging_terms = BridgingTermsOut(
+        topic="test topic",
         terms=["keyword1", "keyword2", "keyword3"],
         scores=[0.95, 0.87, 0.76],
         total_documents_processed=10,
@@ -388,3 +389,63 @@ def test_widesearch_verbose_mode(tmp_path, mock_keywords_file, mock_checkpoint):
         )
 
         assert result.exit_code == 0
+
+
+def test_widesearch_topic_inference(tmp_path, mock_keywords_file, mock_checkpoint):
+    """Test that topic is inferred from keywords file when not provided."""
+    output_file = tmp_path / "output.json"
+
+    def mock_asyncio_run(coro):
+        """Mock asyncio.run that properly closes the coroutine."""
+        coro.close()  # Close coroutine to avoid "never awaited" warning
+        return mock_checkpoint
+
+    with patch("interaction_finder.cli.asyncio.run", side_effect=mock_asyncio_run):
+        # Call without topic argument
+        result = runner.invoke(
+            app,
+            [
+                "widesearch",
+                str(mock_keywords_file),
+                "-o",
+                str(output_file),
+            ],
+        )
+
+        assert result.exit_code == 0
+        # Check that inference message was printed
+        assert "Inferred topic from keywords file" in result.stdout
+        assert "test topic" in result.stdout
+        # Output file should be created
+        assert output_file.exists()
+
+
+def test_widesearch_explicit_topic_overrides_inference(
+    tmp_path, mock_keywords_file, mock_checkpoint
+):
+    """Test that explicit topic argument overrides inferred topic."""
+    output_file = tmp_path / "output.json"
+
+    def mock_asyncio_run(coro):
+        """Mock asyncio.run that properly closes the coroutine."""
+        coro.close()  # Close coroutine to avoid "never awaited" warning
+        return mock_checkpoint
+
+    with patch("interaction_finder.cli.asyncio.run", side_effect=mock_asyncio_run):
+        # Call with explicit topic argument (different from metadata)
+        result = runner.invoke(
+            app,
+            [
+                "widesearch",
+                str(mock_keywords_file),
+                "different topic",
+                "-o",
+                str(output_file),
+            ],
+        )
+
+        assert result.exit_code == 0
+        # Should NOT see inference message when explicit topic provided
+        assert "Inferred topic" not in result.stdout
+        # Output file should be created
+        assert output_file.exists()

@@ -134,6 +134,7 @@ async def run_widesearch_with_checkpoint(
     reranker: Reranker | None = None,
     http_client: httpx.AsyncClient | None = None,
     progress: Any | None = None,
+    keyphrases_source: str | None = None,
 ) -> WidesearchCheckpoint:
     """Run widesearch pipeline and return complete checkpoint.
 
@@ -152,6 +153,7 @@ async def run_widesearch_with_checkpoint(
         reranker: Reranker | None — pre-initialized reranker (creates new if None and rerank_top_k > 0)
         http_client: httpx.AsyncClient | None — HTTP client (creates temporary if None)
         progress: Any | None — optional progress counter for live display
+        keyphrases_source: str | None — source filename for keyphrases (for metadata)
 
     Returns:
         WidesearchCheckpoint — complete checkpoint with results, queries, and resource pool

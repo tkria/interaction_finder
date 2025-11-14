@@ -295,6 +295,9 @@ class TestExtractionResult:
         pool = ResourcePool()
 
         result = ExtractionResult(
+            topic="test topic",
+            target_entity_types=["gene", "disease"],
+            permitted_pairs={"gene": ["disease"], "disease": ["gene"]},
             resources=pool,
             judgments=[
                 PairJudgment(
@@ -326,6 +329,8 @@ class TestExtractionResult:
             ),
         )
 
+        assert result.topic == "test topic"
+        assert result.target_entity_types == ["gene", "disease"]
         assert len(result.judgments) == 1
         assert result.metadata.pairs_accepted == 1
 
@@ -333,6 +338,9 @@ class TestExtractionResult:
         """Test creating empty ExtractionResult."""
         pool = ResourcePool()
         result = ExtractionResult(
+            topic="test",
+            target_entity_types=["gene"],
+            permitted_pairs={"gene": ["gene"]},
             resources=pool,
             judgments=[],
             metadata=ExtractionMetadata(

@@ -122,6 +122,7 @@ class TestBridgingTermsOut:
         """Test creating valid BridgingTermsOut."""
         resource_pool = ResourcePool()
         model = BridgingTermsOut(
+            topic="test topic",
             terms=["term1", "term2", "term3"],
             scores=[0.9, 0.8, 0.7],
             total_documents_processed=5,
@@ -129,6 +130,7 @@ class TestBridgingTermsOut:
             coverage_assessment="Found comprehensive coverage of topic with 3 bridging terms",
             resources=resource_pool,
         )
+        assert model.topic == "test topic"
         assert len(model.terms) == 3
         assert len(model.scores) == 3
         assert model.scores == [0.9, 0.8, 0.7]

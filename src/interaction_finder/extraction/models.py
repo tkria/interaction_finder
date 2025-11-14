@@ -280,6 +280,13 @@ class ExtractionResult(BaseModel):
     by ID in quotes.
     """
 
+    topic: str = Field(description="Research topic for extraction context")
+    target_entity_types: list[str] = Field(
+        description="Entity types that were extracted"
+    )
+    permitted_pairs: dict[str, list[str]] = Field(
+        description="Permitted entity kind pairs for filtering"
+    )
     resources: ResourcePool = Field(
         description="Shared pool of all resources referenced by quotes"
     )

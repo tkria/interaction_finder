@@ -632,7 +632,10 @@ def widesearch(
     keywords_file: Path = typer.Argument(
         help="Path to keywords JSON file from keywords command"
     ),
-    topic: str = typer.Argument(help="Research topic being investigated"),
+    topic: Optional[str] = typer.Argument(
+        None,
+        help="Research topic being investigated (inferred from keywords file if not provided)",
+    ),
     output: Optional[Path] = typer.Option(
         None, "-o", "--output", help="Output file for checkpoint (JSON)"
     ),
@@ -664,12 +667,14 @@ def widesearch(
     saving complete checkpoint (results, queries, resource pool) to JSON.
     The checkpoint format enables downstream processing and search resumption.
 
+    Topic is inferred from the keywords file's run_metadata if not explicitly provided.
+
     Example:
-        interaction-finder widesearch keywords.json "diabetes" -o results.json
+        interaction-finder widesearch keywords.json -o results.json
 
         interaction-finder widesearch keywords.json "cancer" -b perplexica -o out.json
 
-        interaction-finder widesearch keywords.json "diabetes" --fetch -o results.json
+        interaction-finder widesearch keywords.json --fetch -o results.json
     """
     try:
         # Get effective options
@@ -688,6 +693,11 @@ def widesearch(
         keywords_data = json.loads(keywords_file.read_text())
         bridging_terms = BridgingTermsOut.model_validate(keywords_data)
         keyphrases = bridging_terms.terms
+
+        # Infer topic from keywords file if not provided
+        if topic is None:
+            topic = bridging_terms.topic
+            console.print(f"[dim]Inferred topic from keywords file:[/dim] {topic}")
         # Apply CLI overrides to config
         if max_rounds is not None:
             cfg.tools.widesearch.max_rounds = max_rounds
@@ -759,6 +769,7 @@ def widesearch(
                     max_rounds=max_rounds,
                     reranker=reranker,
                     progress=progress_counter,
+                    keyphrases_source=str(keywords_file),
                 )
             )
         # Progress display already shows completion summary, just add newline
@@ -804,7 +815,10 @@ def extract(
     checkpoint_file: Path = typer.Argument(
         help="Path to widesearch checkpoint JSON file"
     ),
-    topic: str = typer.Argument(help="Research topic for extraction context"),
+    topic: Optional[str] = typer.Argument(
+        None,
+        help="Research topic for extraction context (inferred from checkpoint file if not provided)",
+    ),
     entity_types: List[str] = typer.Option(
         ...,
         "--entity-type",
@@ -830,8 +844,10 @@ def extract(
     to identify and validate associations between entities with comprehensive
     quote-level provenance tracking. Automatically fetches missing content.
 
+    Topic is inferred from the checkpoint file's run_metadata if not explicitly provided.
+
     Example:
-        interaction-finder extract searches.json "diabetes" -e gene -e disease -o results.json
+        interaction-finder extract searches.json -e gene -e disease -o results.json
 
         interaction-finder extract pah-searches.json "PAH genetics" -e gene -e protein -o pah-pairs.json
     """
@@ -851,6 +867,12 @@ def extract(
 
         checkpoint_data = json.loads(checkpoint_file.read_text())
         checkpoint = WidesearchCheckpoint.model_validate(checkpoint_data)
+
+        # Infer topic from checkpoint file if not provided
+        if topic is None:
+            topic = checkpoint.topic
+            console.print(f"[dim]Inferred topic from checkpoint file:[/dim] {topic}")
+
         # Display checkpoint info
         console.print(f"\n[bold]Loading checkpoint:[/bold] {checkpoint_file.name}")
         console.print(f"Topic: {checkpoint.topic}")
@@ -898,6 +920,7 @@ def extract(
                     resource_pool=checkpoint.resources,
                     config=cfg,
                     progress=progress,
+                    checkpoint_source=str(checkpoint_file),
                 )
             )
         # Progress display already shows completion summary

@@ -115,4 +115,17 @@ async def run_keyword_research(
                 f"Completed: {len(result.output.terms)} bridging terms from {result.output.total_documents_processed} documents in {result.output.rounds_completed} rounds",
                 terms=result.output.terms,
             )
+            # Populate run metadata
+            from interaction_finder.run_metadata import KeywordsRunMetadata
+
+            result.output.run_metadata = KeywordsRunMetadata(
+                topic=topic,
+                search_backend="pubmed",  # Currently hardcoded in this module
+                max_rounds=kw_config.max_rounds,
+                rerank_top_k=kw_config.rerank_top_k,
+                reranker_model=kw_config.reranker_model
+                if kw_config.rerank_top_k > 0
+                else None,
+                extractors=list(extractors.keys()),
+            )
             return result.output

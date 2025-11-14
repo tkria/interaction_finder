@@ -25,6 +25,7 @@ async def run_extraction(
     config: IfetcherConfig | None = None,
     logger: logging.Logger | None = None,
     progress=None,
+    checkpoint_source: str | None = None,
 ) -> ExtractionResult:
     """Run the association extraction pipeline.
 
@@ -34,6 +35,8 @@ async def run_extraction(
         resource_pool: ResourcePool containing documents to process
         config: Configuration object (creates default if None)
         logger: Logger for warnings and debugging (optional)
+        progress: Progress counter for live display (optional)
+        checkpoint_source: Source checkpoint filename (for metadata)
 
     Returns:
         ExtractionResult with accepted pairs and metadata
@@ -87,5 +90,10 @@ async def run_extraction(
 
         # Run graph
         result = await graph.run(ProcessDocumentsNode(), state=state, deps=deps)
+
+        # Populate top-level fields
+        result.output.topic = topic
+        result.output.target_entity_types = target_entity_types
+        result.output.permitted_pairs = permitted_pairs
 
         return result.output
