@@ -11,7 +11,10 @@ Provides a multi-stage normalization pipeline that handles:
 import re
 from functools import lru_cache
 
-from interaction_finder.resources import normalize_text_for_matching
+from interaction_finder.text_mapping import NormalizedTextMapper
+
+# Convenience alias
+normalize_text_for_matching = NormalizedTextMapper.normalize
 
 
 # Common biomedical/scientific suffixes to strip for deduplication

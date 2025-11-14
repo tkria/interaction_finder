@@ -275,3 +275,62 @@ class TestDocumentAnnotator:
         assert brca1.kind == "gene"
         assert 42 in brca1.pair_indices
         assert "BRCA-1" in brca1.aliases
+
+    def test_greek_letter_normalization(self):
+        """Test that Greek letters are matched via normalization (α ↔ alpha)."""
+        # Document has Greek letter α
+        text = "TGF-α receptor is important in cell signaling."
+        resource = Resource(
+            id=ResourceId(url="http://example.com/doc6", counter=6),
+            title="Test Greek",
+            text=text,
+        )
+
+        renderer = MarkdownToHTMLRenderer(text)
+        renderer.render()
+
+        annotator = DocumentAnnotator(resource, renderer)
+
+        quote = ResourceQuote(
+            resource=resource,
+            query_text=text,
+            spans=[(0, len(text))],
+            resource_id=resource.id,
+            fuzzy_corrected=False,
+        )
+
+        # Entity name uses "alpha" but document has "α"
+        entities = {
+            0: {
+                "entity1": {
+                    "name": "TGF-alpha receptor",
+                    "kind": "protein",
+                    "aliases": [],
+                },
+                "entity2": {
+                    "name": "cell signaling",
+                    "kind": "process",
+                    "aliases": [],
+                },
+            }
+        }
+
+        result = annotator.annotate([quote], entities)
+
+        # Should find TGF-α even though we searched for TGF-alpha
+        assert "TGF-alpha receptor" in [e.name for e in result.entity_map.values()]
+
+        # Find the entity span in HTML
+        tgf_entities = [
+            e for e in result.entity_map.values() if e.name == "TGF-alpha receptor"
+        ]
+        assert len(tgf_entities) == 1
+
+        # Verify it was found (entity map should have the entry)
+        tgf_entity = tgf_entities[0]
+        assert tgf_entity.kind == "protein"
+        assert 0 in tgf_entity.pair_indices
+
+        # The HTML should contain an entity span for TGF-α
+        assert "entity-span" in result.html
+        assert "TGF-" in result.html  # The actual matched text should be preserved

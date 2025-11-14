@@ -27,10 +27,7 @@ from pydantic import (
 from pydantic_core import core_schema
 from rapidfuzz import fuzz
 
-from interaction_finder.text_mapping import (
-    NormalizedTextMapper,
-    normalize_text_for_matching,
-)
+from interaction_finder.text_mapping import NormalizedTextMapper
 
 if TYPE_CHECKING:
     pass  # For forward references
@@ -501,7 +498,7 @@ def fuzzy_match_quote(
         FuzzyMatchResult with corrected quote and metadata, or None if below threshold
 
     Notes:
-        - Uses normalized text for comparison (via normalize_text_for_matching)
+        - Uses normalized text for comparison (via NormalizedTextMapper.normalize())
         - Threshold of 0.90 is conservative to avoid false corrections
         - Very short quotes (<5 chars) are unreliable and return None
     """
@@ -510,8 +507,8 @@ def fuzzy_match_quote(
         return None
 
     # Normalize both for comparison
-    normalized_llm = normalize_text_for_matching(llm_quote)
-    normalized_doc = normalize_text_for_matching(document_segment)
+    normalized_llm = NormalizedTextMapper.normalize(llm_quote)
+    normalized_doc = NormalizedTextMapper.normalize(document_segment)
 
     # Edge case: empty after normalization
     if not normalized_llm or not normalized_doc:
@@ -671,8 +668,8 @@ def compute_chunk_spans(
 
         if chunk_start == -1:
             # Last resort: try normalized text matching
-            normalized_chunk = normalize_text_for_matching(chunk_text)
-            normalized_search = normalize_text_for_matching(full_text[search_start:])
+            normalized_chunk = NormalizedTextMapper.normalize(chunk_text)
+            normalized_search = NormalizedTextMapper.normalize(full_text[search_start:])
 
             if normalized_chunk and normalized_search:
                 norm_pos = normalized_search.find(normalized_chunk)
@@ -1459,7 +1456,9 @@ class ResourceQuote(BaseModel):
         if is_disjoint:
             # Find all occurrences where segments appear in order
             normalized_text = resource.normalized_text
-            normalized_segments = [normalize_text_for_matching(seg) for seg in segments]
+            normalized_segments = [
+                NormalizedTextMapper.normalize(seg) for seg in segments
+            ]
 
             all_spans = []
             pos = 0
@@ -1498,7 +1497,7 @@ class ResourceQuote(BaseModel):
         else:
             # Continuous quote - find all matches by looping
             normalized_text = resource.normalized_text
-            normalized_pattern = normalize_text_for_matching(text)
+            normalized_pattern = NormalizedTextMapper.normalize(text)
 
             norm_spans = []
             pos = 0

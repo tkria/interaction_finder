@@ -12,11 +12,8 @@ from interaction_finder.extraction.models import (
     EntityPairKey,
     ProximalEntitySet,
 )
-from interaction_finder.resources import (
-    Resource,
-    ResourceQuote,
-    normalize_text_for_matching,
-)
+from interaction_finder.resources import Resource, ResourceQuote
+from interaction_finder.text_mapping import normalize_text_for_matching
 
 
 def build_permitted_pairs(entity_types: list[str]) -> dict[str, set[str]]:

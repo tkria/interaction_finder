@@ -9,7 +9,6 @@ import pytest
 import time
 from pydantic import ValidationError
 from interaction_finder.resources import (
-    normalize_text_for_matching,
     expand_scientific_shorthand,
     fuzzy_match_quote,
     FuzzyMatchResult,
@@ -24,6 +23,10 @@ from interaction_finder.resources import (
     CorrectionSuggestion,
     FUZZY_SUGGESTION_THRESHOLD,
 )
+from interaction_finder.text_mapping import NormalizedTextMapper
+
+# Convenience alias for tests
+normalize_text_for_matching = NormalizedTextMapper.normalize
 
 
 class TestNormalizeTextForMatching:
