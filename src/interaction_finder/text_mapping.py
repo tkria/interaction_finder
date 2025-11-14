@@ -203,11 +203,8 @@ GREEK_LETTER_MAP = {
 def normalize_text_for_matching(text: str) -> str:
     """Normalize text for case-insensitive matching with Greek letter support.
 
-    Converts to lowercase, expands Greek letters to ASCII names, removes
-    punctuation (except contractions/decimals), and normalizes whitespace.
-
-    This is a convenience function that delegates to NormalizedTextMapper's
-    internal normalization logic.
+    This is a convenience function that delegates to NormalizedTextMapper.normalize().
+    Prefer using NormalizedTextMapper.normalize() directly for clarity.
 
     Args:
         text: Text to normalize
@@ -215,9 +212,7 @@ def normalize_text_for_matching(text: str) -> str:
     Returns:
         Normalized text suitable for fuzzy matching
     """
-    # Delegate to the mapper's normalization logic
-    normalized_text, _ = NormalizedTextMapper._build_normalized_offsets(text)
-    return normalized_text
+    return NormalizedTextMapper.normalize(text)
 
 
 class NormalizedTextMapper(TextPositionMapper):
@@ -230,6 +225,29 @@ class NormalizedTextMapper(TextPositionMapper):
     The mapper stores normalized text as source and original text as target,
     with position offsets for efficient coordinate translation.
     """
+
+    @staticmethod
+    def normalize(text: str) -> str:
+        """Normalize text for case-insensitive matching with Greek letter support.
+
+        Converts to lowercase, expands Greek letters to ASCII names, removes
+        punctuation (except contractions/decimals), and normalizes whitespace.
+
+        This is a lightweight method for when you only need normalized text
+        without position mapping. For position tracking, use from_text() instead.
+
+        Args:
+            text: Text to normalize
+
+        Returns:
+            Normalized text suitable for fuzzy matching
+
+        Example:
+            >>> NormalizedTextMapper.normalize("TGF-α receptor")
+            'tgf alpha receptor'
+        """
+        normalized_text, _ = NormalizedTextMapper._build_normalized_offsets(text)
+        return normalized_text
 
     @classmethod
     def from_text(
@@ -365,7 +383,7 @@ class NormalizedTextMapper(TextPositionMapper):
         """
         if isinstance(pattern, str):
             # Auto-normalize string searches
-            pattern = normalize_text_for_matching(pattern)
+            pattern = self.normalize(pattern)
         # Regex patterns used as-is (must match normalized space)
         return super().find(pattern)
 
@@ -390,6 +408,6 @@ class NormalizedTextMapper(TextPositionMapper):
         """
         if isinstance(pattern, str):
             # Auto-normalize string searches
-            pattern = normalize_text_for_matching(pattern)
+            pattern = self.normalize(pattern)
         # Regex patterns used as-is (must match normalized space)
         return super().findall(pattern)
