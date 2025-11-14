@@ -16,27 +16,34 @@ from rich.progress import (
     TimeElapsedColumn,
 )
 
-from interaction_finder.extraction.models import ExtractionResult
+from interaction_finder.checkpoint import PipelineCheckpoint
 from interaction_finder.report.parallel_renderer import render_documents_parallel
 
 
 def prepare_report_data(
-    result: ExtractionResult,
+    checkpoint: PipelineCheckpoint,
     show_progress: bool = True,
     judgments_override: list | None = None,
 ) -> tuple[dict[str, Any], dict[str, str]]:
-    """Transform ExtractionResult into report data structure.
+    """Transform PipelineCheckpoint into report data structure.
 
     Args:
-        result: Extraction pipeline output
+        checkpoint: Pipeline checkpoint containing extraction results
 
     Returns:
         Tuple of (json_data, document_html_map)
         - json_data: JSON-serializable dict with metadata for frontend
         - document_html_map: Mapping of doc_id -> pre-rendered HTML string
     """
+    if not checkpoint.extraction:
+        raise ValueError("Checkpoint does not contain extraction results")
+
     # Use provided judgments list when filters were applied upstream
-    judgments = judgments_override if judgments_override is not None else result.judgments
+    judgments = (
+        judgments_override
+        if judgments_override is not None
+        else checkpoint.extraction.judgments
+    )
 
     # Group judgments by entity pair (merge different relationships)
     pair_groups = defaultdict(list)
@@ -125,7 +132,7 @@ def prepare_report_data(
         assessments = []
         for assess in all_assessments:
             # Get resource information
-            resource = result.resources.get(assess.resource_id.url)
+            resource = checkpoint.resources.get(assess.resource_id.url)
             if resource is None:
                 continue
 
@@ -247,7 +254,9 @@ def prepare_report_data(
 
     # Pre-render documents in parallel using multiprocessing
     # Count how many documents need rendering
-    docs_to_render = [r for r in result.resources.resources if r.id.id in doc_to_quotes]
+    docs_to_render = [
+        r for r in checkpoint.resources.resources if r.id.id in doc_to_quotes
+    ]
 
     if show_progress and docs_to_render:
         with Progress(
@@ -258,7 +267,8 @@ def prepare_report_data(
             TimeElapsedColumn(),
         ) as progress:
             task = progress.add_task(
-                f"Rendering {len(docs_to_render)} documents...", total=len(docs_to_render)
+                f"Rendering {len(docs_to_render)} documents...",
+                total=len(docs_to_render),
             )
 
             def update_progress():

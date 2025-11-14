@@ -11,8 +11,8 @@ from interaction_finder.keywords.extractors import (
     TFIDFExtractor,
     YAKEExtractor,
 )
+from interaction_finder.checkpoint import KeywordsStageData, PipelineCheckpoint
 from interaction_finder.keywords.graph import graph
-from interaction_finder.keywords.models import BridgingTermsOut
 from interaction_finder.keywords.nodes import ExpandQueryNode
 from interaction_finder.keywords.reranker import Reranker
 from interaction_finder.keywords.state import State
@@ -25,7 +25,7 @@ async def run_keyword_research(
     topic: str,
     config: IfetcherConfig,
     verbose: bool = False,
-) -> BridgingTermsOut:
+) -> PipelineCheckpoint:
     """Run keyword research pipeline for a topic.
 
     Executes the complete keyword research graph: query expansion, search,
@@ -37,12 +37,12 @@ async def run_keyword_research(
         verbose: bool — enable verbose logging (default: False)
 
     Returns:
-        BridgingTermsOut — final bridging terms with metadata
+        PipelineCheckpoint — checkpoint with keywords stage data
 
     Example:
         >>> config = IfetcherConfig.from_path("config.toml")
-        >>> result = await run_keyword_research("pulmonary arterial hypertension", config)
-        >>> print(f"Found {len(result.terms)} bridging terms")
+        >>> checkpoint = await run_keyword_research("pulmonary arterial hypertension", config)
+        >>> print(f"Found {len(checkpoint.keywords.terms)} bridging terms")
     """
     with logfire.span(
         "run_keyword_research",
@@ -115,17 +115,20 @@ async def run_keyword_research(
                 f"Completed: {len(result.output.terms)} bridging terms from {result.output.total_documents_processed} documents in {result.output.rounds_completed} rounds",
                 terms=result.output.terms,
             )
-            # Populate run metadata
-            from interaction_finder.run_metadata import KeywordsRunMetadata
 
-            result.output.run_metadata = KeywordsRunMetadata(
+            # Snapshot resource URLs at end of keywords stage
+            resource_urls = [rid.url for rid in resource_pool.resource_map.keys()]
+
+            # Build unified checkpoint with keywords stage data
+            return PipelineCheckpoint(
                 topic=topic,
-                search_backend="pubmed",  # Currently hardcoded in this module
-                max_rounds=kw_config.max_rounds,
-                rerank_top_k=kw_config.rerank_top_k,
-                reranker_model=kw_config.reranker_model
-                if kw_config.rerank_top_k > 0
-                else None,
-                extractors=list(extractors.keys()),
+                resources=resource_pool,
+                keywords=KeywordsStageData(
+                    terms=result.output.terms,
+                    scores=result.output.scores,
+                    total_documents_processed=result.output.total_documents_processed,
+                    rounds_completed=result.output.rounds_completed,
+                    coverage_assessment=result.output.coverage_assessment,
+                    resource_urls=resource_urls,
+                ),
             )
-            return result.output

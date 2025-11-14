@@ -686,18 +686,18 @@ def widesearch(
         # Validate keywords file exists
         if not keywords_file.exists():
             raise FileNotFoundError(f"Keywords file not found: {keywords_file}")
-        # Parse keywords JSON
-        from interaction_finder.keywords.models import BridgingTermsOut
+        # Parse checkpoint JSON
+        from interaction_finder.checkpoint import PipelineCheckpoint
         from pydantic import ValidationError
 
-        keywords_data = json.loads(keywords_file.read_text())
-        bridging_terms = BridgingTermsOut.model_validate(keywords_data)
-        keyphrases = bridging_terms.terms
+        input_checkpoint = PipelineCheckpoint.model_validate_json(
+            keywords_file.read_text()
+        )
 
-        # Infer topic from keywords file if not provided
+        # Infer topic from checkpoint if not provided
         if topic is None:
-            topic = bridging_terms.topic
-            console.print(f"[dim]Inferred topic from keywords file:[/dim] {topic}")
+            topic = input_checkpoint.topic
+            console.print(f"[dim]Inferred topic from checkpoint:[/dim] {topic}")
         # Apply CLI overrides to config
         if max_rounds is not None:
             cfg.tools.widesearch.max_rounds = max_rounds
@@ -736,9 +736,13 @@ def widesearch(
 
         # Display start message
         console.print(f"[bold]Running widesearch for:[/bold] {topic}")
-        console.print(f"Using {len(keyphrases)} keyphrases from {keywords_file.name}")
+        # Show keyphrases info if keywords stage present
+        if input_checkpoint.keywords:
+            console.print(
+                f"Using {len(input_checkpoint.keywords.terms)} keyphrases from {keywords_file.name}"
+            )
         # Show resource pool info if present
-        resource_count = len(bridging_terms.resources.resource_map)
+        resource_count = len(input_checkpoint.resources.resource_map)
         if resource_count > 0:
             console.print(f"Starting with {resource_count} existing resources in pool")
         console.print()
@@ -757,19 +761,16 @@ def widesearch(
         from interaction_finder.widesearch.progress import WidesearchProgress
 
         progress_counter = WidesearchProgress()
-        # Run widesearch with checkpoint, passing the resource pool and pre-loaded reranker
+        # Run widesearch with checkpoint, passing the entire checkpoint
         with progress_counter:
             checkpoint = asyncio.run(
                 run_widesearch_with_checkpoint(
-                    topic=topic,
-                    keyphrases=keyphrases,
+                    input_checkpoint=input_checkpoint,
                     search_backend=search_backend,
-                    resource_pool=bridging_terms.resources,
                     config=cfg,
                     max_rounds=max_rounds,
                     reranker=reranker,
                     progress=progress_counter,
-                    keyphrases_source=str(keywords_file),
                 )
             )
         # Progress display already shows completion summary, just add newline
@@ -778,8 +779,9 @@ def widesearch(
         if fetch:
             from interaction_finder.widesearch import fetch_and_populate_results
 
+            results_count = len(checkpoint.search.results) if checkpoint.search else 0
             console.print(
-                f"\n[bold]Fetching content for {len(checkpoint.results)} results...[/bold]"
+                f"\n[bold]Fetching content for {results_count} results...[/bold]"
             )
             fetch_stats = asyncio.run(fetch_and_populate_results(checkpoint, cfg))
             console.print(
@@ -862,29 +864,33 @@ def extract(
         if not checkpoint_file.exists():
             raise FileNotFoundError(f"Checkpoint file not found: {checkpoint_file}")
         # Load and validate checkpoint
-        from interaction_finder.widesearch.models import WidesearchCheckpoint
+        from interaction_finder.checkpoint import PipelineCheckpoint
         from pydantic import ValidationError
 
-        checkpoint_data = json.loads(checkpoint_file.read_text())
-        checkpoint = WidesearchCheckpoint.model_validate(checkpoint_data)
+        input_checkpoint = PipelineCheckpoint.model_validate_json(
+            checkpoint_file.read_text()
+        )
 
         # Infer topic from checkpoint file if not provided
         if topic is None:
-            topic = checkpoint.topic
-            console.print(f"[dim]Inferred topic from checkpoint file:[/dim] {topic}")
+            topic = input_checkpoint.topic
+            console.print(f"[dim]Inferred topic from checkpoint:[/dim] {topic}")
 
         # Display checkpoint info
         console.print(f"\n[bold]Loading checkpoint:[/bold] {checkpoint_file.name}")
-        console.print(f"Topic: {checkpoint.topic}")
-        console.print(f"Results: {len(checkpoint.results)}")
-        console.print(f"Queries executed: {len(checkpoint.queries)}")
-        console.print(f"Resources in pool: {len(checkpoint.resources.resource_map)}")
+        console.print(f"Topic: {input_checkpoint.topic}")
+        if input_checkpoint.search:
+            console.print(f"Results: {len(input_checkpoint.search.results)}")
+            console.print(f"Queries executed: {len(input_checkpoint.search.queries)}")
+        console.print(
+            f"Resources in pool: {len(input_checkpoint.resources.resource_map)}"
+        )
         # Check if content needs to be fetched
         resources_with_content = sum(
-            1 for r in checkpoint.resources.resource_map.values() if r is not None
+            1 for r in input_checkpoint.resources.resource_map.values() if r is not None
         )
         resources_without_content = (
-            len(checkpoint.resources.resource_map) - resources_with_content
+            len(input_checkpoint.resources.resource_map) - resources_with_content
         )
         if resources_without_content > 0:
             from interaction_finder.widesearch import fetch_and_populate_results
@@ -892,13 +898,15 @@ def extract(
             console.print(
                 f"\n[bold]Fetching content for {resources_without_content} resources...[/bold]"
             )
-            fetch_stats = asyncio.run(fetch_and_populate_results(checkpoint, cfg))
+            fetch_stats = asyncio.run(fetch_and_populate_results(input_checkpoint, cfg))
             console.print(
                 f"[green]✓[/green] Fetched {fetch_stats['fetched']}/{fetch_stats['total']} "
                 f"({fetch_stats['cached']} cached, {fetch_stats['failed']} failed)"
             )
             resources_with_content = sum(
-                1 for r in checkpoint.resources.resource_map.values() if r is not None
+                1
+                for r in input_checkpoint.resources.resource_map.values()
+                if r is not None
             )
         # Run extraction
         console.print(
@@ -913,20 +921,20 @@ def extract(
 
         # Run extraction with config and progress
         with progress:
-            result = asyncio.run(
+            result_checkpoint = asyncio.run(
                 run_extraction(
-                    topic=topic,
+                    input_checkpoint=input_checkpoint,
                     target_entity_types=entity_types,
-                    resource_pool=checkpoint.resources,
                     config=cfg,
                     progress=progress,
-                    checkpoint_source=str(checkpoint_file),
                 )
             )
         # Progress display already shows completion summary
         console.print()
         # Show sample of accepted pairs
-        accepted_judgments = [j for j in result.judgments if j.accepted]
+        accepted_judgments = [
+            j for j in result_checkpoint.extraction.judgments if j.accepted
+        ]
         if accepted_judgments:
             console.print("\n[bold]Sample accepted pairs:[/bold]")
             for judgment in accepted_judgments[:5]:
@@ -946,7 +954,7 @@ def extract(
                 console.print(f"  ... and {len(accepted_judgments) - 5} more")
         # Save to file if requested
         if output:
-            output_data = result.model_dump(mode="json")
+            output_data = result_checkpoint.model_dump(mode="json")
             output.write_text(json.dumps(output_data, indent=2))
             console.print(f"\n[dim]Saved results to {output}[/dim]")
         else:
@@ -1017,15 +1025,18 @@ def report(
         if not extraction_file.exists():
             raise FileNotFoundError(f"Extraction file not found: {extraction_file}")
 
-        # Load extraction results
-        from interaction_finder.extraction.models import ExtractionResult
+        # Load extraction checkpoint
+        from interaction_finder.checkpoint import PipelineCheckpoint
         from pydantic import ValidationError
 
         log_console.print(
             f"\n[bold]Loading extraction results:[/bold] {extraction_file.name}"
         )
-        extraction_data = json.loads(extraction_file.read_text())
-        result = ExtractionResult.model_validate(extraction_data)
+        checkpoint = PipelineCheckpoint.model_validate_json(extraction_file.read_text())
+
+        # Ensure extraction stage is present
+        if not checkpoint.extraction:
+            raise ValueError("Checkpoint does not contain extraction results")
 
         normalized_format = format.lower()
         supported_formats = {"html", "plain"}
@@ -1049,11 +1060,13 @@ def report(
             parsed_filters["accepted"] = "yes"
 
         # Display summary
-        log_console.print(f"Topic: {result.metadata.topic}")
-        log_console.print(f"Total pairs: {result.metadata.total_pairs_found}")
-        log_console.print(f"Accepted: {result.metadata.pairs_accepted}")
-        log_console.print(f"Rejected: {result.metadata.pairs_rejected}")
-        log_console.print(f"Resources: {result.metadata.resource_count}")
+        log_console.print(f"Topic: {checkpoint.extraction.metadata.topic}")
+        log_console.print(
+            f"Total pairs: {checkpoint.extraction.metadata.total_pairs_found}"
+        )
+        log_console.print(f"Accepted: {checkpoint.extraction.metadata.pairs_accepted}")
+        log_console.print(f"Rejected: {checkpoint.extraction.metadata.pairs_rejected}")
+        log_console.print(f"Resources: {checkpoint.extraction.metadata.resource_count}")
 
         # Generate output path if not specified
         if output is None:
@@ -1069,7 +1082,7 @@ def report(
         from interaction_finder.report import generate_report
 
         output_path = generate_report(
-            result=result,
+            checkpoint=checkpoint,
             output=output,
             title=title,
             format=normalized_format,
@@ -1082,9 +1095,11 @@ def report(
         # Show statistics (all pairs are included)
         log_console.print(f"\n[bold]Report contains:[/bold]")
         log_console.print(
-            f"  • {result.metadata.total_pairs_found} pairs ({result.metadata.pairs_accepted} accepted, {result.metadata.pairs_rejected} rejected)"
+            f"  • {checkpoint.extraction.metadata.total_pairs_found} pairs ({checkpoint.extraction.metadata.pairs_accepted} accepted, {checkpoint.extraction.metadata.pairs_rejected} rejected)"
         )
-        log_console.print(f"  • {result.metadata.resource_count} documents")
+        log_console.print(
+            f"  • {checkpoint.extraction.metadata.resource_count} documents"
+        )
         log_console.print(f"  • Interactive filtering and search")
         log_console.print(f"  • Full provenance tracking")
 

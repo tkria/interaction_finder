@@ -12,7 +12,6 @@ from interaction_finder.extraction.models import (
     EntityMergeDecision,
     EntityMergeDecisions,
     ExtractionMetadata,
-    ExtractionResult,
     PairJudgment,
     ProximalPairExtraction,
     ProximalPairInfo,
@@ -285,80 +284,3 @@ class TestPairJudgment:
         )
         assert judgment.accepted is False
         assert judgment.confidence == "low"
-
-
-class TestExtractionResult:
-    """Tests for ExtractionResult model."""
-
-    def test_valid_result(self):
-        """Test creating valid ExtractionResult."""
-        pool = ResourcePool()
-
-        result = ExtractionResult(
-            topic="test topic",
-            target_entity_types=["gene", "disease"],
-            permitted_pairs={"gene": ["disease"], "disease": ["gene"]},
-            resources=pool,
-            judgments=[
-                PairJudgment(
-                    entity1=SimpleEntity(name="BRCA1", kind="gene", aliases=["BRCA1"]),
-                    entity2=SimpleEntity(
-                        name="breast cancer", kind="disease", aliases=["breast cancer"]
-                    ),
-                    relationship="associated_with",
-                    assessments=[],
-                    accepted=True,
-                    confidence="high",
-                    reasoning="Strong evidence from multiple sources.",
-                )
-            ],
-            metadata=ExtractionMetadata(
-                topic="BRCA1 and breast cancer",
-                resource_count=1,
-                total_entities_found=2,
-                entities_after_validation=2,
-                entities_merged=0,
-                merge_cache_hits=0,
-                merge_cache_misses=0,
-                proximal_sets_found=1,
-                total_pairs_found=1,
-                pairs_accepted=1,
-                pairs_rejected=0,
-                quotes_validated=1,
-                quotes_failed=0,
-            ),
-        )
-
-        assert result.topic == "test topic"
-        assert result.target_entity_types == ["gene", "disease"]
-        assert len(result.judgments) == 1
-        assert result.metadata.pairs_accepted == 1
-
-    def test_empty_result(self):
-        """Test creating empty ExtractionResult."""
-        pool = ResourcePool()
-        result = ExtractionResult(
-            topic="test",
-            target_entity_types=["gene"],
-            permitted_pairs={"gene": ["gene"]},
-            resources=pool,
-            judgments=[],
-            metadata=ExtractionMetadata(
-                topic="test",
-                resource_count=0,
-                total_entities_found=0,
-                entities_after_validation=0,
-                entities_merged=0,
-                merge_cache_hits=0,
-                merge_cache_misses=0,
-                proximal_sets_found=0,
-                total_pairs_found=0,
-                pairs_accepted=0,
-                pairs_rejected=0,
-                quotes_validated=0,
-                quotes_failed=0,
-            ),
-        )
-
-        assert len(result.judgments) == 0
-        assert result.metadata.pairs_accepted == 0

@@ -8,6 +8,7 @@ from typing import Any
 
 import httpx
 
+from interaction_finder.checkpoint import PipelineCheckpoint, SearchStageData
 from interaction_finder.fetcher import PageFetcher
 from interaction_finder.logging import logfire
 from interaction_finder.resources import ResourcePool, compute_chunk_spans
@@ -15,7 +16,6 @@ from interaction_finder.search.models import SearchBackend, SearchResult
 from interaction_finder.settings import IfetcherConfig
 from interaction_finder.widesearch.deps import Deps
 from interaction_finder.widesearch.graph import graph
-from interaction_finder.widesearch.models import WidesearchCheckpoint
 from interaction_finder.widesearch.nodes import PlanGoalsNode
 from interaction_finder.widesearch.reranker import Reranker
 from interaction_finder.widesearch.state import State
@@ -124,54 +124,53 @@ async def run_widesearch(
 
 
 async def run_widesearch_with_checkpoint(
-    topic: str,
-    keyphrases: list[str],
+    input_checkpoint: PipelineCheckpoint,
     search_backend: SearchBackend,
     *,
-    resource_pool: ResourcePool | None = None,
     config: IfetcherConfig | None = None,
     max_rounds: int | None = None,
     reranker: Reranker | None = None,
     http_client: httpx.AsyncClient | None = None,
     progress: Any | None = None,
-    keyphrases_source: str | None = None,
-) -> WidesearchCheckpoint:
-    """Run widesearch pipeline and return complete checkpoint.
+) -> PipelineCheckpoint:
+    """Run widesearch pipeline preserving keywords data.
 
-    Identical interface to run_widesearch() but returns a WidesearchCheckpoint
-    containing full state including results, queries, query-to-URL mappings,
-    and the complete resource pool. Useful for checkpointing searches or
-    passing complete state to downstream processes.
+    Takes an input checkpoint (typically from keywords stage) and adds
+    search stage data while preserving all existing data. Returns a
+    unified checkpoint with both keywords and search stages.
 
     Parameters:
-        topic: str — research topic to search for
-        keyphrases: list[str] — keyphrases to incorporate in queries
+        input_checkpoint: PipelineCheckpoint — checkpoint with keywords stage data
         search_backend: SearchBackend — search backend to use (PubMed, Perplexica, etc.)
-        resource_pool: ResourcePool | None — existing resource pool (creates new if None)
         config: IfetcherConfig | None — configuration object (uses defaults if None)
         max_rounds: int | None — override max_rounds from config
         reranker: Reranker | None — pre-initialized reranker (creates new if None and rerank_top_k > 0)
         http_client: httpx.AsyncClient | None — HTTP client (creates temporary if None)
         progress: Any | None — optional progress counter for live display
-        keyphrases_source: str | None — source filename for keyphrases (for metadata)
 
     Returns:
-        WidesearchCheckpoint — complete checkpoint with results, queries, and resource pool
+        PipelineCheckpoint — checkpoint with keywords + search stage data
 
     Example:
         >>> from interaction_finder.search.backends import PubMedBackend
-        >>> from interaction_finder.widesearch import run_widesearch_with_checkpoint
-        >>>
         >>> backend = PubMedBackend()
+        >>> # Assume keywords_checkpoint from keywords stage
         >>> checkpoint = await run_widesearch_with_checkpoint(
-        ...     topic="diabetes treatment",
-        ...     keyphrases=["insulin", "glucose"],
+        ...     input_checkpoint=keywords_checkpoint,
         ...     search_backend=backend,
         ...     max_rounds=3
         ... )
-        >>> print(f"Executed {len(checkpoint.queries)} queries")
-        >>> print(f"Found {len(checkpoint.results)} unique results")
+        >>> print(f"Keywords: {len(checkpoint.keywords.terms)}")
+        >>> print(f"Search queries: {len(checkpoint.search.queries)}")
     """
+    # Extract data from input checkpoint
+    topic = input_checkpoint.topic
+    keyphrases = input_checkpoint.keywords.terms if input_checkpoint.keywords else []
+    resource_pool = input_checkpoint.resources
+
+    # Track starting URLs for delta calculation
+    initial_urls = {rid.url for rid in resource_pool.resource_map.keys()}
+
     # Load config or use defaults
     if config is None:
         config = IfetcherConfig()
@@ -183,10 +182,6 @@ async def run_widesearch_with_checkpoint(
     effective_max_rounds = (
         max_rounds if max_rounds is not None else ws_config.max_rounds
     )
-
-    # Create or use existing resource pool
-    if resource_pool is None:
-        resource_pool = ResourcePool()
 
     # Create reranker if enabled (rerank_top_k > 0) and not provided
     if reranker is None and ws_config.rerank_top_k > 0:
@@ -221,18 +216,19 @@ async def run_widesearch_with_checkpoint(
         # Run the graph
         result = await graph.run(PlanGoalsNode(), state=state, deps=deps)
 
-        # Build checkpoint from final state
-        checkpoint = WidesearchCheckpoint(
-            results=result.output,
-            queries=state.all_queries,
-            query_results=state.selected_results,
-            resources=resource_pool,
-            topic=state.topic,
-            keyphrases=state.keyphrases,
-            rounds_completed=state.current_round,
+        # Build unified checkpoint preserving keywords data
+        return PipelineCheckpoint(
+            topic=topic,
+            resources=resource_pool,  # Accumulated pool
+            keywords=input_checkpoint.keywords,  # PRESERVED from input
+            search=SearchStageData(
+                results=result.output,
+                queries=state.all_queries,
+                query_results=state.selected_results,
+                keyphrases=keyphrases,
+                rounds_completed=state.current_round,
+            ),
         )
-
-        return checkpoint
 
     finally:
         # Clean up HTTP client if we created it
@@ -241,13 +237,13 @@ async def run_widesearch_with_checkpoint(
 
 
 async def fetch_and_populate_results(
-    checkpoint: WidesearchCheckpoint,
+    checkpoint: PipelineCheckpoint,
     config: IfetcherConfig,
 ) -> dict[str, int]:
     """Fetch content for selected results and add to ResourcePool.
 
     Parameters:
-        checkpoint: WidesearchCheckpoint — results and resource pool to populate
+        checkpoint: PipelineCheckpoint — checkpoint with search results
         config: IfetcherConfig — configuration with cache directory
 
     Returns:
@@ -257,9 +253,13 @@ async def fetch_and_populate_results(
         cache_dir=config.abspath(config.output.cache), show_status=False
     )
 
+    # Check if search stage data is present
+    if not checkpoint.search:
+        raise ValueError("Checkpoint missing search stage data")
+
     # Identify URLs needing content
     urls_to_fetch = []
-    for result in checkpoint.results:
+    for result in checkpoint.search.results:
         rid = checkpoint.resources._find_resource_id(result.url)
         if rid is None:
             rid = checkpoint.resources.register(result.url)
@@ -268,9 +268,9 @@ async def fetch_and_populate_results(
 
     if not urls_to_fetch:
         return {
-            "total": len(checkpoint.results),
+            "total": len(checkpoint.search.results),
             "fetched": 0,
-            "cached": len(checkpoint.results),
+            "cached": len(checkpoint.search.results),
             "failed": 0,
         }
 
@@ -290,8 +290,8 @@ async def fetch_and_populate_results(
             logfire.warning(f"Failed to fetch content for {url}")
 
     return {
-        "total": len(checkpoint.results),
+        "total": len(checkpoint.search.results),
         "fetched": fetched,
-        "cached": len(checkpoint.results) - len(urls_to_fetch),
+        "cached": len(checkpoint.search.results) - len(urls_to_fetch),
         "failed": len(urls_to_fetch) - fetched,
     }

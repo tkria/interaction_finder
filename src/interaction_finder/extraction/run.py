@@ -7,54 +7,49 @@ extraction process from resources to final pairs with provenance.
 import asyncio
 import logging
 
+from interaction_finder.checkpoint import ExtractionStageData, PipelineCheckpoint
 from interaction_finder.extraction.deps import Deps
 from interaction_finder.extraction.graph import graph
-from interaction_finder.extraction.models import ExtractionResult
 from interaction_finder.extraction.nodes import ProcessDocumentsNode
 from interaction_finder.extraction.state import State
 from interaction_finder.extraction.utils import build_permitted_pairs
 from interaction_finder.logging import logfire
-from interaction_finder.resources import ResourcePool
 from interaction_finder.settings import IfetcherConfig
 
 
 async def run_extraction(
-    topic: str,
+    input_checkpoint: PipelineCheckpoint,
     target_entity_types: list[str],
-    resource_pool: ResourcePool,
     config: IfetcherConfig | None = None,
     logger: logging.Logger | None = None,
     progress=None,
-    checkpoint_source: str | None = None,
-) -> ExtractionResult:
-    """Run the association extraction pipeline.
+) -> PipelineCheckpoint:
+    """Run the association extraction pipeline preserving all prior data.
 
     Parameters:
-        topic: Research topic for context (e.g., "genes associated with breast cancer")
+        input_checkpoint: PipelineCheckpoint with search stage data
         target_entity_types: Types of entities to extract (e.g., ["gene", "disease"])
-        resource_pool: ResourcePool containing documents to process
         config: Configuration object (creates default if None)
         logger: Logger for warnings and debugging (optional)
         progress: Progress counter for live display (optional)
-        checkpoint_source: Source checkpoint filename (for metadata)
 
     Returns:
-        ExtractionResult with accepted pairs and metadata
+        PipelineCheckpoint with keywords + search + extraction stage data
 
     Example:
-        >>> from interaction_finder import IfetcherConfig
-        >>> config = IfetcherConfig.from_path("config.toml")
-        >>> pool = ResourcePool()
-        >>> pool.add(url="...", title="...", document_text="...")
-        >>> result = await run_extraction(
-        ...     topic="BRCA1 and breast cancer",
+        >>> # Assume search_checkpoint from widesearch stage
+        >>> checkpoint = await run_extraction(
+        ...     input_checkpoint=search_checkpoint,
         ...     target_entity_types=["gene", "disease"],
-        ...     resource_pool=pool,
-        ...     config=config,
         ... )
-        >>> accepted = [j for j in result.judgments if j.accepted]
-        >>> print(f"Found {len(accepted)} associations")
+        >>> print(f"Keywords: {len(checkpoint.keywords.terms)}")
+        >>> print(f"Searches: {len(checkpoint.search.queries)}")
+        >>> print(f"Pairs: {len(checkpoint.extraction.judgments)}")
     """
+    # Extract data from input checkpoint
+    topic = input_checkpoint.topic
+    resource_pool = input_checkpoint.resources
+
     with logfire.span(f"Extraction: {topic}"):
         # Load config or use defaults
         if config is None:
@@ -91,9 +86,16 @@ async def run_extraction(
         # Run graph
         result = await graph.run(ProcessDocumentsNode(), state=state, deps=deps)
 
-        # Populate top-level fields
-        result.output.topic = topic
-        result.output.target_entity_types = target_entity_types
-        result.output.permitted_pairs = permitted_pairs
-
-        return result.output
+        # Build unified checkpoint preserving all prior data
+        return PipelineCheckpoint(
+            topic=topic,
+            resources=resource_pool,
+            keywords=input_checkpoint.keywords,  # PRESERVED
+            search=input_checkpoint.search,  # PRESERVED
+            extraction=ExtractionStageData(
+                target_entity_types=target_entity_types,
+                permitted_pairs=permitted_pairs,
+                judgments=result.output.judgments,
+                metadata=result.output.metadata,
+            ),
+        )

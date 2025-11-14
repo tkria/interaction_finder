@@ -43,7 +43,6 @@ Example:
 from interaction_finder.extraction.graph import graph
 from interaction_finder.extraction.models import (
     ExtractionMetadata,
-    ExtractionResult,
     PairAssessment,
     PairJudgment,
 )
@@ -51,7 +50,6 @@ from interaction_finder.extraction.run import run_extraction
 
 __all__ = [
     "run_extraction",
-    "ExtractionResult",
     "PairJudgment",
     "PairAssessment",
     "ExtractionMetadata",

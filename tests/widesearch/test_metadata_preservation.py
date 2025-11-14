@@ -96,25 +96,40 @@ async def test_max_rounds_metadata_preserved():
 async def test_checkpoint_metadata_preserved():
     """Test that checkpoint results preserve metadata."""
     from interaction_finder.widesearch import run_widesearch_with_checkpoint
+    from interaction_finder.checkpoint import KeywordsStageData, PipelineCheckpoint
+    from interaction_finder.resources import ResourcePool
 
     backend = MockSearchBackend(results_per_query=3)
 
-    checkpoint = await run_widesearch_with_checkpoint(
+    # Create input checkpoint with keywords data
+    input_checkpoint = PipelineCheckpoint(
         topic="test topic",
-        keyphrases=["keyword1"],
+        resources=ResourcePool(),
+        keywords=KeywordsStageData(
+            terms=["keyword1"],
+            scores=[0.9],
+            total_documents_processed=5,
+            rounds_completed=1,
+            coverage_assessment="Good coverage of topic with multiple relevant sources and bridging terms",
+            resource_urls=[],
+        ),
+    )
+
+    checkpoint = await run_widesearch_with_checkpoint(
+        input_checkpoint=input_checkpoint,
         search_backend=backend,
         max_rounds=1,
     )
 
-    # Check results in checkpoint
-    assert len(checkpoint.results) > 0
-    for result in checkpoint.results:
+    # Check results in checkpoint (nested in search stage data)
+    assert len(checkpoint.search.results) > 0
+    for result in checkpoint.search.results:
         assert result.title != "", f"Empty title in checkpoint: {result.url}"
         assert result.snippet is not None
         assert result.relevance is not None
 
     # Verify SearchResult objects can be serialized individually
-    for result in checkpoint.results:
+    for result in checkpoint.search.results:
         result_dict = result.model_dump()
         assert result_dict["title"] != "", "Empty title after model_dump"
         assert result_dict["snippet"] is not None

@@ -10,6 +10,16 @@ from .resources import (
     ResourceQuote,
 )
 from .agent_config import agent_getter, get_agent, clear_agent_cache
+from .checkpoint import (
+    PipelineCheckpoint,
+    KeywordsStageData,
+    SearchStageData,
+    ExtractionStageData,
+    _rebuild_models,
+)
+
+# Rebuild checkpoint models to resolve forward references after imports
+_rebuild_models()
 
 __all__ = [
     "PageFetcher",
@@ -23,4 +33,8 @@ __all__ = [
     "agent_getter",
     "get_agent",
     "clear_agent_cache",
+    "PipelineCheckpoint",
+    "KeywordsStageData",
+    "SearchStageData",
+    "ExtractionStageData",
 ]

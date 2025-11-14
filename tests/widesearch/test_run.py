@@ -3,11 +3,11 @@
 import pytest
 from pydantic_ai.models.test import TestModel
 
+from interaction_finder.checkpoint import PipelineCheckpoint
 from interaction_finder.resources import ResourcePool
 from interaction_finder.search.models import SearchBackend, SearchQuery, SearchResult
 from interaction_finder.settings import IfetcherConfig
 from interaction_finder.widesearch import (
-    WidesearchCheckpoint,
     fetch_and_populate_results,
     run_widesearch,
     run_widesearch_with_checkpoint,
@@ -209,6 +209,22 @@ async def test_run_widesearch_with_checkpoint_basic(test_config):
     backend = MockSearchBackend(results=mock_results)
     test_model = TestModel()
 
+    # Create input checkpoint with keywords data
+    from interaction_finder.checkpoint import KeywordsStageData
+
+    input_checkpoint = PipelineCheckpoint(
+        topic="diabetes treatment",
+        resources=ResourcePool(),
+        keywords=KeywordsStageData(
+            terms=["insulin", "glucose"],
+            scores=[0.9, 0.8],
+            total_documents_processed=5,
+            rounds_completed=1,
+            coverage_assessment="Good coverage of topic with multiple relevant sources and bridging terms",
+            resource_urls=[],
+        ),
+    )
+
     config = IfetcherConfig()
     with (
         get_goal_planner_agent(config).override(model=test_model),
@@ -217,23 +233,27 @@ async def test_run_widesearch_with_checkpoint_basic(test_config):
         get_reflector_agent(config).override(model=test_model),
     ):
         checkpoint = await run_widesearch_with_checkpoint(
-            topic="diabetes treatment",
-            keyphrases=["insulin", "glucose"],
+            input_checkpoint=input_checkpoint,
             search_backend=backend,
             config=test_config,
             max_rounds=1,
         )
 
-        # Should return WidesearchCheckpoint
-        assert isinstance(checkpoint, WidesearchCheckpoint)
-        # Check all expected fields present
-        assert isinstance(checkpoint.results, list)
-        assert isinstance(checkpoint.queries, list)
-        assert isinstance(checkpoint.query_results, dict)
+        # Should return PipelineCheckpoint
+        assert isinstance(checkpoint, PipelineCheckpoint)
+        # Check core fields present
         assert isinstance(checkpoint.resources, ResourcePool)
         assert checkpoint.topic == "diabetes treatment"
-        assert checkpoint.keyphrases == ["insulin", "glucose"]
-        assert checkpoint.rounds_completed >= 0
+        # Check keywords data preserved
+        assert checkpoint.keywords is not None
+        assert checkpoint.keywords.terms == ["insulin", "glucose"]
+        # Check search stage data present
+        assert checkpoint.search is not None
+        assert isinstance(checkpoint.search.results, list)
+        assert isinstance(checkpoint.search.queries, list)
+        assert isinstance(checkpoint.search.query_results, dict)
+        assert checkpoint.search.keyphrases == ["insulin", "glucose"]
+        assert checkpoint.search.rounds_completed >= 0
 
 
 @pytest.mark.asyncio
@@ -252,6 +272,22 @@ async def test_checkpoint_serialization(test_config):
     backend = MockSearchBackend(results=mock_results)
     test_model = TestModel()
 
+    # Create input checkpoint with keywords data
+    from interaction_finder.checkpoint import KeywordsStageData
+
+    input_checkpoint = PipelineCheckpoint(
+        topic="test topic",
+        resources=ResourcePool(),
+        keywords=KeywordsStageData(
+            terms=["keyword"],
+            scores=[0.9],
+            total_documents_processed=5,
+            rounds_completed=1,
+            coverage_assessment="Good coverage of topic with multiple relevant sources and bridging terms",
+            resource_urls=[],
+        ),
+    )
+
     config = IfetcherConfig()
     with (
         get_goal_planner_agent(config).override(model=test_model),
@@ -260,8 +296,7 @@ async def test_checkpoint_serialization(test_config):
         get_reflector_agent(config).override(model=test_model),
     ):
         checkpoint = await run_widesearch_with_checkpoint(
-            topic="test topic",
-            keyphrases=["keyword"],
+            input_checkpoint=input_checkpoint,
             search_backend=backend,
             config=test_config,
             max_rounds=1,
@@ -275,23 +310,27 @@ async def test_checkpoint_serialization(test_config):
         assert json_str is not None
         assert len(json_str) > 0
 
-        # Verify JSON structure is valid
+        # Verify JSON structure is valid (new nested structure)
         loaded_dict = json.loads(json_str)
-        assert "results" in loaded_dict
-        assert "queries" in loaded_dict
-        assert "query_results" in loaded_dict
+        assert "search" in loaded_dict
+        assert "results" in loaded_dict["search"]
+        assert "queries" in loaded_dict["search"]
+        assert "query_results" in loaded_dict["search"]
         assert "resources" in loaded_dict
         assert "topic" in loaded_dict
-        assert "keyphrases" in loaded_dict
-        assert "rounds_completed" in loaded_dict
+        assert "keyphrases" in loaded_dict["search"]
+        assert "rounds_completed" in loaded_dict["search"]
 
         # Full deserialization should now work with new ResourcePool serialization
-        loaded_checkpoint = WidesearchCheckpoint.model_validate(loaded_dict)
+        loaded_checkpoint = PipelineCheckpoint.model_validate(loaded_dict)
 
         # Verify round-trip preserves data
         assert loaded_checkpoint.topic == checkpoint.topic
-        assert loaded_checkpoint.keyphrases == checkpoint.keyphrases
-        assert loaded_checkpoint.rounds_completed == checkpoint.rounds_completed
+        assert loaded_checkpoint.search.keyphrases == checkpoint.search.keyphrases
+        assert (
+            loaded_checkpoint.search.rounds_completed
+            == checkpoint.search.rounds_completed
+        )
 
 
 @pytest.mark.asyncio
@@ -313,6 +352,22 @@ async def test_checkpoint_contains_all_data(test_config):
     backend = MockSearchBackend(results=mock_results)
     test_model = TestModel()
 
+    # Create input checkpoint with keywords data
+    from interaction_finder.checkpoint import KeywordsStageData
+
+    input_checkpoint = PipelineCheckpoint(
+        topic="test topic",
+        resources=ResourcePool(),
+        keywords=KeywordsStageData(
+            terms=["keyword1", "keyword2"],
+            scores=[0.9, 0.8],
+            total_documents_processed=5,
+            rounds_completed=1,
+            coverage_assessment="Good coverage of topic with multiple relevant sources and bridging terms",
+            resource_urls=[],
+        ),
+    )
+
     config = IfetcherConfig()
     with (
         get_goal_planner_agent(config).override(model=test_model),
@@ -321,24 +376,23 @@ async def test_checkpoint_contains_all_data(test_config):
         get_reflector_agent(config).override(model=test_model),
     ):
         checkpoint = await run_widesearch_with_checkpoint(
-            topic="test topic",
-            keyphrases=["keyword1", "keyword2"],
+            input_checkpoint=input_checkpoint,
             search_backend=backend,
             config=test_config,
             max_rounds=2,
         )
 
         # Should have executed queries
-        assert len(checkpoint.queries) > 0
+        assert len(checkpoint.search.queries) > 0
         # Should have results
-        assert len(checkpoint.results) >= 0  # May be empty if no selection
+        assert len(checkpoint.search.results) >= 0  # May be empty if no selection
         # Should have query_results mapping
-        assert isinstance(checkpoint.query_results, dict)
+        assert isinstance(checkpoint.search.query_results, dict)
         # Should have resource pool
         assert isinstance(checkpoint.resources, ResourcePool)
         # Topic and keyphrases should be preserved
         assert checkpoint.topic == "test topic"
-        assert checkpoint.keyphrases == ["keyword1", "keyword2"]
+        assert checkpoint.search.keyphrases == ["keyword1", "keyword2"]
 
 
 @pytest.mark.asyncio
@@ -373,7 +427,7 @@ async def test_checkpoint_backward_compatibility(test_config):
 
         # Should return list, not checkpoint
         assert isinstance(results, list)
-        assert not isinstance(results, WidesearchCheckpoint)
+        assert not isinstance(results, PipelineCheckpoint)
         assert all(isinstance(r, SearchResult) for r in results)
 
 
@@ -383,18 +437,24 @@ async def test_fetch_and_populate_results_basic(test_config, tmp_path):
     from unittest.mock import AsyncMock, patch
 
     # Create checkpoint with results
+    from interaction_finder.checkpoint import SearchStageData
+
     results = [
         SearchResult(title="Paper 1", url="https://example.com/1", snippet="snippet 1"),
         SearchResult(title="Paper 2", url="https://example.com/2", snippet="snippet 2"),
     ]
-    checkpoint = WidesearchCheckpoint(
-        results=results,
-        queries=["query1"],
-        query_results={"query1": ["https://example.com/1", "https://example.com/2"]},
-        resources=ResourcePool(),
+    checkpoint = PipelineCheckpoint(
         topic="test topic",
-        keyphrases=["keyword"],
-        rounds_completed=1,
+        resources=ResourcePool(),
+        search=SearchStageData(
+            results=results,
+            queries=["query1"],
+            query_results={
+                "query1": ["https://example.com/1", "https://example.com/2"]
+            },
+            keyphrases=["keyword"],
+            rounds_completed=1,
+        ),
     )
 
     # Configure test config with temp cache dir
@@ -456,6 +516,7 @@ async def test_fetch_and_populate_results_basic(test_config, tmp_path):
 async def test_fetch_and_populate_results_with_existing_content(test_config, tmp_path):
     """Test fetch_and_populate_results skips already-fetched content."""
     from unittest.mock import AsyncMock, patch
+    from interaction_finder.checkpoint import SearchStageData
 
     # Create resource pool with one URL already having content
     pool = ResourcePool()
@@ -467,14 +528,18 @@ async def test_fetch_and_populate_results_with_existing_content(test_config, tmp
         SearchResult(title="Paper 1", url="https://example.com/1", snippet="snippet 1"),
         SearchResult(title="Paper 2", url="https://example.com/2", snippet="snippet 2"),
     ]
-    checkpoint = WidesearchCheckpoint(
-        results=results,
-        queries=["query1"],
-        query_results={"query1": ["https://example.com/1", "https://example.com/2"]},
-        resources=pool,
+    checkpoint = PipelineCheckpoint(
         topic="test topic",
-        keyphrases=["keyword"],
-        rounds_completed=1,
+        resources=pool,
+        search=SearchStageData(
+            results=results,
+            queries=["query1"],
+            query_results={
+                "query1": ["https://example.com/1", "https://example.com/2"]
+            },
+            keyphrases=["keyword"],
+            rounds_completed=1,
+        ),
     )
 
     test_config.output.cache = str(tmp_path / "cache")
@@ -510,19 +575,24 @@ async def test_fetch_and_populate_results_with_existing_content(test_config, tmp
 async def test_fetch_and_populate_results_handles_failures(test_config, tmp_path):
     """Test fetch_and_populate_results handles fetch failures gracefully."""
     from unittest.mock import AsyncMock, patch
+    from interaction_finder.checkpoint import SearchStageData
 
     results = [
         SearchResult(title="Paper 1", url="https://example.com/1", snippet="snippet 1"),
         SearchResult(title="Paper 2", url="https://example.com/2", snippet="snippet 2"),
     ]
-    checkpoint = WidesearchCheckpoint(
-        results=results,
-        queries=["query1"],
-        query_results={"query1": ["https://example.com/1", "https://example.com/2"]},
-        resources=ResourcePool(),
+    checkpoint = PipelineCheckpoint(
         topic="test topic",
-        keyphrases=["keyword"],
-        rounds_completed=1,
+        resources=ResourcePool(),
+        search=SearchStageData(
+            results=results,
+            queries=["query1"],
+            query_results={
+                "query1": ["https://example.com/1", "https://example.com/2"]
+            },
+            keyphrases=["keyword"],
+            rounds_completed=1,
+        ),
     )
 
     test_config.output.cache = str(tmp_path / "cache")
@@ -562,14 +632,18 @@ async def test_fetch_and_populate_results_handles_failures(test_config, tmp_path
 @pytest.mark.asyncio
 async def test_fetch_and_populate_results_empty_checkpoint(test_config, tmp_path):
     """Test fetch_and_populate_results handles empty results gracefully."""
-    checkpoint = WidesearchCheckpoint(
-        results=[],
-        queries=["query1"],
-        query_results={},
-        resources=ResourcePool(),
+    from interaction_finder.checkpoint import SearchStageData
+
+    checkpoint = PipelineCheckpoint(
         topic="test topic",
-        keyphrases=["keyword"],
-        rounds_completed=1,
+        resources=ResourcePool(),
+        search=SearchStageData(
+            results=[],
+            queries=["query1"],
+            query_results={},
+            keyphrases=["keyword"],
+            rounds_completed=1,
+        ),
     )
 
     test_config.output.cache = str(tmp_path / "cache")

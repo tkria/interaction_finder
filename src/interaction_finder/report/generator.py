@@ -9,7 +9,8 @@ from typing import Any
 import sys
 from typing import Literal
 
-from interaction_finder.extraction.models import ExtractionResult, PairJudgment
+from interaction_finder.checkpoint import PipelineCheckpoint
+from interaction_finder.extraction.models import PairJudgment
 from interaction_finder.report.data_prep import prepare_report_data
 from interaction_finder.report.template import render_template
 
@@ -24,7 +25,13 @@ def _normalize_filters(filter_spec: dict[str, str]) -> dict[str, Any]:
 
         if key_lower == "accepted":
             val = value.lower()
-            mapping = {"yes": "yes", "true": "yes", "no": "no", "false": "no", "any": "any"}
+            mapping = {
+                "yes": "yes",
+                "true": "yes",
+                "no": "no",
+                "false": "no",
+                "any": "any",
+            }
             if val not in mapping:
                 raise ValueError(
                     "Invalid accepted filter value. Use 'yes', 'no', or 'any'."
@@ -33,7 +40,9 @@ def _normalize_filters(filter_spec: dict[str, str]) -> dict[str, Any]:
         elif key_lower == "confidence":
             normalized["confidence"] = _parse_confidence_filter(value)
         else:
-            raise ValueError(f"Unsupported filter '{key}'. Supported: accepted, confidence.")
+            raise ValueError(
+                f"Unsupported filter '{key}'. Supported: accepted, confidence."
+            )
     return normalized
 
 
@@ -84,7 +93,7 @@ def _apply_filters(
 
 
 def generate_report(
-    result: ExtractionResult,
+    checkpoint: PipelineCheckpoint,
     output: Path | str,
     title: str | None = None,
     format: Literal["html", "plain"] | str = "html",
@@ -93,7 +102,7 @@ def generate_report(
     """Generate report artifacts from extraction results.
 
     Args:
-        result: ExtractionResult from pipeline
+        checkpoint: PipelineCheckpoint containing extraction results
         output: Path or "-" (stdout) destination
         title: Report title (default: auto-generated from topic)
         format: "html" for interactive report, "plain" for tuples, or "plain:kind"
@@ -104,11 +113,14 @@ def generate_report(
         Path to generated report file (Path("-") when writing to stdout)
 
     Raises:
-        ValueError: If result is empty or invalid
+        ValueError: If checkpoint is empty or invalid
         OSError: If output path cannot be written
     """
-    if not result.judgments:
-        raise ValueError("ExtractionResult contains no judgments")
+    if not checkpoint.extraction:
+        raise ValueError("Checkpoint does not contain extraction results")
+
+    if not checkpoint.extraction.judgments:
+        raise ValueError("Extraction results contain no judgments")
 
     normalized_format = format.lower()
     supported_formats = {"html", "plain"}
@@ -124,7 +136,9 @@ def generate_report(
 
     normalized_filters = _normalize_filters(filter_spec)
 
-    filtered_judgments = _apply_filters(result.judgments, normalized_filters)
+    filtered_judgments = _apply_filters(
+        checkpoint.extraction.judgments, normalized_filters
+    )
 
     if not filtered_judgments:
         raise ValueError("No judgments matched the provided filters")
@@ -172,13 +186,13 @@ def generate_report(
 
     # HTML generation path
     json_data, document_html = prepare_report_data(
-        result,
+        checkpoint,
         show_progress=not write_to_stdout,
         judgments_override=filtered_judgments,
     )
 
     if title is None:
-        topic = result.metadata.topic
+        topic = checkpoint.extraction.metadata.topic
         title = f"Extraction Report: {topic}"
 
     html = render_template(json_data, document_html, title=title)
