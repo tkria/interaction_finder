@@ -4,8 +4,8 @@ Fetcher package for web content retrieval and processing.
 Provides the same public API as the original fetcher.py but with improved internal structure.
 """
 
-# Import the main PageFetcher class
-from .page_fetcher import PageFetcher
+# Import the main PageFetcher class and FetchedDocument dataclass
+from .page_fetcher import PageFetcher, FetchedDocument
 
 # Import standalone utility functions for backward compatibility
 from .batch_operations import (
@@ -28,6 +28,7 @@ from .cache import URLCache
 # Export the public API
 __all__ = [
     "PageFetcher",
+    "FetchedDocument",
     "URLCache",
     "ChunkData",
     "convert_legacy_chunk_data",

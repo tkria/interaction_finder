@@ -17,6 +17,7 @@ class FetchedDocument:
     content_markdown: str
     source_type: Optional[str] = None  # "html" or "pdf"
     doi: Optional[str] = None
+    publication_date: Optional[str] = None  # YYYY-MM-DD format
 
 
 def _create_content_getter(content_type: str, single_fetcher: Callable):
@@ -192,17 +193,23 @@ class PageFetcher:
         documents = {}
         for url, markdown in zip(urls, markdown_results):
             if markdown and not isinstance(markdown, Exception):
-                # Fetch additional metadata
+                # Fetch metadata from cache (DOI and publication_date are cached during initial fetch)
                 source_type = await self.get_source_type(url)
                 doi = None
+                pub_date = None
+
                 if source_type == "html":
                     doi = await self.get_doi(url, retry=False)
+                    if doi:
+                        # Publication date should be cached from initial fetch
+                        pub_date = await self.get_publication_date(url, doi=doi)
 
                 documents[url] = FetchedDocument(
                     url=url,
                     content_markdown=markdown,
                     source_type=source_type,
                     doi=doi,
+                    publication_date=pub_date,
                 )
             else:
                 documents[url] = None
@@ -227,6 +234,46 @@ class PageFetcher:
             # Try again after fetching
             if await self.cache.has_path(url, "doi"):
                 return await self.cache.get_content(url, "doi")
+
+        return None
+
+    async def get_publication_date(
+        self, url: str, doi: Optional[str] = None
+    ) -> Optional[str]:
+        """
+        Get publication date for URL (YYYY-MM-DD format).
+
+        Publication dates are cached during initial HTML fetch when DOI is extracted.
+        If not cached, will fetch from OpenAlex using the DOI.
+
+        Parameters:
+            url: URL to get publication date for
+            doi: Optional DOI to use for lookup (avoids re-fetching)
+
+        Returns:
+            Publication date string or None if not available
+        """
+        # Check cache first
+        if await self.cache.has_path(url, "publication_date"):
+            return await self.cache.get_content(url, "publication_date")
+
+        # Cache miss - try to fetch from OpenAlex if we have a DOI
+        if doi is None:
+            doi = await self.get_doi(url, retry=False)
+
+        if doi:
+            try:
+                from .doi_metadata import fetch_doi_metadata
+
+                metadata = await fetch_doi_metadata(doi)
+                if metadata and metadata.get("publication_date"):
+                    pub_date = metadata["publication_date"]
+                    # Cache for future use
+                    await self.cache.store_content(url, pub_date, "publication_date")
+                    return pub_date
+            except Exception:
+                # Don't fail if publication date lookup fails
+                pass
 
         return None
 

@@ -23,6 +23,11 @@ CONTENT_TYPE_CONFIG = {
         "deserialize": lambda x: json.loads(x),
     },
     "doi": {"extension": "doi", "serialize": str, "deserialize": lambda x: x.strip()},
+    "publication_date": {
+        "extension": "date",
+        "serialize": str,
+        "deserialize": lambda x: x.strip(),
+    },
 }
 
 

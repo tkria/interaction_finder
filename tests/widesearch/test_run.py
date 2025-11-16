@@ -460,8 +460,25 @@ async def test_fetch_and_populate_results_basic(test_config, tmp_path):
     # Configure test config with temp cache dir
     test_config.output.cache = str(tmp_path / "cache")
 
-    # Mock PageFetcher.get_markdown to return mock content
-    mock_content = ["# Paper 1 content", "# Paper 2 content"]
+    # Mock PageFetcher methods
+    from interaction_finder.fetcher import FetchedDocument
+
+    mock_documents = {
+        "https://example.com/1": FetchedDocument(
+            url="https://example.com/1",
+            content_markdown="# Paper 1 content",
+            source_type="html",
+            doi="10.1234/paper1",
+            publication_date="2023-06-15",
+        ),
+        "https://example.com/2": FetchedDocument(
+            url="https://example.com/2",
+            content_markdown="# Paper 2 content",
+            source_type="html",
+            doi=None,
+            publication_date=None,
+        ),
+    }
     # Mock PageFetcher.get_chunks to return mock chunks
     mock_chunks = [
         ["# Paper 1 content"],  # Single chunk for paper 1
@@ -470,15 +487,15 @@ async def test_fetch_and_populate_results_basic(test_config, tmp_path):
 
     with (
         patch(
-            "interaction_finder.widesearch.run.PageFetcher.get_markdown",
+            "interaction_finder.widesearch.run.PageFetcher.fetch_documents",
             new_callable=AsyncMock,
-        ) as mock_get_markdown,
+        ) as mock_fetch_documents,
         patch(
             "interaction_finder.widesearch.run.PageFetcher.get_chunks",
             new_callable=AsyncMock,
         ) as mock_get_chunks,
     ):
-        mock_get_markdown.return_value = mock_content
+        mock_fetch_documents.return_value = mock_documents
         mock_get_chunks.return_value = mock_chunks
 
         # Run fetch_and_populate_results
@@ -499,6 +516,8 @@ async def test_fetch_and_populate_results_basic(test_config, tmp_path):
         assert resource1.text == "# Paper 1 content"
         assert len(resource1.chunks) == 1
         assert resource1.chunks[0] == (0, len("# Paper 1 content"))
+        assert resource1.doi == "10.1234/paper1"
+        assert resource1.publication_date == "2023-06-15"
 
         # Verify Paper 2: two chunks
         resource2 = checkpoint.resources.get("https://example.com/2")
@@ -510,6 +529,8 @@ async def test_fetch_and_populate_results_basic(test_config, tmp_path):
         assert resource2.chunks[0][0] == 0
         # Second chunk should be " content" found after first chunk
         assert resource2.chunks[1][0] > 0
+        assert resource2.doi is None
+        assert resource2.publication_date is None
 
 
 @pytest.mark.asyncio
@@ -545,17 +566,29 @@ async def test_fetch_and_populate_results_with_existing_content(test_config, tmp
     test_config.output.cache = str(tmp_path / "cache")
 
     # Mock PageFetcher to return content only for URL 2
+    from interaction_finder.fetcher import FetchedDocument
+
+    mock_documents = {
+        "https://example.com/2": FetchedDocument(
+            url="https://example.com/2",
+            content_markdown="# Paper 2 content",
+            source_type="html",
+            doi=None,
+            publication_date=None,
+        ),
+    }
+
     with (
         patch(
-            "interaction_finder.widesearch.run.PageFetcher.get_markdown",
+            "interaction_finder.widesearch.run.PageFetcher.fetch_documents",
             new_callable=AsyncMock,
-        ) as mock_get_markdown,
+        ) as mock_fetch_documents,
         patch(
             "interaction_finder.widesearch.run.PageFetcher.get_chunks",
             new_callable=AsyncMock,
         ) as mock_get_chunks,
     ):
-        mock_get_markdown.return_value = ["# Paper 2 content"]
+        mock_fetch_documents.return_value = mock_documents
         mock_get_chunks.return_value = [["# Paper 2 content"]]
 
         stats = await fetch_and_populate_results(checkpoint, test_config)
@@ -598,17 +631,30 @@ async def test_fetch_and_populate_results_handles_failures(test_config, tmp_path
     test_config.output.cache = str(tmp_path / "cache")
 
     # Mock PageFetcher to return content for first URL, None for second (failed)
+    from interaction_finder.fetcher import FetchedDocument
+
+    mock_documents = {
+        "https://example.com/1": FetchedDocument(
+            url="https://example.com/1",
+            content_markdown="# Paper 1 content",
+            source_type="html",
+            doi=None,
+            publication_date=None,
+        ),
+        # URL 2 has no entry, simulating a fetch failure
+    }
+
     with (
         patch(
-            "interaction_finder.widesearch.run.PageFetcher.get_markdown",
+            "interaction_finder.widesearch.run.PageFetcher.fetch_documents",
             new_callable=AsyncMock,
-        ) as mock_get_markdown,
+        ) as mock_fetch_documents,
         patch(
             "interaction_finder.widesearch.run.PageFetcher.get_chunks",
             new_callable=AsyncMock,
         ) as mock_get_chunks,
     ):
-        mock_get_markdown.return_value = ["# Paper 1 content", None]
+        mock_fetch_documents.return_value = mock_documents
         mock_get_chunks.return_value = [["# Paper 1 content"], []]
 
         stats = await fetch_and_populate_results(checkpoint, test_config)

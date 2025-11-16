@@ -207,6 +207,21 @@ class BatchOperations:
                 )
             if fetch_result["doi"]:
                 await self.cache.set_content(url, "doi", fetch_result["doi"], final_url)
+                # Fetch and cache publication date from OpenAlex
+                try:
+                    from .doi_metadata import fetch_doi_metadata
+
+                    metadata = await fetch_doi_metadata(fetch_result["doi"])
+                    if metadata and metadata.get("publication_date"):
+                        await self.cache.set_content(
+                            url,
+                            "publication_date",
+                            metadata["publication_date"],
+                            final_url,
+                        )
+                except Exception:
+                    # Don't fail the entire fetch if publication date lookup fails
+                    pass
 
             # Clear any previous failure markers on success
             await self.cache.clear_failed(url)

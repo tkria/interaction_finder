@@ -169,7 +169,7 @@ async def run_widesearch_with_checkpoint(
     resource_pool = input_checkpoint.resources
 
     # Track starting URLs for delta calculation
-    initial_urls = {rid.url for rid in resource_pool.resource_map.keys()}
+    {rid.url for rid in resource_pool.resource_map.keys()}
 
     # Load config or use defaults
     if config is None:
@@ -276,15 +276,27 @@ async def fetch_and_populate_results(
 
     # Fetch and populate
     urls = [url for url, _, _ in urls_to_fetch]
-    contents = await fetcher.get_markdown(urls, progress=False, fail_fast=False)
+    # Fetch documents with DOI metadata
+    documents = await fetcher.fetch_documents(urls, progress=False, fail_fast=False)
+    # Fetch chunks for all URLs in batch
     chunk_lists = await fetcher.get_chunks(urls, progress=False, fail_fast=False)
 
     fetched = 0
-    for (url, title, rid), content, chunks in zip(urls_to_fetch, contents, chunk_lists):
-        if content:
+    for (url, title, rid), chunks in zip(urls_to_fetch, chunk_lists):
+        doc = documents.get(url)
+        if doc:
             # Compute chunk spans from full text and chunk texts
-            chunk_spans = compute_chunk_spans(content, chunks) if chunks else None
-            checkpoint.resources.add_content(rid, title, content, chunks=chunk_spans)
+            chunk_spans = (
+                compute_chunk_spans(doc.content_markdown, chunks) if chunks else None
+            )
+            checkpoint.resources.add_content(
+                rid,
+                title,
+                doc.content_markdown,
+                chunks=chunk_spans,
+                doi=doc.doi,
+                publication_date=doc.publication_date,
+            )
             fetched += 1
         else:
             logfire.warning(f"Failed to fetch content for {url}")

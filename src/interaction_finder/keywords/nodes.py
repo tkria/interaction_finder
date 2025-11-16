@@ -292,26 +292,34 @@ class FetchDocumentsNode(BaseNode[State, Deps, BridgingTermsOut]):
                 return ExtractKeywordsNode()
             # Fetch only new URLs
             urls = [url for url, _ in urls_to_fetch]
-            contents = await ctx.deps.fetcher.get_markdown(
+            # Fetch documents with DOI metadata
+            documents = await ctx.deps.fetcher.fetch_documents(
                 urls, progress=False, fail_fast=False, retry=False
             )
+            # Fetch chunks for all URLs in batch
             chunk_lists = await ctx.deps.fetcher.get_chunks(
                 urls, progress=False, fail_fast=False, retry=False
             )
             # Add content to resource pool and track failures
             fetched_count = 0
             failed_count = 0
-            for (url, title), content, chunks in zip(
-                urls_to_fetch, contents, chunk_lists
-            ):
-                if content:
+            for (url, title), chunks in zip(urls_to_fetch, chunk_lists):
+                doc = documents.get(url)
+                if doc:
                     rid = resource_ids_map[url]
                     # Compute chunk spans from full text and chunk texts
                     chunk_spans = (
-                        compute_chunk_spans(content, chunks) if chunks else None
+                        compute_chunk_spans(doc.content_markdown, chunks)
+                        if chunks
+                        else None
                     )
                     ctx.deps.resource_pool.add_content(
-                        rid, title, content, chunks=chunk_spans
+                        rid,
+                        title,
+                        doc.content_markdown,
+                        chunks=chunk_spans,
+                        doi=doc.doi,
+                        publication_date=doc.publication_date,
                     )
                     fetched_count += 1
                 else:

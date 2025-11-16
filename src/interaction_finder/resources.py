@@ -9,12 +9,10 @@ supporting quotes.
 import hashlib
 from urllib.parse import urlparse, urlunparse
 import re
-import bisect
-import unicodedata
 from dataclasses import dataclass
 from enum import Enum
 from difflib import SequenceMatcher
-from typing import List, Optional, Tuple, Union, TYPE_CHECKING
+from typing import List, Optional, Tuple, TYPE_CHECKING
 from pydantic import (
     BaseModel,
     Field,
@@ -22,7 +20,6 @@ from pydantic import (
     field_validator,
     ValidationInfo,
     model_serializer,
-    model_validator,
 )
 from pydantic_core import core_schema
 from rapidfuzz import fuzz
@@ -820,6 +817,12 @@ class Resource(BaseModel):
         default_factory=list,
         description="List of (start, end) character positions for document chunks",
     )
+    doi: Optional[str] = Field(
+        default=None, description="Digital Object Identifier (DOI) if available"
+    )
+    publication_date: Optional[str] = Field(
+        default=None, description="Publication date (YYYY-MM-DD) if available"
+    )
 
     # Private attribute for position mapping with normalization
     _position_mapper: Optional[NormalizedTextMapper] = PrivateAttr(default=None)
@@ -830,6 +833,8 @@ class Resource(BaseModel):
         title: str,
         text: str,
         chunks: Optional[List[Tuple[int, int]]] = None,
+        doi: Optional[str] = None,
+        publication_date: Optional[str] = None,
         **data,
     ):
         """
@@ -841,6 +846,8 @@ class Resource(BaseModel):
             text: Full document text content
             chunks: Optional list of (start, end) positions for document chunks.
                    Defaults to single chunk spanning entire document.
+            doi: Optional Digital Object Identifier
+            publication_date: Optional publication date (YYYY-MM-DD)
         """
         # Create normalized text mapper (handles Greek letters automatically)
         mapper = NormalizedTextMapper.from_text(text)
@@ -855,6 +862,8 @@ class Resource(BaseModel):
             text=text,
             normalized_text=mapper.source,  # Get normalized text from mapper
             chunks=chunks,
+            doi=doi,
+            publication_date=publication_date,
             **data,
         )
         # Store the mapper
@@ -995,6 +1004,8 @@ def _validate_resource_pool(obj):
                     title=entry["title"],
                     text=entry["text"],
                     chunks=entry.get("chunks", []),
+                    doi=entry.get("doi"),
+                    publication_date=entry.get("publication_date"),
                 )
                 pool.resource_map[resource_id] = resource
             else:
@@ -1061,6 +1072,8 @@ class ResourcePool(BaseModel):
         title: str,
         document_text: str,
         chunks: Optional[List[Tuple[int, int]]] = None,
+        doi: Optional[str] = None,
+        publication_date: Optional[str] = None,
     ) -> Resource:
         """
         Add content to a previously registered resource.
@@ -1070,6 +1083,8 @@ class ResourcePool(BaseModel):
             title: Human-readable document title
             document_text: Full text content of the document
             chunks: Optional list of (start, end) positions for document chunks
+            doi: Optional Digital Object Identifier
+            publication_date: Optional publication date (YYYY-MM-DD)
 
         Returns:
             Complete Resource with content
@@ -1086,7 +1101,12 @@ class ResourcePool(BaseModel):
 
         # Create Resource with content
         resource = Resource(
-            id=resource_id, title=title, text=document_text, chunks=chunks
+            id=resource_id,
+            title=title,
+            text=document_text,
+            chunks=chunks,
+            doi=doi,
+            publication_date=publication_date,
         )
         self.resource_map[resource_id] = resource
 
@@ -1098,6 +1118,8 @@ class ResourcePool(BaseModel):
         title: str,
         document_text: str,
         chunks: Optional[List[Tuple[int, int]]] = None,
+        doi: Optional[str] = None,
+        publication_date: Optional[str] = None,
     ) -> Resource:
         """
         Add a complete resource (register ID + content) in one step.
@@ -1107,6 +1129,8 @@ class ResourcePool(BaseModel):
             title: Human-readable document title
             document_text: Full text content of the document
             chunks: Optional list of (start, end) positions for document chunks
+            doi: Optional Digital Object Identifier
+            publication_date: Optional publication date (YYYY-MM-DD)
 
         Returns:
             Complete Resource
@@ -1115,7 +1139,9 @@ class ResourcePool(BaseModel):
             ValueError: If URL already exists in pool
         """
         resource_id = self.register(url)
-        return self.add_content(resource_id, title, document_text, chunks)
+        return self.add_content(
+            resource_id, title, document_text, chunks, doi, publication_date
+        )
 
     def _find_resource_id(self, key) -> Optional[ResourceId]:
         """
@@ -1224,6 +1250,12 @@ class ResourcePool(BaseModel):
                     entry["title"] = resource.title
                     entry["text"] = resource.text
                     entry["chunks"] = resource.chunks
+                    # Only include DOI if present
+                    if resource.doi is not None:
+                        entry["doi"] = resource.doi
+                    # Only include publication_date if present
+                    if resource.publication_date is not None:
+                        entry["publication_date"] = resource.publication_date
 
                 # Only include id if it doesn't match expected pattern
                 # Expected pattern: "{counter}_{hash}" where counter = idx
