@@ -20,7 +20,9 @@ class MarkdownToHTMLRenderer:
         self.original_text = text
         self.html: str = ""
         self._position_mapper: TextPositionMapper | None = None
-        self._md = MarkdownIt("commonmark", {"html": False, "typographer": False})
+        self._md = MarkdownIt(
+            "commonmark", {"html": False, "typographer": False}
+        ).enable("table")
         self._line_offsets = self._compute_line_offsets(text)
         self._builder = HTMLBuilder(text, self._line_offsets)
 
@@ -119,6 +121,8 @@ class HTMLBuilder:
         self.position_offsets: list[tuple[int, int]] = []
         self._last_orig_pos = 0
         self._last_delta: int | None = None
+        # Track cursors by line to handle table cells on the same row
+        self._line_cursors: dict[tuple[int, int], InlineCursor] = {}
 
     def reset(self) -> None:
         self.html_parts = []
@@ -126,6 +130,7 @@ class HTMLBuilder:
         self.position_offsets = []
         self._last_orig_pos = 0
         self._last_delta = None
+        self._line_cursors = {}
 
     @property
     def html(self) -> str:
@@ -278,8 +283,18 @@ class HTMLBuilder:
         start_line, end_line = token.map
         start = self.line_offsets[start_line]
         end = self.line_offsets[end_line]
-        block_text = self.text[start:end]
-        cursor = InlineCursor(block_text, start)
+
+        # Reuse cursor for the same line range (important for table cells)
+        # This ensures that when multiple cells share the same row, each cell
+        # continues from where the previous cell left off
+        line_key = (start_line, end_line)
+        if line_key in self._line_cursors:
+            cursor = self._line_cursors[line_key]
+        else:
+            block_text = self.text[start:end]
+            cursor = InlineCursor(block_text, start)
+            self._line_cursors[line_key] = cursor
+
         for child in token.children or []:
             handler = getattr(self, f"_inline_{child.type}", self._inline_unknown)
             handler(child, cursor)

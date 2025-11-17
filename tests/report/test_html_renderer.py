@@ -362,3 +362,63 @@ Line 3"""
         # Should have both tags (order may vary)
         assert "<strong>" in html or "<em>" in html
         assert "bold and italic" in html
+
+
+class TestTableRendering:
+    """Test markdown table rendering."""
+
+    def test_simple_table(self):
+        """Test basic table rendering."""
+        text = "A | B\n---|---\nC | D"
+        renderer = MarkdownToHTMLRenderer(text)
+        renderer.render()
+        
+        assert "<table>" in renderer.html
+        assert "<thead>" in renderer.html
+        assert "<tbody>" in renderer.html
+        assert "<th>A</th>" in renderer.html
+        assert "<td>C</td>" in renderer.html
+
+    def test_table_with_repeated_content(self):
+        """Test table cells with repeated content on same row."""
+        text = "A | B | C\n---|---|---\nx | x | x"
+        renderer = MarkdownToHTMLRenderer(text)
+        renderer.render()
+        
+        assert renderer.html.count(">x<") == 3
+
+    def test_table_with_special_characters(self):
+        """Test table cells with HTML special characters."""
+        text = "Comparison | Value\n---|---\nless | < 5\ngreater | > 10"
+        renderer = MarkdownToHTMLRenderer(text)
+        renderer.render()
+        
+        assert "&lt; 5" in renderer.html
+        assert "&gt; 10" in renderer.html
+
+    def test_table_position_mapping(self):
+        """Test position mapping works correctly for tables."""
+        text = "Group | Value\n---|---\nA | 100\nB | 200"
+        renderer = MarkdownToHTMLRenderer(text)
+        mapper = renderer.render()
+        
+        # Find content in original and verify it maps correctly
+        pos_100 = text.index("100")
+        html_pos = mapper.targetpos(pos_100)
+        assert "100" in renderer.html[html_pos:html_pos+10]
+
+    def test_complex_table(self):
+        """Test complex table with multiple rows and columns."""
+        text = """Group | Age | MPAP | CO
+---|---|---|---
+Child | 8 ± 6 | 55 ± 18 | 3.3 ± 1.6
+Adult | 52 ± 19 | 50 ± 14 | 4.6 ± 1.7
+P value | < .0001 | < .0001 | < .0001"""
+        
+        renderer = MarkdownToHTMLRenderer(text)
+        renderer.render()
+        
+        assert "<table>" in renderer.html
+        assert "Woods Units" not in renderer.html  # Not in this test
+        assert renderer.html.count(".0001") == 3
+        assert "±" in renderer.html
