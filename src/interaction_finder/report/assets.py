@@ -54,6 +54,11 @@ REPORT_CSS = """
 
     /* Connection/decoration colors */
     --connection-stroke: var(--pico-color-azure-600);
+
+    /* Document badge colors */
+    --doc-badge-bg: var(--pico-color-azure-600);
+    --doc-badge-hover-bg: var(--pico-color-azure-500);
+    --doc-badge-text: var(--pico-color-slate-50);
 }
 
 /* Dark theme colors (prefers-color-scheme: dark without explicit theme) */
@@ -97,6 +102,11 @@ REPORT_CSS = """
 
         /* Connection/decoration colors (flipped: 600->400) */
         --connection-stroke: var(--pico-color-azure-400);
+
+        /* Document badge colors (flipped: 600->400, 500->500, 50->950) */
+        --doc-badge-bg: var(--pico-color-azure-400);
+        --doc-badge-hover-bg: var(--pico-color-azure-500);
+        --doc-badge-text: var(--pico-color-slate-950);
     }
 }
 
@@ -140,6 +150,11 @@ REPORT_CSS = """
 
     /* Connection/decoration colors */
     --connection-stroke: var(--pico-color-azure-400);
+
+    /* Document badge colors */
+    --doc-badge-bg: var(--pico-color-azure-400);
+    --doc-badge-hover-bg: var(--pico-color-azure-500);
+    --doc-badge-text: var(--pico-color-slate-950);
 }
 
 body {
@@ -434,6 +449,16 @@ header {
     font-size: 1rem;
     flex: 1;
     margin-right: 1rem;
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+}
+
+.document-date {
+    font-weight: 300;
+    font-size: 0.85rem;
+    color: var(--pico-muted-color);
+    opacity: 0.7;
 }
 
 .document-stats {
@@ -458,23 +483,41 @@ header {
     display: block;
 }
 
+.document-links {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 1rem;
+    margin-bottom: 0.75rem;
+}
+
 .document-url-badge {
     display: inline-flex;
     align-items: center;
     gap: 0.35rem;
     padding: 0.2rem 0.75rem;
-    margin-bottom: 0.75rem;
     border-radius: 999px;
-    background: var(--pico-color-azure-600);
-    color: var(--pico-color-slate-50);
+    background: var(--doc-badge-bg);
+    color: var(--doc-badge-text);
     font-weight: 600;
     font-size: 0.85rem;
     text-decoration: none;
 }
 
 .document-url-badge:hover {
-    background: var(--pico-color-azure-700);
-    color: var(--pico-color-slate-25);
+    background: var(--doc-badge-hover-bg);
+    color: var(--doc-badge-text);
+}
+
+.document-doi-link {
+    font-size: 0.85rem;
+    color: var(--pico-muted-color);
+    text-decoration: none;
+}
+
+.document-doi-link:hover {
+    color: var(--pico-primary);
+    text-decoration: underline;
 }
 
 .document-text {
@@ -970,11 +1013,16 @@ function renderContent() {
         b.quotes.length - a.quotes.length
     );
 
-    content.innerHTML = sortedAssessments.map((assess, idx) => `
+    content.innerHTML = sortedAssessments.map((assess, idx) => {
+        const doc = state.data.documents[assess.resource_id];
+        const dateSpan = doc?.publication_date ? `<span class="document-date">${escapeHtml(doc.publication_date)}</span>` : '';
+        return `
         <div class="document-accordion">
             <div class="document-header ${state.openDocumentIdx === idx ? 'open' : ''}"
                  onclick="toggleDocument(${idx})">
-                <div class="document-title">${escapeHtml(assess.title)}</div>
+                <div class="document-title">
+                    <span>${escapeHtml(assess.title)}</span>${dateSpan}
+                </div>
                 <div class="document-stats">
                     <span>${assess.quotes.length} quotes</span>
                     <span class="confidence-badge confidence-${assess.confidence}">${assess.confidence}</span>
@@ -985,7 +1033,8 @@ function renderContent() {
                 ${state.openDocumentIdx === idx ? renderDocument(assess) : ''}
             </div>
         </div>
-    `).join('');
+    `;
+    }).join('');
 }
 
 // Toggle document accordion
@@ -1219,11 +1268,25 @@ function renderDocument(assess) {
     tempContainer.appendChild(clone);
     const html = tempContainer.innerHTML;
 
+    // Build document links (centered container with URL badge and DOI link)
     const urlBadge = doc.url ? `
         <a class="document-url-badge" href="${escapeHtml(doc.url)}" target="_blank" rel="noreferrer noopener">
             <span aria-hidden="true">&#128279;</span>
             <span>View original</span>
         </a>
+    ` : '';
+
+    const doiLink = doc.doi ? `
+        <a class="document-doi-link" href="https://doi.org/${escapeHtml(doc.doi)}" target="_blank" rel="noreferrer noopener">
+            DOI: ${escapeHtml(doc.doi)}
+        </a>
+    ` : '';
+
+    const links = (urlBadge || doiLink) ? `
+        <div class="document-links">
+            ${urlBadge}
+            ${doiLink}
+        </div>
     ` : '';
 
     // After rendering, update the highlighting classes based on current pair
@@ -1233,7 +1296,7 @@ function renderDocument(assess) {
         highlightQuotesForAssessment(assess);
     }, 0);
 
-    return `${urlBadge}${html}`;
+    return `${links}${html}`;
 }
 
 // Render reasoning sidebar

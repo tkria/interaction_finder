@@ -55,6 +55,8 @@ def _render_document_worker(
                 "id": resource.id.id,
                 "url": resource.id.url,
                 "title": resource.title or "Untitled",
+                "publication_date": resource.publication_date,
+                "doi": resource.doi,
                 "quote_map": {
                     quote_id: {
                         "span_id": quote_meta.span_id,
