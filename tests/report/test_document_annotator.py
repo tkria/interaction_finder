@@ -227,9 +227,15 @@ class TestDocumentAnnotator:
         result = annotator.annotate(0, quotes, entities)
 
         html = result.html
+        # Check that entities are correctly highlighted with abbreviations
         assert '<abbr title="Pulmonary arterial hypertension">IPAH</abbr>' in html
-        assert 'IPAH</abbr></span></span><span class="quote-span' in html
-        assert '</abbr></span><span class="quote-span' not in html
+
+        # Check that overlapping quotes share a single span with both quote IDs
+        # New implementation: uses a single span with multiple quote IDs in classes
+        assert 'class="quote-span doc-0-quote-0 doc-0-quote-1"' in html
+
+        # Check that the second quote span (for the non-overlapping part) exists
+        assert 'id="doc-0-quote-0" class="quote-span doc-0-quote-0"' in html
 
     def test_entity_metadata(self):
         """Test that entity metadata is correctly populated."""

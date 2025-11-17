@@ -40,6 +40,20 @@ def _render_pair_cards(pairs: list[dict[str, Any]]) -> str:
         # Build doc indices list (space-separated)
         doc_indices = " ".join(str(assess["doc_idx"]) for assess in pair["assessments"])
 
+        # Build assessments data (minimal: doc_idx, confidence, and quote_count for accordion display)
+        import json
+
+        assessments_data = json.dumps(
+            [
+                {
+                    "doc_idx": assess["doc_idx"],
+                    "confidence": assess["confidence"],
+                    "quote_count": len(assess["quotes"]),
+                }
+                for assess in pair["assessments"]
+            ]
+        )
+
         # Build card classes
         card_classes = ["pair-card"]
         if not pair["accepted"]:
@@ -83,7 +97,8 @@ def _render_pair_cards(pairs: list[dict[str, Any]]) -> str:
              data-e2a="{_escape_html(entity2_aliases_data)}"
              data-rel="{_escape_html(pair["relationship"])}"
              data-accepted="{str(pair["accepted"]).lower()}"
-             data-docs="{doc_indices}">
+             data-docs="{doc_indices}"
+             data-assessments='{assessments_data}'>
             <div class="pair-entities">
                 <span class="entity-name left"
                       title="{_escape_html(entity1_aliases_display)}">

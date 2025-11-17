@@ -1156,8 +1156,10 @@ class DocumentAnnotator:
                     region_pair_indices.update(quote_to_pairs.get(quote_id, set()))
                 # Format as space-separated list of numeric indices
                 pairs_attr = " ".join(str(idx) for idx in sorted(region_pair_indices))
+                # Use first quote_id as the HTML id attribute for navigation
+                primary_quote_id = sorted(quote_ids)[0] if quote_ids else ""
                 html_parts.append(
-                    f'<span class="quote-span {quote_classes}" data-pairs="{pairs_attr}">'
+                    f'<span id="{primary_quote_id}" class="quote-span {quote_classes}" data-pairs="{pairs_attr}">'
                 )
 
                 # Add content with entity spans

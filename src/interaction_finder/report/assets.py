@@ -530,7 +530,8 @@ header {
 }
 
 /* Entity highlights in document */
-.entity-highlight {
+.entity-highlight,
+.entity-span {
     padding: 2px 4px;
     border-radius: 3px;
     font-weight: 600;
@@ -540,11 +541,13 @@ header {
 
 /* Entity position-specific colors (entity1 vs entity2 in current pair) */
 /* Default (outside quotes): fainter backgrounds */
-.entity-highlight.entity1 {
+.entity-highlight.entity1,
+.entity-span[data-entity] {
     background: var(--entity1-bg-faint);
 }
 
-.entity-highlight.entity1:hover {
+.entity-highlight.entity1:hover,
+.entity-span[data-entity]:hover {
     background: var(--entity1-bg-hover);
 }
 
@@ -557,11 +560,13 @@ header {
 }
 
 /* Inside quote highlights: standard backgrounds */
-.quote-highlight .entity-highlight.entity1 {
+.quote-span .entity-highlight.entity1,
+.quote-span .entity-span.entity1 {
     background: var(--entity1-bg);
 }
 
-.quote-highlight .entity-highlight.entity2 {
+.quote-span .entity-highlight.entity2,
+.quote-span .entity-span.entity2 {
     background: var(--entity2-bg);
 }
 
@@ -1048,12 +1053,24 @@ function renderContent() {
         }
         const date = dateEl ? dateEl.textContent : '';
 
+        // Find assessment for this document to get confidence and quote count
+        const assessments = JSON.parse(pairCard.dataset.assessments || '[]');
+        const assessment = assessments.find(a => a.doc_idx === docIdx);
+        const confidence = assessment ? assessment.confidence : '';
+        const quoteCount = assessment ? assessment.quote_count : 0;
+        const confidenceBadge = confidence ?
+            `<span class="confidence-badge confidence-${escapeHtml(confidence)}">${escapeHtml(confidence)}</span>` : '';
+
         return `
         <div class="document-accordion">
             <div class="document-header ${state.openDocumentIdx === idx ? 'open' : ''}"
                  onclick="toggleDocument(${idx})">
                 <div class="document-title">
                     <span>${escapeHtml(title)}</span>${date ? `<span class="document-date">${escapeHtml(date)}</span>` : ''}
+                </div>
+                <div class="document-stats">
+                    <span>${quoteCount} quote${quoteCount !== 1 ? 's' : ''}</span>
+                    ${confidenceBadge}
                 </div>
             </div>
             <div class="document-content ${state.openDocumentIdx === idx ? 'open' : ''}"
