@@ -1031,12 +1031,21 @@ function renderContent() {
         const docTemplate = document.getElementById(`doc-template-${docIdx}`);
         if (!docTemplate) return '';
 
-        // Extract metadata from template
+        // Extract metadata from template (title and date are now in template)
         const tempDiv = document.createElement('div');
         tempDiv.appendChild(docTemplate.content.cloneNode(true));
-        const titleEl = tempDiv.querySelector('.document-title span');
+        const titleEl = tempDiv.querySelector('.document-title');
         const dateEl = tempDiv.querySelector('.document-date');
-        const title = titleEl ? titleEl.textContent : 'Untitled';
+
+        // Extract title text (everything except the date span)
+        let title = 'Untitled';
+        if (titleEl) {
+            // Clone and remove date span to get just the title text
+            const titleClone = titleEl.cloneNode(true);
+            const dateInTitle = titleClone.querySelector('.document-date');
+            if (dateInTitle) dateInTitle.remove();
+            title = titleClone.textContent.trim();
+        }
         const date = dateEl ? dateEl.textContent : '';
 
         return `
@@ -1171,11 +1180,14 @@ function renderDocument(docIdx, pairIdx) {
         return '<p>Document template not found</p>';
     }
 
-    // Clone the template content
+    // Clone the template content and extract just the document body
     const clone = template.content.cloneNode(true);
     const tempContainer = document.createElement('div');
     tempContainer.appendChild(clone);
-    const html = tempContainer.innerHTML;
+
+    // Get the document body (which contains the links and text with quotes/entities)
+    const docBody = tempContainer.querySelector('.document-body');
+    const html = docBody ? docBody.innerHTML : '<p>Document content not found</p>';
 
     // After rendering, update the highlighting classes
     setTimeout(() => {
@@ -1237,7 +1249,34 @@ function scrollToQuote(quoteId) {
     }
 }
 
-// Removed: selectPairAndDocument - no longer needed
+// Select pair and open specific document by doc_idx
+function selectPairAndDocument(pairIdx, docIdx) {
+    // Find pairIdx in filtered pairs
+    const filtered = getFilteredPairs();
+    const filteredIdx = Array.from(filtered).findIndex(card =>
+        parseInt(card.id.split('-')[1]) === pairIdx
+    );
+
+    if (filteredIdx === -1) {
+        console.warn(`Pair ${pairIdx} not in filtered list`);
+        return;
+    }
+
+    // Select the pair
+    state.selectedPairIdx = filteredIdx;
+
+    // Find which assessment index corresponds to this doc_idx
+    const pairCard = filtered[filteredIdx];
+    const docIndices = pairCard.dataset.docs.trim().split(' ').map(n => parseInt(n));
+    const assessIdx = docIndices.indexOf(docIdx);
+
+    // Open the document (or first if not found)
+    state.openDocumentIdx = assessIdx !== -1 ? assessIdx : 0;
+
+    updatePairListDisplay();
+    renderContent();
+    renderReasoning();
+}
 
 // Utility: escape HTML
 function escapeHtml(text) {

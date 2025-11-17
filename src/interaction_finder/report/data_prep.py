@@ -58,7 +58,12 @@ def prepare_report_data(
     checkpoint: PipelineCheckpoint,
     show_progress: bool = True,
     judgments_override: list | None = None,
-) -> tuple[list[dict[str, Any]], dict[int, str], dict[str, dict[str, str]]]:
+) -> tuple[
+    list[dict[str, Any]],
+    dict[int, str],
+    dict[str, dict[str, str]],
+    list[tuple[int, Any]],
+]:
     """Transform PipelineCheckpoint into report data structure.
 
     Args:
@@ -67,10 +72,11 @@ def prepare_report_data(
         judgments_override: Optional filtered judgments list
 
     Returns:
-        Tuple of (pairs, document_html_map, reasoning_templates)
+        Tuple of (pairs, document_html, reasoning_templates, indexed_docs)
         - pairs: List of pair data dicts with doc indices (not IDs)
-        - document_html_map: Mapping of doc_idx -> pre-rendered HTML string
+        - document_html: Mapping of doc_idx -> pre-rendered HTML string
         - reasoning_templates: Nested dict pair_idx -> template_type -> HTML
+        - indexed_docs: List of (doc_idx, resource) tuples
     """
     if not checkpoint.extraction:
         raise ValueError("Checkpoint does not contain extraction results")
@@ -326,4 +332,4 @@ def prepare_report_data(
     # Generate reasoning templates for all pairs
     reasoning_templates = render_all_reasoning_templates(pairs, doc_idx_map)
 
-    return pairs, document_html, reasoning_templates
+    return pairs, document_html, reasoning_templates, indexed_docs

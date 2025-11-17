@@ -1222,7 +1222,7 @@ class DocumentAnnotator:
         # Wrap document text in container with doc_idx and pair indices
         full_html = (
             f"{links_html}"
-            f'<div class="document-text" data-pairs="{pairs_attr}">'
+            f'<div id="doc-{doc_idx}" class="document-text" data-pairs="{pairs_attr}">'
             f"{annotated_html}"
             f"</div>"
         )

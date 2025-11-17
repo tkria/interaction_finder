@@ -153,8 +153,8 @@ def create_test_checkpoint(
 def test_pair_cards_have_minimal_attributes():
     """Verify pair cards use only minimal required data-attributes."""
     checkpoint = create_test_checkpoint(pairs=2, docs_per_pair=2)
-    pairs, html_map, templates = prepare_report_data(checkpoint)
-    html = render_template(pairs, html_map, templates, topic="test topic")
+    pairs, html_map, templates, indexed_docs = prepare_report_data(checkpoint)
+    html = render_template(pairs, html_map, templates, indexed_docs, topic="test topic")
 
     soup = BeautifulSoup(html, "html.parser")
 
@@ -185,8 +185,8 @@ def test_pair_cards_have_minimal_attributes():
 def test_no_json_embedded():
     """Verify zero JSON embedding - no window.REPORT_DATA assignment."""
     checkpoint = create_test_checkpoint()
-    pairs, html_map, templates = prepare_report_data(checkpoint)
-    html = render_template(pairs, html_map, templates, topic="test topic")
+    pairs, html_map, templates, indexed_docs = prepare_report_data(checkpoint)
+    html = render_template(pairs, html_map, templates, indexed_docs, topic="test topic")
 
     # Should NOT contain window.REPORT_DATA = {...} assignment
     # (Comments mentioning it are OK, but no actual data assignment)
@@ -231,8 +231,8 @@ def test_no_json_embedded():
 def test_numeric_ids_throughout():
     """Verify all IDs use numeric indices (pair-5, doc-3, doc-3-quote-0)."""
     checkpoint = create_test_checkpoint(pairs=3, docs_per_pair=2)
-    pairs, html_map, templates = prepare_report_data(checkpoint)
-    html = render_template(pairs, html_map, templates, topic="test topic")
+    pairs, html_map, templates, indexed_docs = prepare_report_data(checkpoint)
+    html = render_template(pairs, html_map, templates, indexed_docs, topic="test topic")
 
     soup = BeautifulSoup(html, "html.parser")
 
@@ -273,8 +273,8 @@ def test_numeric_ids_throughout():
 def test_space_separated_doc_list():
     """Verify data-docs uses space-separated numeric IDs."""
     checkpoint = create_test_checkpoint(pairs=2, docs_per_pair=3)
-    pairs, html_map, templates = prepare_report_data(checkpoint)
-    html = render_template(pairs, html_map, templates, topic="test topic")
+    pairs, html_map, templates, indexed_docs = prepare_report_data(checkpoint)
+    html = render_template(pairs, html_map, templates, indexed_docs, topic="test topic")
 
     soup = BeautifulSoup(html, "html.parser")
 
@@ -301,8 +301,8 @@ def test_space_separated_doc_list():
 def test_document_templates_exist():
     """Verify document HTML is wrapped in <template> tags."""
     checkpoint = create_test_checkpoint(pairs=1, docs_per_pair=2)
-    pairs, html_map, templates = prepare_report_data(checkpoint)
-    html = render_template(pairs, html_map, templates, topic="test topic")
+    pairs, html_map, templates, indexed_docs = prepare_report_data(checkpoint)
+    html = render_template(pairs, html_map, templates, indexed_docs, topic="test topic")
 
     soup = BeautifulSoup(html, "html.parser")
 
@@ -325,8 +325,8 @@ def test_document_templates_exist():
 def test_reasoning_templates_exist():
     """Verify reasoning panels are pre-rendered in <template> tags."""
     checkpoint = create_test_checkpoint(pairs=2, docs_per_pair=2)
-    pairs, html_map, templates = prepare_report_data(checkpoint)
-    html = render_template(pairs, html_map, templates, topic="test topic")
+    pairs, html_map, templates, indexed_docs = prepare_report_data(checkpoint)
+    html = render_template(pairs, html_map, templates, indexed_docs, topic="test topic")
 
     soup = BeautifulSoup(html, "html.parser")
 
@@ -350,8 +350,8 @@ def test_reasoning_templates_exist():
 def test_javascript_query_patterns():
     """Verify HTML structure enables expected JavaScript query patterns."""
     checkpoint = create_test_checkpoint(pairs=2, docs_per_pair=2)
-    pairs, html_map, templates = prepare_report_data(checkpoint)
-    html = render_template(pairs, html_map, templates, topic="test topic")
+    pairs, html_map, templates, indexed_docs = prepare_report_data(checkpoint)
+    html = render_template(pairs, html_map, templates, indexed_docs, topic="test topic")
 
     soup = BeautifulSoup(html, "html.parser")
 
@@ -377,8 +377,8 @@ def test_javascript_query_patterns():
 def test_entity_aliases_format():
     """Verify entity aliases use comma-separated format."""
     checkpoint = create_test_checkpoint()
-    pairs, html_map, templates = prepare_report_data(checkpoint)
-    html = render_template(pairs, html_map, templates, topic="test topic")
+    pairs, html_map, templates, indexed_docs = prepare_report_data(checkpoint)
+    html = render_template(pairs, html_map, templates, indexed_docs, topic="test topic")
 
     soup = BeautifulSoup(html, "html.parser")
 
@@ -405,8 +405,8 @@ def test_file_size_reduction():
     smaller files than embedding JSON data.
     """
     checkpoint = create_test_checkpoint(pairs=10, docs_per_pair=2)
-    pairs, html_map, templates = prepare_report_data(checkpoint)
-    html = render_template(pairs, html_map, templates, topic="test topic")
+    pairs, html_map, templates, indexed_docs = prepare_report_data(checkpoint)
+    html = render_template(pairs, html_map, templates, indexed_docs, topic="test topic")
 
     html_size = len(html.encode("utf-8"))
 
@@ -431,8 +431,8 @@ def test_file_size_reduction():
 def test_html_is_self_contained():
     """Verify HTML report is self-contained (CSS and JS embedded)."""
     checkpoint = create_test_checkpoint()
-    pairs, html_map, templates = prepare_report_data(checkpoint)
-    html = render_template(pairs, html_map, templates, topic="test topic")
+    pairs, html_map, templates, indexed_docs = prepare_report_data(checkpoint)
+    html = render_template(pairs, html_map, templates, indexed_docs, topic="test topic")
 
     # Should contain embedded CSS
     assert "<style>" in html
@@ -451,8 +451,8 @@ def test_html_is_self_contained():
 def test_display_content_matches_data_attributes():
     """Verify display content matches data-attributes (single source of truth)."""
     checkpoint = create_test_checkpoint()
-    pairs, html_map, templates = prepare_report_data(checkpoint)
-    html = render_template(pairs, html_map, templates, topic="test topic")
+    pairs, html_map, templates, indexed_docs = prepare_report_data(checkpoint)
+    html = render_template(pairs, html_map, templates, indexed_docs, topic="test topic")
 
     soup = BeautifulSoup(html, "html.parser")
 

@@ -205,6 +205,7 @@ def render_template(
     pairs: list[dict[str, Any]],
     document_html: dict[int, str],
     reasoning_templates: dict[str, dict[str, str]],
+    indexed_docs: list[tuple[int, Any]],
     topic: str,
     title: str | None = None,
 ) -> str:
@@ -214,6 +215,7 @@ def render_template(
         pairs: List of pair data dicts with doc indices
         document_html: Mapping of doc_idx -> pre-rendered HTML string
         reasoning_templates: Nested dict pair_idx -> template_type -> HTML
+        indexed_docs: List of (doc_idx, resource) tuples for metadata
         topic: Report topic for header
         title: Optional report title (defaults to "Extraction Report: {topic}")
 
@@ -230,14 +232,36 @@ def render_template(
     # Build pair cards HTML
     pair_cards_html = _render_pair_cards(pairs)
 
-    # Build document templates HTML
+    # Build doc_idx -> resource map for quick lookup
+    doc_resources = {idx: resource for idx, resource in indexed_docs}
+
+    # Build document templates HTML with metadata
     doc_templates_parts = []
     for doc_idx, doc_html in document_html.items():
-        # Wrap each document's HTML in a <template> tag with unique ID
-        # Use numeric doc indices
+        # Get resource metadata
+        resource = doc_resources.get(doc_idx)
+        if resource:
+            title_text = resource.title or "Untitled"
+            date_html = (
+                f'<span class="document-date">{_escape_html(resource.publication_date)}</span>'
+                if resource.publication_date
+                else ""
+            )
+        else:
+            title_text = "Untitled"
+            date_html = ""
+
+        # Wrap document HTML with metadata header
+        # The JavaScript will extract this metadata when cloning the template
+        # Note: doc_html already contains #doc-{doc_idx} on the .document-text element
+        template_content = f"""<div class="document-template-wrapper">
+                <div class="document-title">{_escape_html(title_text)}{date_html}</div>
+                <div class="document-body">{doc_html}</div>
+            </div>"""
+
         doc_templates_parts.append(
             f'        <template id="doc-template-{doc_idx}">\n'
-            f"            {doc_html}\n"
+            f"            {template_content}\n"
             f"        </template>"
         )
     document_templates_html = "\n".join(doc_templates_parts)

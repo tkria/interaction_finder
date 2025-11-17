@@ -230,15 +230,13 @@ class ReasoningTemplateRenderer:
         return f"""
     <div class="reasoning-panel">
         <div class="pair-header">
-            <div class="pair-header-entities">
-                <span>{_escape_html(pair["entity1"]["name"])}</span>
-                <span>{_escape_html(pair["entity2"]["name"])}</span>
-            </div>
-            <div class="pair-header-relation">{_escape_html(pair["relationship"])}</div>
+            <span class="pair-entity">{_escape_html(pair["entity1"]["name"])}</span>
+            <span class="pair-entity">{_escape_html(pair["entity2"]["name"])}</span>
+            <span class="pair-relation">{_escape_html(pair["relationship"])}</span>
         </div>
         <div class="reasoning-title">Overall Assessment</div>
         <div class="reasoning-content">
-            <p><strong>Confidence:</strong> <span class="confidence-badge confidence-{_escape_html(pair["confidence"])}">{_escape_html(pair["confidence"])}</span></p>
+            <strong>Confidence:</strong> <span class="confidence-badge confidence-{_escape_html(pair["confidence"])}">{_escape_html(pair["confidence"])}</span>
             <p>{highlighted_reasoning}</p>
         </div>
         <div class="entity-details-section">
@@ -272,10 +270,11 @@ class ReasoningTemplateRenderer:
         """
         pair = self.pair
 
-        # Get doc_idx from resource_id
-        doc_idx = self.doc_idx_map.get(assess["resource_id"])
+        # Get doc_idx (should already be in assessment dict)
+        doc_idx = assess.get("doc_idx")
         if doc_idx is None:
-            doc_idx = 0  # Fallback
+            # Fallback: look up via resource_id
+            doc_idx = self.doc_idx_map.get(assess["resource_id"], 0)
 
         # Highlight entities in assessment reasoning
         highlighted_reasoning = self.highlighter.highlight(assess["reasoning"])
@@ -284,24 +283,20 @@ class ReasoningTemplateRenderer:
         quote_nav_html = self._render_quote_navigation(assess["quotes"], doc_idx)
 
         # Render other pairs navigation
-        other_pairs_html = self._render_other_pairs_navigation(
-            assess["resource_id"], all_pairs
-        )
+        other_pairs_html = self._render_other_pairs_navigation(doc_idx, all_pairs)
 
         return f"""
     <div class="reasoning-panel">
         <div class="pair-header">
-            <div class="pair-header-entities">
-                <span>{_escape_html(pair["entity1"]["name"])}</span>
-                <span>{_escape_html(pair["entity2"]["name"])}</span>
-            </div>
-            <div class="pair-header-relation">{_escape_html(pair["relationship"])}</div>
+            <span class="pair-entity">{_escape_html(pair["entity1"]["name"])}</span>
+            <span class="pair-entity">{_escape_html(pair["entity2"]["name"])}</span>
+            <span class="pair-relation">{_escape_html(pair["relationship"])}</span>
         </div>
         <div class="reasoning-title">Document Assessment</div>
         <div class="reasoning-content">
-            <p><strong>Document:</strong> {_escape_html(assess["title"])}</p>
-            <p><strong>Relationship:</strong> {_escape_html(assess["relationship"])}</p>
-            <p><strong>Confidence:</strong> <span class="confidence-badge confidence-{_escape_html(assess["confidence"])}">{_escape_html(assess["confidence"])}</span></p>
+            <strong>Document:</strong> {_escape_html(assess["title"])}
+            <br><strong>Relationship:</strong> {_escape_html(assess["relationship"])}
+            <br><strong>Confidence:</strong> <span class="confidence-badge confidence-{_escape_html(assess["confidence"])}">{_escape_html(assess["confidence"])}</span>
             <p>{highlighted_reasoning}</p>
         </div>
         {quote_nav_html}
@@ -352,12 +347,12 @@ class ReasoningTemplateRenderer:
         </div>"""
 
     def _render_other_pairs_navigation(
-        self, doc_id: str, all_pairs: list[dict[str, Any]]
+        self, doc_idx: int, all_pairs: list[dict[str, Any]]
     ) -> str:
         """Render navigation to other pairs using this document.
 
         Args:
-            doc_id: Resource ID of current document
+            doc_idx: Document index of current document
             all_pairs: Full list of pairs
 
         Returns:
@@ -370,8 +365,8 @@ class ReasoningTemplateRenderer:
             if idx == self.pair_idx:
                 continue
 
-            # Check if this pair uses the current document
-            if any(a["resource_id"] == doc_id for a in pair["assessments"]):
+            # Check if this pair uses the current document (by doc_idx)
+            if any(a["doc_idx"] == doc_idx for a in pair["assessments"]):
                 other_pairs.append((idx, pair))
 
         if not other_pairs:
@@ -380,12 +375,7 @@ class ReasoningTemplateRenderer:
         items = []
         for pair_idx, pair in other_pairs:
             items.append(
-                f"""
-                <li class="quote-nav-item" onclick="selectPairAndDocument({pair_idx}, '{_escape_html(doc_id)}')">
-                    <span class="quote-preview">
-                        {_escape_html(pair["entity1"]["name"])} {_escape_html(pair["entity2"]["name"])}
-                    </span>
-                </li>"""
+                f"""<li class="quote-nav-item" onclick="selectPairAndDocument({pair_idx}, {doc_idx})">{_escape_html(pair["entity1"]["name"])} {_escape_html(pair["entity2"]["name"])}</li>"""
             )
 
         items_html = "".join(items)

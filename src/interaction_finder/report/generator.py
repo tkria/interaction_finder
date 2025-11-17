@@ -185,13 +185,18 @@ def generate_report(
         return write_output("\n".join(lines), ensure_trailing_newline=True)
 
     # HTML generation path
-    pairs, document_html, reasoning_templates = prepare_report_data(
+    pairs, document_html, reasoning_templates, indexed_docs = prepare_report_data(
         checkpoint,
         show_progress=not write_to_stdout,
         judgments_override=filtered_judgments,
     )
 
     html = render_template(
-        pairs, document_html, reasoning_templates, checkpoint.topic, title=title
+        pairs,
+        document_html,
+        reasoning_templates,
+        indexed_docs,
+        checkpoint.topic,
+        title=title,
     )
     return write_output(html)
