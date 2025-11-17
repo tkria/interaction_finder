@@ -304,13 +304,13 @@ def prepare_report_data(
 
     json_data = {
         "metadata": {
-            "topic": result.metadata.topic,
+            "topic": checkpoint.topic,
             "total_pairs": len(judgments),
             "accepted_pairs": sum(1 for j in judgments if j.accepted),
             "rejected_pairs": sum(1 for j in judgments if not j.accepted),
             "entity_stats": entity_stats,
             "confidence_counts": confidence_counts,
-            "resource_count": result.metadata.resource_count,
+            "resource_count": checkpoint.extraction.metadata.resource_count,
         },
         "pairs": pairs,
         "documents": documents,

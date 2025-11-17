@@ -1060,7 +1060,7 @@ def report(
             parsed_filters["accepted"] = "yes"
 
         # Display summary
-        log_console.print(f"Topic: {checkpoint.extraction.metadata.topic}")
+        log_console.print(f"Topic: {checkpoint.topic}")
         log_console.print(
             f"Total pairs: {checkpoint.extraction.metadata.total_pairs_found}"
         )

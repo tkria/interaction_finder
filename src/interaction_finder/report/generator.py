@@ -192,7 +192,7 @@ def generate_report(
     )
 
     if title is None:
-        topic = checkpoint.extraction.metadata.topic
+        topic = checkpoint.topic
         title = f"Extraction Report: {topic}"
 
     html = render_template(json_data, document_html, title=title)
