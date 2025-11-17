@@ -11,8 +11,8 @@ from typing import Any
 class EntityHighlighter:
     """Highlights entity mentions in plain text with HTML spans.
 
-    Uses regex-based search for simplicity (no position mapping needed for
-    reasoning text, unlike document annotation which requires precise tracking).
+    Uses position-based matching (like document body) rather than iterative
+    regex replacement to avoid nested HTML in attributes.
     """
 
     def __init__(
@@ -38,6 +38,12 @@ class EntityHighlighter:
     def highlight(self, text: str) -> str:
         """Highlight entity mentions with HTML spans.
 
+        Uses position-based approach to avoid nested HTML:
+        1. Find all match positions in plain text
+        2. Deduplicate overlapping matches (longest first)
+        3. Insert spans in reverse order (before HTML escaping)
+        4. Escape HTML of final result
+
         Args:
             text: Plain text to highlight
 
@@ -45,8 +51,74 @@ class EntityHighlighter:
             HTML string with entity mentions wrapped in
             <span class="entity-highlight entity1/entity2">
         """
-        # Escape HTML first to prevent injection
-        text = _escape_html(text)
+        # Step 1: Find all matches with positions
+        matches = self._find_all_matches(text)
+
+        # Step 2: Deduplicate overlapping matches
+        non_overlapping = self._remove_overlaps(matches)
+
+        # Step 3: Insert spans in reverse order (preserves positions)
+        # Do this BEFORE HTML escaping so positions stay valid
+        result_text = text
+        for start, end, entity_type, canonical, matched_text in reversed(
+            non_overlapping
+        ):
+            span = (
+                f'<span class="entity-highlight {entity_type}" '
+                f'title="{_escape_html(canonical)}">{matched_text}</span>'
+            )
+            result_text = result_text[:start] + span + result_text[end:]
+
+        # Step 4: Escape HTML OUTSIDE of spans we just inserted
+        # Split by our inserted tags and escape only the text portions
+        return self._escape_text_outside_spans(result_text)
+
+    def _escape_text_outside_spans(self, html: str) -> str:
+        """Escape HTML in text portions, leaving our span tags intact.
+
+        Args:
+            html: HTML string with entity-highlight spans
+
+        Returns:
+            HTML with text escaped but span tags preserved
+        """
+        # Split by our span tags
+        parts = []
+        current_pos = 0
+
+        # Pattern to match our inserted spans
+        import re
+
+        span_pattern = re.compile(
+            r'<span class="entity-highlight (?:entity1|entity2)" title="[^"]*">.*?</span>'
+        )
+
+        for match in span_pattern.finditer(html):
+            # Escape text before this span
+            if match.start() > current_pos:
+                parts.append(_escape_html(html[current_pos : match.start()]))
+
+            # Keep span as-is (it's our generated HTML)
+            parts.append(match.group(0))
+            current_pos = match.end()
+
+        # Escape remaining text
+        if current_pos < len(html):
+            parts.append(_escape_html(html[current_pos:]))
+
+        return "".join(parts)
+
+    def _find_all_matches(self, text: str) -> list[tuple[int, int, str, str, str]]:
+        """Find all entity matches with their positions.
+
+        Args:
+            text: Plain text to search (before HTML escaping)
+
+        Returns:
+            List of (start, end, entity_type, canonical_name, matched_text)
+            sorted by position, then by length (longest first)
+        """
+        matches = []
 
         # Build term mapping: lowercase term -> (entity_type, canonical_name)
         term_map: dict[str, tuple[str, str]] = {}
@@ -55,26 +127,60 @@ class EntityHighlighter:
         for term in self.entity2_terms:
             term_map[term.lower()] = ("entity2", self.entity2_name)
 
-        # Sort by length (longest first) to avoid partial matches
-        # Example: "BRCA1" should match before "BRCA"
+        # Sort by length (longest first) for better overlap resolution
         all_terms = sorted(
             self.entity1_terms + self.entity2_terms,
             key=len,
             reverse=True,
         )
 
-        # Replace each term with highlighted version
-        # Case-insensitive matching
+        # Find all matches
         for term in all_terms:
             entity_type, canonical = term_map[term.lower()]
             pattern = re.compile(re.escape(term), re.IGNORECASE)
-            replacement = (
-                f'<span class="entity-highlight {entity_type}" '
-                f'title="{_escape_html(canonical)}">\\g<0></span>'
-            )
-            text = pattern.sub(replacement, text)
 
-        return text
+            for match in pattern.finditer(text):
+                matches.append(
+                    (
+                        match.start(),
+                        match.end(),
+                        entity_type,
+                        canonical,
+                        match.group(0),  # Actual matched text (preserves case)
+                    )
+                )
+
+        # Sort by position, then by length (longest first at same position)
+        matches.sort(key=lambda x: (x[0], -(x[1] - x[0])))
+
+        return matches
+
+    def _remove_overlaps(
+        self, matches: list[tuple[int, int, str, str, str]]
+    ) -> list[tuple[int, int, str, str, str]]:
+        """Remove overlapping matches, keeping longest at each position.
+
+        Args:
+            matches: Sorted list of (start, end, entity_type, canonical, text)
+
+        Returns:
+            Non-overlapping matches
+        """
+        non_overlapping = []
+
+        for match in matches:
+            start, end = match[0], match[1]
+
+            # Check if this overlaps with any already-selected match
+            overlaps = any(
+                not (end <= existing[1] or start >= existing[0])
+                for existing in non_overlapping
+            )
+
+            if not overlaps:
+                non_overlapping.append(match)
+
+        return non_overlapping
 
 
 class ReasoningTemplateRenderer:
