@@ -61,10 +61,12 @@ def create_minimal_extraction_result() -> ExtractionResult:
     )
 
     return ExtractionResult(
+        topic="test topic",
+        target_entity_types=["type1", "type2"],
+        permitted_pairs=[("type1", "type2")],
         resources=pool,
         judgments=[judgment],
         metadata=ExtractionMetadata(
-            topic="test topic",
             resource_count=1,
             total_entities_found=2,
             entities_after_validation=2,
