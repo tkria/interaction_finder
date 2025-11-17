@@ -321,11 +321,6 @@ header {
     text-align: right;
 }
 
-.pair-arrow {
-    color: var(--pico-muted-color);
-    font-size: 1rem;
-}
-
 .pair-kinds {
     display: grid;
     grid-template-columns: 1fr auto 1fr;
@@ -964,7 +959,6 @@ function renderPairList() {
                       title="${escapeHtml(pair.entity1.aliases.join(', '))}">
                     ${escapeHtml(pair.entity1.name)}
                 </span>
-                <span class="pair-arrow">⟷</span>
                 <span class="entity-name right"
                       onclick="event.stopPropagation(); filterByEntity('${escapeHtml(pair.entity2.name)}')"
                       title="${escapeHtml(pair.entity2.aliases.join(', '))}">
@@ -1349,7 +1343,6 @@ function renderReasoning() {
                 <div class="pair-header">
                     <div class="pair-header-entities">
                         <span>${escapeHtml(pair.entity1.name)}</span>
-                        <span>⟷</span>
                         <span>${escapeHtml(pair.entity2.name)}</span>
                     </div>
                     <div class="pair-header-relation">${escapeHtml(pair.relationship)}</div>
@@ -1429,7 +1422,7 @@ function renderReasoning() {
                     ${otherPairs.map(({ pair, idx }) => `
                         <li class="quote-nav-item" onclick="selectPairAndDocument(${idx}, '${escapeHtml(currentDocId)}')">
                             <span class="quote-preview">
-                                ${escapeHtml(pair.entity1.name)} ⟷ ${escapeHtml(pair.entity2.name)}
+                                ${escapeHtml(pair.entity1.name)} ${escapeHtml(pair.entity2.name)}
                             </span>
                         </li>
                     `).join('')}
@@ -1442,7 +1435,6 @@ function renderReasoning() {
                 <div class="pair-header">
                     <div class="pair-header-entities">
                         <span>${escapeHtml(pair.entity1.name)}</span>
-                        <span>⟷</span>
                         <span>${escapeHtml(pair.entity2.name)}</span>
                     </div>
                     <div class="pair-header-relation">${escapeHtml(pair.relationship)}</div>
