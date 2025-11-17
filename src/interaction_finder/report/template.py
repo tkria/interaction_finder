@@ -176,6 +176,11 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 {{ document_templates }}
     </div>
 
+    <!-- Reasoning Templates (pre-rendered HTML) -->
+    <div id="reasoning-templates" style="display: none;">
+{{ reasoning_templates }}
+    </div>
+
     <!-- Embedded Data -->
     <script>
         window.REPORT_DATA = {{ data_json }};
@@ -193,6 +198,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 def render_template(
     data: dict[str, Any],
     document_html: dict[str, str],
+    reasoning_templates: dict[str, dict[str, str]],
     title: str = "Extraction Report",
 ) -> str:
     """Render HTML report from prepared data.
@@ -200,6 +206,7 @@ def render_template(
     Args:
         data: Prepared report data from prepare_report_data() (JSON-serializable)
         document_html: Mapping of doc_id -> pre-rendered HTML string
+        reasoning_templates: Nested dict pair_idx -> template_type -> HTML
         title: Report title
 
     Returns:
@@ -225,6 +232,18 @@ def render_template(
         )
     document_templates_html = "\n".join(doc_templates_parts)
 
+    # Build reasoning templates HTML
+    reasoning_templates_parts = []
+    for pair_idx_str, templates in reasoning_templates.items():
+        for template_type, template_html in templates.items():
+            template_id = f"reasoning-pair-{pair_idx_str}-{template_type}"
+            reasoning_templates_parts.append(
+                f'        <template id="{template_id}">\n'
+                f"            {template_html}\n"
+                f"        </template>"
+            )
+    reasoning_templates_html = "\n".join(reasoning_templates_parts)
+
     # Replace placeholders
     replacements = {
         "{{ title }}": _escape_html(title),
@@ -235,6 +254,7 @@ def render_template(
         "{{ js }}": get_js(),
         "{{ data_json }}": json.dumps(data, ensure_ascii=False, indent=2),
         "{{ document_templates }}": document_templates_html,
+        "{{ reasoning_templates }}": reasoning_templates_html,
         "{{ pair_cards }}": pair_cards_html,
     }
 

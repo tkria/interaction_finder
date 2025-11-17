@@ -1030,23 +1030,9 @@ function renderContent() {
     const filtered = getFilteredPairs();
     const pair = filtered[state.selectedPairIdx];
 
-    // Sort assessments by publication date (newest first), then by quote count
-    const sortedAssessments = [...pair.assessments].sort((a, b) => {
-        const docA = state.data.documents[a.resource_id];
-        const docB = state.data.documents[b.resource_id];
-        const dateA = docA?.publication_date || '';
-        const dateB = docB?.publication_date || '';
-
-        // Primary sort: date (newest first)
-        if (dateB !== dateA) {
-            return dateB.localeCompare(dateA);
-        }
-
-        // Secondary sort: quote count (most quotes first)
-        return b.quotes.length - a.quotes.length;
-    });
-
-    content.innerHTML = sortedAssessments.map((assess, idx) => {
+    // Assessments are pre-sorted in Python (by publication date, then quote count)
+    // No need to sort here
+    content.innerHTML = pair.assessments.map((assess, idx) => {
         const doc = state.data.documents[assess.resource_id];
         const dateSpan = doc?.publication_date ? `<span class="document-date">${escapeHtml(doc.publication_date)}</span>` : '';
         return `
@@ -1102,38 +1088,7 @@ function toggleDocument(idx) {
     }
 }
 
-// Highlight entities in text (for reasoning panels)
-function highlightEntities(text, entity1Terms, entity2Terms, entity1Kind, entity2Kind, entity1Name, entity2Name, escapeFirst = true) {
-    if (escapeFirst) {
-        text = escapeHtml(text);
-    }
-
-    // Create term-to-type (entity1/entity2) and term-to-canonical mapping
-    const termTypes = new Map();
-    const termCanonical = new Map();
-    entity1Terms.forEach(term => {
-        termTypes.set(term.toLowerCase(), 'entity1');
-        termCanonical.set(term.toLowerCase(), entity1Name);
-    });
-    entity2Terms.forEach(term => {
-        termTypes.set(term.toLowerCase(), 'entity2');
-        termCanonical.set(term.toLowerCase(), entity2Name);
-    });
-
-    const allTerms = [...entity1Terms, ...entity2Terms];
-    // Sort by length (longest first) to avoid partial matches
-    allTerms.sort((a, b) => b.length - a.length);
-
-    allTerms.forEach(term => {
-        const escapedTerm = escapeHtml(term);
-        const type = termTypes.get(term.toLowerCase()) || 'other';
-        const canonical = termCanonical.get(term.toLowerCase()) || term;
-        const regex = new RegExp(`(${escapedTerm.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')})`, 'gi');
-        text = text.replace(regex, `<span class="entity-highlight ${type}" title="${escapeHtml(canonical)}">$1</span>`);
-    });
-
-    return text;
-}
+// highlightEntities() function removed - entity highlighting now done in Python
 
 // Highlight quotes for the current assessment
 function highlightQuotesForAssessment(assess) {
@@ -1344,125 +1299,31 @@ function renderReasoning() {
     const filtered = getFilteredPairs();
     const pair = filtered[state.selectedPairIdx];
 
+    // Map from filtered pair index to full array index
+    const fullArrayIdx = state.data.pairs.indexOf(pair);
+
+    // Determine template ID based on state
+    let templateId;
     if (state.openDocumentIdx === null) {
-        // Show overall pair reasoning with entity highlighting
-        const entity1Terms = [pair.entity1.name, ...pair.entity1.aliases];
-        const entity2Terms = [pair.entity2.name, ...pair.entity2.aliases];
-        const highlightedReasoning = highlightEntities(pair.reasoning, entity1Terms, entity2Terms, pair.entity1.kind, pair.entity2.kind, pair.entity1.name, pair.entity2.name, true);
-
-        rightbar.innerHTML = `
-            <div class="reasoning-panel">
-                <div class="pair-header">
-                    <div class="pair-header-entities">
-                        <span>${escapeHtml(pair.entity1.name)}</span>
-                        <span>${escapeHtml(pair.entity2.name)}</span>
-                    </div>
-                    <div class="pair-header-relation">${escapeHtml(pair.relationship)}</div>
-                </div>
-                <div class="reasoning-title">Overall Assessment</div>
-                <div class="reasoning-content">
-                    <p><strong>Confidence:</strong> <span class="confidence-badge confidence-${pair.confidence}">${pair.confidence}</span></p>
-                    <p>${highlightedReasoning}</p>
-                </div>
-                <div class="entity-details-section">
-                    <div class="reasoning-title">Entity Details</div>
-                    <div class="entity-detail-item">
-                        <strong>${escapeHtml(pair.entity1.name)}</strong> (${escapeHtml(pair.entity1.kind)})
-                        ${pair.entity1.aliases.length > 0 ? `
-                            <div class="alias-tooltip">Aliases: ${escapeHtml(pair.entity1.aliases.join(', '))}</div>
-                        ` : ''}
-                    </div>
-                    <div class="entity-detail-item">
-                        <strong>${escapeHtml(pair.entity2.name)}</strong> (${escapeHtml(pair.entity2.kind)})
-                        ${pair.entity2.aliases.length > 0 ? `
-                            <div class="alias-tooltip">Aliases: ${escapeHtml(pair.entity2.aliases.join(', '))}</div>
-                        ` : ''}
-                    </div>
-                </div>
-            </div>
-        `;
+        // Show overall pair reasoning (pre-rendered template)
+        templateId = `reasoning-pair-${fullArrayIdx}-overall`;
     } else {
-        // Show document-specific reasoning with entity highlighting
-        const sortedAssessments = [...pair.assessments].sort((a, b) => {
-            const docA = state.data.documents[a.resource_id];
-            const docB = state.data.documents[b.resource_id];
-            const dateA = docA?.publication_date || '';
-            const dateB = docB?.publication_date || '';
-
-            // Primary sort: date (newest first)
-            if (dateB !== dateA) {
-                return dateB.localeCompare(dateA);
-            }
-
-            // Secondary sort: quote count (most quotes first)
-            return b.quotes.length - a.quotes.length;
-        });
-        const assess = sortedAssessments[state.openDocumentIdx];
-
-        const entity1Terms = [pair.entity1.name, ...pair.entity1.aliases];
-        const entity2Terms = [pair.entity2.name, ...pair.entity2.aliases];
-        const highlightedReasoning = highlightEntities(assess.reasoning, entity1Terms, entity2Terms, pair.entity1.kind, pair.entity2.kind, true);
-
-        // Build quote navigation with better styling
-        const quoteNav = assess.quotes.length > 0 ? `
-            <div class="quote-navigation">
-                <div class="quote-nav-title">Jump to Quotes (${assess.quotes.length})</div>
-                <ul class="quote-nav-list">
-                    ${assess.quotes.map((q, idx) => `
-                        <li class="quote-nav-item" onclick="scrollToQuote(${idx})" title="${escapeHtml(q.text)}">
-                            <span class="quote-number">${idx + 1}</span>
-                            <span class="quote-preview">${escapeHtml(q.text.substring(0, 60))}${q.text.length > 60 ? '...' : ''}</span>
-                        </li>
-                    `).join('')}
-                </ul>
-            </div>
-        ` : '';
-
-        // Find other pairs that use this document
-        const currentDocId = assess.resource_id;
-        const otherPairs = state.data.pairs
-            .map((p, idx) => ({ pair: p, idx: idx }))
-            .filter(({ pair, idx }) =>
-                idx !== state.selectedPairIdx &&
-                pair.assessments.some(a => a.resource_id === currentDocId)
-            );
-
-        const otherPairsNav = otherPairs.length > 0 ? `
-            <div class="quote-navigation">
-                <div class="quote-nav-title">Other Pairs (${otherPairs.length})</div>
-                <ul class="quote-nav-list">
-                    ${otherPairs.map(({ pair, idx }) => `
-                        <li class="quote-nav-item" onclick="selectPairAndDocument(${idx}, '${escapeHtml(currentDocId)}')">
-                            <span class="quote-preview">
-                                ${escapeHtml(pair.entity1.name)} ${escapeHtml(pair.entity2.name)}
-                            </span>
-                        </li>
-                    `).join('')}
-                </ul>
-            </div>
-        ` : '';
-
-        rightbar.innerHTML = `
-            <div class="reasoning-panel">
-                <div class="pair-header">
-                    <div class="pair-header-entities">
-                        <span>${escapeHtml(pair.entity1.name)}</span>
-                        <span>${escapeHtml(pair.entity2.name)}</span>
-                    </div>
-                    <div class="pair-header-relation">${escapeHtml(pair.relationship)}</div>
-                </div>
-                <div class="reasoning-title">Document Assessment</div>
-                <div class="reasoning-content">
-                    <p><strong>Document:</strong> ${escapeHtml(assess.title)}</p>
-                    <p><strong>Relationship:</strong> ${escapeHtml(assess.relationship)}</p>
-                    <p><strong>Confidence:</strong> <span class="confidence-badge confidence-${assess.confidence}">${assess.confidence}</span></p>
-                    <p>${highlightedReasoning}</p>
-                </div>
-                ${quoteNav}
-                ${otherPairsNav}
-            </div>
-        `;
+        // Show document-specific reasoning (pre-rendered template)
+        // Note: assessments are pre-sorted in Python, so use openDocumentIdx directly
+        templateId = `reasoning-pair-${fullArrayIdx}-assess_${state.openDocumentIdx}`;
     }
+
+    const template = document.getElementById(templateId);
+    if (!template) {
+        console.error(`Template not found: ${templateId}`);
+        rightbar.innerHTML = '<div class="reasoning-panel"><p>Error loading reasoning content</p></div>';
+        return;
+    }
+
+    // Clone and insert template (no HTML generation!)
+    const clone = template.content.cloneNode(true);
+    rightbar.innerHTML = '';
+    rightbar.appendChild(clone);
 }
 
 // Scroll to quote with emphasis
@@ -1474,21 +1335,8 @@ function scrollToQuote(quoteIdx) {
     const pair = filtered[state.selectedPairIdx];
     if (!pair || state.openDocumentIdx === null) return;
 
-    const sortedAssessments = [...pair.assessments].sort((a, b) => {
-        const docA = state.data.documents[a.resource_id];
-        const docB = state.data.documents[b.resource_id];
-        const dateA = docA?.publication_date || '';
-        const dateB = docB?.publication_date || '';
-
-        // Primary sort: date (newest first)
-        if (dateB !== dateA) {
-            return dateB.localeCompare(dateA);
-        }
-
-        // Secondary sort: quote count (most quotes first)
-        return b.quotes.length - a.quotes.length;
-    });
-    const assess = sortedAssessments[state.openDocumentIdx];
+    // Assessments are pre-sorted in Python, use openDocumentIdx directly
+    const assess = pair.assessments[state.openDocumentIdx];
 
     // Get the quote text from this assessment
     if (quoteIdx < 0 || quoteIdx >= assess.quotes.length) return;

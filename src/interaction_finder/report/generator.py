@@ -185,7 +185,7 @@ def generate_report(
         return write_output("\n".join(lines), ensure_trailing_newline=True)
 
     # HTML generation path
-    json_data, document_html = prepare_report_data(
+    json_data, document_html, reasoning_templates = prepare_report_data(
         checkpoint,
         show_progress=not write_to_stdout,
         judgments_override=filtered_judgments,
@@ -195,5 +195,5 @@ def generate_report(
         topic = checkpoint.topic
         title = f"Extraction Report: {topic}"
 
-    html = render_template(json_data, document_html, title=title)
+    html = render_template(json_data, document_html, reasoning_templates, title=title)
     return write_output(html)

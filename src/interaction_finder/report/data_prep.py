@@ -18,22 +18,50 @@ from rich.progress import (
 
 from interaction_finder.checkpoint import PipelineCheckpoint
 from interaction_finder.report.parallel_renderer import render_documents_parallel
+from interaction_finder.report.reasoning_renderer import render_all_reasoning_templates
+
+
+def _sort_assessments(
+    assessments: list[dict[str, Any]], documents: dict[str, dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Sort assessments by publication date (newest first), then quote count.
+
+    Args:
+        assessments: List of assessment dictionaries
+        documents: Document metadata mapping (doc_id -> metadata)
+
+    Returns:
+        Sorted assessments list
+    """
+
+    def sort_key(assess: dict[str, Any]) -> tuple:
+        doc = documents.get(assess["resource_id"], {})
+        date = doc.get("publication_date", "")
+        quote_count = len(assess.get("quotes", []))
+        # Negative for descending order (newest first, most quotes first)
+        # Empty dates sort last
+        return (date if date else "", -quote_count)
+
+    return sorted(assessments, key=sort_key, reverse=True)
 
 
 def prepare_report_data(
     checkpoint: PipelineCheckpoint,
     show_progress: bool = True,
     judgments_override: list | None = None,
-) -> tuple[dict[str, Any], dict[str, str]]:
+) -> tuple[dict[str, Any], dict[str, str], dict[str, dict[str, str]]]:
     """Transform PipelineCheckpoint into report data structure.
 
     Args:
         checkpoint: Pipeline checkpoint containing extraction results
+        show_progress: Show progress bars for rendering
+        judgments_override: Optional filtered judgments list
 
     Returns:
-        Tuple of (json_data, document_html_map)
+        Tuple of (json_data, document_html_map, reasoning_templates)
         - json_data: JSON-serializable dict with metadata for frontend
         - document_html_map: Mapping of doc_id -> pre-rendered HTML string
+        - reasoning_templates: Nested dict pair_idx -> template_type -> HTML
     """
     if not checkpoint.extraction:
         raise ValueError("Checkpoint does not contain extraction results")
@@ -202,6 +230,11 @@ def prepare_report_data(
 
     pairs.sort(key=pair_sort_key)
 
+    # Sort assessments within each pair (do this before document rendering
+    # since documents dict is needed for sorting)
+    # Note: We'll do a second pass after documents are rendered
+    # to ensure documents dict is available for accurate sorting
+
     # Build document index with pre-rendered HTML
     # Collect document references directly from judgments
     doc_to_quotes: dict[str, list[Any]] = defaultdict(
@@ -302,6 +335,13 @@ def prepare_report_data(
         for alias in pair["entity2"]["aliases"]:
             entity_to_pairs[alias.lower()].append(pair_idx)
 
+    # Sort assessments within each pair (now that documents dict is available)
+    for pair in pairs:
+        pair["assessments"] = _sort_assessments(pair["assessments"], documents)
+
+    # Generate reasoning templates for all pairs
+    reasoning_templates = render_all_reasoning_templates(pairs)
+
     json_data = {
         "metadata": {
             "topic": checkpoint.topic,
@@ -318,4 +358,4 @@ def prepare_report_data(
         "entity_to_pairs": dict(entity_to_pairs),
     }
 
-    return json_data, document_html
+    return json_data, document_html, reasoning_templates
