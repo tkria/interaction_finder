@@ -18,9 +18,11 @@ REPORT_CSS = """
     /* Semantic color mappings for theming */
     /* Entity highlighting colors */
     --entity1-bg: var(--pico-color-violet-200);
+    --entity1-bg-faint: var(--pico-color-violet-150);
     --entity1-bg-hover: var(--pico-color-violet-300);
     --entity1-text: var(--pico-color-violet-450);
     --entity2-bg: var(--pico-color-lime-100);
+    --entity2-bg-faint: var(--pico-color-lime-50);
     --entity2-bg-hover: var(--pico-color-lime-200);
     --entity2-text: var(--pico-color-lime-450);
     --entity-other-bg: var(--pico-color-slate-150);
@@ -66,12 +68,14 @@ REPORT_CSS = """
     :root:not([data-theme]) {
         /* Entity highlighting colors (flipped shades: 200->800, 300->700, 450->550) */
         --entity1-bg: var(--pico-color-violet-800);
+        --entity1-bg-faint: var(--pico-color-violet-850);
         --entity1-bg-hover: var(--pico-color-violet-700);
         --entity1-text: var(--pico-color-violet-550);
         --entity2-bg: var(--pico-color-lime-650);
-        --entity2-bg-hover: var(--pico-color-lime-800);
+        --entity2-bg-faint: var(--pico-color-lime-800);
+        --entity2-bg-hover: var(--pico-color-lime-600);
         --entity2-text: var(--pico-color-lime-550);
-        --entity-other-bg: var(--pico-color-slate-850);
+        --entity-other-bg: var(--pico-color-slate-800);
         --entity-other-bg-hover: var(--pico-color-slate-750);
         --entity-fallback-bg: var(--pico-color-slate-900);
         --entity-fallback-bg-hover: var(--pico-color-slate-800);
@@ -114,12 +118,14 @@ REPORT_CSS = """
 [data-theme=dark] {
     /* Entity highlighting colors (flipped shades) */
     --entity1-bg: var(--pico-color-violet-800);
+    --entity1-bg-faint: var(--pico-color-violet-850);
     --entity1-bg-hover: var(--pico-color-violet-700);
     --entity1-text: var(--pico-color-violet-550);
     --entity2-bg: var(--pico-color-lime-650);
-    --entity2-bg-hover: var(--pico-color-lime-800);
+    --entity2-bg-faint: var(--pico-color-lime-800);
+    --entity2-bg-hover: var(--pico-color-lime-600);
     --entity2-text: var(--pico-color-lime-550);
-    --entity-other-bg: var(--pico-color-slate-850);
+    --entity-other-bg: var(--pico-color-slate-800);
     --entity-other-bg-hover: var(--pico-color-slate-750);
     --entity-fallback-bg: var(--pico-color-slate-900);
     --entity-fallback-bg-hover: var(--pico-color-slate-800);
@@ -537,8 +543,9 @@ header {
 }
 
 /* Entity position-specific colors (entity1 vs entity2 in current pair) */
+/* Default (outside quotes): fainter backgrounds */
 .entity-highlight.entity1 {
-    background: var(--entity1-bg);
+    background: var(--entity1-bg-faint);
 }
 
 .entity-highlight.entity1:hover {
@@ -546,11 +553,20 @@ header {
 }
 
 .entity-highlight.entity2 {
-    background: var(--entity2-bg);
+    background: var(--entity2-bg-faint);
 }
 
 .entity-highlight.entity2:hover {
     background: var(--entity2-bg-hover);
+}
+
+/* Inside quote highlights: standard backgrounds */
+.quote-highlight .entity-highlight.entity1 {
+    background: var(--entity1-bg);
+}
+
+.quote-highlight .entity-highlight.entity2 {
+    background: var(--entity2-bg);
 }
 
 /* Entities from other pairs */
