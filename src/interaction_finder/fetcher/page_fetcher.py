@@ -269,7 +269,7 @@ class PageFetcher:
                 if metadata and metadata.get("publication_date"):
                     pub_date = metadata["publication_date"]
                     # Cache for future use
-                    await self.cache.store_content(url, pub_date, "publication_date")
+                    await self.cache.set_content(url, "publication_date", pub_date)
                     return pub_date
             except Exception:
                 # Don't fail if publication date lookup fails
