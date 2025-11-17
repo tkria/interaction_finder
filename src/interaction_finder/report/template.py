@@ -9,6 +9,91 @@ from typing import Any
 
 from interaction_finder.report.assets import get_css, get_js
 
+
+def _render_pair_cards(pairs: list[dict[str, Any]]) -> str:
+    """Render pair cards as HTML.
+
+    Args:
+        pairs: List of pair data dictionaries
+
+    Returns:
+        HTML string for all pair cards
+    """
+    # Determine if we should show entity kinds
+    # Show kinds if: (1) more than 2 distinct kinds, OR (2) any self-pairs exist
+    all_kinds = set()
+    has_self_pair = False
+    for pair in pairs:
+        all_kinds.add(pair["entity1"]["kind"])
+        all_kinds.add(pair["entity2"]["kind"])
+        if pair["entity1"]["kind"] == pair["entity2"]["kind"]:
+            has_self_pair = True
+    show_kinds = len(all_kinds) > 2 or has_self_pair
+
+    cards = []
+    for idx, pair in enumerate(pairs):
+        # Build entity aliases tooltip
+        entity1_aliases = ", ".join(pair["entity1"]["aliases"])
+        entity2_aliases = ", ".join(pair["entity2"]["aliases"])
+
+        # Build card classes
+        card_classes = ["pair-card"]
+        if not pair["accepted"]:
+            card_classes.append("rejected")
+
+        # Build kinds/relationship row
+        if show_kinds:
+            kinds_html = f"""
+            <div class="pair-kinds">
+                <span class="entity-kind left">{_escape_html(pair["entity1"]["kind"])}</span>
+                <span class="relationship-label">{_escape_html(pair["relationship"])}</span>
+                <span class="entity-kind right">{_escape_html(pair["entity2"]["kind"])}</span>
+            </div>"""
+        else:
+            kinds_html = f"""
+            <div class="pair-relationship-only">
+                <span class="relationship-label">{_escape_html(pair["relationship"])}</span>
+            </div>"""
+
+        # Build variants section if present
+        variants_html = ""
+        if "variants" in pair and pair["variants"]:
+            variant_items = []
+            for variant in pair["variants"]:
+                variant_items.append(f"""
+                        <div class="variant-item">
+                            <span class="variant-relationship">{_escape_html(variant["relationship"])}</span>
+                            <span class="confidence-badge variant-badge confidence-{_escape_html(variant["confidence"])}">{_escape_html(variant["confidence"])}</span>
+                        </div>""")
+            variants_html = f"""
+                <div class="pair-variants">
+                    {"".join(variant_items)}
+                </div>"""
+
+        # Build complete card
+        card_html = f"""
+        <div class="{" ".join(card_classes)}" data-pair-idx="{idx}">
+            <div class="pair-entities">
+                <span class="entity-name left"
+                      title="{_escape_html(entity1_aliases)}">
+                    {_escape_html(pair["entity1"]["name"])}
+                </span>
+                <span class="entity-name right"
+                      title="{_escape_html(entity2_aliases)}">
+                    {_escape_html(pair["entity2"]["name"])}
+                </span>
+            </div>{kinds_html}
+            <div class="pair-meta">
+                <span class="pair-counts">{pair["doc_count"]} docs, {pair["quote_count"]} quotes</span>
+                <span class="confidence-badge confidence-{_escape_html(pair["confidence"])}">{_escape_html(pair["confidence"])}</span>
+            </div>{variants_html}
+        </div>"""
+
+        cards.append(card_html)
+
+    return "\n".join(cards)
+
+
 # HTML template with Jinja2 placeholders
 HTML_TEMPLATE = """<!DOCTYPE html>
 <html lang="en">
@@ -71,7 +156,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
     <!-- Left Sidebar: Pair List -->
     <aside id="sidebar">
-        <!-- Rendered by JavaScript -->
+{{ pair_cards }}
     </aside>
 
     <!-- Main Content: Document Accordions -->
@@ -124,6 +209,9 @@ def render_template(
     # Use string replacement for placeholders
     html = HTML_TEMPLATE
 
+    # Build pair cards HTML
+    pair_cards_html = _render_pair_cards(data["pairs"])
+
     # Build document templates HTML
     doc_templates_parts = []
     for doc_id, doc_html in document_html.items():
@@ -146,6 +234,7 @@ def render_template(
         "{{ js }}": get_js(),
         "{{ data_json }}": json.dumps(data, ensure_ascii=False, indent=2),
         "{{ document_templates }}": document_templates_html,
+        "{{ pair_cards }}": pair_cards_html,
     }
 
     for placeholder, value in replacements.items():

@@ -855,9 +855,25 @@ function initReport() {
     document.getElementById('search-input').addEventListener('input', handleSearch);
     document.getElementById('show-rejected').addEventListener('change', handleToggleRejected);
 
+    // Add click handlers to pre-rendered pair cards
+    const sidebar = document.getElementById('sidebar');
+    sidebar.querySelectorAll('.pair-card').forEach((card, idx) => {
+        card.addEventListener('click', () => selectPair(idx));
+
+        // Add click handlers to entity names for filtering
+        const entityNames = card.querySelectorAll('.entity-name');
+        entityNames.forEach((entityEl) => {
+            entityEl.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const entityName = entityEl.textContent.trim();
+                filterByEntity(entityName);
+            });
+        });
+    });
+
     // Initial render with header counts
     updateHeaderCounts();
-    renderPairList();
+    updatePairListDisplay();
     renderContent();
     renderReasoning();
 }
@@ -866,14 +882,14 @@ function initReport() {
 function handleSearch(e) {
     state.searchQuery = e.target.value.toLowerCase();
     updateHeaderCounts();
-    renderPairList();
+    updatePairListDisplay();
 }
 
 // Toggle rejected pairs
 function handleToggleRejected(e) {
     state.showRejected = e.target.checked;
     updateHeaderCounts();
-    renderPairList();
+    updatePairListDisplay();
 }
 
 // Update header counts based on current filter
@@ -945,75 +961,50 @@ function getFilteredPairs() {
     });
 }
 
-// Render pair list in sidebar
-function renderPairList() {
-    const sidebar = document.getElementById('sidebar');
+// Update pair list visibility and selection based on filters
+function updatePairListDisplay() {
     const filtered = getFilteredPairs();
+    const sidebar = document.getElementById('sidebar');
+    const allCards = sidebar.querySelectorAll('.pair-card');
 
-    // Determine if we should show entity kinds
-    // Show kinds if: (1) more than 2 distinct kinds, OR (2) any self-pairs exist
-    const allKinds = new Set();
-    let hasSelfPair = false;
-    filtered.forEach(pair => {
-        allKinds.add(pair.entity1.kind);
-        allKinds.add(pair.entity2.kind);
-        if (pair.entity1.kind === pair.entity2.kind) {
-            hasSelfPair = true;
+    // Build set of visible pair indices for fast lookup
+    const visibleIndices = new Set(filtered.map((_, idx) => idx));
+
+    allCards.forEach((card, idx) => {
+        const pair = state.data.pairs[idx];
+        if (!pair) return;
+
+        // Check if this pair matches filters
+        const matchesRejectedFilter = state.showRejected || pair.accepted;
+        const matchesSearch = !state.searchQuery || (
+            pair.entity1.name.toLowerCase().includes(state.searchQuery) ||
+            pair.entity2.name.toLowerCase().includes(state.searchQuery) ||
+            pair.entity1.aliases.some(a => a.toLowerCase().includes(state.searchQuery)) ||
+            pair.entity2.aliases.some(a => a.toLowerCase().includes(state.searchQuery)) ||
+            pair.relationship.toLowerCase().includes(state.searchQuery)
+        );
+
+        // Show/hide card based on filters
+        if (matchesRejectedFilter && matchesSearch) {
+            card.classList.remove('hidden');
+        } else {
+            card.classList.add('hidden');
+        }
+
+        // Update selected state
+        if (state.selectedPairIdx === idx) {
+            card.classList.add('selected');
+        } else {
+            card.classList.remove('selected');
         }
     });
-    const showKinds = allKinds.size > 2 || hasSelfPair;
-
-    sidebar.innerHTML = filtered.map((pair, idx) => `
-        <div class="pair-card ${pair.accepted ? '' : 'rejected'} ${state.selectedPairIdx === idx ? 'selected' : ''}"
-             onclick="selectPair(${idx})"
-             data-pair-idx="${idx}">
-            <div class="pair-entities">
-                <span class="entity-name left"
-                      onclick="event.stopPropagation(); filterByEntity('${escapeHtml(pair.entity1.name)}')"
-                      title="${escapeHtml(pair.entity1.aliases.join(', '))}">
-                    ${escapeHtml(pair.entity1.name)}
-                </span>
-                <span class="entity-name right"
-                      onclick="event.stopPropagation(); filterByEntity('${escapeHtml(pair.entity2.name)}')"
-                      title="${escapeHtml(pair.entity2.aliases.join(', '))}">
-                    ${escapeHtml(pair.entity2.name)}
-                </span>
-            </div>
-            ${showKinds ? `
-            <div class="pair-kinds">
-                <span class="entity-kind left">${escapeHtml(pair.entity1.kind)}</span>
-                <span class="relationship-label">${escapeHtml(pair.relationship)}</span>
-                <span class="entity-kind right">${escapeHtml(pair.entity2.kind)}</span>
-            </div>
-            ` : `
-            <div class="pair-relationship-only">
-                <span class="relationship-label">${escapeHtml(pair.relationship)}</span>
-            </div>
-            `}
-            <div class="pair-meta">
-                <span class="pair-counts">${pair.doc_count} docs, ${pair.quote_count} quotes</span>
-                <span class="confidence-badge confidence-${pair.confidence}">${pair.confidence}</span>
-            </div>
-            ${pair.variants ? `
-                <div class="pair-variants">
-                    ${pair.variants.map((v, vIdx) => `
-                        <div class="variant-item">
-                            <span class="variant-relationship">${escapeHtml(v.relationship)}</span>
-                            <span class="confidence-badge variant-badge confidence-${v.confidence}">${v.confidence}</span>
-                        </div>
-                    `).join('')}
-                </div>
-            ` : ''}
-        </div>
-    `).join('');
 }
 
 // Select a pair
 function selectPair(idx) {
-    const filtered = getFilteredPairs();
     state.selectedPairIdx = idx;
     state.openDocumentIdx = null;
-    renderPairList();
+    updatePairListDisplay();
     renderContent();
     renderReasoning();
 }
@@ -1023,7 +1014,8 @@ function filterByEntity(entityName) {
     const searchInput = document.getElementById('search-input');
     searchInput.value = entityName;
     state.searchQuery = entityName.toLowerCase();
-    renderPairList();
+    updateHeaderCounts();
+    updatePairListDisplay();
 }
 
 // Render content area
@@ -1260,7 +1252,7 @@ function selectPairByEntity(entityName, pairIdx) {
         state.openDocumentIdx = null;
     }
 
-    renderPairList();
+    updatePairListDisplay();
     renderContent();
     renderReasoning();
 }
@@ -1275,7 +1267,7 @@ function selectPairByEntityAndQuote(entityName, pairIdx, docId, quoteIdx) {
     const docIdx = newPair.assessments.findIndex(a => a.resource_id === docId);
     state.openDocumentIdx = docIdx !== -1 ? docIdx : 0;
 
-    renderPairList();
+    updatePairListDisplay();
     renderContent();
     renderReasoning();
 
@@ -1554,7 +1546,7 @@ function selectPairAndDocument(pairIdx, docId) {
     const docIdx = pair.assessments.findIndex(a => a.resource_id === docId);
     state.openDocumentIdx = docIdx !== -1 ? docIdx : 0;
 
-    renderPairList();
+    updatePairListDisplay();
     renderContent();
     renderReasoning();
 }
