@@ -803,12 +803,14 @@ class DocumentAnnotator:
 
     def annotate(
         self,
+        doc_idx: int,
         quotes: list[ResourceQuote],
         entities: dict[str, Any],  # pair_idx -> {entity1: ..., entity2: ...}
     ) -> PrerenderedDocument:
-        """Annotate HTML with quote and entity spans.
+        """Annotate HTML with quote and entity spans using numeric doc index.
 
         Args:
+            doc_idx: Sequential document index for ID generation
             quotes: List of validated ResourceQuote objects for this document
             entities: Dictionary mapping pair indices to entity information
                 Expected format: {pair_idx: {"entity1": {...}, "entity2": {...}}}
@@ -816,14 +818,11 @@ class DocumentAnnotator:
         Returns:
             PrerenderedDocument with annotated HTML and metadata
         """
-        # Generate document hash for unique IDs
-        doc_hash = abs(hash(self.resource.id.url)) % 10000
 
         quote_map: dict[str, QuoteMetadata] = {}
         entity_map: dict[str, EntityMetadata] = {}
 
         # Step 1: Map all quotes to HTML coordinates
-        quote_counter = 0
         html_quote_spans: list[
             tuple[int, int, str, list[int]]
         ] = []  # (start, end, span_id, pair_indices)
@@ -836,9 +835,8 @@ class DocumentAnnotator:
                 html_end = self.renderer.map_original_to_html_position(orig_end)
                 html_spans.append((html_start, html_end))
 
-            # Generate quote span ID
-            quote_id = f"doc-{doc_hash}-quote-{quote_counter}"
-            quote_counter += 1
+            # Generate quote span ID using doc_idx
+            quote_id = f"doc-{doc_idx}-quote-{quote_idx}"
 
             # Record quote metadata
             quote_map[quote_id] = QuoteMetadata(
@@ -858,6 +856,10 @@ class DocumentAnnotator:
                         [],  # pair_indices
                     )
                 )
+
+        # Build mapping from quote_id to pair_indices
+        # We'll populate this as we find entities within quotes
+        quote_to_pairs: dict[str, set[int]] = {qid: set() for qid in quote_map.keys()}
 
         # Step 2: Find entity mentions within quotes
         # Use normalized search via Resource._position_mapper for Greek letter support
@@ -893,15 +895,18 @@ class DocumentAnnotator:
                     for orig_start, orig_end in matches:
                         # Check if this position is within any quote span (in original coordinates)
                         in_quote = False
-                        for quote_meta in quote_map.values():
+                        containing_quote_ids = []
+                        for quote_id, quote_meta in quote_map.items():
                             for q_start, q_end in quote_meta.original_spans:
                                 if q_start <= orig_start < q_end:
                                     in_quote = True
+                                    containing_quote_ids.append(quote_id)
                                     break
-                            if in_quote:
-                                break
 
                         if in_quote:
+                            # Mark these quotes as belonging to this pair
+                            for quote_id in containing_quote_ids:
+                                quote_to_pairs[quote_id].add(pair_idx)
                             # Extract the actual matched text from original document
                             actual_matched_text = self.resource.text[
                                 orig_start:orig_end
@@ -992,8 +997,8 @@ class DocumentAnnotator:
             if start >= end:
                 continue
 
-            # Generate unique entity span ID
-            entity_id = f"doc-{doc_hash}-entity-{entity_counter}"
+            # Generate unique entity span ID using doc_idx
+            entity_id = f"doc-{doc_idx}-entity-{entity_counter}"
             entity_counter += 1
 
             # Record entity metadata
@@ -1018,10 +1023,10 @@ class DocumentAnnotator:
             )
 
         # Step 3: Insert spans into HTML
-        # Build entity span lookup: span_id -> (entity_name, matched_term)
+        # Build entity span lookup: span_id -> (entity_name, matched_term, pair_indices)
         entity_span_info = {
-            span_id: (entity_name, matched_term)
-            for _, _, span_id, entity_name, matched_term, _ in html_entity_spans
+            span_id: (entity_name, matched_term, pair_indices)
+            for _, _, span_id, entity_name, matched_term, pair_indices in html_entity_spans
         }
 
         # Scan HTML for tag structure to validate span insertion positions
@@ -1143,9 +1148,17 @@ class DocumentAnnotator:
                     )
                     html_parts.append(unquoted_html)
 
-                # Open quote span with classes for all active quotes
+                # Open quote span with classes for all active quotes and data-pairs attribute
                 quote_classes = " ".join(sorted(quote_ids))
-                html_parts.append(f'<span class="quote-span {quote_classes}">')
+                # Collect all pair indices for quotes in this region
+                region_pair_indices = set()
+                for quote_id in quote_ids:
+                    region_pair_indices.update(quote_to_pairs.get(quote_id, set()))
+                # Format as space-separated list of numeric indices
+                pairs_attr = " ".join(str(idx) for idx in sorted(region_pair_indices))
+                html_parts.append(
+                    f'<span class="quote-span {quote_classes}" data-pairs="{pairs_attr}">'
+                )
 
                 # Add content with entity spans
                 region_html = self._build_html_with_entities(
@@ -1200,8 +1213,19 @@ class DocumentAnnotator:
             <div class="document-links">{url_badge}{doi_link}
             </div>"""
 
-        # Wrap document text in container and prepend links
-        full_html = f'{links_html}<div class="document-text" data-doc-id="{_escape_html(self.resource.id.id)}">{annotated_html}</div>'
+        # Build list of all pairs that reference this document
+        all_pair_indices = set()
+        for pair_idx in entities.keys():
+            all_pair_indices.add(pair_idx)
+        pairs_attr = " ".join(str(idx) for idx in sorted(all_pair_indices))
+
+        # Wrap document text in container with doc_idx and pair indices
+        full_html = (
+            f"{links_html}"
+            f'<div class="document-text" data-pairs="{pairs_attr}">'
+            f"{annotated_html}"
+            f"</div>"
+        )
 
         return PrerenderedDocument(
             doc_id=self.resource.id.id,
@@ -1260,22 +1284,28 @@ class DocumentAnnotator:
             # Add entity span tag
             if is_opening:
                 if span_id in entity_span_info:
-                    entity_name, matched_term = entity_span_info[span_id]
+                    entity_name, matched_term, pair_indices = entity_span_info[span_id]
                     use_abbr = len(matched_term) < len(entity_name)
 
+                    # Format pair indices as space-separated list
+                    pairs_attr = " ".join(str(idx) for idx in sorted(pair_indices))
+                    escaped_name = _escape_html(entity_name)
+
                     if use_abbr:
-                        # Escape entity name for HTML attribute
-                        escaped_name = _escape_html(entity_name)
                         html_parts.append(
-                            f'<span id="{span_id}" class="entity-span">'
+                            f'<span id="{span_id}" class="entity-span" '
+                            f'data-entity="{escaped_name}" data-pairs="{pairs_attr}">'
                             f'<abbr title="{escaped_name}">'
                         )
                     else:
-                        html_parts.append(f'<span id="{span_id}" class="entity-span">')
+                        html_parts.append(
+                            f'<span id="{span_id}" class="entity-span" '
+                            f'data-entity="{escaped_name}" data-pairs="{pairs_attr}">'
+                        )
             else:
                 # Closing tag
                 if span_id in entity_span_info:
-                    entity_name, matched_term = entity_span_info[span_id]
+                    entity_name, matched_term, pair_indices = entity_span_info[span_id]
                     use_abbr = len(matched_term) < len(entity_name)
                     if use_abbr:
                         html_parts.append("</abbr></span>")

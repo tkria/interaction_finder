@@ -80,15 +80,19 @@ class EntityHighlighter:
 class ReasoningTemplateRenderer:
     """Renders reasoning panel templates for a single pair."""
 
-    def __init__(self, pair: dict[str, Any], pair_idx: int):
+    def __init__(
+        self, pair: dict[str, Any], pair_idx: int, doc_idx_map: dict[str, int]
+    ):
         """Initialize renderer for a specific pair.
 
         Args:
             pair: Pair data dictionary from prepare_report_data
             pair_idx: Index of this pair in the full pairs array
+            doc_idx_map: Mapping of resource_id -> doc_idx
         """
         self.pair = pair
         self.pair_idx = pair_idx
+        self.doc_idx_map = doc_idx_map
 
         # Build entity search terms
         self.entity1_terms = [pair["entity1"]["name"]] + pair["entity1"]["aliases"]
@@ -162,11 +166,16 @@ class ReasoningTemplateRenderer:
         """
         pair = self.pair
 
+        # Get doc_idx from resource_id
+        doc_idx = self.doc_idx_map.get(assess["resource_id"])
+        if doc_idx is None:
+            doc_idx = 0  # Fallback
+
         # Highlight entities in assessment reasoning
         highlighted_reasoning = self.highlighter.highlight(assess["reasoning"])
 
-        # Render quote navigation
-        quote_nav_html = self._render_quote_navigation(assess["quotes"])
+        # Render quote navigation with doc_idx for quote IDs
+        quote_nav_html = self._render_quote_navigation(assess["quotes"], doc_idx)
 
         # Render other pairs navigation
         other_pairs_html = self._render_other_pairs_navigation(
@@ -193,11 +202,14 @@ class ReasoningTemplateRenderer:
         {other_pairs_html}
     </div>"""
 
-    def _render_quote_navigation(self, quotes: list[dict[str, Any]]) -> str:
+    def _render_quote_navigation(
+        self, quotes: list[dict[str, Any]], doc_idx: int
+    ) -> str:
         """Render quote navigation list.
 
         Args:
             quotes: List of quote dictionaries from assessment
+            doc_idx: Document index for generating quote IDs
 
         Returns:
             HTML for quote navigation section (empty string if no quotes)
@@ -212,9 +224,12 @@ class ReasoningTemplateRenderer:
             if len(quote_text) > 60:
                 preview += "..."
 
+            # Generate quote ID for direct navigation
+            quote_id = f"doc-{doc_idx}-quote-{idx}"
+
             items.append(
                 f"""
-                <li class="quote-nav-item" onclick="scrollToQuote({idx})" title="{_escape_html(quote_text)}">
+                <li class="quote-nav-item" onclick="scrollToQuote('{quote_id}')" title="{_escape_html(quote_text)}">
                     <span class="quote-number">{idx + 1}</span>
                     <span class="quote-preview">{_escape_html(preview)}</span>
                 </li>"""
@@ -280,31 +295,35 @@ class ReasoningTemplateRenderer:
 
 def render_all_reasoning_templates(
     pairs: list[dict[str, Any]],
+    doc_idx_map: dict[str, int],
 ) -> dict[str, dict[str, str]]:
     """Render all reasoning templates for all pairs.
 
     Args:
         pairs: List of pair dictionaries (with pre-sorted assessments)
+        doc_idx_map: Mapping of resource_id -> doc_idx for template ID generation
 
     Returns:
         Nested dict mapping pair_idx -> template_type -> HTML
-        Example: {"0": {"overall": "<div>...</div>", "assess_0": "<div>...</div>"}}
+        Example: {"0": {"overall": "<div>...</div>", "doc-3": "<div>...</div>"}}
     """
     templates: dict[str, dict[str, str]] = {}
 
     for pair_idx, pair in enumerate(pairs):
-        renderer = ReasoningTemplateRenderer(pair, pair_idx)
+        renderer = ReasoningTemplateRenderer(pair, pair_idx, doc_idx_map)
 
         pair_templates: dict[str, str] = {}
 
         # Render overall assessment template
         pair_templates["overall"] = renderer.render_overall_template()
 
-        # Render per-assessment templates
+        # Render per-assessment templates using doc_idx as key
         for assess_idx, assess in enumerate(pair["assessments"]):
-            pair_templates[f"assess_{assess_idx}"] = (
-                renderer.render_assessment_template(assess, assess_idx, pairs)
-            )
+            doc_idx = doc_idx_map.get(assess["resource_id"])
+            if doc_idx is not None:
+                pair_templates[f"doc-{doc_idx}"] = renderer.render_assessment_template(
+                    assess, assess_idx, pairs
+                )
 
         templates[str(pair_idx)] = pair_templates
 

@@ -28,7 +28,7 @@ def _render_document_worker(
     results and progress updates to output_queue.
 
     Args:
-        input_queue: Queue containing (resource, doc_quotes, doc_entities) tuples
+        input_queue: Queue containing (doc_idx, resource, doc_quotes, doc_entities) tuples
         output_queue: Queue for sending ('progress', None) or ('result', data) messages
     """
     while True:
@@ -39,7 +39,7 @@ def _render_document_worker(
         if item is None:
             break
 
-        resource, doc_quotes, doc_entities = item
+        doc_idx, resource, doc_quotes, doc_entities = item
 
         try:
             # Render markdown to HTML
@@ -48,62 +48,32 @@ def _render_document_worker(
 
             # Annotate HTML with quotes and entities
             annotator = DocumentAnnotator(resource, renderer)
-            prerendered = annotator.annotate(doc_quotes, doc_entities)
+            prerendered = annotator.annotate(doc_idx, doc_quotes, doc_entities)
 
-            # Extract metadata in JSON-serializable format
-            metadata = {
-                "id": resource.id.id,
-                "url": resource.id.url,
-                "title": resource.title or "Untitled",
-                "publication_date": resource.publication_date,
-                "doi": resource.doi,
-                "quote_map": {
-                    quote_id: {
-                        "span_id": quote_meta.span_id,
-                        "pair_indices": quote_meta.pair_indices,
-                        "original_spans": quote_meta.original_spans,
-                        "html_spans": quote_meta.html_spans,
-                    }
-                    for quote_id, quote_meta in prerendered.quote_map.items()
-                },
-                "entity_map": {
-                    entity_id: {
-                        "span_id": entity_meta.span_id,
-                        "name": entity_meta.name,
-                        "kind": entity_meta.kind,
-                        "aliases": entity_meta.aliases,
-                        "pair_indices": entity_meta.pair_indices,
-                    }
-                    for entity_id, entity_meta in prerendered.entity_map.items()
-                },
-            }
-
-            # Send result back (progress will be updated when result is received)
-            output_queue.put(("result", (resource.id.id, prerendered.html, metadata)))
+            # Send result back (just HTML, no metadata)
+            output_queue.put(("result", (doc_idx, prerendered.html)))
 
         except Exception as e:
             # Send error back to main process
-            output_queue.put(("error", (resource.id.id, e)))
+            output_queue.put(("error", (doc_idx, e)))
 
 
 def render_documents_parallel(
-    docs_to_render: list[Resource],
-    doc_to_quotes: dict[str, list[ResourceQuote]],
-    doc_to_entities: dict[str, dict[int, dict[str, Any]]],
+    indexed_docs: list[tuple[int, Resource]],
+    doc_to_quotes: dict[int, list[ResourceQuote]],
+    doc_to_entities: dict[int, dict[int, dict[str, Any]]],
     progress_callback: Callable[[], None] | None = None,
-) -> tuple[dict[str, dict[str, Any]], dict[str, str]]:
+) -> dict[int, str]:
     """Render documents in parallel using multiprocessing.
 
     Args:
-        docs_to_render: List of Resource objects to render
-        doc_to_quotes: Mapping of doc_id -> list of ResourceQuote objects
-        doc_to_entities: Mapping of doc_id -> {pair_idx: {entity1, entity2}}
+        indexed_docs: List of (doc_idx, Resource) tuples
+        doc_to_quotes: Mapping of doc_idx -> list of ResourceQuote objects
+        doc_to_entities: Mapping of doc_idx -> {pair_idx: {entity1, entity2}}
         progress_callback: Optional callback function called after each document completes
 
     Returns:
-        Tuple of (documents, document_html):
-        - documents: Dict mapping doc_id -> metadata dict (JSON-serializable)
-        - document_html: Dict mapping doc_id -> pre-rendered HTML string
+        Dict mapping doc_idx -> pre-rendered HTML string
 
     Raises:
         Exception: If any worker encounters an error during rendering
@@ -117,11 +87,10 @@ def render_documents_parallel(
     output_queue: Queue = Queue()
 
     # Populate input queue with work items
-    for resource in docs_to_render:
-        doc_id = resource.id.id
-        doc_quotes = doc_to_quotes.get(doc_id, [])
-        doc_entities = doc_to_entities.get(doc_id, {})
-        input_queue.put((resource, doc_quotes, doc_entities))
+    for doc_idx, resource in indexed_docs:
+        doc_quotes = doc_to_quotes.get(doc_idx, [])
+        doc_entities = doc_to_entities.get(doc_idx, {})
+        input_queue.put((doc_idx, resource, doc_quotes, doc_entities))
 
     # Add poison pills (one per worker) to signal completion
     for _ in range(num_workers):
@@ -137,26 +106,24 @@ def render_documents_parallel(
         workers.append(worker)
 
     # Collect results from output queue
-    documents = {}
     document_html = {}
     completed = 0
     errors = []
 
-    while completed < len(docs_to_render):
+    while completed < len(indexed_docs):
         msg_type, msg_data = output_queue.get()
 
         if msg_type == "result":
-            doc_id, html, metadata = msg_data
-            document_html[doc_id] = html
-            documents[doc_id] = metadata
+            doc_idx, html = msg_data
+            document_html[doc_idx] = html
             # Increment progress when result is received
             completed += 1
             if progress_callback:
                 progress_callback()
 
         elif msg_type == "error":
-            doc_id, error = msg_data
-            errors.append((doc_id, error))
+            doc_idx, error = msg_data
+            errors.append((doc_idx, error))
             completed += 1
             if progress_callback:
                 progress_callback()
@@ -167,9 +134,9 @@ def render_documents_parallel(
 
     # Raise first error if any occurred
     if errors:
-        doc_id, error = errors[0]
+        doc_idx, error = errors[0]
         raise RuntimeError(
-            f"Document rendering failed for {doc_id}: {error}"
+            f"Document rendering failed for doc index {doc_idx}: {error}"
         ) from error
 
-    return documents, document_html
+    return document_html

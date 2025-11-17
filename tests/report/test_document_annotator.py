@@ -57,7 +57,7 @@ class TestDocumentAnnotator:
         }
 
         # Annotate
-        result = annotator.annotate([quote], entities)
+        result = annotator.annotate(0, [quote], entities)
 
         # Verify structure
         assert result.doc_id == resource.id.id
@@ -86,7 +86,7 @@ class TestDocumentAnnotator:
         annotator = DocumentAnnotator(resource, renderer)
 
         # No quotes, no entities
-        result = annotator.annotate([], {})
+        result = annotator.annotate(0, [], {})
 
         assert result.doc_id == resource.id.id
         # HTML now includes document-links wrapper and document-text container
@@ -134,7 +134,7 @@ class TestDocumentAnnotator:
             }
         }
 
-        result = annotator.annotate([quote], entities)
+        result = annotator.annotate(0, [quote], entities)
 
         # Should find BRCA1 within quote
         # May or may not find the second BRCA1 (depends on implementation)
@@ -170,7 +170,7 @@ class TestDocumentAnnotator:
             fuzzy_corrected=False,
         )
 
-        result = annotator.annotate([quote1, quote2], {})
+        result = annotator.annotate(0, [quote1, quote2], {})
 
         assert len(result.quote_map) == 2
 
@@ -224,7 +224,7 @@ class TestDocumentAnnotator:
             }
         }
 
-        result = annotator.annotate(quotes, entities)
+        result = annotator.annotate(0, quotes, entities)
 
         html = result.html
         assert '<abbr title="Pulmonary arterial hypertension">IPAH</abbr>' in html
@@ -268,7 +268,7 @@ class TestDocumentAnnotator:
             }
         }
 
-        result = annotator.annotate([quote], entities)
+        result = annotator.annotate(0, [quote], entities)
 
         # Find BRCA1 entity in map
         brca1_entities = [e for e in result.entity_map.values() if e.name == "BRCA1"]
@@ -318,7 +318,7 @@ class TestDocumentAnnotator:
             }
         }
 
-        result = annotator.annotate([quote], entities)
+        result = annotator.annotate(0, [quote], entities)
 
         # Should find TGF-α even though we searched for TGF-alpha
         assert "TGF-alpha receptor" in [e.name for e in result.entity_map.values()]

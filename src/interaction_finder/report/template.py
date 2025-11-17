@@ -1,10 +1,9 @@
 """HTML template for report generation.
 
-Provides a Jinja2 template for rendering self-contained HTML reports
-with embedded data, CSS, and JavaScript.
+Renders self-contained HTML reports with minimal data-attributes.
+No JSON embedding - all data queryable from HTML structure.
 """
 
-import json
 from typing import Any
 
 from interaction_finder.report.assets import get_css, get_js
@@ -32,9 +31,14 @@ def _render_pair_cards(pairs: list[dict[str, Any]]) -> str:
 
     cards = []
     for idx, pair in enumerate(pairs):
-        # Build entity aliases tooltip
-        entity1_aliases = ", ".join(pair["entity1"]["aliases"])
-        entity2_aliases = ", ".join(pair["entity2"]["aliases"])
+        # Build entity aliases (comma-separated for data-attribute)
+        entity1_aliases_data = ",".join(pair["entity1"]["aliases"])
+        entity2_aliases_data = ",".join(pair["entity2"]["aliases"])
+        entity1_aliases_display = ", ".join(pair["entity1"]["aliases"])
+        entity2_aliases_display = ", ".join(pair["entity2"]["aliases"])
+
+        # Build doc indices list (space-separated)
+        doc_indices = " ".join(str(assess["doc_idx"]) for assess in pair["assessments"])
 
         # Build card classes
         card_classes = ["pair-card"]
@@ -70,16 +74,23 @@ def _render_pair_cards(pairs: list[dict[str, Any]]) -> str:
                     {"".join(variant_items)}
                 </div>"""
 
-        # Build complete card
+        # Build complete card with minimal data-attributes
         card_html = f"""
-        <div class="{" ".join(card_classes)}" data-pair-idx="{idx}">
+        <div id="pair-{idx}" class="{" ".join(card_classes)}"
+             data-e1="{_escape_html(pair["entity1"]["name"])}"
+             data-e1a="{_escape_html(entity1_aliases_data)}"
+             data-e2="{_escape_html(pair["entity2"]["name"])}"
+             data-e2a="{_escape_html(entity2_aliases_data)}"
+             data-rel="{_escape_html(pair["relationship"])}"
+             data-accepted="{str(pair["accepted"]).lower()}"
+             data-docs="{doc_indices}">
             <div class="pair-entities">
                 <span class="entity-name left"
-                      title="{_escape_html(entity1_aliases)}">
+                      title="{_escape_html(entity1_aliases_display)}">
                     {_escape_html(pair["entity1"]["name"])}
                 </span>
                 <span class="entity-name right"
-                      title="{_escape_html(entity2_aliases)}">
+                      title="{_escape_html(entity2_aliases_display)}">
                     {_escape_html(pair["entity2"]["name"])}
                 </span>
             </div>{kinds_html}
@@ -181,12 +192,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 {{ reasoning_templates }}
     </div>
 
-    <!-- Embedded Data -->
-    <script>
-        window.REPORT_DATA = {{ data_json }};
-    </script>
-
-    <!-- JavaScript -->
+    <!-- JavaScript (no embedded JSON data) -->
     <script>
 {{ js }}
     </script>
@@ -196,37 +202,41 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
 
 def render_template(
-    data: dict[str, Any],
-    document_html: dict[str, str],
+    pairs: list[dict[str, Any]],
+    document_html: dict[int, str],
     reasoning_templates: dict[str, dict[str, str]],
-    title: str = "Extraction Report",
+    topic: str,
+    title: str | None = None,
 ) -> str:
     """Render HTML report from prepared data.
 
     Args:
-        data: Prepared report data from prepare_report_data() (JSON-serializable)
-        document_html: Mapping of doc_id -> pre-rendered HTML string
+        pairs: List of pair data dicts with doc indices
+        document_html: Mapping of doc_idx -> pre-rendered HTML string
         reasoning_templates: Nested dict pair_idx -> template_type -> HTML
-        title: Report title
+        topic: Report topic for header
+        title: Optional report title (defaults to "Extraction Report: {topic}")
 
     Returns:
         Complete HTML document as string
     """
+    if title is None:
+        title = f"Extraction Report: {topic}"
+
     # Simple template rendering without Jinja2 dependency
     # Use string replacement for placeholders
     html = HTML_TEMPLATE
 
     # Build pair cards HTML
-    pair_cards_html = _render_pair_cards(data["pairs"])
+    pair_cards_html = _render_pair_cards(pairs)
 
     # Build document templates HTML
     doc_templates_parts = []
-    for doc_id, doc_html in document_html.items():
+    for doc_idx, doc_html in document_html.items():
         # Wrap each document's HTML in a <template> tag with unique ID
-        # Note: doc_html already contains <div class="document-links"> and <div class="document-text">
-        escaped_doc_id = _escape_html(doc_id)
+        # Use numeric doc indices
         doc_templates_parts.append(
-            f'        <template id="doc-template-{escaped_doc_id}">\n'
+            f'        <template id="doc-template-{doc_idx}">\n'
             f"            {doc_html}\n"
             f"        </template>"
         )
@@ -244,15 +254,23 @@ def render_template(
             )
     reasoning_templates_html = "\n".join(reasoning_templates_parts)
 
+    # Compute statistics from pairs (no pre-computed JSON)
+    total_pairs = len(pairs)
+    # Count unique documents from all assessments
+    unique_docs = set()
+    for pair in pairs:
+        for assess in pair["assessments"]:
+            unique_docs.add(assess["doc_idx"])
+    resource_count = len(unique_docs)
+
     # Replace placeholders
     replacements = {
         "{{ title }}": _escape_html(title),
-        "{{ metadata.topic }}": _escape_html(data["metadata"]["topic"]),
-        "{{ metadata.total_pairs }}": str(data["metadata"]["total_pairs"]),
-        "{{ metadata.resource_count }}": str(data["metadata"]["resource_count"]),
+        "{{ metadata.topic }}": _escape_html(topic),
+        "{{ metadata.total_pairs }}": str(total_pairs),
+        "{{ metadata.resource_count }}": str(resource_count),
         "{{ css }}": get_css(),
         "{{ js }}": get_js(),
-        "{{ data_json }}": json.dumps(data, ensure_ascii=False, indent=2),
         "{{ document_templates }}": document_templates_html,
         "{{ reasoning_templates }}": reasoning_templates_html,
         "{{ pair_cards }}": pair_cards_html,
@@ -261,13 +279,24 @@ def render_template(
     for placeholder, value in replacements.items():
         html = html.replace(placeholder, value)
 
-    # Handle entity stats loop
+    # Handle entity stats loop (compute from pairs)
+    entity_kinds: dict[str, set[str]] = {}
+    for pair in pairs:
+        kind1 = pair["entity1"]["kind"]
+        kind2 = pair["entity2"]["kind"]
+        if kind1 not in entity_kinds:
+            entity_kinds[kind1] = set()
+        if kind2 not in entity_kinds:
+            entity_kinds[kind2] = set()
+        entity_kinds[kind1].add(pair["entity1"]["name"])
+        entity_kinds[kind2].add(pair["entity2"]["name"])
+
     entity_stats_html = ""
-    for kind, count in data["metadata"]["entity_stats"].items():
+    for kind, names in entity_kinds.items():
         entity_stats_html += f"""
                 <span class="stat-item">
                     <span class="stat-label">{_escape_html(kind)}:</span>
-                    <span>{count}</span>
+                    <span>{len(names)}</span>
                 </span>"""
 
     # Replace the Jinja2 loop with rendered HTML

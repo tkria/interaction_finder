@@ -1,7 +1,7 @@
 """Data preparation for report generation.
 
-Transforms ExtractionResult into JSON-serializable report data structures
-optimized for frontend rendering and filtering.
+Transforms ExtractionResult into report structure with minimal data-attributes.
+No JSON generation - all data embedded in HTML structure.
 """
 
 from collections import defaultdict
@@ -21,22 +21,31 @@ from interaction_finder.report.parallel_renderer import render_documents_paralle
 from interaction_finder.report.reasoning_renderer import render_all_reasoning_templates
 
 
-def _sort_assessments(
-    assessments: list[dict[str, Any]], documents: dict[str, dict[str, Any]]
+def _sort_assessments_by_date(
+    assessments: list[dict[str, Any]],
+    doc_idx_map: dict[str, int],
+    indexed_docs: list[tuple[int, Any]],
 ) -> list[dict[str, Any]]:
     """Sort assessments by publication date (newest first), then quote count.
 
     Args:
         assessments: List of assessment dictionaries
-        documents: Document metadata mapping (doc_id -> metadata)
+        doc_idx_map: Mapping of resource_id -> doc_idx
+        indexed_docs: List of (doc_idx, resource) tuples
 
     Returns:
         Sorted assessments list
     """
+    # Build doc_idx -> resource map for quick lookup
+    doc_resources = {idx: resource for idx, resource in indexed_docs}
 
     def sort_key(assess: dict[str, Any]) -> tuple:
-        doc = documents.get(assess["resource_id"], {})
-        date = doc.get("publication_date", "")
+        doc_idx = doc_idx_map.get(assess["resource_id"])
+        if doc_idx is None:
+            return ("", 0)
+
+        resource = doc_resources.get(doc_idx)
+        date = resource.publication_date if resource else ""
         quote_count = len(assess.get("quotes", []))
         # Negative for descending order (newest first, most quotes first)
         # Empty dates sort last
@@ -49,7 +58,7 @@ def prepare_report_data(
     checkpoint: PipelineCheckpoint,
     show_progress: bool = True,
     judgments_override: list | None = None,
-) -> tuple[dict[str, Any], dict[str, str], dict[str, dict[str, str]]]:
+) -> tuple[list[dict[str, Any]], dict[int, str], dict[str, dict[str, str]]]:
     """Transform PipelineCheckpoint into report data structure.
 
     Args:
@@ -58,9 +67,9 @@ def prepare_report_data(
         judgments_override: Optional filtered judgments list
 
     Returns:
-        Tuple of (json_data, document_html_map, reasoning_templates)
-        - json_data: JSON-serializable dict with metadata for frontend
-        - document_html_map: Mapping of doc_id -> pre-rendered HTML string
+        Tuple of (pairs, document_html_map, reasoning_templates)
+        - pairs: List of pair data dicts with doc indices (not IDs)
+        - document_html_map: Mapping of doc_idx -> pre-rendered HTML string
         - reasoning_templates: Nested dict pair_idx -> template_type -> HTML
     """
     if not checkpoint.extraction:
@@ -72,33 +81,6 @@ def prepare_report_data(
         if judgments_override is not None
         else checkpoint.extraction.judgments
     )
-
-    # Group judgments by entity pair (merge different relationships)
-    pair_groups = defaultdict(list)
-    for judgment in judgments:
-        # Create canonical pair key (sorted entity names)
-        e1, e2 = sorted([judgment.entity1.name, judgment.entity2.name])
-        pair_key = (e1, e2)
-        pair_groups[pair_key].append(judgment)
-
-    # Extract entity statistics
-    entity_kinds: dict[str, set[str]] = defaultdict(set)
-    for judgment in judgments:
-        entity_kinds[judgment.entity1.kind].add(judgment.entity1.name)
-        entity_kinds[judgment.entity2.kind].add(judgment.entity2.name)
-
-    entity_stats = {kind: len(names) for kind, names in entity_kinds.items()}
-
-    # Confidence distribution
-    confidence_counts = {"high": 0, "medium": 0, "low": 0}
-    for judgment in judgments:
-        confidence_counts[judgment.confidence] += 1
-
-    # Build entity index: entity name -> list of pair indices
-    entity_index: dict[str, list[int]] = defaultdict(list)
-    for idx, judgment in enumerate(judgments):
-        entity_index[judgment.entity1.name].append(idx)
-        entity_index[judgment.entity2.name].append(idx)
 
     # Group judgments by entity pair (to collapse different relationships)
     pair_groups: dict[tuple[str, str], list] = defaultdict(list)
@@ -235,26 +217,47 @@ def prepare_report_data(
     # Note: We'll do a second pass after documents are rendered
     # to ensure documents dict is available for accurate sorting
 
-    # Build document index with pre-rendered HTML
-    # Collect document references directly from judgments
-    doc_to_quotes: dict[str, list[Any]] = defaultdict(
-        list
-    )  # doc_id -> [ResourceQuote objects]
-    doc_to_entities: dict[str, dict[int, dict[str, Any]]] = defaultdict(
-        dict
-    )  # doc_id -> {pair_idx: {entity1, entity2}}
+    # Create document index mapping: resource_id -> sequential doc_idx
+    # First, collect all unique document IDs from assessments
+    unique_doc_ids = set()
+    for pair in pairs:
+        for assess in pair["assessments"]:
+            unique_doc_ids.add(assess["resource_id"])
+
+    # Assign sequential indices to documents
+    doc_idx_map: dict[str, int] = {}
+    indexed_docs: list[tuple[int, Any]] = []
+
+    for doc_idx, resource in enumerate(checkpoint.resources.resources):
+        if resource.id.id in unique_doc_ids:
+            doc_idx_map[resource.id.id] = doc_idx
+            indexed_docs.append((doc_idx, resource))
+
+    # Update assessments to use doc indices instead of IDs
+    for pair in pairs:
+        for assess in pair["assessments"]:
+            assess["doc_idx"] = doc_idx_map[assess["resource_id"]]
+
+    # Sort assessments within each pair by publication date
+    for pair in pairs:
+        pair["assessments"] = _sort_assessments_by_date(
+            pair["assessments"], doc_idx_map, indexed_docs
+        )
+
+    # Build document rendering data structures
+    # doc_idx -> [ResourceQuote objects]
+    doc_to_quotes: dict[int, list[Any]] = defaultdict(list)
+    # doc_idx -> {pair_idx: {entity1, entity2}}
+    doc_to_entities: dict[int, dict[int, dict[str, Any]]] = defaultdict(dict)
 
     # Map from sorted (entity1, entity2) to pair_idx for tracking
-    # Use sorted names to handle different orderings
     pair_idx_map = {}
     for pair_idx, pair in enumerate(pairs):
-        # Create sorted key for matching
         e1, e2 = sorted([pair["entity1"]["name"], pair["entity2"]["name"]])
         pair_idx_map[(e1, e2)] = pair_idx
 
     # Go back to original judgments to get ResourceQuote objects
     for judgment in judgments:
-        # Create sorted key to match against pair_idx_map
         e1, e2 = sorted([judgment.entity1.name, judgment.entity2.name])
         pair_idx = pair_idx_map.get((e1, e2))
 
@@ -264,15 +267,19 @@ def prepare_report_data(
         # Collect quotes and entities from each assessment
         for assess in judgment.assessments:
             doc_id = assess.resource_id.id
+            doc_idx = doc_idx_map.get(doc_id)
+
+            if doc_idx is None:
+                continue
 
             # Store the actual ResourceQuote objects
             for quote in assess.quotes:
-                if quote not in doc_to_quotes[doc_id]:
-                    doc_to_quotes[doc_id].append(quote)
+                if quote not in doc_to_quotes[doc_idx]:
+                    doc_to_quotes[doc_idx].append(quote)
 
             # Store entities for this pair in this document
-            if pair_idx not in doc_to_entities[doc_id]:
-                doc_to_entities[doc_id][pair_idx] = {
+            if pair_idx not in doc_to_entities[doc_idx]:
+                doc_to_entities[doc_idx][pair_idx] = {
                     "entity1": {
                         "name": judgment.entity1.name,
                         "kind": judgment.entity1.kind,
@@ -286,12 +293,7 @@ def prepare_report_data(
                 }
 
     # Pre-render documents in parallel using multiprocessing
-    # Count how many documents need rendering
-    docs_to_render = [
-        r for r in checkpoint.resources.resources if r.id.id in doc_to_quotes
-    ]
-
-    if show_progress and docs_to_render:
+    if show_progress and indexed_docs:
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
@@ -300,62 +302,28 @@ def prepare_report_data(
             TimeElapsedColumn(),
         ) as progress:
             task = progress.add_task(
-                f"Rendering {len(docs_to_render)} documents...",
-                total=len(docs_to_render),
+                f"Rendering {len(indexed_docs)} documents...",
+                total=len(indexed_docs),
             )
 
             def update_progress():
                 progress.update(task, advance=1)
 
-            documents, document_html = render_documents_parallel(
-                docs_to_render,
+            document_html = render_documents_parallel(
+                indexed_docs,
                 doc_to_quotes,
                 doc_to_entities,
                 progress_callback=update_progress,
             )
     else:
-        documents, document_html = render_documents_parallel(
-            docs_to_render,
+        document_html = render_documents_parallel(
+            indexed_docs,
             doc_to_quotes,
             doc_to_entities,
             progress_callback=None,
         )
 
-    # Build comprehensive entity-to-pair mapping (including aliases)
-    # Maps entity name/alias -> list of pair indices
-    entity_to_pairs: dict[str, list[int]] = defaultdict(list)
-    for pair_idx, pair in enumerate(pairs):
-        # Add entity1
-        entity_to_pairs[pair["entity1"]["name"].lower()].append(pair_idx)
-        for alias in pair["entity1"]["aliases"]:
-            entity_to_pairs[alias.lower()].append(pair_idx)
-
-        # Add entity2
-        entity_to_pairs[pair["entity2"]["name"].lower()].append(pair_idx)
-        for alias in pair["entity2"]["aliases"]:
-            entity_to_pairs[alias.lower()].append(pair_idx)
-
-    # Sort assessments within each pair (now that documents dict is available)
-    for pair in pairs:
-        pair["assessments"] = _sort_assessments(pair["assessments"], documents)
-
     # Generate reasoning templates for all pairs
-    reasoning_templates = render_all_reasoning_templates(pairs)
+    reasoning_templates = render_all_reasoning_templates(pairs, doc_idx_map)
 
-    json_data = {
-        "metadata": {
-            "topic": checkpoint.topic,
-            "total_pairs": len(judgments),
-            "accepted_pairs": sum(1 for j in judgments if j.accepted),
-            "rejected_pairs": sum(1 for j in judgments if not j.accepted),
-            "entity_stats": entity_stats,
-            "confidence_counts": confidence_counts,
-            "resource_count": checkpoint.extraction.metadata.resource_count,
-        },
-        "pairs": pairs,
-        "documents": documents,
-        "entity_index": {name: indices for name, indices in entity_index.items()},
-        "entity_to_pairs": dict(entity_to_pairs),
-    }
-
-    return json_data, document_html, reasoning_templates
+    return pairs, document_html, reasoning_templates
