@@ -17,6 +17,13 @@ from .checkpoint import (
     ExtractionStageData,
     _rebuild_models,
 )
+from .upgrade import (
+    checkpoint_stage,
+    create_empty_checkpoint,
+    ensure_keywords,
+    ensure_search,
+    ensure_extraction,
+)
 
 # Rebuild checkpoint models to resolve forward references after imports
 _rebuild_models()
@@ -37,4 +44,9 @@ __all__ = [
     "KeywordsStageData",
     "SearchStageData",
     "ExtractionStageData",
+    "checkpoint_stage",
+    "create_empty_checkpoint",
+    "ensure_keywords",
+    "ensure_search",
+    "ensure_extraction",
 ]

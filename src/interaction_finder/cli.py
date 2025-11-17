@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
-from typing import Optional, List, Any
+from typing import Annotated, Optional, List, Any
 
 import typer
 import click
@@ -29,54 +29,69 @@ app = typer.Typer(
 console = Console()
 
 
+# Common parameter factories to reduce boilerplate
+# These are functions that return fresh Option instances (avoiding mutable default issues)
+def config_option():
+    return typer.Option(None, "-c", "--config", help="Config file")
+
+
+def mode_option():
+    return typer.Option(None, "-m", "--mode", help="Configuration mode")
+
+
+def verbose_option():
+    return typer.Option(False, "-v", "--verbose", help="Verbose output")
+
+
+def overrides_option():
+    return typer.Option([], "-O", "--override", help="Config overrides")
+
+
 # Global options that apply to all subcommands
 @app.callback()
 def global_options(
-    config: Optional[str] = typer.Option(
-        None, "-c", "--config", help="Path to configuration file"
-    ),
-    verbose: bool = typer.Option(False, "-v", "--verbose", help="Show verbose output"),
-    overrides: List[str] = typer.Option(
-        [],
-        "-O",
-        "--override",
-        help="Override config values using dotted paths (e.g., -O output.cache=my_cache)",
-    ),
+    config: Optional[str] = config_option(),
+    mode: Optional[str] = mode_option(),
+    verbose: bool = verbose_option(),
+    overrides: List[str] = overrides_option(),
 ):
     """
     A tool for fetching and processing web content for interaction discovery.
 
-    Global options like --config, --verbose, and --override can be used with any subcommand.
+    Global options like --config, --mode, --verbose, and --override can be used with any subcommand.
     """
     # Store options in the context for use by subcommands
     ctx = click.get_current_context()
     ctx.ensure_object(dict)
     ctx.obj["config"] = config
+    ctx.obj["mode"] = mode
     ctx.obj["verbose"] = verbose
     ctx.obj["overrides"] = overrides
 
 
 def get_options_with_fallback(
     config: Optional[str] = None,
+    mode: Optional[str] = None,
     verbose: Optional[bool] = None,
     overrides: Optional[List[str]] = None,
-) -> tuple[Optional[str], bool, List[str]]:
+) -> tuple[Optional[str], Optional[str], bool, List[str]]:
     """
     Get options, using global values as fallback for None/empty local values.
 
     Returns:
-        Tuple of (effective_config, effective_verbose, effective_overrides)
+        Tuple of (effective_config, effective_mode, effective_verbose, effective_overrides)
     """
     ctx = click.get_current_context()
     if not ctx.obj:
-        return config, verbose or False, overrides or []
+        return config, mode, verbose or False, overrides or []
     # Use local values if provided, otherwise fall back to global
     effective_config = config if config is not None else ctx.obj.get("config")
+    effective_mode = mode if mode is not None else ctx.obj.get("mode")
     effective_verbose = (
         verbose if verbose is not None else ctx.obj.get("verbose", False)
     )
     effective_overrides = overrides if overrides else ctx.obj.get("overrides", [])
-    return effective_config, effective_verbose, effective_overrides
+    return effective_config, effective_mode, effective_verbose, effective_overrides
 
 
 def _parse_filter_options(filter_args: List[str]) -> dict[str, str]:
@@ -241,14 +256,10 @@ def scan_available_terms(config: IfetcherConfig) -> List[str]:
 
 @app.command()
 def terms(
-    mode: Optional[str] = typer.Option(
-        None, "-m", "--mode", help="Configuration mode to use"
-    ),
-    config: Optional[str] = typer.Option(None, "-c", "--config", help="Config file"),
-    verbose: bool = typer.Option(False, "-v", "--verbose", help="Verbose output"),
-    overrides: List[str] = typer.Option(
-        [], "-O", "--override", help="Config overrides"
-    ),
+    config: Optional[str] = config_option(),
+    mode: Optional[str] = mode_option(),
+    verbose: bool = verbose_option(),
+    overrides: List[str] = overrides_option(),
 ):
     """
     List available terms found in training data directory.
@@ -378,14 +389,10 @@ def fetch(
         "--chunk/--no-chunk",
         help="Perform semantic chunking and cache chunks",
     ),
-    mode: Optional[str] = typer.Option(
-        None, "-m", "--mode", help="Configuration mode to use"
-    ),
-    config: Optional[str] = typer.Option(None, "-c", "--config", help="Config file"),
-    verbose: bool = typer.Option(False, "-v", "--verbose", help="Verbose output"),
-    overrides: List[str] = typer.Option(
-        [], "-O", "--override", help="Config overrides"
-    ),
+    config: Optional[str] = config_option(),
+    mode: Optional[str] = mode_option(),
+    verbose: bool = verbose_option(),
+    overrides: List[str] = overrides_option(),
 ):
     """
     Fetch web content and cache it using PageFetcher, or clear cache entries.
@@ -549,9 +556,10 @@ def keywords(
     max_rounds: Optional[int] = typer.Option(
         None, "--max-rounds", help="Override maximum search rounds"
     ),
-    backend: Optional[str] = typer.Option(
-        None, "-b", "--backend", help="Search backend to use"
-    ),
+    config: Optional[str] = config_option(),
+    mode: Optional[str] = mode_option(),
+    verbose: bool = verbose_option(),
+    overrides: List[str] = overrides_option(),
 ):
     """
     Extract bridging terms for a research topic by analyzing review articles.
@@ -566,64 +574,50 @@ def keywords(
         interaction-finder keywords "machine learning" -o keywords.json
     """
     try:
-        # Load configuration
-        config_path = None  # Use default config
-        cfg = IfetcherConfig.from_path(config_path) if config_path else IfetcherConfig()
-
-        # Apply overrides if provided
-        if max_rounds:
+        # Get effective options (local flags override global)
+        config_path, mode, verbose, overrides = get_options_with_fallback(
+            config, mode, verbose, overrides
+        )
+        # Load config
+        cfg = load_config(config_path, overrides, mode)
+        # Apply CLI overrides
+        if max_rounds is not None:
             cfg.tools.keywords.max_rounds = max_rounds
-        if backend:
-            cfg.tools.keywords.search_backend = backend
-
-        # Show PubMed API key warning if using PubMed backend
-        # Note: Keywords module currently hardcodes PubMedBackend
-        backend_name = cfg.tools.keywords.search_backend
-        if backend_name == "pubmed":
-            # Import backend to check for API key
-            from interaction_finder.search.backends.pubmed import PubMedBackend
-
-            test_backend = PubMedBackend(config={"timeout": cfg.tools.search.timeout})
-            if test_backend.should_show_api_key_warning():
-                console.print(
-                    "[yellow]Note:[/yellow] PubMed API key not configured. "
-                    "Using default rate limit of 3 req/sec.\n"
-                    "With an API key, you can increase to 10 req/sec. "
-                    "Get your free key at: https://www.ncbi.nlm.nih.gov/account/settings/\n"
-                )
-
-        # Import here to avoid slow imports at CLI startup
+        # Import keywords pipeline
         from interaction_finder.keywords import run_keyword_research
 
-        # Run keyword research
+        # Run keywords stage
         console.print(f"[bold]Extracting bridging terms for:[/bold] {topic}\n")
-        result = asyncio.run(run_keyword_research(topic, cfg, verbose=True))
+        result_checkpoint = asyncio.run(run_keyword_research(topic, cfg, verbose=False))
+
+        # Extract keywords data for display
+        keywords_data = result_checkpoint.keywords
 
         # Display results
         console.print(
-            f"\n[bold green]✓ Found {len(result.terms)} bridging terms[/bold green]"
+            f"\n[bold green]✓ Found {len(keywords_data.terms)} bridging terms[/bold green]"
         )
-        console.print(f"Documents processed: {result.total_documents_processed}")
-        console.print(f"Rounds completed: {result.rounds_completed}")
-        console.print(f"\nCoverage: {result.coverage_assessment}\n")
+        console.print(f"Documents processed: {keywords_data.total_documents_processed}")
+        console.print(f"Rounds completed: {keywords_data.rounds_completed}")
+        console.print(f"\nCoverage: {keywords_data.coverage_assessment}\n")
 
         # Print terms with similarity scores
-        if result.terms:
+        if keywords_data.terms:
             console.print("[bold]Bridging Terms:[/bold]")
-            for term, score in zip(result.terms, result.scores):
+            for term, score in zip(keywords_data.terms, keywords_data.scores):
                 console.print(f" [dim]{score:5.2f}[/dim] • {term}")
         else:
             console.print("[yellow]No bridging terms found[/yellow]")
 
-        # Save to file if requested
+        # Save checkpoint if requested
         if output:
-            output_data = result.model_dump(mode="json")
-            output.write_text(json.dumps(output_data, indent=2))
+            output.write_text(result_checkpoint.model_dump_json(indent=2))
             console.print(f"\n[dim]Saved to {output}[/dim]")
 
     except Exception as e:
         console.print(f"\n[red]Error:[/red] {e}")
-        console.print_exception()
+        if verbose:
+            console.print_exception()
         raise typer.Exit(1)
 
 
@@ -651,14 +645,10 @@ def widesearch(
     fetch: bool = typer.Option(
         False, "--fetch", help="Fetch and cache content for all selected results"
     ),
-    mode: Optional[str] = typer.Option(
-        None, "-m", "--mode", help="Configuration mode to use"
-    ),
-    config: Optional[str] = typer.Option(None, "-c", "--config", help="Config file"),
-    verbose: bool = typer.Option(False, "-v", "--verbose", help="Verbose output"),
-    overrides: List[str] = typer.Option(
-        [], "-O", "--override", help="Config overrides"
-    ),
+    config: Optional[str] = config_option(),
+    mode: Optional[str] = mode_option(),
+    verbose: bool = verbose_option(),
+    overrides: List[str] = overrides_option(),
 ):
     """
     Execute widesearch using keywords from keywords command.
@@ -678,8 +668,8 @@ def widesearch(
     """
     try:
         # Get effective options
-        config_path, verbose, overrides = get_options_with_fallback(
-            config, verbose, overrides
+        config_path, mode, verbose, overrides = get_options_with_fallback(
+            config, mode, verbose, overrides
         )
         # Load config
         cfg = load_config(config_path, overrides, mode)
@@ -731,9 +721,6 @@ def widesearch(
                 "With an API key, you can increase to 10 req/sec. "
                 "Get your free key at: https://www.ncbi.nlm.nih.gov/account/settings/\n"
             )
-        # Import widesearch entrypoint
-        from interaction_finder.widesearch import run_widesearch_with_checkpoint
-
         # Display start message
         console.print(f"[bold]Running widesearch for:[/bold] {topic}")
         # Show keyphrases info if keywords stage present
@@ -745,6 +732,14 @@ def widesearch(
         resource_count = len(input_checkpoint.resources.resource_map)
         if resource_count > 0:
             console.print(f"Starting with {resource_count} existing resources in pool")
+
+        # Check prerequisite stage (must have keywords)
+        if input_checkpoint.keywords is None:
+            raise ValueError(
+                "Widesearch requires checkpoint with keywords stage completed. "
+                "Run keywords command first."
+            )
+
         console.print()
         # Pre-load reranker if enabled to avoid debug messages during progress display
         reranker = None
@@ -761,8 +756,11 @@ def widesearch(
         from interaction_finder.widesearch.progress import WidesearchProgress
 
         progress_counter = WidesearchProgress()
-        # Run widesearch with checkpoint, passing the entire checkpoint
+        # Use upgrade system to advance from keywords to search
         with progress_counter:
+            # Import run function for progress integration
+            from interaction_finder.widesearch import run_widesearch_with_checkpoint
+
             checkpoint = asyncio.run(
                 run_widesearch_with_checkpoint(
                     input_checkpoint=input_checkpoint,
@@ -830,14 +828,10 @@ def extract(
     output: Optional[Path] = typer.Option(
         None, "-o", "--output", help="Output file for extraction results (JSON)"
     ),
-    mode: Optional[str] = typer.Option(
-        None, "-m", "--mode", help="Configuration mode to use"
-    ),
-    config: Optional[str] = typer.Option(None, "-c", "--config", help="Config file"),
-    verbose: bool = typer.Option(False, "-v", "--verbose", help="Verbose output"),
-    overrides: List[str] = typer.Option(
-        [], "-O", "--override", help="Config overrides"
-    ),
+    config: Optional[str] = config_option(),
+    mode: Optional[str] = mode_option(),
+    verbose: bool = verbose_option(),
+    overrides: List[str] = overrides_option(),
 ):
     """
     Extract entity-entity associations from widesearch results.
@@ -855,8 +849,8 @@ def extract(
     """
     try:
         # Get effective options
-        config_path, verbose, overrides = get_options_with_fallback(
-            config, verbose, overrides
+        config_path, mode, verbose, overrides = get_options_with_fallback(
+            config, mode, verbose, overrides
         )
         # Load config
         cfg = load_config(config_path, overrides, mode)
