@@ -212,10 +212,6 @@ header {
     font-weight: 600;
 }
 
-.header-search {
-    max-width: 600px;
-}
-
 .header-controls {
     display: flex;
     gap: 1rem;
