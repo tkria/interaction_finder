@@ -13,6 +13,7 @@ from interaction_finder.extraction.models import (
     EntityMergeDecisions,
     ExtractionMetadata,
     PairJudgment,
+    PairSpread,
     ProximalPairExtraction,
     ProximalPairInfo,
     SimpleEntity,
@@ -259,7 +260,7 @@ class TestPairJudgment:
                 name="breast cancer", kind="disease", aliases=["breast cancer"]
             ),
             relationship="associated_with",
-            assessments=[],
+            spread=PairSpread(),
             accepted=True,
             confidence="high",
             reasoning="Multiple strong sources with consistent evidence support acceptance.",
@@ -277,10 +278,317 @@ class TestPairJudgment:
                 name="breast cancer", kind="disease", aliases=["breast cancer"]
             ),
             relationship="associated_with",
-            assessments=[],
+            spread=PairSpread(),
             accepted=False,
             confidence="low",
             reasoning="Evidence is weak or contradictory, leading to rejection.",
         )
         assert judgment.accepted is False
         assert judgment.confidence == "low"
+
+
+class TestPairSpread:
+    """Tests for PairSpread model."""
+
+    def test_empty_spread(self):
+        """Test creating empty PairSpread."""
+        spread = PairSpread()
+        assert len(spread.supporting) == 0
+        assert len(spread.refuting) == 0
+        assert len(spread.neutral) == 0
+        assert len(spread.irrelevant) == 0
+
+    def test_spread_with_supporting_only(self):
+        """Test PairSpread with only supporting assessments."""
+        pool = ResourcePool()
+        resource = pool.add(
+            url="http://example.com", title="Test", document_text="Test"
+        )
+
+        from interaction_finder.extraction.models import EntityMention, PairAssessment
+
+        entity1 = EntityMention(
+            kind="gene", name="BRCA1", aliases=["BRCA1"], quotes=[], reasoning="test"
+        )
+        entity2 = EntityMention(
+            kind="disease",
+            name="cancer",
+            aliases=["cancer"],
+            quotes=[],
+            reasoning="test",
+        )
+
+        assessment = PairAssessment(
+            resource_id=resource.id,
+            entity1=entity1,
+            entity2=entity2,
+            relationship="increases_risk_of",
+            quotes=[],
+            confidence="high",
+            reasoning="test",
+        )
+
+        spread = PairSpread(supporting=[assessment])
+        assert len(spread.supporting) == 1
+        assert len(spread.refuting) == 0
+        assert len(spread.neutral) == 0
+        assert len(spread.irrelevant) == 0
+
+    def test_spread_serialization(self):
+        """Test that PairSpread can be serialized and deserialized."""
+        pool = ResourcePool()
+        resource = pool.add(
+            url="http://example.com", title="Test", document_text="Test"
+        )
+
+        from interaction_finder.extraction.models import EntityMention, PairAssessment
+
+        entity1 = EntityMention(
+            kind="gene", name="BRCA1", aliases=["BRCA1"], quotes=[], reasoning="test"
+        )
+        entity2 = EntityMention(
+            kind="disease",
+            name="cancer",
+            aliases=["cancer"],
+            quotes=[],
+            reasoning="test",
+        )
+
+        assessment1 = PairAssessment(
+            resource_id=resource.id,
+            entity1=entity1,
+            entity2=entity2,
+            relationship="increases_risk_of",
+            quotes=[],
+            confidence="high",
+            reasoning="supporting evidence",
+        )
+
+        assessment2 = PairAssessment(
+            resource_id=resource.id,
+            entity1=entity1,
+            entity2=entity2,
+            relationship="protects_against",
+            quotes=[],
+            confidence="medium",
+            reasoning="refuting evidence",
+        )
+
+        spread = PairSpread(supporting=[assessment1], refuting=[assessment2])
+
+        # Serialize to dict
+        spread_dict = spread.model_dump()
+        assert "supporting" in spread_dict
+        assert "refuting" in spread_dict
+        assert len(spread_dict["supporting"]) == 1
+        assert len(spread_dict["refuting"]) == 1
+
+        # Deserialize from dict
+        spread_restored = PairSpread.model_validate(spread_dict)
+        assert len(spread_restored.supporting) == 1
+        assert len(spread_restored.refuting) == 1
+        assert spread_restored.supporting[0].relationship == "increases_risk_of"
+        assert spread_restored.refuting[0].relationship == "protects_against"
+
+    def test_spread_with_mixed_polarities(self):
+        """Test PairSpread with assessments in multiple categories."""
+        pool = ResourcePool()
+        resource = pool.add(
+            url="http://example.com", title="Test", document_text="Test"
+        )
+
+        from interaction_finder.extraction.models import EntityMention, PairAssessment
+
+        entity1 = EntityMention(
+            kind="gene", name="BRCA1", aliases=["BRCA1"], quotes=[], reasoning="test"
+        )
+        entity2 = EntityMention(
+            kind="disease",
+            name="cancer",
+            aliases=["cancer"],
+            quotes=[],
+            reasoning="test",
+        )
+
+        assessments = {
+            "supporting": PairAssessment(
+                resource_id=resource.id,
+                entity1=entity1,
+                entity2=entity2,
+                relationship="increases_risk_of",
+                quotes=[],
+                confidence="high",
+                reasoning="supporting",
+            ),
+            "refuting": PairAssessment(
+                resource_id=resource.id,
+                entity1=entity1,
+                entity2=entity2,
+                relationship="protects_against",
+                quotes=[],
+                confidence="high",
+                reasoning="refuting",
+            ),
+            "neutral": PairAssessment(
+                resource_id=resource.id,
+                entity1=entity1,
+                entity2=entity2,
+                relationship="regulates",
+                quotes=[],
+                confidence="medium",
+                reasoning="neutral",
+            ),
+            "irrelevant": PairAssessment(
+                resource_id=resource.id,
+                entity1=entity1,
+                entity2=entity2,
+                relationship="spatial_colocalization",
+                quotes=[],
+                confidence="low",
+                reasoning="irrelevant",
+            ),
+        }
+
+        spread = PairSpread(
+            supporting=[assessments["supporting"]],
+            refuting=[assessments["refuting"]],
+            neutral=[assessments["neutral"]],
+            irrelevant=[assessments["irrelevant"]],
+        )
+
+        # All categories should have exactly one assessment
+        assert len(spread.supporting) == 1
+        assert len(spread.refuting) == 1
+        assert len(spread.neutral) == 1
+        assert len(spread.irrelevant) == 1
+
+        # Verify relationships are correct
+        assert spread.supporting[0].relationship == "increases_risk_of"
+        assert spread.refuting[0].relationship == "protects_against"
+        assert spread.neutral[0].relationship == "regulates"
+        assert spread.irrelevant[0].relationship == "spatial_colocalization"
+
+
+class TestPairJudgmentSerialization:
+    """Tests for PairJudgment serialization with new spread field."""
+
+    def test_judgment_with_spread_serialization(self):
+        """Test that PairJudgment with PairSpread serializes correctly."""
+        pool = ResourcePool()
+        resource = pool.add(
+            url="http://example.com", title="Test", document_text="Test"
+        )
+
+        from interaction_finder.extraction.models import EntityMention, PairAssessment
+
+        entity1 = EntityMention(
+            kind="gene", name="BRCA1", aliases=["BRCA1"], quotes=[], reasoning="test"
+        )
+        entity2 = EntityMention(
+            kind="disease",
+            name="cancer",
+            aliases=["cancer"],
+            quotes=[],
+            reasoning="test",
+        )
+
+        assessment = PairAssessment(
+            resource_id=resource.id,
+            entity1=entity1,
+            entity2=entity2,
+            relationship="increases_risk_of",
+            quotes=[],
+            confidence="high",
+            reasoning="test",
+        )
+
+        spread = PairSpread(supporting=[assessment])
+
+        judgment = PairJudgment(
+            entity1=SimpleEntity(name="BRCA1", kind="gene", aliases=["BRCA1"]),
+            entity2=SimpleEntity(name="cancer", kind="disease", aliases=["cancer"]),
+            relationship="increases_risk_of",
+            spread=spread,
+            accepted=True,
+            confidence="high",
+            reasoning="Strong supporting evidence",
+        )
+
+        # Serialize
+        judgment_dict = judgment.model_dump()
+        assert "spread" in judgment_dict
+        assert "supporting" in judgment_dict["spread"]
+        assert len(judgment_dict["spread"]["supporting"]) == 1
+
+        # Deserialize
+        judgment_restored = PairJudgment.model_validate(judgment_dict)
+        assert judgment_restored.accepted is True
+        assert len(judgment_restored.spread.supporting) == 1
+        assert (
+            judgment_restored.spread.supporting[0].relationship == "increases_risk_of"
+        )
+
+    def test_judgment_with_contentious_spread(self):
+        """Test judgment with both supporting and refuting evidence."""
+        pool = ResourcePool()
+        resource = pool.add(
+            url="http://example.com", title="Test", document_text="Test"
+        )
+
+        from interaction_finder.extraction.models import EntityMention, PairAssessment
+
+        entity1 = EntityMention(
+            kind="gene", name="BRCA1", aliases=["BRCA1"], quotes=[], reasoning="test"
+        )
+        entity2 = EntityMention(
+            kind="disease",
+            name="cancer",
+            aliases=["cancer"],
+            quotes=[],
+            reasoning="test",
+        )
+
+        supporting_assessment = PairAssessment(
+            resource_id=resource.id,
+            entity1=entity1,
+            entity2=entity2,
+            relationship="increases_risk_of",
+            quotes=[],
+            confidence="high",
+            reasoning="supporting",
+        )
+
+        refuting_assessment = PairAssessment(
+            resource_id=resource.id,
+            entity1=entity1,
+            entity2=entity2,
+            relationship="protects_against",
+            quotes=[],
+            confidence="medium",
+            reasoning="refuting",
+        )
+
+        spread = PairSpread(
+            supporting=[supporting_assessment], refuting=[refuting_assessment]
+        )
+
+        judgment = PairJudgment(
+            entity1=SimpleEntity(name="BRCA1", kind="gene", aliases=["BRCA1"]),
+            entity2=SimpleEntity(name="cancer", kind="disease", aliases=["cancer"]),
+            relationship="increases_risk_of",
+            spread=spread,
+            accepted=True,
+            confidence="medium",
+            reasoning="Mixed evidence, supporting evidence stronger",
+        )
+
+        # Verify contentious pair structure
+        assert len(judgment.spread.supporting) == 1
+        assert len(judgment.spread.refuting) == 1
+
+        # Serialize and deserialize
+        judgment_dict = judgment.model_dump()
+        judgment_restored = PairJudgment.model_validate(judgment_dict)
+
+        assert len(judgment_restored.spread.supporting) == 1
+        assert len(judgment_restored.spread.refuting) == 1

@@ -2,12 +2,18 @@
 
 import pytest
 
-from interaction_finder.extraction.models import EntityMention, ProximalEntitySet
+from interaction_finder.extraction.models import (
+    EntityMention,
+    PairAssessment,
+    ProximalEntitySet,
+)
 from interaction_finder.extraction.utils import (
+    build_pair_spread,
     build_permitted_pairs,
     build_text_region,
     collect_relevant_text_for_quotes,
     find_substring_entities,
+    get_relationship_polarity,
     identify_proximal_sets,
     make_entity_pair_key,
     normalize_for_comparison,
@@ -597,3 +603,229 @@ class TestMakeEntityPairKey:
         key2 = make_entity_pair_key(entity2, entity1)
 
         assert key1 == key2
+
+
+class TestGetRelationshipPolarity:
+    """Tests for get_relationship_polarity function."""
+
+    def test_gets_polarity_for_known_relationship(self):
+        """Test looking up polarity for a known relationship."""
+        polarity_map = {
+            "increases_risk_of": "supporting",
+            "protects_against": "refuting",
+            "regulates": "neutral",
+            "spatial_colocalization": "irrelevant",
+        }
+
+        assert (
+            get_relationship_polarity("increases_risk_of", polarity_map) == "supporting"
+        )
+        assert get_relationship_polarity("protects_against", polarity_map) == "refuting"
+        assert get_relationship_polarity("regulates", polarity_map) == "neutral"
+        assert (
+            get_relationship_polarity("spatial_colocalization", polarity_map)
+            == "irrelevant"
+        )
+
+    def test_raises_key_error_for_unknown_relationship(self):
+        """Test that KeyError is raised for unknown relationship."""
+        polarity_map = {"increases_risk_of": "supporting"}
+
+        with pytest.raises(KeyError):
+            get_relationship_polarity("unknown_relationship", polarity_map)
+
+    def test_works_with_empty_map(self):
+        """Test behavior with empty polarity map."""
+        polarity_map = {}
+
+        with pytest.raises(KeyError):
+            get_relationship_polarity("any_relationship", polarity_map)
+
+
+class TestBuildPairSpread:
+    """Tests for build_pair_spread function."""
+
+    def setup_method(self):
+        """Set up test data."""
+        self.pool = ResourcePool()
+        self.resource = self.pool.add(
+            url="http://example.com",
+            title="Test",
+            document_text="Test text with entities.",
+        )
+
+        # Create test entities
+        self.entity1 = EntityMention(
+            kind="gene",
+            name="BRCA1",
+            aliases=["BRCA1"],
+            quotes=[],
+            reasoning="test",
+        )
+        self.entity2 = EntityMention(
+            kind="disease",
+            name="breast cancer",
+            aliases=["breast cancer"],
+            quotes=[],
+            reasoning="test",
+        )
+
+    def test_groups_assessments_by_polarity(self):
+        """Test that assessments are correctly grouped by polarity."""
+        polarity_map = {
+            "increases_risk_of": "supporting",
+            "protects_against": "refuting",
+            "regulates": "neutral",
+            "spatial_colocalization": "irrelevant",
+        }
+
+        assessments = [
+            PairAssessment(
+                resource_id=self.resource.id,
+                entity1=self.entity1,
+                entity2=self.entity2,
+                relationship="increases_risk_of",
+                quotes=[],
+                confidence="high",
+                reasoning="test",
+            ),
+            PairAssessment(
+                resource_id=self.resource.id,
+                entity1=self.entity1,
+                entity2=self.entity2,
+                relationship="protects_against",
+                quotes=[],
+                confidence="medium",
+                reasoning="test",
+            ),
+            PairAssessment(
+                resource_id=self.resource.id,
+                entity1=self.entity1,
+                entity2=self.entity2,
+                relationship="regulates",
+                quotes=[],
+                confidence="low",
+                reasoning="test",
+            ),
+        ]
+
+        spread = build_pair_spread(assessments, polarity_map)
+
+        assert len(spread.supporting) == 1
+        assert spread.supporting[0].relationship == "increases_risk_of"
+        assert len(spread.refuting) == 1
+        assert spread.refuting[0].relationship == "protects_against"
+        assert len(spread.neutral) == 1
+        assert spread.neutral[0].relationship == "regulates"
+        assert len(spread.irrelevant) == 0
+
+    def test_handles_all_same_polarity(self):
+        """Test with all assessments having same polarity."""
+        polarity_map = {
+            "increases_risk_of": "supporting",
+            "causes": "supporting",
+            "associated_with": "supporting",
+        }
+
+        assessments = [
+            PairAssessment(
+                resource_id=self.resource.id,
+                entity1=self.entity1,
+                entity2=self.entity2,
+                relationship="increases_risk_of",
+                quotes=[],
+                confidence="high",
+                reasoning="test",
+            ),
+            PairAssessment(
+                resource_id=self.resource.id,
+                entity1=self.entity1,
+                entity2=self.entity2,
+                relationship="causes",
+                quotes=[],
+                confidence="high",
+                reasoning="test",
+            ),
+            PairAssessment(
+                resource_id=self.resource.id,
+                entity1=self.entity1,
+                entity2=self.entity2,
+                relationship="associated_with",
+                quotes=[],
+                confidence="medium",
+                reasoning="test",
+            ),
+        ]
+
+        spread = build_pair_spread(assessments, polarity_map)
+
+        assert len(spread.supporting) == 3
+        assert len(spread.refuting) == 0
+        assert len(spread.neutral) == 0
+        assert len(spread.irrelevant) == 0
+
+    def test_handles_empty_assessments(self):
+        """Test with empty assessments list."""
+        polarity_map = {"increases_risk_of": "supporting"}
+
+        spread = build_pair_spread([], polarity_map)
+
+        assert len(spread.supporting) == 0
+        assert len(spread.refuting) == 0
+        assert len(spread.neutral) == 0
+        assert len(spread.irrelevant) == 0
+
+    def test_raises_key_error_for_unmapped_relationship(self):
+        """Test that KeyError is raised for unmapped relationship."""
+        polarity_map = {"increases_risk_of": "supporting"}
+
+        assessments = [
+            PairAssessment(
+                resource_id=self.resource.id,
+                entity1=self.entity1,
+                entity2=self.entity2,
+                relationship="unknown_relationship",
+                quotes=[],
+                confidence="high",
+                reasoning="test",
+            ),
+        ]
+
+        with pytest.raises(KeyError):
+            build_pair_spread(assessments, polarity_map)
+
+    def test_contentious_pair_detection(self):
+        """Test identifying contentious pairs (supporting + refuting)."""
+        polarity_map = {
+            "increases_risk_of": "supporting",
+            "protects_against": "refuting",
+        }
+
+        assessments = [
+            PairAssessment(
+                resource_id=self.resource.id,
+                entity1=self.entity1,
+                entity2=self.entity2,
+                relationship="increases_risk_of",
+                quotes=[],
+                confidence="high",
+                reasoning="test",
+            ),
+            PairAssessment(
+                resource_id=self.resource.id,
+                entity1=self.entity1,
+                entity2=self.entity2,
+                relationship="protects_against",
+                quotes=[],
+                confidence="high",
+                reasoning="test",
+            ),
+        ]
+
+        spread = build_pair_spread(assessments, polarity_map)
+
+        # Contentious: has both supporting and refuting
+        is_contentious = bool(spread.supporting and spread.refuting)
+        assert is_contentious
+        assert len(spread.supporting) == 1
+        assert len(spread.refuting) == 1

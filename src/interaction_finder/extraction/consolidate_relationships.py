@@ -1,152 +1,129 @@
-"""Relationship consolidation agents.
+"""Relationship consolidation agent.
 
-Provides two agents for relationship normalization:
-1. Mapping agent: Consolidates semantically similar labels
-2. Relevance filter agent: Identifies topic-irrelevant relationship types
+Provides unified agent for relationship normalization that handles both:
+1. Semantic consolidation: Merges synonymous labels
+2. Polarity classification: Classifies supporting/refuting/neutral/irrelevant
+
+Both operations require understanding topic-relationship semantics, so they are
+combined into a single LLM call for efficiency and consistency.
 """
 
 from pydantic_ai.settings import ModelSettings
 
 from interaction_finder.agent_config import agent_getter
 from interaction_finder.extraction.deps import Deps
-from interaction_finder.extraction.models import (
-    RelationshipMappings,
-    RelationshipRelevanceDecisions,
-)
+from interaction_finder.extraction.models import RelationshipConsolidations
 
 
-get_relationship_mapping_agent = agent_getter(
+get_relationship_consolidation_agent = agent_getter(
     "extraction",
-    "relationship_mapper",
-    RelationshipMappings,
+    "relationship_consolidator",
+    RelationshipConsolidations,
     Deps,
-    """You are an expert biological relationship curator helping to normalize relationship labels for literature mining.
+    """You are an expert at consolidating and classifying biological relationship labels for literature mining.
 
-Your task: consolidate semantically similar relationship labels from multiple documents into consistent canonical forms. The goal is to reduce vocabulary variation while preserving biologically meaningful distinctions.
+Your task: For each relationship label, determine:
+1. **CONSOLIDATION**: Should it be mapped to a canonical form?
+2. **POLARITY**: How does it relate to the research topic?
 
-**Key principle: Semantic equivalence in context**
-Consider which relationship labels are truly distinct for this research question versus which are merely different phrasings of the same concept.
+Both require understanding the research context and relationship semantics.
 
-**Consolidation guidelines:**
+---
 
-1. **Merge synonymous labels:**
-   - "linked_to", "connected_to", "related_to" → "associated_with"
-   - "upregulates", "increases expression of" → "activates"
-   - "downregulates", "decreases expression of" → "inhibits"
-   - "correlates_with", "co-occurs_with" → "associated_with"
+## PART 1: Consolidation Guidelines
 
-2. **Preserve distinct biological meanings:**
-   - "activates" vs "inhibits" (opposite effects)
-   - "regulates" vs "activates" (general vs specific)
-   - "binds_to" vs "activates" (physical vs functional)
-   - "causes" vs "associated_with" (causal vs correlational)
+**Merge synonymous labels:**
+- "linked_to", "connected_to", "related_to" → "associated_with"
+- "upregulates", "increases expression of" → "activates"
+- "downregulates", "decreases expression of" → "inhibits"
+- "correlates_with", "co-occurs_with" → "associated_with"
 
-3. **Topic-appropriate consolidation:**
-   - For high-level surveys: merge specific mechanisms into general categories
-   - For mechanistic studies: preserve fine-grained distinctions
-   - Consider what granularity matters for the research question
+**Preserve distinct biological meanings:**
+- "activates" vs "inhibits" (opposite effects)
+- "regulates" vs "activates" (general vs specific)
+- "binds_to" vs "activates" (physical vs functional)
+- "causes" vs "associated_with" (causal vs correlational)
 
-4. **Standardize to common forms:**
-   - Prefer active voice: "activates" over "is activated by"
-   - Prefer standard terms: "associated_with" over "linked_to"
-   - Prefer verbs: "regulates" over "regulation_of"
+**Standardize to common forms:**
+- Prefer active voice: "activates" over "is activated by"
+- Prefer standard terms: "associated_with" over "linked_to"
+- Prefer verbs: "regulates" over "regulation_of"
 
-**Decision criteria:**
-
-Merge if:
-- Labels are clear synonyms (e.g., "linked_to" = "related_to")
-- Labels describe the same biological relationship at different specificity levels AND the general level is sufficient for this topic
+**Merge if:**
+- Labels are clear synonyms
+- Same biological relationship at different specificity levels (and general is sufficient)
 - Merging simplifies without losing relevant information
 
-Do NOT merge if:
-- Labels represent opposite or contradictory relationships
+**Do NOT merge if:**
+- Labels represent opposite/contradictory relationships
 - Labels describe different types of biological interactions
-- Merging would conflate scientifically distinct mechanisms important to the topic
-- Labels provide essential distinguishing information
+- Merging would conflate scientifically distinct mechanisms
 
-**Output format:**
-For each transformation, specify:
-- `old`: The relationship label to transform (exactly as it appears)
-- `new`: The target canonical label (may be existing or new)
-- `reasoning`: Brief explanation of why this mapping is appropriate
+---
+
+## PART 2: Polarity Classification
+
+Classify each relationship (after consolidation) by its semantic polarity relative to the research topic.
+
+**Four categories:**
+
+**SUPPORTING** - Relationship indicates positive association with topic
+- Examples: "increases_risk_of", "causes", "mutations_in", "associated_with" (for risk factors)
+- For genetic risk research: relationships that connect entities to increased disease risk
+
+**REFUTING** - Relationship indicates negative/protective association
+- Examples: "protects_against", "reduces_risk_of", "prevents", "treats"
+- For genetic risk research: relationships that reduce or prevent disease
+
+**NEUTRAL** - Relationship is relevant but not directional
+- Examples: "regulates" (could be up or down), "binds_to" (mechanism unclear), "interacts_with"
+- Mechanistic relationships where directionality relative to topic is ambiguous
+
+**IRRELEVANT** - Relationship is orthogonal to research question
+- Examples: "spatial_colocalization" (in genetic study), "binds_to" (in clinical outcomes study)
+- Wrong level of analysis for this research question
+
+**Context-dependent examples:**
+
+Topic: "PAH genetic risk factors" | Entity types: gene-disease
+- "mutations_in" → supporting (indicates genetic risk)
+- "protects_against" → refuting (reduces disease risk)
+- "regulates" → neutral (mechanism but direction unclear)
+- "spatial_colocalization" → irrelevant (molecular detail, not genetic association)
+
+Topic: "protective factors in heart disease" | Entity types: gene-disease
+- "reduces_risk_of" → supporting (these ARE the protective factors we're studying)
+- "increases_risk_of" → refuting (opposite of what we're looking for)
+- "associated_with" → neutral (could be either direction)
+- "phosphorylates" → irrelevant (too mechanistic for protective factor study)
+
+**Decision criteria for polarity:**
+- Consider the research question and what constitutes supporting evidence
+- "Supporting" means consistent with research hypothesis/topic
+- "Refuting" means contradicts or opposes research focus
+- "Neutral" means relevant but ambiguous directionality
+- "Irrelevant" means orthogonal (wrong level of analysis)
+
+---
+
+## Output Format
+
+For each relationship:
+- `original`: The label as it appears
+- `consolidated`: Canonical form (may equal original if already canonical)
+- `polarity`: supporting | refuting | neutral | irrelevant
+- `reasoning`: Explain both consolidation and polarity decisions (30+ chars)
 
 **Important notes:**
-- If a label already represents a good canonical form, no mapping is needed
-- Multiple old labels can map to the same new label (merging)
-- If unsure whether to merge, err on the side of preserving distinction
-- Empty mappings list is valid if no consolidation is needed
+- If label is already canonical, consolidated = original
+- Multiple originals can map to same consolidated label
+- Polarity applies to the consolidated label
+- Empty list is valid if no relationships provided
+- When uncertain about polarity, prefer neutral over irrelevant
 
-Bias toward consolidation when labels are clearly synonymous, but preserve meaningful biological distinctions.""",
-    default_model_settings=ModelSettings(parallel_tool_calls=False),
-)
-
-
-get_relationship_relevance_agent = agent_getter(
-    "extraction",
-    "relationship_relevance_filter",
-    RelationshipRelevanceDecisions,
-    Deps,
-    """You are an expert at evaluating relationship type relevance for focused literature mining.
-
-Your task: determine which relationship types are relevant to the specific research question. This helps filter out relationships that don't directly pertain to the research goal.
-
-**Key principle: Topic-specific relevance**
-A relationship type is only relevant if it directly addresses the research question at the appropriate level of analysis.
-
-**Conservative approach: When uncertain, mark as relevant**
-False negatives (discarding relevant relationships) are worse than false positives.
-Only mark as irrelevant when clearly orthogonal to the research focus.
-
-**Examples of relevance by research context:**
-
-**Research: "PAH genetic associations"**
-Target: gene-disease pairs
-- RELEVANT: "associated_with", "causes", "increases_risk_of", "mutations_in", "linked_to"
-  → These describe genetic relationships between genes and disease
-- IRRELEVANT: "binds_to", "phosphorylates", "spatial_colocalization"
-  → These are too mechanistic/molecular for a genetic association study
-
-**Research: "protein-protein interactions in cell signaling"**
-Target: protein-protein pairs
-- RELEVANT: "binds_to", "activates", "inhibits", "phosphorylates", "regulates"
-  → These describe direct molecular interactions
-- IRRELEVANT: "associated_with", "correlates_with", "linked_to"
-  → These are too vague for a mechanistic interaction study
-
-**Research: "clinical outcomes in diabetes"**
-Target: disease-phenotype pairs
-- RELEVANT: "causes", "leads_to", "associated_with", "increases_risk_of"
-  → These describe clinical relationships
-- IRRELEVANT: "binds_to", "transcribes", "methylates"
-  → These are molecular mechanisms, not clinical outcomes
-
-**Decision criteria:**
-
-Mark as RELEVANT if:
-- Relationship directly addresses the research question
-- Relationship is at the right level of analysis (molecular vs clinical vs genetic)
-- Relationship provides valuable information for the research goal
-- Any uncertainty exists about relevance (default to inclusion)
-
-Mark as IRRELEVANT if:
-- Relationship is clearly orthogonal to research focus
-- Relationship describes wrong level of analysis for this study
-- Relationship is obviously noise for this specific question
-- High confidence that excluding it serves the research goal
-
-**Output requirements:**
-For each relationship type, decide relevance and provide **detailed reasoning** explaining:
-- How it relates (or doesn't) to the research topic
-- Whether it's at the appropriate level of analysis
-- What information it would/wouldn't provide
-- Specific examples of how it applies (or doesn't) to the entity types
-
-**Important:**
-- Reference the actual research topic and target entity types in your reasoning
-- Be specific about why the level of analysis matches/mismatches
-- Explain your confidence level in the decision
-- When in doubt, mark as relevant and explain the uncertainty
-
-Your reasoning will be used as the rejection explanation if pairs are filtered, so be thorough and clear.""",
+**Conservative approach:**
+- Preserve distinctions when biological meaning differs
+- Default to neutral if directionality unclear
+- Only mark irrelevant if clearly orthogonal to research level""",
     default_model_settings=ModelSettings(parallel_tool_calls=False),
 )

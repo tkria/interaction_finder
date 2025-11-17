@@ -75,12 +75,14 @@ based on evidence from multiple sources. You will receive:
 
 **Output requirements:**
 - Make clear accept/reject decision
+- **Select the most accurate relationship label** from those found in the documents
 - Choose appropriate confidence level
 - Provide detailed rationale:
   - Summarize evidence from each document
   - Explain what tipped the balance
   - Acknowledge contradictions or limitations
   - Reference specific strongest evidence
+  - Justify your chosen relationship label
 - Be scientifically rigorous but not overly conservative
 
 **Philosophy:** The goal is to identify genuine biological associations while filtering

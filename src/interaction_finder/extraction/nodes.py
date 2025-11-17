@@ -39,6 +39,8 @@ from interaction_finder.extraction.models import (
     ExtractionResult,
     PairAssessment,
     PairJudgment,
+    PairSpread,
+    RelationshipConsolidation,
     SimpleEntity,
 )
 from interaction_finder.extraction.state import State
@@ -377,7 +379,6 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
         Returns:
             {(norm_child, kind): norm_parent} for pairs that should merge
         """
-        from interaction_finder.extraction.models import EntityMergeDecision
 
         merge_rules: dict[tuple[str, str], str] = {}
 
@@ -670,24 +671,24 @@ For each pair, decide if they should be merged (child absorbed into parent) or k
 
 @dataclass
 class ConsolidateRelationshipsNode(BaseNode[State, Deps, ExtractionResult]):
-    """Consolidate relationship labels globally across all documents.
+    """Consolidate relationship labels and classify polarities globally.
 
-    Algorithm:
+    Unified algorithm:
     1. Collect all unique relationship labels from all assessments
-    2. Query LLM for mapping decisions (merge/rename)
-    3. Resolve transitive mappings (A→B→C becomes A→C)
-    4. Apply mappings consistently across all assessments
+    2. Query LLM for consolidation + polarity classification (single call)
+    3. Apply consolidations to all assessments
+    4. Store polarity mappings in state
     5. Filter irrelevant relationship types (optional, on by default)
 
     This approach ensures:
     - Vocabulary consolidation (merges synonyms like "linked_to" → "associated_with")
+    - Polarity classification (supporting/refuting/neutral/irrelevant)
     - Topic-appropriate normalization (context-aware decisions)
-    - Relevance filtering (removes orthogonal relationship types)
-    - Consistency (same canonical label across all documents)
+    - Consistency (same canonical label and polarity across all documents)
     """
 
     async def run(self, ctx: GraphRunContext[State, Deps]) -> "JudgeCrossDocumentNode":
-        """Consolidate relationship labels and filter irrelevant types."""
+        """Consolidate relationship labels, classify polarities, and filter irrelevant."""
         with logfire.span("ConsolidateRelationshipsNode"):
             # Step 1: Collect unique relationship labels
             unique_relationships = self._collect_unique_relationships(ctx)
@@ -696,27 +697,29 @@ class ConsolidateRelationshipsNode(BaseNode[State, Deps, ExtractionResult]):
                 ctx.deps.logger.info("No relationships to consolidate")
                 return JudgeCrossDocumentNode()
 
-            # Step 2: Get mapping decisions from LLM
-            mappings = await self._get_relationship_mappings(unique_relationships, ctx)
+            # Step 2: Get consolidation + polarity from LLM (unified)
+            consolidations = await self._consolidate_and_classify(
+                unique_relationships, ctx
+            )
 
-            if not mappings:
-                ctx.deps.logger.info("No relationship consolidations suggested")
+            if not consolidations:
+                ctx.deps.logger.info("No relationship consolidations from LLM")
                 return JudgeCrossDocumentNode()
 
-            # Step 3: Resolve transitive mapping chains (A→B→C becomes A→C)
-            resolved_mappings = self._resolve_transitive_mappings(mappings)
+            # Step 3: Apply consolidations to assessments
+            self._apply_consolidations(consolidations, ctx)
 
-            # Step 4: Apply mappings to all assessments
-            self._apply_relationship_mappings(resolved_mappings, ctx)
+            # Step 4: Store polarity mappings
+            self._store_polarity_mappings(consolidations, ctx)
 
             ctx.deps.logger.info(
-                f"Relationship consolidation: {len(resolved_mappings)} mappings applied, "
+                f"Relationship consolidation: {len(consolidations)} relationships processed, "
                 f"{ctx.state.relationships_merged} assessments updated"
             )
 
             # Step 5: Filter irrelevant relationship types (if enabled)
             if ctx.deps.config.tools.extraction.filter_irrelevant_relationships:
-                await self._filter_irrelevant_relationships(ctx)
+                self._filter_irrelevant_assessments(ctx)
 
             return JudgeCrossDocumentNode()
 
@@ -736,275 +739,154 @@ class ConsolidateRelationshipsNode(BaseNode[State, Deps, ExtractionResult]):
 
         return relationships
 
-    async def _get_relationship_mappings(
-        self,
-        relationships: set[str],
-        ctx: GraphRunContext[State, Deps],
-    ) -> dict[str, str]:
-        """Query LLM for relationship label mappings.
+    async def _consolidate_and_classify(
+        self, relationships: set[str], ctx: GraphRunContext[State, Deps]
+    ) -> list[RelationshipConsolidation]:
+        """Query LLM for consolidation + polarity classification (unified).
 
         Returns:
-            {normalized_old_label: normalized_new_label}
+            List of RelationshipConsolidation objects
         """
         from interaction_finder.extraction.consolidate_relationships import (
-            get_relationship_mapping_agent,
+            get_relationship_consolidation_agent,
         )
-        from interaction_finder.extraction.utils import normalize_for_comparison
 
-        # Build prompt with all relationship labels
+        # Build prompt
         relationships_list = sorted(relationships)
         relationships_str = "\n".join(f"- {r}" for r in relationships_list)
-
         entity_types_str = ", ".join(ctx.state.target_entity_types)
 
         prompt = f"""**Research topic:** {ctx.state.topic}
 
-**Target entity types for this research:** {entity_types_str}
+**Target entity types:** {entity_types_str}
 
-**Task:** Review the following relationship labels and identify appropriate mappings to consolidate vocabulary.
-
-Consider:
-1. Semantic equivalence (synonyms like "linked_to" and "related_to")
-2. Topic-appropriate consolidation (what distinctions matter for this research?)
-3. Standardization to common biological terms
-
-**Relationship labels found across all documents:**
+**Relationship labels found:**
 {relationships_str}
 
-For each label that should be transformed, specify the old label and new target label.
-If no consolidation is needed, return an empty list of mappings."""
+For each relationship, provide:
+1. Consolidated canonical form (may equal original)
+2. Polarity classification relative to this research topic"""
 
-        # Call LLM
-        agent = get_relationship_mapping_agent(ctx.deps.config)
+        # Call unified agent
+        agent = get_relationship_consolidation_agent(ctx.deps.config)
         usage = RunUsage()
         try:
             with rename_agent(agent, name="ConsolidateRelationshipsNode"):
                 async with ctx.deps.agent_semaphore:
                     result = await agent.run(prompt, deps=ctx.deps, usage=usage)
-
+            return result.output.consolidations
         except (TimeoutError, ConnectionError, ValueError) as e:
             ctx.deps.logger.error(
-                f"Relationship mapping decision failed: {type(e).__name__}: {e}"
+                f"Relationship consolidation failed: {type(e).__name__}: {e}"
             )
-            return {}
+            return []
 
-        # Build mapping dict with normalized keys
-        mappings: dict[str, str] = {}
-        for mapping in result.output.mappings:
-            norm_old = normalize_for_comparison(mapping.old)
-            norm_new = normalize_for_comparison(mapping.new)
-
-            # Skip self-mappings
-            if norm_old == norm_new:
-                ctx.deps.logger.debug(
-                    f"Skipping self-mapping: {mapping.old} → {mapping.new}"
-                )
-                continue
-
-            # Store normalized mapping
-            mappings[norm_old] = norm_new
-
-        return mappings
-
-    def _resolve_transitive_mappings(self, mappings: dict[str, str]) -> dict[str, str]:
-        """Resolve transitive mapping chains.
-
-        If A→B and B→C, resolve to A→C (and B→C).
-        This ensures all relationships in a chain ultimately point to the final target.
-
-        Algorithm:
-        1. For each source in mappings, follow target chain until we find
-           a target that isn't itself a source
-        2. Update mapping to point directly to final target
-
-        Returns:
-            Resolved mappings with transitive chains collapsed
-        """
-        resolved = {}
-
-        for source, target in mappings.items():
-            # Follow the chain: source → target → target's target → ...
-            final_target = target
-            visited = {source}  # Prevent infinite loops
-
-            while final_target in mappings:
-                if final_target in visited:
-                    # Cycle detected - stop here and log
-                    self._log_cycle_warning(source, visited)
-                    break
-                visited.add(final_target)
-                final_target = mappings[final_target]
-
-            resolved[source] = final_target
-
-        return resolved
-
-    def _log_cycle_warning(self, source: str, visited: set[str]):
-        """Log a warning about a cycle in relationship mappings."""
-        # This shouldn't happen with good LLM output, but handle gracefully
-        cycle_path = " → ".join(visited) + f" → {source}"
-        # Note: would need ctx to log properly, for now just pass
-        # In practice, the cycle is broken by the visited check
-        pass
-
-    def _apply_relationship_mappings(
+    def _apply_consolidations(
         self,
-        mappings: dict[str, str],
+        consolidations: list[RelationshipConsolidation],
         ctx: GraphRunContext[State, Deps],
     ) -> None:
-        """Apply relationship mappings to all assessments.
+        """Apply consolidations to all assessments.
 
-        Updates assessment.relationship in place when a mapping is found.
+        Updates assessment.relationship in place when consolidation changes the label.
         """
-        if not mappings:
-            return
-
         from interaction_finder.extraction.utils import normalize_for_comparison
 
-        # Build map of normalized label → canonical form from original labels
-        # This must be done BEFORE we start modifying assessments
-        canonical_forms: dict[str, str] = {}
+        # Build mapping: normalized_original → consolidated_label
+        consolidation_map: dict[str, str] = {}
+        for cons in consolidations:
+            norm_orig = normalize_for_comparison(cons.original)
+            # If consolidation changed the label, store mapping
+            if cons.original != cons.consolidated:
+                consolidation_map[norm_orig] = cons.consolidated
+
+        if not consolidation_map:
+            return
+
+        # Apply consolidations to all assessments
         for assessments in ctx.state.pair_assessments_by_resource.values():
             for assessment in assessments:
                 norm = normalize_for_comparison(assessment.relationship)
-                if norm not in canonical_forms:
-                    canonical_forms[norm] = assessment.relationship
-
-        # Now apply mappings using the canonical forms we collected
-        for assessments in ctx.state.pair_assessments_by_resource.values():
-            for assessment in assessments:
-                norm_relationship = normalize_for_comparison(assessment.relationship)
-
-                if norm_relationship in mappings:
-                    # Get new normalized label
-                    new_norm = mappings[norm_relationship]
-
-                    # Find canonical form for new label, or use normalized form
-                    new_label = canonical_forms.get(new_norm, new_norm)
-
-                    # Update assessment
-                    assessment.relationship = new_label
+                if norm in consolidation_map:
+                    assessment.relationship = consolidation_map[norm]
                     ctx.state.relationships_merged += 1
 
-        # Store mappings in state for provenance
-        ctx.state.relationship_mappings = mappings
+        # Store in state for provenance
+        ctx.state.relationship_mappings = consolidation_map
 
-    async def _filter_irrelevant_relationships(
-        self, ctx: GraphRunContext[State, Deps]
+    def _store_polarity_mappings(
+        self,
+        consolidations: list[RelationshipConsolidation],
+        ctx: GraphRunContext[State, Deps],
     ) -> None:
-        """Filter pairs with irrelevant relationship types.
+        """Store polarity mappings from consolidations.
 
-        Creates pre-rejected judgments for pairs whose relationship type is
-        deemed irrelevant to the research question by the LLM.
+        Creates mapping: relationship_label → polarity
+        Stores for BOTH original and consolidated labels to handle cases where
+        relationships weren't merged.
         """
-        # Get irrelevant relationship types from LLM
-        unique_rels = {
-            a.relationship
-            for assessments in ctx.state.pair_assessments_by_resource.values()
-            for a in assessments
-        }
-        if not unique_rels:
-            return
+        for cons in consolidations:
+            # Store polarity for both original and consolidated labels
+            # This ensures lookup works even if consolidation wasn't applied
+            ctx.state.relationship_polarities[cons.original] = cons.polarity
+            ctx.state.relationship_polarities[cons.consolidated] = cons.polarity
 
-        irrelevant = await self._get_relevance_decisions(unique_rels, ctx)
-        if not irrelevant:
-            ctx.deps.logger.info("All relationship types deemed relevant")
-            return
+    def _filter_irrelevant_assessments(self, ctx: GraphRunContext[State, Deps]) -> None:
+        """Remove assessments with irrelevant polarity.
 
-        # Create pre-rejected judgments for filtered pairs
-        from interaction_finder.extraction.utils import make_entity_pair_key
-
-        filtered = 0
-        for pair_key, assessments in self._group_assessments_by_pair(ctx).items():
-            rel = assessments[0].relationship
-            if rel in irrelevant:
-                ctx.state.pair_judgments[pair_key] = self._make_rejected_judgment(
-                    assessments,
-                    f"Relationship type filtered as irrelevant: {irrelevant[rel]}",
-                )
-                filtered += 1
-
-        ctx.deps.logger.info(
-            f"Filtered {filtered} pairs with {len(irrelevant)} irrelevant type(s)"
+        Uses the stored polarity mappings to identify and remove irrelevant assessments.
+        """
+        from interaction_finder.extraction.utils import (
+            build_pair_spread,
+            make_entity_pair_key,
         )
 
-    def _group_assessments_by_pair(
-        self, ctx: GraphRunContext[State, Deps]
-    ) -> dict[EntityPairKey, list[PairAssessment]]:
-        """Group assessments by entity pair key."""
-        from interaction_finder.extraction.utils import make_entity_pair_key
-
+        # Group assessments by pair
         grouped: dict[EntityPairKey, list[PairAssessment]] = defaultdict(list)
         for assessments in ctx.state.pair_assessments_by_resource.values():
             for assessment in assessments:
                 pair_key = make_entity_pair_key(assessment.entity1, assessment.entity2)
                 grouped[pair_key].append(assessment)
-        return grouped
 
-    def _make_rejected_judgment(
-        self, assessments: list[PairAssessment], reasoning: str
-    ) -> PairJudgment:
-        """Create a rejected PairJudgment from assessments."""
-        from interaction_finder.extraction.models import PairJudgment, SimpleEntity
-
-        first = assessments[0]
-        return PairJudgment(
-            entity1=SimpleEntity(
-                name=first.entity1.name,
-                kind=first.entity1.kind,
-                aliases=first.entity1.aliases,
-            ),
-            entity2=SimpleEntity(
-                name=first.entity2.name,
-                kind=first.entity2.kind,
-                aliases=first.entity2.aliases,
-            ),
-            relationship=first.relationship,
-            assessments=assessments,
-            accepted=False,
-            confidence="high",
-            reasoning=reasoning,
-        )
-
-    async def _get_relevance_decisions(
-        self, relationships: set[str], ctx: GraphRunContext[State, Deps]
-    ) -> dict[str, str]:
-        """Query LLM for relationship relevance decisions.
-
-        Returns:
-            {relationship: reasoning} for irrelevant relationships only
-        """
-        from interaction_finder.extraction.consolidate_relationships import (
-            get_relationship_relevance_agent,
-        )
-
-        prompt = f"""**Research topic:** {ctx.state.topic}
-
-**Target entity types:** {", ".join(ctx.state.target_entity_types)}
-
-**Task:** Evaluate which relationship types are relevant to this research question.
-
-**Relationship types found:**
-{chr(10).join(f"- {r}" for r in sorted(relationships))}
-
-For each relationship type, decide if it's relevant or irrelevant to the research goal.
-Remember: when uncertain, mark as relevant to avoid false negatives."""
-
-        try:
-            agent = get_relationship_relevance_agent(ctx.deps.config)
-            with rename_agent(agent, name="FilterIrrelevantRelationships"):
-                async with ctx.deps.agent_semaphore:
-                    result = await agent.run(prompt, deps=ctx.deps, usage=RunUsage())
-            return {
-                d.relationship: d.reasoning
-                for d in result.output.decisions
-                if not d.is_relevant
-            }
-        except (TimeoutError, ConnectionError, ValueError) as e:
-            ctx.deps.logger.error(
-                f"Relevance filtering failed: {e}. Proceeding without filtering."
+        # Create pre-rejected judgments for pairs that are ALL irrelevant
+        filtered = 0
+        for pair_key, assessments in grouped.items():
+            # Check if all assessments are irrelevant
+            all_irrelevant = all(
+                ctx.state.relationship_polarities.get(a.relationship) == "irrelevant"
+                for a in assessments
             )
-            return {}
+
+            if all_irrelevant:
+                # Create rejected judgment with empty spread (or all in irrelevant)
+                spread = build_pair_spread(
+                    assessments, ctx.state.relationship_polarities
+                )
+                first = assessments[0]
+
+                ctx.state.pair_judgments[pair_key] = PairJudgment(
+                    entity1=SimpleEntity(
+                        name=first.entity1.name,
+                        kind=first.entity1.kind,
+                        aliases=first.entity1.aliases,
+                    ),
+                    entity2=SimpleEntity(
+                        name=first.entity2.name,
+                        kind=first.entity2.kind,
+                        aliases=first.entity2.aliases,
+                    ),
+                    relationship=first.relationship,
+                    spread=spread,
+                    accepted=False,
+                    confidence="high",
+                    reasoning="All relationship types for this pair were classified as irrelevant to the research question",
+                )
+                filtered += 1
+
+        if filtered > 0:
+            ctx.deps.logger.info(
+                f"Filtered {filtered} pairs with only irrelevant relationships"
+            )
 
 
 @dataclass
@@ -1107,6 +989,120 @@ class JudgeCrossDocumentNode(BaseNode[State, Deps, ExtractionResult]):
         # All other cases need investigation
         return True
 
+    def _build_contentious_prompt(
+        self,
+        pair_key: EntityPairKey,
+        spread: PairSpread,
+        ctx: GraphRunContext[State, Deps],
+    ) -> str:
+        """Build prompt for contentious pairs (supporting + refuting evidence)."""
+        padding = getattr(ctx.deps.config.tools.extraction, "region_padding_chunks", 1)
+
+        def format_assessments(assessments: list[PairAssessment], label: str) -> str:
+            """Format a list of assessments with document evidence."""
+            if not assessments:
+                return ""
+            sections = [f"**{label.upper()} EVIDENCE:**\n"]
+            for i, assessment in enumerate(assessments, 1):
+                resource = ctx.deps.resource_pool.get(assessment.resource_id)
+                if not resource:
+                    continue
+                text = collect_relevant_text_for_quotes(
+                    resource, assessment.quotes, padding
+                )
+                section = f"""[Document {i}] {resource.title}
+Relationship: {assessment.relationship} | Confidence: {assessment.confidence}
+Reasoning: {assessment.reasoning}
+
+Evidence:
+{text}"""
+                sections.append(section)
+            return "\n\n".join(sections)
+
+        supporting_text = format_assessments(spread.supporting, "Supporting")
+        refuting_text = format_assessments(spread.refuting, "Refuting")
+        neutral_text = format_assessments(spread.neutral, "Neutral")
+
+        # Get all unique relationships
+        all_rels = {
+            a.relationship for a in spread.supporting + spread.refuting + spread.neutral
+        }
+        relationships_str = ", ".join(f'"{r}"' for r in sorted(all_rels))
+
+        return f"""Topic: {ctx.state.topic}
+
+**Pair:** {pair_key.entity1_name} <-> {pair_key.entity2_name}
+
+**Relationship types found:** {relationships_str}
+
+**IMPORTANT:** This is a CONTENTIOUS pair with contradictory evidence. Some documents support the association while others refute it.
+
+{supporting_text}
+
+---
+
+{refuting_text}
+
+{f"---{chr(10)}{chr(10)}{neutral_text}" if neutral_text else ""}
+
+---
+
+**Task:**
+Synthesize the contradictory evidence. Consider:
+1. Is there genuine disagreement in the literature, or do studies examine different contexts?
+2. What is the weight of evidence on each side?
+3. Should we accept this pair despite contradictions?
+
+Select the most accurate relationship overall (from the ones found above).
+Provide: accepted (true/false), relationship (selected label), confidence (high/medium/low), and detailed reasoning explaining how you weighed the contradictions."""
+
+    def _build_unidirectional_prompt(
+        self,
+        pair_key: EntityPairKey,
+        spread: PairSpread,
+        ctx: GraphRunContext[State, Deps],
+    ) -> str:
+        """Build prompt for unidirectional pairs (no supporting+refuting conflict)."""
+        padding = getattr(ctx.deps.config.tools.extraction, "region_padding_chunks", 1)
+
+        # Combine all assessments (one polarity category will dominate)
+        all_assessments = spread.supporting + spread.refuting + spread.neutral
+        document_sections = []
+        for i, assessment in enumerate(all_assessments, 1):
+            resource = ctx.deps.resource_pool.get(assessment.resource_id)
+            if not resource:
+                continue
+            text = collect_relevant_text_for_quotes(
+                resource, assessment.quotes, padding
+            )
+            section = f"""**Document {i}:** {resource.title}
+
+**Assessment:** {assessment.confidence} confidence - {assessment.relationship}
+**Reasoning:** {assessment.reasoning}
+
+**Evidence from document:**
+{text}"""
+            document_sections.append(section)
+
+        relationships = {a.relationship for a in all_assessments}
+        relationships_str = ", ".join(f'"{r}"' for r in sorted(relationships))
+
+        return f"""Topic: {ctx.state.topic}
+
+**Pair:** {pair_key.entity1_name} <-> {pair_key.entity2_name}
+
+**Relationship types found across documents:** {relationships_str}
+
+{chr(10).join(f"{chr(10)}---{chr(10)}{chr(10)}" + section for section in document_sections)}
+
+---
+
+**Task:**
+Make a final judgment on whether to accept this association.
+Synthesize the evidence across documents, considering consistency, quality, and contradictions.
+Select the most accurate relationship overall (from the ones found above).
+Decide: accepted (true/false), relationship (selected label), confidence (high/medium/low), and detailed reasoning."""
+
     async def _judge_pair(
         self,
         pair_key: EntityPairKey,
@@ -1114,13 +1110,17 @@ class JudgeCrossDocumentNode(BaseNode[State, Deps, ExtractionResult]):
         ctx: GraphRunContext[State, Deps],
     ) -> tuple[EntityPairKey, PairJudgment]:
         """Make final judgment on a single pair."""
+        from interaction_finder.extraction.utils import build_pair_spread
+
+        # Build PairSpread by polarity
+        spread = build_pair_spread(assessments, ctx.state.relationship_polarities)
+
         # Try deterministic accept
         can_accept, relationship, reasoning = self._can_accept_deterministically(
             assessments
         )
         if can_accept:
             # Create judgment without LLM call
-            # Get entity info from first assessment
             first_assessment = assessments[0]
             judgment = PairJudgment(
                 entity1=SimpleEntity(
@@ -1134,49 +1134,20 @@ class JudgeCrossDocumentNode(BaseNode[State, Deps, ExtractionResult]):
                     aliases=first_assessment.entity2.aliases,
                 ),
                 relationship=relationship,
-                assessments=assessments,
+                spread=spread,
                 accepted=True,
                 confidence="high",
                 reasoning=reasoning,
             )
             return (pair_key, judgment)
         # Need LLM investigation
-        # Build per-document sections with assessment + content together
-        padding = getattr(ctx.deps.config.tools.extraction, "region_padding_chunks", 1)
-        document_sections = []
-        for i, assessment in enumerate(assessments, 1):
-            resource = ctx.deps.resource_pool.get(assessment.resource_id)
-            if not resource:
-                continue
-            # Build document section with assessment first, then content
-            text = collect_relevant_text_for_quotes(
-                resource, assessment.quotes, padding
-            )
-            section = f"""**Document {i}:** {resource.title}
+        # Detect contentious pairs (supporting + refuting evidence)
+        is_contentious = bool(spread.supporting and spread.refuting)
 
-**Assessment:** {assessment.confidence} confidence - {assessment.relationship}
-**Reasoning:** {assessment.reasoning}
-
-**Evidence from document:**
-{text}"""
-            document_sections.append(section)
-        # Get all relationship types mentioned
-        relationships = {a.relationship for a in assessments}
-        relationships_str = ", ".join(f'"{r}"' for r in sorted(relationships))
-        prompt = f"""Topic: {ctx.state.topic}
-
-**Pair:** {pair_key.entity1_name} <-> {pair_key.entity2_name}
-
-**Relationship types found across documents:** {relationships_str}
-
-{chr(10).join(f"{chr(10)}---{chr(10)}{chr(10)}" + section for section in document_sections)}
-
----
-
-**Task:**
-Make a final judgment on whether to accept this association.
-Synthesize the evidence across documents, considering consistency, quality, and contradictions.
-Decide: accept or reject, with confidence level (high/medium/low) and detailed reasoning."""
+        if is_contentious:
+            prompt = self._build_contentious_prompt(pair_key, spread, ctx)
+        else:
+            prompt = self._build_unidirectional_prompt(pair_key, spread, ctx)
         # Call cross-document judge with renamed span
         agent = get_cross_document_judge_agent(ctx.deps.config)
         usage = RunUsage()
@@ -1208,22 +1179,14 @@ Decide: accept or reject, with confidence level (high/medium/low) and detailed r
                         aliases=first_assessment.entity2.aliases,
                     ),
                     relationship=first_assessment.relationship,
-                    assessments=assessments,
+                    spread=spread,
                     accepted=False,
                     confidence="low",
                     reasoning=f"Judgment failed due to error: {e}",
                 ),
             )
-        # Select most common relationship type
-        relationship_counts = {}
-        for assessment in assessments:
-            relationship_counts[assessment.relationship] = (
-                relationship_counts.get(assessment.relationship, 0) + 1
-            )
-        most_common_relationship = max(relationship_counts.items(), key=lambda x: x[1])[
-            0
-        ]
-        # Create judgment
+
+        # Create judgment using LLM-selected relationship
         first_assessment = assessments[0]
         judgment = PairJudgment(
             entity1=SimpleEntity(
@@ -1236,8 +1199,8 @@ Decide: accept or reject, with confidence level (high/medium/low) and detailed r
                 kind=first_assessment.entity2.kind,
                 aliases=first_assessment.entity2.aliases,
             ),
-            relationship=most_common_relationship,
-            assessments=assessments,
+            relationship=result.output.relationship,
+            spread=spread,
             accepted=result.output.accepted,
             confidence=result.output.confidence,
             reasoning=result.output.reasoning,

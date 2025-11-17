@@ -132,59 +132,34 @@ class EntityMergeDecisions(BaseModel):
     )
 
 
-class RelationshipMapping(BaseModel):
-    """LLM output: single relationship label transformation.
+class RelationshipConsolidation(BaseModel):
+    """LLM output: combined mapping and polarity classification for one relationship.
 
-    Specifies how one relationship label should be renamed or merged into another.
-    Both 'old' and 'new' should be provided in their original forms (the system
-    will normalize them for matching).
-
-    If 'new' matches an existing label, this is a merge operation.
-    If 'new' is novel, this is a rename operation.
+    This unified model handles both semantic consolidation (merging synonyms)
+    and polarity classification (supporting/refuting/neutral/irrelevant) in a
+    single operation, as both require understanding topic-relationship semantics.
     """
 
-    old: str = Field(
-        description="Original relationship label to transform", min_length=1
+    original: str = Field(
+        description="Original relationship label to consolidate", min_length=1
     )
-    new: str = Field(description="Target relationship label", min_length=1)
-    reasoning: str = Field(
-        min_length=20, description="Why this mapping is appropriate for the topic"
+    consolidated: str = Field(
+        description="Canonical relationship label (may equal original)", min_length=1
     )
-
-
-class RelationshipMappings(BaseModel):
-    """LLM output: batch of relationship label transformations."""
-
-    mappings: list[RelationshipMapping] = Field(
-        description="All relationship label mappings to apply"
-    )
-
-
-class RelationshipRelevanceDecision(BaseModel):
-    """LLM decision on whether a relationship type is relevant to the research topic.
-
-    Used to filter out relationship types that are orthogonal to the research
-    question (e.g., molecular mechanisms in a clinical outcomes study).
-    """
-
-    relationship: str = Field(
-        description="Relationship type being evaluated", min_length=1
-    )
-    is_relevant: bool = Field(
-        description="Whether this relationship type is relevant to the research topic"
+    polarity: Literal["supporting", "refuting", "neutral", "irrelevant"] = Field(
+        description="Semantic polarity of this relationship relative to research topic"
     )
     reasoning: str = Field(
         min_length=30,
-        description="Detailed explanation of why this relationship type is/isn't relevant, "
-        "including level of analysis and how it relates to research goals",
+        description="Explanation of consolidation and polarity classification",
     )
 
 
-class RelationshipRelevanceDecisions(BaseModel):
-    """LLM output: batch of relevance decisions for relationship types."""
+class RelationshipConsolidations(BaseModel):
+    """LLM output: batch of relationship consolidations with polarity."""
 
-    decisions: list[RelationshipRelevanceDecision] = Field(
-        description="Relevance decisions for all relationship types"
+    consolidations: list[RelationshipConsolidation] = Field(
+        description="All relationship consolidations and polarities"
     )
 
 
@@ -240,6 +215,9 @@ class CrossDocumentJudgment(BaseModel):
     accepted: bool = Field(
         description="Whether to accept this pair as a valid association"
     )
+    relationship: str = Field(
+        description="Selected final relationship type (most accurate overall)"
+    )
     confidence: Literal["high", "medium", "low"] = Field(
         description="Confidence level in this judgment"
     )
@@ -290,18 +268,46 @@ class PairAssessment(BaseModel):
     reasoning: str
 
 
+class PairSpread(BaseModel):
+    """Assessments grouped by relationship polarity.
+
+    Organizes per-document assessments by the semantic polarity of their
+    relationship labels relative to the research topic. Polarity is derived
+    via lookup from relationship label to polarity mapping created during
+    consolidation.
+
+    This structure enables explicit synthesis of supporting vs refuting evidence
+    and identification of contentious pairs where evidence contradicts.
+
+    Attributes:
+        supporting: Assessments with relationships that support the topic
+        refuting: Assessments with relationships that refute/contradict the topic
+        neutral: Assessments with relationships that are relevant but not directional
+        irrelevant: Assessments with relationships orthogonal to research question
+    """
+
+    supporting: list[PairAssessment] = Field(default_factory=list)
+    refuting: list[PairAssessment] = Field(default_factory=list)
+    neutral: list[PairAssessment] = Field(default_factory=list)
+    irrelevant: list[PairAssessment] = Field(default_factory=list)
+
+
 class PairJudgment(BaseModel):
     """Final cross-document judgment on an entity pair.
 
     This is the primary output of the extraction pipeline, containing
-    all per-document assessments and the final accept/reject decision.
+    all per-document assessments organized by polarity and the final
+    accept/reject decision.
+
+    The final polarity is inferred from the selected relationship via the
+    polarity mapping created during consolidation.
     """
 
     entity1: SimpleEntity = Field(description="First entity")
     entity2: SimpleEntity = Field(description="Second entity")
     relationship: str = Field(description="Final relationship type")
-    assessments: list[PairAssessment] = Field(
-        description="All per-document assessments"
+    spread: PairSpread = Field(
+        description="Per-document assessments grouped by relationship polarity"
     )
     accepted: bool = Field(description="Whether this pair is accepted")
     confidence: Literal["high", "medium", "low"] = Field(

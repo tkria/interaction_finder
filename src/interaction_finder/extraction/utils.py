@@ -10,6 +10,8 @@ from collections import Counter
 from interaction_finder.extraction.models import (
     EntityMention,
     EntityPairKey,
+    PairAssessment,
+    PairSpread,
     ProximalEntitySet,
 )
 from interaction_finder.resources import Resource, ResourceQuote
@@ -335,3 +337,52 @@ def make_entity_pair_key(
             return EntityPairKey(entity1_name=entity1.name, entity2_name=entity2.name)
         else:
             return EntityPairKey(entity1_name=entity2.name, entity2_name=entity1.name)
+
+
+# =============================================================================
+# Relationship polarity utilities
+# =============================================================================
+
+
+def get_relationship_polarity(relationship: str, polarity_map: dict[str, str]) -> str:
+    """Look up polarity for a relationship label.
+
+    Parameters:
+        relationship: Relationship label to look up
+        polarity_map: Mapping from relationship to polarity
+
+    Returns:
+        Polarity category: "supporting", "refuting", "neutral", or "irrelevant"
+
+    Raises:
+        KeyError: If relationship not in mapping (indicates consolidation bug)
+    """
+    return polarity_map[relationship]
+
+
+def build_pair_spread(
+    assessments: list[PairAssessment], polarity_map: dict[str, str]
+) -> PairSpread:
+    """Group assessments by relationship polarity.
+
+    Creates a PairSpread by looking up the polarity of each assessment's
+    relationship label and organizing them into supporting/refuting/neutral/irrelevant
+    categories.
+
+    Parameters:
+        assessments: All per-document assessments for one entity pair
+        polarity_map: Mapping from relationship label to polarity
+
+    Returns:
+        PairSpread with assessments organized by polarity
+
+    Raises:
+        KeyError: If any assessment's relationship is not in polarity_map
+    """
+    spread = PairSpread()
+
+    for assessment in assessments:
+        polarity = get_relationship_polarity(assessment.relationship, polarity_map)
+        getattr(spread, polarity).append(assessment)
+
+    return spread
