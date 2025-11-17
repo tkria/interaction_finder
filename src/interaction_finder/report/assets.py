@@ -1024,10 +1024,21 @@ function renderContent() {
     const filtered = getFilteredPairs();
     const pair = filtered[state.selectedPairIdx];
 
-    // Sort assessments by quote count
-    const sortedAssessments = [...pair.assessments].sort((a, b) =>
-        b.quotes.length - a.quotes.length
-    );
+    // Sort assessments by publication date (newest first), then by quote count
+    const sortedAssessments = [...pair.assessments].sort((a, b) => {
+        const docA = state.data.documents[a.resource_id];
+        const docB = state.data.documents[b.resource_id];
+        const dateA = docA?.publication_date || '';
+        const dateB = docB?.publication_date || '';
+
+        // Primary sort: date (newest first)
+        if (dateB !== dateA) {
+            return dateB.localeCompare(dateA);
+        }
+
+        // Secondary sort: quote count (most quotes first)
+        return b.quotes.length - a.quotes.length;
+    });
 
     content.innerHTML = sortedAssessments.map((assess, idx) => {
         const doc = state.data.documents[assess.resource_id];
@@ -1367,9 +1378,20 @@ function renderReasoning() {
         `;
     } else {
         // Show document-specific reasoning with entity highlighting
-        const sortedAssessments = [...pair.assessments].sort((a, b) =>
-            b.quotes.length - a.quotes.length
-        );
+        const sortedAssessments = [...pair.assessments].sort((a, b) => {
+            const docA = state.data.documents[a.resource_id];
+            const docB = state.data.documents[b.resource_id];
+            const dateA = docA?.publication_date || '';
+            const dateB = docB?.publication_date || '';
+
+            // Primary sort: date (newest first)
+            if (dateB !== dateA) {
+                return dateB.localeCompare(dateA);
+            }
+
+            // Secondary sort: quote count (most quotes first)
+            return b.quotes.length - a.quotes.length;
+        });
         const assess = sortedAssessments[state.openDocumentIdx];
 
         const entity1Terms = [pair.entity1.name, ...pair.entity1.aliases];
@@ -1448,9 +1470,20 @@ function scrollToQuote(quoteIdx) {
     const pair = filtered[state.selectedPairIdx];
     if (!pair || state.openDocumentIdx === null) return;
 
-    const sortedAssessments = [...pair.assessments].sort((a, b) =>
-        b.quotes.length - a.quotes.length
-    );
+    const sortedAssessments = [...pair.assessments].sort((a, b) => {
+        const docA = state.data.documents[a.resource_id];
+        const docB = state.data.documents[b.resource_id];
+        const dateA = docA?.publication_date || '';
+        const dateB = docB?.publication_date || '';
+
+        // Primary sort: date (newest first)
+        if (dateB !== dateA) {
+            return dateB.localeCompare(dateA);
+        }
+
+        // Secondary sort: quote count (most quotes first)
+        return b.quotes.length - a.quotes.length;
+    });
     const assess = sortedAssessments[state.openDocumentIdx];
 
     // Get the quote text from this assessment
