@@ -894,79 +894,76 @@ If no consolidation is needed, return an empty list of mappings."""
     ) -> None:
         """Filter pairs with irrelevant relationship types.
 
-        Queries LLM to identify relationship types that are orthogonal to the
-        research question. Creates pre-rejected judgments for filtered pairs,
-        using the LLM's reasoning as the rejection explanation.
+        Creates pre-rejected judgments for pairs whose relationship type is
+        deemed irrelevant to the research question by the LLM.
         """
-        # Collect unique relationship types (post-consolidation)
-        unique_relationships = set(
-            assessment.relationship
+        # Get irrelevant relationship types from LLM
+        unique_rels = {
+            a.relationship
             for assessments in ctx.state.pair_assessments_by_resource.values()
-            for assessment in assessments
-        )
-
-        if not unique_relationships:
+            for a in assessments
+        }
+        if not unique_rels:
             return
 
-        # Get relevance decisions from LLM
-        irrelevant_decisions = await self._get_relevance_decisions(
-            unique_relationships, ctx
-        )
-
-        if not irrelevant_decisions:
+        irrelevant = await self._get_relevance_decisions(unique_rels, ctx)
+        if not irrelevant:
             ctx.deps.logger.info("All relationship types deemed relevant")
             return
 
-        # Group assessments by pair
+        # Create pre-rejected judgments for filtered pairs
         from interaction_finder.extraction.utils import make_entity_pair_key
 
-        assessments_by_pair: dict[EntityPairKey, list[PairAssessment]] = defaultdict(
-            list
+        filtered = 0
+        for pair_key, assessments in self._group_assessments_by_pair(ctx).items():
+            rel = assessments[0].relationship
+            if rel in irrelevant:
+                ctx.state.pair_judgments[pair_key] = self._make_rejected_judgment(
+                    assessments,
+                    f"Relationship type filtered as irrelevant: {irrelevant[rel]}",
+                )
+                filtered += 1
+
+        ctx.deps.logger.info(
+            f"Filtered {filtered} pairs with {len(irrelevant)} irrelevant type(s)"
         )
+
+    def _group_assessments_by_pair(
+        self, ctx: GraphRunContext[State, Deps]
+    ) -> dict[EntityPairKey, list[PairAssessment]]:
+        """Group assessments by entity pair key."""
+        from interaction_finder.extraction.utils import make_entity_pair_key
+
+        grouped: dict[EntityPairKey, list[PairAssessment]] = defaultdict(list)
         for assessments in ctx.state.pair_assessments_by_resource.values():
             for assessment in assessments:
                 pair_key = make_entity_pair_key(assessment.entity1, assessment.entity2)
-                assessments_by_pair[pair_key].append(assessment)
+                grouped[pair_key].append(assessment)
+        return grouped
 
-        # Create pre-rejected judgments for irrelevant pairs
-        filtered_count = 0
-        for pair_key, assessments in assessments_by_pair.items():
-            # All assessments for a pair should have same relationship (post-consolidation)
-            relationship = assessments[0].relationship
+    def _make_rejected_judgment(
+        self, assessments: list[PairAssessment], reasoning: str
+    ) -> PairJudgment:
+        """Create a rejected PairJudgment from assessments."""
+        from interaction_finder.extraction.models import PairJudgment, SimpleEntity
 
-            if relationship in irrelevant_decisions:
-                # Get the LLM's reasoning for this decision
-                reasoning = irrelevant_decisions[relationship]
-
-                # Create pre-rejected judgment with LLM reasoning
-                first = assessments[0]
-                from interaction_finder.extraction.models import (
-                    PairJudgment,
-                    SimpleEntity,
-                )
-
-                ctx.state.pair_judgments[pair_key] = PairJudgment(
-                    entity1=SimpleEntity(
-                        name=first.entity1.name,
-                        kind=first.entity1.kind,
-                        aliases=first.entity1.aliases,
-                    ),
-                    entity2=SimpleEntity(
-                        name=first.entity2.name,
-                        kind=first.entity2.kind,
-                        aliases=first.entity2.aliases,
-                    ),
-                    relationship=relationship,
-                    assessments=assessments,  # Keep full provenance
-                    accepted=False,
-                    confidence="high",
-                    reasoning=f"Relationship type filtered as irrelevant: {reasoning}",
-                )
-                filtered_count += 1
-
-        ctx.deps.logger.info(
-            f"Filtered {filtered_count} pairs with {len(irrelevant_decisions)} "
-            f"irrelevant relationship type(s)"
+        first = assessments[0]
+        return PairJudgment(
+            entity1=SimpleEntity(
+                name=first.entity1.name,
+                kind=first.entity1.kind,
+                aliases=first.entity1.aliases,
+            ),
+            entity2=SimpleEntity(
+                name=first.entity2.name,
+                kind=first.entity2.kind,
+                aliases=first.entity2.aliases,
+            ),
+            relationship=first.relationship,
+            assessments=assessments,
+            accepted=False,
+            confidence="high",
+            reasoning=reasoning,
         )
 
     async def _get_relevance_decisions(
@@ -981,43 +978,33 @@ If no consolidation is needed, return an empty list of mappings."""
             get_relationship_relevance_agent,
         )
 
-        # Build prompt
-        rels_str = "\n".join(f"- {r}" for r in sorted(relationships))
-        entity_types_str = ", ".join(ctx.state.target_entity_types)
-
         prompt = f"""**Research topic:** {ctx.state.topic}
 
-**Target entity types:** {entity_types_str}
+**Target entity types:** {", ".join(ctx.state.target_entity_types)}
 
 **Task:** Evaluate which relationship types are relevant to this research question.
 
 **Relationship types found:**
-{rels_str}
+{chr(10).join(f"- {r}" for r in sorted(relationships))}
 
 For each relationship type, decide if it's relevant or irrelevant to the research goal.
 Remember: when uncertain, mark as relevant to avoid false negatives."""
 
-        # Call LLM
-        agent = get_relationship_relevance_agent(ctx.deps.config)
-        usage = RunUsage()
         try:
+            agent = get_relationship_relevance_agent(ctx.deps.config)
             with rename_agent(agent, name="FilterIrrelevantRelationships"):
                 async with ctx.deps.agent_semaphore:
-                    result = await agent.run(prompt, deps=ctx.deps, usage=usage)
+                    result = await agent.run(prompt, deps=ctx.deps, usage=RunUsage())
+            return {
+                d.relationship: d.reasoning
+                for d in result.output.decisions
+                if not d.is_relevant
+            }
         except (TimeoutError, ConnectionError, ValueError) as e:
             ctx.deps.logger.error(
-                f"Relevance filtering failed: {type(e).__name__}: {e}. "
-                f"Proceeding without filtering."
+                f"Relevance filtering failed: {e}. Proceeding without filtering."
             )
             return {}
-
-        # Extract irrelevant relationships with their reasoning
-        irrelevant = {}
-        for decision in result.output.decisions:
-            if not decision.is_relevant:
-                irrelevant[decision.relationship] = decision.reasoning
-
-        return irrelevant
 
 
 @dataclass
