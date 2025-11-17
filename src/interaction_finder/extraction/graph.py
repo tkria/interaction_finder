@@ -3,8 +3,9 @@
 The graph defines the flow:
 1. Process all documents concurrently (entities → pairs → assessments)
 2. Merge entities globally and update pair references
-3. Make cross-document judgments
-4. Finalize results
+3. Merge relationship labels globally
+4. Make cross-document judgments
+5. Finalize results
 """
 
 from pydantic_graph import Graph
@@ -12,7 +13,8 @@ from pydantic_graph import Graph
 from interaction_finder.extraction.nodes import (
     FinalizeNode,
     JudgeCrossDocumentNode,
-    MergeEntitiesNode,
+    ConsolidateEntitiesNode,
+    ConsolidateRelationshipsNode,
     ProcessDocumentsNode,
 )
 
@@ -20,7 +22,8 @@ from interaction_finder.extraction.nodes import (
 graph = Graph(
     nodes=[
         ProcessDocumentsNode,
-        MergeEntitiesNode,
+        ConsolidateEntitiesNode,
+        ConsolidateRelationshipsNode,
         JudgeCrossDocumentNode,
         FinalizeNode,
     ]

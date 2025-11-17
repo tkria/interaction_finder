@@ -1,4 +1,4 @@
-"""Tests for MergeEntitiesNode global cross-document merging.
+"""Tests for ConsolidateEntitiesNode global cross-document merging.
 
 Tests the new global merging architecture that:
 1. Collects all unique normalized entities across documents
@@ -18,7 +18,7 @@ from interaction_finder.extraction.models import (
     EntityMergeDecision,
     EntityMergeDecisions,
 )
-from interaction_finder.extraction.nodes import MergeEntitiesNode
+from interaction_finder.extraction.nodes import ConsolidateEntitiesNode
 from interaction_finder.extraction.state import State
 from interaction_finder.extraction.utils import build_permitted_pairs
 from interaction_finder.resources import ResourceId, ResourcePool
@@ -48,7 +48,7 @@ class TestCollectUniqueEntities:
 
     def test_collects_from_single_document(self, mock_deps):
         """Should collect entities from a single document."""
-        node = MergeEntitiesNode()
+        node = ConsolidateEntitiesNode()
         state = State(
             topic="test",
             target_entity_types=["gene"],
@@ -87,7 +87,7 @@ class TestCollectUniqueEntities:
 
     def test_collects_from_multiple_documents(self, mock_deps):
         """Should collect entities across multiple documents."""
-        node = MergeEntitiesNode()
+        node = ConsolidateEntitiesNode()
         state = State(
             topic="test",
             target_entity_types=["gene"],
@@ -130,7 +130,7 @@ class TestCollectUniqueEntities:
 
     def test_tracks_canonical_variants_globally(self, mock_deps):
         """Should track all canonical name variants in state."""
-        node = MergeEntitiesNode()
+        node = ConsolidateEntitiesNode()
         state = State(
             topic="test",
             target_entity_types=["gene"],
@@ -182,7 +182,7 @@ class TestCollectUniqueEntities:
 
     def test_handles_multiple_entity_kinds(self, mock_deps):
         """Should separate entities by kind."""
-        node = MergeEntitiesNode()
+        node = ConsolidateEntitiesNode()
         state = State(
             topic="test",
             target_entity_types=["gene", "disease"],
@@ -223,7 +223,7 @@ class TestFindGlobalSubstringPairs:
 
     def test_finds_simple_substring(self):
         """Should find substring relationships."""
-        node = MergeEntitiesNode()
+        node = ConsolidateEntitiesNode()
 
         unique_entities = {"gene": {"brca": {"BRCA"}, "brca1": {"BRCA1"}}}
 
@@ -235,7 +235,7 @@ class TestFindGlobalSubstringPairs:
 
     def test_finds_multiple_substrings(self):
         """Should find multiple substring relationships."""
-        node = MergeEntitiesNode()
+        node = ConsolidateEntitiesNode()
 
         unique_entities = {
             "gene": {
@@ -256,7 +256,7 @@ class TestFindGlobalSubstringPairs:
 
     def test_no_substrings_found(self):
         """Should return empty dict when no substrings exist."""
-        node = MergeEntitiesNode()
+        node = ConsolidateEntitiesNode()
 
         unique_entities = {"gene": {"brca1": {"BRCA1"}, "tp53": {"TP53"}}}
 
@@ -266,7 +266,7 @@ class TestFindGlobalSubstringPairs:
 
     def test_handles_exact_normalized_match(self):
         """Should not create pairs for identical normalized names."""
-        node = MergeEntitiesNode()
+        node = ConsolidateEntitiesNode()
 
         unique_entities = {"gene": {"brca1": {"BRCA1", "brca1", "Brca1"}}}
 
@@ -277,7 +277,7 @@ class TestFindGlobalSubstringPairs:
 
     def test_bidirectional_substring_detection(self):
         """Should detect substrings in both directions."""
-        node = MergeEntitiesNode()
+        node = ConsolidateEntitiesNode()
 
         unique_entities = {
             "gene": {
@@ -303,7 +303,7 @@ class TestGetGlobalMergeDecisions:
     @pytest.mark.asyncio
     async def test_cache_miss_queries_llm(self, mock_deps):
         """First encounter should query LLM."""
-        node = MergeEntitiesNode()
+        node = ConsolidateEntitiesNode()
         state = State(
             topic="test",
             target_entity_types=["gene"],
@@ -352,7 +352,7 @@ class TestGetGlobalMergeDecisions:
     @pytest.mark.asyncio
     async def test_cache_hit_skips_llm(self, mock_deps):
         """Second encounter should use cache."""
-        node = MergeEntitiesNode()
+        node = ConsolidateEntitiesNode()
         state = State(
             topic="test",
             target_entity_types=["gene"],
@@ -393,7 +393,7 @@ class TestGetGlobalMergeDecisions:
     @pytest.mark.asyncio
     async def test_respects_reject_decisions(self, mock_deps):
         """Should not create merge rule when cache says no merge."""
-        node = MergeEntitiesNode()
+        node = ConsolidateEntitiesNode()
         state = State(
             topic="test",
             target_entity_types=["gene"],
@@ -415,7 +415,7 @@ class TestGetGlobalMergeDecisions:
     @pytest.mark.asyncio
     async def test_mixed_cached_and_uncached(self, mock_deps):
         """Should handle mix of cached and uncached pairs efficiently."""
-        node = MergeEntitiesNode()
+        node = ConsolidateEntitiesNode()
         state = State(
             topic="test",
             target_entity_types=["gene"],
@@ -467,7 +467,7 @@ class TestGetGlobalMergeDecisions:
     @pytest.mark.asyncio
     async def test_handles_llm_errors_gracefully(self, mock_deps):
         """Should continue if LLM call fails."""
-        node = MergeEntitiesNode()
+        node = ConsolidateEntitiesNode()
         state = State(
             topic="test",
             target_entity_types=["gene"],
@@ -505,7 +505,7 @@ class TestResolveTransitiveMerges:
 
     def test_resolves_simple_chain(self):
         """Should resolve A→B→C to A→C, B→C."""
-        node = MergeEntitiesNode()
+        node = ConsolidateEntitiesNode()
 
         merge_rules = {
             ("a", "gene"): "b",
@@ -520,7 +520,7 @@ class TestResolveTransitiveMerges:
 
     def test_resolves_long_chain(self):
         """Should resolve A→B→C→D to A→D, B→D, C→D."""
-        node = MergeEntitiesNode()
+        node = ConsolidateEntitiesNode()
 
         merge_rules = {
             ("a", "gene"): "b",
@@ -537,7 +537,7 @@ class TestResolveTransitiveMerges:
 
     def test_handles_multiple_independent_chains(self):
         """Should handle multiple independent merge chains."""
-        node = MergeEntitiesNode()
+        node = ConsolidateEntitiesNode()
 
         merge_rules = {
             ("a", "gene"): "b",
@@ -556,7 +556,7 @@ class TestResolveTransitiveMerges:
 
     def test_handles_no_chains(self):
         """Should pass through rules with no chains."""
-        node = MergeEntitiesNode()
+        node = ConsolidateEntitiesNode()
 
         merge_rules = {
             ("a", "gene"): "b",
@@ -571,7 +571,7 @@ class TestResolveTransitiveMerges:
 
     def test_handles_empty_rules(self):
         """Should handle empty merge rules."""
-        node = MergeEntitiesNode()
+        node = ConsolidateEntitiesNode()
 
         merge_rules = {}
         resolved = node._resolve_transitive_merges(merge_rules)
@@ -580,7 +580,7 @@ class TestResolveTransitiveMerges:
 
     def test_handles_circular_reference(self):
         """Should detect and stop at circular references."""
-        node = MergeEntitiesNode()
+        node = ConsolidateEntitiesNode()
 
         # Create artificial cycle: a→b, b→c, c→a
         merge_rules = {
@@ -597,7 +597,7 @@ class TestResolveTransitiveMerges:
 
     def test_respects_entity_kinds(self):
         """Should handle different entity kinds independently."""
-        node = MergeEntitiesNode()
+        node = ConsolidateEntitiesNode()
 
         merge_rules = {
             ("a", "gene"): "b",
@@ -620,7 +620,7 @@ class TestApplyMergeRulesGlobally:
 
     def test_applies_merge_to_single_document(self, mock_deps):
         """Should merge entities within a document."""
-        node = MergeEntitiesNode()
+        node = ConsolidateEntitiesNode()
         state = State(
             topic="test",
             target_entity_types=["gene"],
@@ -662,7 +662,7 @@ class TestApplyMergeRulesGlobally:
 
     def test_applies_merge_across_multiple_documents(self, mock_deps):
         """Should apply same rule consistently across documents."""
-        node = MergeEntitiesNode()
+        node = ConsolidateEntitiesNode()
         state = State(
             topic="test",
             target_entity_types=["gene"],
@@ -726,7 +726,7 @@ class TestApplyMergeRulesGlobally:
 
     def test_only_merges_when_both_present(self, mock_deps):
         """Should only merge when both parent and child exist in document."""
-        node = MergeEntitiesNode()
+        node = ConsolidateEntitiesNode()
         state = State(
             topic="test",
             target_entity_types=["gene"],
@@ -781,7 +781,7 @@ class TestApplyMergeRulesGlobally:
 
     def test_handles_empty_merge_rules(self, mock_deps):
         """Should handle empty merge rules gracefully."""
-        node = MergeEntitiesNode()
+        node = ConsolidateEntitiesNode()
         state = State(
             topic="test",
             target_entity_types=["gene"],
@@ -812,7 +812,7 @@ class TestApplyMergeRulesGlobally:
 
     def test_handles_multiple_entity_kinds(self, mock_deps):
         """Should apply merges for different entity kinds independently."""
-        node = MergeEntitiesNode()
+        node = ConsolidateEntitiesNode()
         state = State(
             topic="test",
             target_entity_types=["gene", "disease"],
@@ -884,7 +884,7 @@ class TestApplyMergeRulesGlobally:
 
         So everything merges directly to the final parent.
         """
-        node = MergeEntitiesNode()
+        node = ConsolidateEntitiesNode()
         state = State(
             topic="test",
             target_entity_types=["disease"],
@@ -945,12 +945,12 @@ class TestApplyMergeRulesGlobally:
 
 
 class TestIntegration:
-    """Integration tests for complete MergeEntitiesNode flow."""
+    """Integration tests for complete ConsolidateEntitiesNode flow."""
 
     @pytest.mark.asyncio
     async def test_full_merge_flow(self, mock_deps):
         """Test complete flow from collection to application."""
-        node = MergeEntitiesNode()
+        node = ConsolidateEntitiesNode()
         state = State(
             topic="breast cancer genetics",
             target_entity_types=["gene"],
@@ -1018,10 +1018,10 @@ class TestIntegration:
         try:
             result = await node.run(ctx)
 
-            # Should return next node
-            from interaction_finder.extraction.nodes import JudgeCrossDocumentNode
+            # Should return next node (ConsolidateRelationshipsNode)
+            from interaction_finder.extraction.nodes import ConsolidateRelationshipsNode
 
-            assert isinstance(result, JudgeCrossDocumentNode)
+            assert isinstance(result, ConsolidateRelationshipsNode)
 
             # Both documents should have merges
             assert "BRCA" in ctx.state.validated_entities_by_resource[resource1]

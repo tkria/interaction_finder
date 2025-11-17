@@ -284,6 +284,10 @@ class IfetcherConfig(BaseModel):
                 le=200,
                 description="Maximum number of entity merge decisions per LLM call",
             )
+            filter_irrelevant_relationships: bool = Field(
+                True,
+                description="Filter relationship types deemed irrelevant to research topic",
+            )
             enable_entity_kind_validation: bool = Field(
                 True, description="Filter entities not matching target kinds"
             )

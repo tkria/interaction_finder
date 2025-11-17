@@ -15,7 +15,7 @@ from interaction_finder.extraction.models import (
     EntityMergeDecision,
     EntityMergeDecisions,
 )
-from interaction_finder.extraction.nodes import MergeEntitiesNode
+from interaction_finder.extraction.nodes import ConsolidateEntitiesNode
 from interaction_finder.extraction.state import State
 from interaction_finder.extraction.utils import build_permitted_pairs
 from interaction_finder.resources import ResourceId, ResourcePool
@@ -45,7 +45,7 @@ class TestCanonicalNameTracking:
 
     def test_tracks_all_canonical_variants(self, mock_deps):
         """Should track all canonical variants for each normalized entity."""
-        node = MergeEntitiesNode()
+        node = ConsolidateEntitiesNode()
         state = State(
             topic="test",
             target_entity_types=["disease"],
@@ -107,7 +107,7 @@ class TestCrossDocumentCanonicalMerging:
     @pytest.mark.asyncio
     async def test_merges_using_per_document_canonical_names(self, mock_deps):
         """Should use the canonical name present in each specific document."""
-        node = MergeEntitiesNode()
+        node = ConsolidateEntitiesNode()
         state = State(
             topic="PAH genetics",
             target_entity_types=["disease"],
@@ -225,7 +225,7 @@ class TestCrossDocumentCanonicalMerging:
     @pytest.mark.asyncio
     async def test_handles_abbreviation_stripping_in_merges(self, mock_deps):
         """Should handle merges when abbreviations are stripped from names."""
-        node = MergeEntitiesNode()
+        node = ConsolidateEntitiesNode()
         state = State(
             topic="PAH genetics",
             target_entity_types=["disease"],
@@ -287,7 +287,7 @@ class TestMergeWithMissingParent:
     @pytest.mark.asyncio
     async def test_no_merge_when_parent_missing(self, mock_deps):
         """Should not merge if parent doesn't exist in document."""
-        node = MergeEntitiesNode()
+        node = ConsolidateEntitiesNode()
         state = State(
             topic="test",
             target_entity_types=["disease"],

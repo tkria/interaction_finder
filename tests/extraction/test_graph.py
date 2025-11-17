@@ -20,7 +20,7 @@ class TestGraphAssembly:
 
         expected_nodes = [
             "ProcessDocumentsNode",
-            "MergeEntitiesNode",
+            "ConsolidateEntitiesNode",
             "JudgeCrossDocumentNode",
             "FinalizeNode",
         ]

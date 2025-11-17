@@ -132,6 +132,62 @@ class EntityMergeDecisions(BaseModel):
     )
 
 
+class RelationshipMapping(BaseModel):
+    """LLM output: single relationship label transformation.
+
+    Specifies how one relationship label should be renamed or merged into another.
+    Both 'old' and 'new' should be provided in their original forms (the system
+    will normalize them for matching).
+
+    If 'new' matches an existing label, this is a merge operation.
+    If 'new' is novel, this is a rename operation.
+    """
+
+    old: str = Field(
+        description="Original relationship label to transform", min_length=1
+    )
+    new: str = Field(description="Target relationship label", min_length=1)
+    reasoning: str = Field(
+        min_length=20, description="Why this mapping is appropriate for the topic"
+    )
+
+
+class RelationshipMappings(BaseModel):
+    """LLM output: batch of relationship label transformations."""
+
+    mappings: list[RelationshipMapping] = Field(
+        description="All relationship label mappings to apply"
+    )
+
+
+class RelationshipRelevanceDecision(BaseModel):
+    """LLM decision on whether a relationship type is relevant to the research topic.
+
+    Used to filter out relationship types that are orthogonal to the research
+    question (e.g., molecular mechanisms in a clinical outcomes study).
+    """
+
+    relationship: str = Field(
+        description="Relationship type being evaluated", min_length=1
+    )
+    is_relevant: bool = Field(
+        description="Whether this relationship type is relevant to the research topic"
+    )
+    reasoning: str = Field(
+        min_length=30,
+        description="Detailed explanation of why this relationship type is/isn't relevant, "
+        "including level of analysis and how it relates to research goals",
+    )
+
+
+class RelationshipRelevanceDecisions(BaseModel):
+    """LLM output: batch of relevance decisions for relationship types."""
+
+    decisions: list[RelationshipRelevanceDecision] = Field(
+        description="Relevance decisions for all relationship types"
+    )
+
+
 class ProximalPairInfo(BaseModel):
     """LLM output for a single pair extracted from a proximal region."""
 

@@ -1,6 +1,6 @@
 """Tests for entity reference updates in PairAssessments after merging.
 
-The MergeEntitiesNode now updates entity references in PairAssessments after
+The ConsolidateEntitiesNode now updates entity references in PairAssessments after
 merging entities globally. These tests verify that:
 1. Entity references in assessments are updated to use merged canonical names
 2. Original names are preserved in aliases
@@ -14,7 +14,7 @@ import pytest
 from pydantic_graph import GraphRunContext
 
 from interaction_finder.extraction.models import EntityMention, PairAssessment
-from interaction_finder.extraction.nodes import MergeEntitiesNode
+from interaction_finder.extraction.nodes import ConsolidateEntitiesNode
 from interaction_finder.extraction.state import State
 from interaction_finder.extraction.utils import build_permitted_pairs
 from interaction_finder.resources import ResourceId, ResourcePool
@@ -35,7 +35,7 @@ class TestFindCanonicalName:
 
     def test_finds_exact_match(self):
         """Should find entity by normalized name match."""
-        node = MergeEntitiesNode()
+        node = ConsolidateEntitiesNode()
         entities = {
             "BRCA1": EntityMention(
                 kind="gene",
@@ -54,7 +54,7 @@ class TestFindCanonicalName:
 
     def test_returns_none_for_no_match(self):
         """Should return None if no matching entity found."""
-        node = MergeEntitiesNode()
+        node = ConsolidateEntitiesNode()
         entities = {
             "BRCA1": EntityMention(
                 kind="gene",
@@ -70,7 +70,7 @@ class TestFindCanonicalName:
 
     def test_respects_kind_filter(self):
         """Should not match if kind differs."""
-        node = MergeEntitiesNode()
+        node = ConsolidateEntitiesNode()
         entities = {
             "BRCA1": EntityMention(
                 kind="gene",
@@ -88,7 +88,7 @@ class TestFindCanonicalName:
         """Should match despite whitespace differences in normalized input."""
         from interaction_finder.extraction.utils import normalize_for_comparison
 
-        node = MergeEntitiesNode()
+        node = ConsolidateEntitiesNode()
         entities = {
             "Alzheimer's disease": EntityMention(
                 kind="disease",
@@ -110,7 +110,7 @@ class TestUpdateEntityInAssessment:
 
     def test_updates_entity_name(self, mock_deps):
         """Should update entity name to merged canonical name."""
-        node = MergeEntitiesNode()
+        node = ConsolidateEntitiesNode()
         assessment = PairAssessment(
             resource_id=ResourceId(url="https://example.com", counter=1),
             entity1=EntityMention(
@@ -136,7 +136,7 @@ class TestUpdateEntityInAssessment:
 
     def test_adds_old_name_to_aliases(self):
         """Should add original name to aliases list."""
-        node = MergeEntitiesNode()
+        node = ConsolidateEntitiesNode()
         assessment = PairAssessment(
             resource_id=ResourceId(url="https://example.com", counter=1),
             entity1=EntityMention(
@@ -167,7 +167,7 @@ class TestUpdateEntityInAssessment:
 
     def test_updates_reasoning_with_merge_info(self):
         """Should append merge information to reasoning."""
-        node = MergeEntitiesNode()
+        node = ConsolidateEntitiesNode()
         assessment = PairAssessment(
             resource_id=ResourceId(url="https://example.com", counter=1),
             entity1=EntityMention(
@@ -193,7 +193,7 @@ class TestUpdateEntityInAssessment:
 
     def test_handles_entity2_update(self):
         """Should update entity2 when specified."""
-        node = MergeEntitiesNode()
+        node = ConsolidateEntitiesNode()
         assessment = PairAssessment(
             resource_id=ResourceId(url="https://example.com", counter=1),
             entity1=EntityMention(
@@ -224,7 +224,7 @@ class TestUpdatePairEntityReferences:
 
     def test_updates_both_entities_in_assessment(self, mock_deps):
         """Should update both entity references when both are merged."""
-        node = MergeEntitiesNode()
+        node = ConsolidateEntitiesNode()
         resource_id = ResourceId(url="https://example.com", counter=1)
 
         # Create state with assessments
@@ -291,7 +291,7 @@ class TestUpdatePairEntityReferences:
 
     def test_handles_no_merge_needed(self, mock_deps):
         """Should leave assessment unchanged if no merges apply."""
-        node = MergeEntitiesNode()
+        node = ConsolidateEntitiesNode()
         resource_id = ResourceId(url="https://example.com", counter=1)
 
         state = State(
@@ -346,7 +346,7 @@ class TestUpdatePairEntityReferences:
 
     def test_handles_only_entity1_merged(self, mock_deps):
         """Should update only entity1 if entity2 is not merged."""
-        node = MergeEntitiesNode()
+        node = ConsolidateEntitiesNode()
         resource_id = ResourceId(url="https://example.com", counter=1)
 
         state = State(
@@ -404,7 +404,7 @@ class TestUpdatePairEntityReferences:
 
     def test_handles_multiple_assessments(self, mock_deps):
         """Should update all assessments in a resource."""
-        node = MergeEntitiesNode()
+        node = ConsolidateEntitiesNode()
         resource_id = ResourceId(url="https://example.com", counter=1)
 
         state = State(
@@ -490,7 +490,7 @@ class TestUpdatePairEntityReferences:
 
     def test_handles_multiple_resources(self, mock_deps):
         """Should update assessments across multiple resources."""
-        node = MergeEntitiesNode()
+        node = ConsolidateEntitiesNode()
         resource_id1 = ResourceId(url="https://example.com/doc1", counter=1)
         resource_id2 = ResourceId(url="https://example.com/doc2", counter=2)
 

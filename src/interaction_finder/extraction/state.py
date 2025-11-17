@@ -9,7 +9,7 @@ Pipeline flow:
    - Validate kinds → validated_entities_by_resource
    - Identify proximal sets → proximal_sets_by_resource
    - Extract & assess pairs → pair_assessments_by_resource
-2. MergeEntitiesNode → entities_merged, canonical_name_variants (global merging + pair reference updates)
+2. ConsolidateEntitiesNode → entities_merged, canonical_name_variants (global merging + pair reference updates)
 3. JudgeCrossDocumentNode → pair_judgments
 4. FinalizeNode → ExtractionResult
 """
@@ -94,7 +94,13 @@ class State:
         default_factory=dict
     )
 
-    # === Stage 5: Cross-Document Judgment ===
+    # === Stage 5: Relationship Label Merging ===
+    # Mapping from normalized old label to normalized new label
+    relationship_mappings: dict[str, str] = field(default_factory=dict)
+    # Count of assessments with updated relationship labels
+    relationships_merged: int = 0
+
+    # === Stage 6: Cross-Document Judgment ===
     # Final judgments for each unique entity pair across all documents
     pair_judgments: dict[EntityPairKey, PairJudgment] = field(default_factory=dict)
 

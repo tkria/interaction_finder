@@ -6,9 +6,10 @@ agents only produce typed data.
 
 Pipeline stages:
 1. ProcessDocumentsNode - Process all documents concurrently (entities → pairs → assessments)
-2. MergeEntitiesNode - Merge entities globally + update pair references
-3. JudgeCrossDocumentNode - Make final accept/reject decisions
-4. FinalizeNode - Build final output
+2. ConsolidateEntitiesNode - Consolidate entities globally + update pair references
+3. ConsolidateRelationshipsNode - Consolidate relationship labels + filter irrelevant types
+4. JudgeCrossDocumentNode - Make final accept/reject decisions
+5. FinalizeNode - Build final output
 """
 
 import asyncio
@@ -31,7 +32,7 @@ from interaction_finder.extraction.document_pipeline import (
 from interaction_finder.extraction.judge_cross_document import (
     get_cross_document_judge_agent,
 )
-from interaction_finder.extraction.merge_entities import get_entity_merge_agent
+from interaction_finder.extraction.consolidate_entities import get_entity_merge_agent
 from interaction_finder.extraction.models import (
     EntityMention,
     EntityPairKey,
@@ -67,7 +68,7 @@ class ProcessDocumentsNode(BaseNode[State, Deps, ExtractionResult]):
 
     async def run(
         self, ctx: GraphRunContext[State, Deps]
-    ) -> Union["MergeEntitiesNode", End[ExtractionResult]]:
+    ) -> Union["ConsolidateEntitiesNode", End[ExtractionResult]]:
         """Process all resources concurrently."""
         with logfire.span("ProcessDocumentsNode"):
             resources = ctx.deps.resource_pool.resources
@@ -100,7 +101,7 @@ class ProcessDocumentsNode(BaseNode[State, Deps, ExtractionResult]):
                 ctx.deps.logger.warning("No entities extracted from documents")
                 return End(self._empty_result(ctx))
 
-            return MergeEntitiesNode()
+            return ConsolidateEntitiesNode()
 
     def _empty_result(self, ctx: GraphRunContext[State, Deps]) -> ExtractionResult:
         """Create empty result for early termination."""
@@ -262,8 +263,8 @@ class ProcessDocumentsNode(BaseNode[State, Deps, ExtractionResult]):
 
 
 @dataclass
-class MergeEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
-    """Merge entities globally across all documents.
+class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
+    """Consolidate entities globally across all documents.
 
     Algorithm:
     1. Collect all unique normalized entity forms from all documents
@@ -277,9 +278,11 @@ class MergeEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
     - Consistency (same canonical name across documents)
     """
 
-    async def run(self, ctx: GraphRunContext[State, Deps]) -> "JudgeCrossDocumentNode":
-        """Merge entities globally and update pair references."""
-        with logfire.span("MergeEntitiesNode"):
+    async def run(
+        self, ctx: GraphRunContext[State, Deps]
+    ) -> "ConsolidateRelationshipsNode":
+        """Consolidate entities globally and update pair references."""
+        with logfire.span("ConsolidateEntitiesNode"):
             # Step 1: Collect unique normalized entities with canonical variants
             unique_entities = self._collect_unique_entities(ctx)
 
@@ -299,11 +302,11 @@ class MergeEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
             self._update_pair_entity_references(resolved_rules, ctx)
 
             ctx.deps.logger.info(
-                f"Global merging: {len(resolved_rules)} rules applied, "
-                f"{ctx.state.entities_merged} entities merged"
+                f"Global consolidation: {len(resolved_rules)} rules applied, "
+                f"{ctx.state.entities_merged} entities consolidated"
             )
 
-            return JudgeCrossDocumentNode()
+            return ConsolidateRelationshipsNode()
 
     def _collect_unique_entities(
         self, ctx: GraphRunContext[State, Deps]
@@ -435,7 +438,7 @@ For each pair, decide if they should be merged (child absorbed into parent) or k
                     try:
                         with rename_agent(
                             agent,
-                            name=f"MergeEntitiesNode (kind={kind}, batch {i // batch_size + 1})",
+                            name=f"ConsolidateEntitiesNode (kind={kind}, batch {i // batch_size + 1})",
                         ):
                             async with ctx.deps.agent_semaphore:
                                 result = await agent.run(
@@ -663,6 +666,358 @@ For each pair, decide if they should be merged (child absorbed into parent) or k
 
         # Update reasoning to show merge
         entity.reasoning += f" | MERGED_FROM({old_name})"
+
+
+@dataclass
+class ConsolidateRelationshipsNode(BaseNode[State, Deps, ExtractionResult]):
+    """Consolidate relationship labels globally across all documents.
+
+    Algorithm:
+    1. Collect all unique relationship labels from all assessments
+    2. Query LLM for mapping decisions (merge/rename)
+    3. Resolve transitive mappings (A→B→C becomes A→C)
+    4. Apply mappings consistently across all assessments
+    5. Filter irrelevant relationship types (optional, on by default)
+
+    This approach ensures:
+    - Vocabulary consolidation (merges synonyms like "linked_to" → "associated_with")
+    - Topic-appropriate normalization (context-aware decisions)
+    - Relevance filtering (removes orthogonal relationship types)
+    - Consistency (same canonical label across all documents)
+    """
+
+    async def run(self, ctx: GraphRunContext[State, Deps]) -> "JudgeCrossDocumentNode":
+        """Consolidate relationship labels and filter irrelevant types."""
+        with logfire.span("ConsolidateRelationshipsNode"):
+            # Step 1: Collect unique relationship labels
+            unique_relationships = self._collect_unique_relationships(ctx)
+
+            if not unique_relationships:
+                ctx.deps.logger.info("No relationships to consolidate")
+                return JudgeCrossDocumentNode()
+
+            # Step 2: Get mapping decisions from LLM
+            mappings = await self._get_relationship_mappings(unique_relationships, ctx)
+
+            if not mappings:
+                ctx.deps.logger.info("No relationship consolidations suggested")
+                return JudgeCrossDocumentNode()
+
+            # Step 3: Resolve transitive mapping chains (A→B→C becomes A→C)
+            resolved_mappings = self._resolve_transitive_mappings(mappings)
+
+            # Step 4: Apply mappings to all assessments
+            self._apply_relationship_mappings(resolved_mappings, ctx)
+
+            ctx.deps.logger.info(
+                f"Relationship consolidation: {len(resolved_mappings)} mappings applied, "
+                f"{ctx.state.relationships_merged} assessments updated"
+            )
+
+            # Step 5: Filter irrelevant relationship types (if enabled)
+            if ctx.deps.config.tools.extraction.filter_irrelevant_relationships:
+                await self._filter_irrelevant_relationships(ctx)
+
+            return JudgeCrossDocumentNode()
+
+    def _collect_unique_relationships(
+        self, ctx: GraphRunContext[State, Deps]
+    ) -> set[str]:
+        """Collect all unique relationship labels from assessments.
+
+        Returns:
+            Set of unique relationship labels (unnormalized)
+        """
+        relationships = set()
+
+        for assessments in ctx.state.pair_assessments_by_resource.values():
+            for assessment in assessments:
+                relationships.add(assessment.relationship)
+
+        return relationships
+
+    async def _get_relationship_mappings(
+        self,
+        relationships: set[str],
+        ctx: GraphRunContext[State, Deps],
+    ) -> dict[str, str]:
+        """Query LLM for relationship label mappings.
+
+        Returns:
+            {normalized_old_label: normalized_new_label}
+        """
+        from interaction_finder.extraction.consolidate_relationships import (
+            get_relationship_mapping_agent,
+        )
+        from interaction_finder.extraction.utils import normalize_for_comparison
+
+        # Build prompt with all relationship labels
+        relationships_list = sorted(relationships)
+        relationships_str = "\n".join(f"- {r}" for r in relationships_list)
+
+        entity_types_str = ", ".join(ctx.state.target_entity_types)
+
+        prompt = f"""**Research topic:** {ctx.state.topic}
+
+**Target entity types for this research:** {entity_types_str}
+
+**Task:** Review the following relationship labels and identify appropriate mappings to consolidate vocabulary.
+
+Consider:
+1. Semantic equivalence (synonyms like "linked_to" and "related_to")
+2. Topic-appropriate consolidation (what distinctions matter for this research?)
+3. Standardization to common biological terms
+
+**Relationship labels found across all documents:**
+{relationships_str}
+
+For each label that should be transformed, specify the old label and new target label.
+If no consolidation is needed, return an empty list of mappings."""
+
+        # Call LLM
+        agent = get_relationship_mapping_agent(ctx.deps.config)
+        usage = RunUsage()
+        try:
+            with rename_agent(agent, name="ConsolidateRelationshipsNode"):
+                async with ctx.deps.agent_semaphore:
+                    result = await agent.run(prompt, deps=ctx.deps, usage=usage)
+
+        except (TimeoutError, ConnectionError, ValueError) as e:
+            ctx.deps.logger.error(
+                f"Relationship mapping decision failed: {type(e).__name__}: {e}"
+            )
+            return {}
+
+        # Build mapping dict with normalized keys
+        mappings: dict[str, str] = {}
+        for mapping in result.output.mappings:
+            norm_old = normalize_for_comparison(mapping.old)
+            norm_new = normalize_for_comparison(mapping.new)
+
+            # Skip self-mappings
+            if norm_old == norm_new:
+                ctx.deps.logger.debug(
+                    f"Skipping self-mapping: {mapping.old} → {mapping.new}"
+                )
+                continue
+
+            # Store normalized mapping
+            mappings[norm_old] = norm_new
+
+        return mappings
+
+    def _resolve_transitive_mappings(self, mappings: dict[str, str]) -> dict[str, str]:
+        """Resolve transitive mapping chains.
+
+        If A→B and B→C, resolve to A→C (and B→C).
+        This ensures all relationships in a chain ultimately point to the final target.
+
+        Algorithm:
+        1. For each source in mappings, follow target chain until we find
+           a target that isn't itself a source
+        2. Update mapping to point directly to final target
+
+        Returns:
+            Resolved mappings with transitive chains collapsed
+        """
+        resolved = {}
+
+        for source, target in mappings.items():
+            # Follow the chain: source → target → target's target → ...
+            final_target = target
+            visited = {source}  # Prevent infinite loops
+
+            while final_target in mappings:
+                if final_target in visited:
+                    # Cycle detected - stop here and log
+                    self._log_cycle_warning(source, visited)
+                    break
+                visited.add(final_target)
+                final_target = mappings[final_target]
+
+            resolved[source] = final_target
+
+        return resolved
+
+    def _log_cycle_warning(self, source: str, visited: set[str]):
+        """Log a warning about a cycle in relationship mappings."""
+        # This shouldn't happen with good LLM output, but handle gracefully
+        cycle_path = " → ".join(visited) + f" → {source}"
+        # Note: would need ctx to log properly, for now just pass
+        # In practice, the cycle is broken by the visited check
+        pass
+
+    def _apply_relationship_mappings(
+        self,
+        mappings: dict[str, str],
+        ctx: GraphRunContext[State, Deps],
+    ) -> None:
+        """Apply relationship mappings to all assessments.
+
+        Updates assessment.relationship in place when a mapping is found.
+        """
+        if not mappings:
+            return
+
+        from interaction_finder.extraction.utils import normalize_for_comparison
+
+        # Build map of normalized label → canonical form from original labels
+        # This must be done BEFORE we start modifying assessments
+        canonical_forms: dict[str, str] = {}
+        for assessments in ctx.state.pair_assessments_by_resource.values():
+            for assessment in assessments:
+                norm = normalize_for_comparison(assessment.relationship)
+                if norm not in canonical_forms:
+                    canonical_forms[norm] = assessment.relationship
+
+        # Now apply mappings using the canonical forms we collected
+        for assessments in ctx.state.pair_assessments_by_resource.values():
+            for assessment in assessments:
+                norm_relationship = normalize_for_comparison(assessment.relationship)
+
+                if norm_relationship in mappings:
+                    # Get new normalized label
+                    new_norm = mappings[norm_relationship]
+
+                    # Find canonical form for new label, or use normalized form
+                    new_label = canonical_forms.get(new_norm, new_norm)
+
+                    # Update assessment
+                    assessment.relationship = new_label
+                    ctx.state.relationships_merged += 1
+
+        # Store mappings in state for provenance
+        ctx.state.relationship_mappings = mappings
+
+    async def _filter_irrelevant_relationships(
+        self, ctx: GraphRunContext[State, Deps]
+    ) -> None:
+        """Filter pairs with irrelevant relationship types.
+
+        Queries LLM to identify relationship types that are orthogonal to the
+        research question. Creates pre-rejected judgments for filtered pairs,
+        using the LLM's reasoning as the rejection explanation.
+        """
+        # Collect unique relationship types (post-consolidation)
+        unique_relationships = set(
+            assessment.relationship
+            for assessments in ctx.state.pair_assessments_by_resource.values()
+            for assessment in assessments
+        )
+
+        if not unique_relationships:
+            return
+
+        # Get relevance decisions from LLM
+        irrelevant_decisions = await self._get_relevance_decisions(
+            unique_relationships, ctx
+        )
+
+        if not irrelevant_decisions:
+            ctx.deps.logger.info("All relationship types deemed relevant")
+            return
+
+        # Group assessments by pair
+        from interaction_finder.extraction.utils import make_entity_pair_key
+
+        assessments_by_pair: dict[EntityPairKey, list[PairAssessment]] = defaultdict(
+            list
+        )
+        for assessments in ctx.state.pair_assessments_by_resource.values():
+            for assessment in assessments:
+                pair_key = make_entity_pair_key(assessment.entity1, assessment.entity2)
+                assessments_by_pair[pair_key].append(assessment)
+
+        # Create pre-rejected judgments for irrelevant pairs
+        filtered_count = 0
+        for pair_key, assessments in assessments_by_pair.items():
+            # All assessments for a pair should have same relationship (post-consolidation)
+            relationship = assessments[0].relationship
+
+            if relationship in irrelevant_decisions:
+                # Get the LLM's reasoning for this decision
+                reasoning = irrelevant_decisions[relationship]
+
+                # Create pre-rejected judgment with LLM reasoning
+                first = assessments[0]
+                from interaction_finder.extraction.models import (
+                    PairJudgment,
+                    SimpleEntity,
+                )
+
+                ctx.state.pair_judgments[pair_key] = PairJudgment(
+                    entity1=SimpleEntity(
+                        name=first.entity1.name,
+                        kind=first.entity1.kind,
+                        aliases=first.entity1.aliases,
+                    ),
+                    entity2=SimpleEntity(
+                        name=first.entity2.name,
+                        kind=first.entity2.kind,
+                        aliases=first.entity2.aliases,
+                    ),
+                    relationship=relationship,
+                    assessments=assessments,  # Keep full provenance
+                    accepted=False,
+                    confidence="high",
+                    reasoning=f"Relationship type filtered as irrelevant: {reasoning}",
+                )
+                filtered_count += 1
+
+        ctx.deps.logger.info(
+            f"Filtered {filtered_count} pairs with {len(irrelevant_decisions)} "
+            f"irrelevant relationship type(s)"
+        )
+
+    async def _get_relevance_decisions(
+        self, relationships: set[str], ctx: GraphRunContext[State, Deps]
+    ) -> dict[str, str]:
+        """Query LLM for relationship relevance decisions.
+
+        Returns:
+            {relationship: reasoning} for irrelevant relationships only
+        """
+        from interaction_finder.extraction.consolidate_relationships import (
+            get_relationship_relevance_agent,
+        )
+
+        # Build prompt
+        rels_str = "\n".join(f"- {r}" for r in sorted(relationships))
+        entity_types_str = ", ".join(ctx.state.target_entity_types)
+
+        prompt = f"""**Research topic:** {ctx.state.topic}
+
+**Target entity types:** {entity_types_str}
+
+**Task:** Evaluate which relationship types are relevant to this research question.
+
+**Relationship types found:**
+{rels_str}
+
+For each relationship type, decide if it's relevant or irrelevant to the research goal.
+Remember: when uncertain, mark as relevant to avoid false negatives."""
+
+        # Call LLM
+        agent = get_relationship_relevance_agent(ctx.deps.config)
+        usage = RunUsage()
+        try:
+            with rename_agent(agent, name="FilterIrrelevantRelationships"):
+                async with ctx.deps.agent_semaphore:
+                    result = await agent.run(prompt, deps=ctx.deps, usage=usage)
+        except (TimeoutError, ConnectionError, ValueError) as e:
+            ctx.deps.logger.error(
+                f"Relevance filtering failed: {type(e).__name__}: {e}. "
+                f"Proceeding without filtering."
+            )
+            return {}
+
+        # Extract irrelevant relationships with their reasoning
+        irrelevant = {}
+        for decision in result.output.decisions:
+            if not decision.is_relevant:
+                irrelevant[decision.relationship] = decision.reasoning
+
+        return irrelevant
 
 
 @dataclass
