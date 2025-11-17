@@ -1072,6 +1072,10 @@ function renderContent() {
 
 // Toggle document accordion
 function toggleDocument(idx) {
+    // Capture the clicked header's viewport position before any changes
+    const clickedHeader = document.querySelectorAll('.document-header')[idx];
+    const headerTopBeforeToggle = clickedHeader ? clickedHeader.getBoundingClientRect().top : null;
+
     if (state.openDocumentIdx === idx) {
         state.openDocumentIdx = null;
     } else {
@@ -1079,6 +1083,23 @@ function toggleDocument(idx) {
     }
     renderContent();
     renderReasoning();
+
+    // After rendering, adjust scroll to keep clicked header at same viewport position
+    if (headerTopBeforeToggle !== null) {
+        requestAnimationFrame(() => {
+            // Query the newly rendered header element (old reference is stale)
+            const newClickedHeader = document.querySelectorAll('.document-header')[idx];
+            if (newClickedHeader) {
+                const headerTopAfterToggle = newClickedHeader.getBoundingClientRect().top;
+                const scrollAdjustment = headerTopAfterToggle - headerTopBeforeToggle;
+
+                if (scrollAdjustment !== 0) {
+                    const contentArea = document.getElementById('content');
+                    contentArea.scrollTop += scrollAdjustment;
+                }
+            }
+        });
+    }
 }
 
 // Highlight entities in text (for reasoning panels)
