@@ -801,70 +801,94 @@ class DocumentAnnotator:
         entity_span_positions.sort(key=lambda x: (x[0], not x[1]))
 
         # Build annotated HTML using quote regions and entity spans
+        annotated_html = ""
         if not quote_regions and not entity_span_positions:
-            # No annotations, return as-is
-            return PrerenderedDocument(
-                doc_id=self.resource.id.id,
-                html=self.renderer.html,
-                quote_map=quote_map,
-                entity_map=entity_map,
-            )
+            # No annotations, use HTML as-is
+            annotated_html = self.renderer.html
+        else:
+            # Process HTML by quote regions, inserting entity spans within each region
+            html_parts = []
+            current_pos = 0
 
-        # Process HTML by quote regions, inserting entity spans within each region
-        html_parts = []
-        current_pos = 0
+            consumed_boundary_events: set[tuple[int, str]] = set()
 
-        consumed_boundary_events: set[tuple[int, str]] = set()
+            # Group entity spans by their containing quote region
+            for region_start, region_end, quote_ids in quote_regions:
+                # Add any HTML before this region (unquoted)
+                if region_start > current_pos:
+                    # Check for entity spans in the unquoted region
+                    unquoted_html = self._build_html_with_entities(
+                        current_pos,
+                        region_start,
+                        entity_span_positions,
+                        entity_span_info,
+                        consumed_boundary_events,
+                    )
+                    html_parts.append(unquoted_html)
 
-        # Group entity spans by their containing quote region
-        for region_start, region_end, quote_ids in quote_regions:
-            # Add any HTML before this region (unquoted)
-            if region_start > current_pos:
-                # Check for entity spans in the unquoted region
-                unquoted_html = self._build_html_with_entities(
-                    current_pos,
+                # Open quote span with classes for all active quotes
+                quote_classes = " ".join(sorted(quote_ids))
+                html_parts.append(f'<span class="quote-span {quote_classes}">')
+
+                # Add content with entity spans
+                region_html = self._build_html_with_entities(
                     region_start,
+                    region_end,
                     entity_span_positions,
                     entity_span_info,
                     consumed_boundary_events,
                 )
-                html_parts.append(unquoted_html)
+                html_parts.append(region_html)
 
-            # Open quote span with classes for all active quotes
-            quote_classes = " ".join(sorted(quote_ids))
-            html_parts.append(f'<span class="quote-span {quote_classes}">')
+                # Close quote span
+                html_parts.append("</span>")
 
-            # Add content with entity spans
-            region_html = self._build_html_with_entities(
-                region_start,
-                region_end,
-                entity_span_positions,
-                entity_span_info,
-                consumed_boundary_events,
-            )
-            html_parts.append(region_html)
+                current_pos = region_end
 
-            # Close quote span
-            html_parts.append("</span>")
+            # Add any remaining HTML after last quote region
+            if current_pos < len(self.renderer.html):
+                remaining_html = self._build_html_with_entities(
+                    current_pos,
+                    len(self.renderer.html),
+                    entity_span_positions,
+                    entity_span_info,
+                    consumed_boundary_events,
+                )
+                html_parts.append(remaining_html)
 
-            current_pos = region_end
+            annotated_html = "".join(html_parts)
 
-        # Add any remaining HTML after last quote region
-        if current_pos < len(self.renderer.html):
-            remaining_html = self._build_html_with_entities(
-                current_pos,
-                len(self.renderer.html),
-                entity_span_positions,
-                entity_span_info,
-                consumed_boundary_events,
-            )
-            html_parts.append(remaining_html)
+        # Build document links (URL badge and DOI link)
+        url_badge = ""
+        if self.resource.id.url:
+            escaped_url = _escape_html(self.resource.id.url)
+            url_badge = f"""
+                <a class="document-url-badge" href="{escaped_url}" target="_blank" rel="noreferrer noopener">
+                    <span aria-hidden="true">&#128279;</span>
+                    <span>View original</span>
+                </a>"""
 
-        annotated_html = "".join(html_parts)
+        doi_link = ""
+        if self.resource.doi:
+            escaped_doi = _escape_html(self.resource.doi)
+            doi_link = f"""
+                <a class="document-doi-link" href="https://doi.org/{escaped_doi}" target="_blank" rel="noreferrer noopener">
+                    DOI: {escaped_doi}
+                </a>"""
+
+        # Prepend links if present
+        links_html = ""
+        if url_badge or doi_link:
+            links_html = f"""
+            <div class="document-links">{url_badge}{doi_link}
+            </div>"""
+
+        # Wrap document text in container and prepend links
+        full_html = f'{links_html}<div class="document-text" data-doc-id="{_escape_html(self.resource.id.id)}">{annotated_html}</div>'
 
         return PrerenderedDocument(
             doc_id=self.resource.id.id,
-            html=annotated_html,
+            html=full_html,
             quote_map=quote_map,
             entity_map=entity_map,
         )

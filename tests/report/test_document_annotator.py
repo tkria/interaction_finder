@@ -89,7 +89,10 @@ class TestDocumentAnnotator:
         result = annotator.annotate([], {})
 
         assert result.doc_id == resource.id.id
-        assert result.html == renderer.html  # Unchanged
+        # HTML now includes document-links wrapper and document-text container
+        assert 'class="document-links"' in result.html
+        assert 'class="document-text"' in result.html
+        assert renderer.html in result.html  # Original content is wrapped
         assert len(result.quote_map) == 0
         assert len(result.entity_map) == 0
 

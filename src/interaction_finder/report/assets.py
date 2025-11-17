@@ -1305,7 +1305,7 @@ function renderDocument(assess) {
         return '<p>Document not found</p>';
     }
 
-    // Get the pre-rendered document template
+    // Get the pre-rendered document template (includes links and document text)
     const templateId = `doc-template-${assess.resource_id}`;
     const template = document.getElementById(templateId);
 
@@ -1322,27 +1322,6 @@ function renderDocument(assess) {
     tempContainer.appendChild(clone);
     const html = tempContainer.innerHTML;
 
-    // Build document links (centered container with URL badge and DOI link)
-    const urlBadge = doc.url ? `
-        <a class="document-url-badge" href="${escapeHtml(doc.url)}" target="_blank" rel="noreferrer noopener">
-            <span aria-hidden="true">&#128279;</span>
-            <span>View original</span>
-        </a>
-    ` : '';
-
-    const doiLink = doc.doi ? `
-        <a class="document-doi-link" href="https://doi.org/${escapeHtml(doc.doi)}" target="_blank" rel="noreferrer noopener">
-            DOI: ${escapeHtml(doc.doi)}
-        </a>
-    ` : '';
-
-    const links = (urlBadge || doiLink) ? `
-        <div class="document-links">
-            ${urlBadge}
-            ${doiLink}
-        </div>
-    ` : '';
-
     // After rendering, update the highlighting classes based on current pair
     // Use setTimeout to ensure DOM is updated
     setTimeout(() => {
@@ -1350,7 +1329,7 @@ function renderDocument(assess) {
         highlightQuotesForAssessment(assess);
     }, 0);
 
-    return `${links}${html}`;
+    return html;
 }
 
 // Render reasoning sidebar
