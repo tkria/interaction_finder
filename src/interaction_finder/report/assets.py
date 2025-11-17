@@ -340,6 +340,11 @@ header {
     color: var(--pico-muted-color);
 }
 
+.pair-relationship-only {
+    text-align: center;
+    margin-bottom: var(--spacing-compact);
+}
+
 .pair-variants {
     margin-top: 0.5rem;
     padding-top: 0.5rem;
@@ -945,6 +950,19 @@ function renderPairList() {
     const sidebar = document.getElementById('sidebar');
     const filtered = getFilteredPairs();
 
+    // Determine if we should show entity kinds
+    // Show kinds if: (1) more than 2 distinct kinds, OR (2) any self-pairs exist
+    const allKinds = new Set();
+    let hasSelfPair = false;
+    filtered.forEach(pair => {
+        allKinds.add(pair.entity1.kind);
+        allKinds.add(pair.entity2.kind);
+        if (pair.entity1.kind === pair.entity2.kind) {
+            hasSelfPair = true;
+        }
+    });
+    const showKinds = allKinds.size > 2 || hasSelfPair;
+
     sidebar.innerHTML = filtered.map((pair, idx) => `
         <div class="pair-card ${pair.accepted ? '' : 'rejected'} ${state.selectedPairIdx === idx ? 'selected' : ''}"
              onclick="selectPair(${idx})"
@@ -961,11 +979,17 @@ function renderPairList() {
                     ${escapeHtml(pair.entity2.name)}
                 </span>
             </div>
+            ${showKinds ? `
             <div class="pair-kinds">
                 <span class="entity-kind left">${escapeHtml(pair.entity1.kind)}</span>
                 <span class="relationship-label">${escapeHtml(pair.relationship)}</span>
                 <span class="entity-kind right">${escapeHtml(pair.entity2.kind)}</span>
             </div>
+            ` : `
+            <div class="pair-relationship-only">
+                <span class="relationship-label">${escapeHtml(pair.relationship)}</span>
+            </div>
+            `}
             <div class="pair-meta">
                 <span class="pair-counts">${pair.doc_count} docs, ${pair.quote_count} quotes</span>
                 <span class="confidence-badge confidence-${pair.confidence}">${pair.confidence}</span>
