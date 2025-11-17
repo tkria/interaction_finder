@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any, Iterable, List, Mapping, Sequence
 
@@ -11,6 +12,304 @@ from pydantic import BaseModel
 
 from interaction_finder.resources import Resource, ResourceQuote
 from interaction_finder.text_mapping import TextPositionMapper
+
+
+@dataclass
+class HTMLTag:
+    """Represents an HTML tag found in text."""
+
+    tag_name: str  # e.g., "strong", "em", "a"
+    is_opening: bool  # True for <tag>, False for </tag>
+    start_pos: int  # Position where tag starts (at '<')
+    end_pos: int  # Position where tag ends (after '>')
+    is_self_closing: bool = False  # For <br />, <img />, etc.
+
+
+@dataclass
+class HTMLTagPair:
+    """Represents a matched pair of opening/closing tags."""
+
+    tag_name: str
+    opening: HTMLTag
+    closing: HTMLTag | None  # None for self-closing tags
+    content_start: int  # Position after opening tag
+    content_end: int  # Position before closing tag
+
+
+class HTMLTagScanner:
+    """Scans HTML to find and pair up all tags."""
+
+    # Tags that are self-closing
+    VOID_ELEMENTS = {
+        "area",
+        "base",
+        "br",
+        "col",
+        "embed",
+        "hr",
+        "img",
+        "input",
+        "link",
+        "meta",
+        "param",
+        "source",
+        "track",
+        "wbr",
+    }
+
+    # Inline tags that we care about for nesting validation
+    INLINE_TAGS = {
+        "a",
+        "abbr",
+        "b",
+        "bdi",
+        "bdo",
+        "cite",
+        "code",
+        "data",
+        "dfn",
+        "em",
+        "i",
+        "kbd",
+        "mark",
+        "q",
+        "s",
+        "samp",
+        "small",
+        "span",
+        "strong",
+        "sub",
+        "sup",
+        "time",
+        "u",
+        "var",
+    }
+
+    def __init__(self, html: str):
+        self.html = html
+        self.tags: list[HTMLTag] = []
+        self.tag_pairs: list[HTMLTagPair] = []
+
+    def scan(self) -> list[HTMLTagPair]:
+        """Scan HTML and return list of matched tag pairs.
+
+        Returns:
+            List of HTMLTagPair objects representing matched tags
+        """
+        self._find_all_tags()
+        self._pair_tags()
+        return self.tag_pairs
+
+    def _find_all_tags(self) -> None:
+        """Find all HTML tags in the text."""
+        # Regex to match HTML tags
+        # Matches: <tagname>, </tagname>, <tagname attr="value">, <tagname />
+        tag_pattern = re.compile(
+            r"<"  # Opening bracket
+            r"(/?)?"  # Optional closing slash
+            r"([a-zA-Z][a-zA-Z0-9]*)"  # Tag name
+            r"(?:\s[^>]*)?"  # Optional attributes
+            r"(/?)?"  # Optional self-closing slash
+            r">"  # Closing bracket
+        )
+
+        for match in tag_pattern.finditer(self.html):
+            is_closing = bool(match.group(1))
+            tag_name = match.group(2).lower()
+            is_self_closing = bool(match.group(3)) or tag_name in self.VOID_ELEMENTS
+
+            tag = HTMLTag(
+                tag_name=tag_name,
+                is_opening=not is_closing,
+                start_pos=match.start(),
+                end_pos=match.end(),
+                is_self_closing=is_self_closing,
+            )
+            self.tags.append(tag)
+
+    def _pair_tags(self) -> None:
+        """Pair up opening and closing tags."""
+        # Stack-based matching for nested tags
+        stack: list[HTMLTag] = []
+
+        for tag in self.tags:
+            if tag.is_self_closing:
+                # Self-closing tag - create pair with no closing tag
+                pair = HTMLTagPair(
+                    tag_name=tag.tag_name,
+                    opening=tag,
+                    closing=None,
+                    content_start=tag.end_pos,
+                    content_end=tag.end_pos,
+                )
+                self.tag_pairs.append(pair)
+            elif tag.is_opening:
+                stack.append(tag)
+            else:
+                # Closing tag - find matching opening tag
+                # Search backwards through stack for matching tag
+                for i in range(len(stack) - 1, -1, -1):
+                    if stack[i].tag_name == tag.tag_name:
+                        opening = stack.pop(i)
+                        pair = HTMLTagPair(
+                            tag_name=tag.tag_name,
+                            opening=opening,
+                            closing=tag,
+                            content_start=opening.end_pos,
+                            content_end=tag.start_pos,
+                        )
+                        self.tag_pairs.append(pair)
+                        break
+
+
+@dataclass
+class SpanInsertionPlan:
+    """Plan for where to insert opening/closing span tags."""
+
+    open_pos: int  # Where to insert opening <span>
+    close_pos: int  # Where to insert closing </span>
+    original_open_pos: int  # Original desired position
+    original_close_pos: int  # Original desired position
+    adjusted: bool  # Whether positions were adjusted
+    split_required: bool  # Whether span needs to be split
+    split_segments: list[tuple[int, int]] | None = (
+        None  # Split (start, end) segments if needed
+    )
+
+
+class HTMLTagValidator:
+    """Validates and adjusts span insertion positions to avoid malformed HTML."""
+
+    def __init__(self, html: str, tag_pairs: list[HTMLTagPair]):
+        self.html = html
+        self.tag_pairs = tag_pairs
+        # Filter to only inline tags for performance
+        self.inline_pairs = [
+            p for p in tag_pairs if p.tag_name in HTMLTagScanner.INLINE_TAGS
+        ]
+
+    def validate_insertion(self, open_pos: int, close_pos: int) -> SpanInsertionPlan:
+        """Validate span insertion positions and adjust if needed.
+
+        Args:
+            open_pos: Desired position for opening <span>
+            close_pos: Desired position for closing </span>
+
+        Returns:
+            SpanInsertionPlan with validated/adjusted positions
+        """
+        # Check if positions would create invalid nesting
+        conflicts = self._find_conflicts(open_pos, close_pos)
+
+        if not conflicts:
+            # No conflicts - positions are valid
+            return SpanInsertionPlan(
+                open_pos=open_pos,
+                close_pos=close_pos,
+                original_open_pos=open_pos,
+                original_close_pos=close_pos,
+                adjusted=False,
+                split_required=False,
+            )
+
+        # Try to adjust positions to avoid conflicts
+        adjusted_plan = self._try_adjust_positions(open_pos, close_pos, conflicts)
+        if adjusted_plan:
+            return adjusted_plan
+
+        # Adjustment failed - compute split segments
+        split_segments = self._compute_split_segments(open_pos, close_pos, conflicts)
+        return SpanInsertionPlan(
+            open_pos=open_pos,
+            close_pos=close_pos,
+            original_open_pos=open_pos,
+            original_close_pos=close_pos,
+            adjusted=False,
+            split_required=True,
+            split_segments=split_segments,
+        )
+
+    def _find_conflicts(self, open_pos: int, close_pos: int) -> list[HTMLTagPair]:
+        """Find tags that would be invalidly split by span insertion."""
+        return [
+            tag
+            for tag in self.inline_pairs
+            if (tag.content_start <= open_pos < tag.content_end)
+            != (tag.content_start < close_pos <= tag.content_end)
+        ]
+
+    def _try_adjust_positions(
+        self, open_pos: int, close_pos: int, conflicts: list[HTMLTagPair]
+    ) -> SpanInsertionPlan | None:
+        """Adjust positions to avoid conflicts by moving boundaries outside tags."""
+        # Separate conflicts affecting opening vs closing positions
+        open_conflicts = [
+            t for t in conflicts if t.content_start <= open_pos < t.content_end
+        ]
+        close_conflicts = [
+            t for t in conflicts if t.content_start < close_pos <= t.content_end
+        ]
+
+        # Move boundaries outside conflicting tags
+        adjusted_open = (
+            min(t.opening.start_pos for t in open_conflicts)
+            if open_conflicts
+            else open_pos
+        )
+        adjusted_close = (
+            max(
+                t.closing.end_pos if t.closing else t.opening.end_pos
+                for t in close_conflicts
+            )
+            if close_conflicts
+            else close_pos
+        )
+
+        # Validate adjustment doesn't create new conflicts
+        if self._find_conflicts(adjusted_open, adjusted_close):
+            return None
+
+        return SpanInsertionPlan(
+            open_pos=adjusted_open,
+            close_pos=adjusted_close,
+            original_open_pos=open_pos,
+            original_close_pos=close_pos,
+            adjusted=True,
+            split_required=False,
+        )
+
+    def _compute_split_segments(
+        self, open_pos: int, close_pos: int, conflicts: list[HTMLTagPair]
+    ) -> list[tuple[int, int]]:
+        """Split span into segments that don't cross conflicting tag boundaries."""
+        # Collect all relevant boundaries within our range
+        boundaries = {open_pos, close_pos}
+        for tag in conflicts:
+            for pos in [
+                tag.opening.start_pos,
+                tag.opening.end_pos,
+                tag.content_start,
+                tag.content_end,
+                tag.closing.start_pos if tag.closing else None,
+                tag.closing.end_pos if tag.closing else None,
+            ]:
+                if pos and open_pos < pos < close_pos:
+                    boundaries.add(pos)
+
+        # Test each potential segment for validity
+        sorted_boundaries = sorted(boundaries)
+        segments = []
+        for i in range(len(sorted_boundaries) - 1):
+            start, end = sorted_boundaries[i], sorted_boundaries[i + 1]
+            # Valid if no conflicts for this segment
+            if not self._find_conflicts(start, end):
+                # Merge with previous if adjacent
+                if segments and segments[-1][1] == start:
+                    segments[-1] = (segments[-1][0], end)
+                else:
+                    segments.append((start, end))
+
+        return segments or [(open_pos, close_pos)]
 
 
 class MarkdownToHTMLRenderer:
@@ -725,6 +1024,11 @@ class DocumentAnnotator:
             for _, _, span_id, entity_name, matched_term, _ in html_entity_spans
         }
 
+        # Scan HTML for tag structure to validate span insertion positions
+        scanner = HTMLTagScanner(self.renderer.html)
+        tag_pairs = scanner.scan()
+        validator = HTMLTagValidator(self.renderer.html, tag_pairs)
+
         # New approach: Use flat quote spans with CSS classes (no nesting)
         # Collect all quote boundaries to create regions
         quote_boundaries: list[
@@ -753,17 +1057,30 @@ class DocumentAnnotator:
                 block_boundaries.append(pos)
                 pos += len(tag)
 
-        # Collect quote boundaries, adjusting end positions to respect block boundaries
+        # Collect quote boundaries, validating and adjusting positions to avoid malformed HTML
         for start, end, span_id, _ in html_quote_spans:
-            quote_boundaries.append((start, True, span_id))
-
-            # Adjust end position to not go past block boundaries
+            # First adjust end position to respect block boundaries
             adjusted_end = end
             for boundary in block_boundaries:
                 if start < boundary <= end:
                     adjusted_end = min(adjusted_end, boundary)
 
-            quote_boundaries.append((adjusted_end, False, span_id))
+            # Validate span insertion positions to avoid splitting inline tags
+            plan = validator.validate_insertion(start, adjusted_end)
+
+            # Handle the validation result
+            if plan.split_required and plan.split_segments:
+                # Span needs to be split into multiple segments
+                # Each segment gets its own start/end boundary with the same quote ID
+                for seg_start, seg_end in plan.split_segments:
+                    quote_boundaries.append((seg_start, True, span_id))
+                    quote_boundaries.append((seg_end, False, span_id))
+            else:
+                # Use adjusted positions (or original if no adjustment needed)
+                final_start = plan.open_pos
+                final_end = plan.close_pos
+                quote_boundaries.append((final_start, True, span_id))
+                quote_boundaries.append((final_end, False, span_id))
 
         # Sort boundaries
         quote_boundaries.sort(
