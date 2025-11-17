@@ -17,7 +17,7 @@ from rich.console import Console
 from rich.table import Table
 
 from .settings import IfetcherConfig
-from . import cli_fetch
+from . import cli_fetch, cli_upgrade
 
 app = typer.Typer(
     name="interaction-finder",
@@ -541,6 +541,78 @@ def fetch(
         raise typer.Exit(1)
     except Exception as e:
         # Handle unexpected errors
+        console.print(f"[red]Error:[/red] {e}")
+        if verbose:
+            console.print_exception()
+        raise typer.Exit(1)
+
+
+@app.command()
+def upgrade(
+    output: Annotated[
+        Path, typer.Option("-o", "--output", help="Output path for upgraded checkpoint")
+    ],
+    keywords: Annotated[
+        Optional[Path],
+        typer.Option("--keywords", "-k", help="Path to old keywords checkpoint file"),
+    ] = None,
+    searches: Annotated[
+        Optional[Path],
+        typer.Option("--searches", "-s", help="Path to old searches checkpoint file"),
+    ] = None,
+    extraction: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--extraction", "-e", help="Path to old extraction checkpoint file"
+        ),
+    ] = None,
+    config: Optional[str] = config_option(),
+    mode: Optional[str] = mode_option(),
+    verbose: bool = verbose_option(),
+    overrides: List[str] = overrides_option(),
+):
+    """
+    Upgrade old checkpoint files to unified PipelineCheckpoint format.
+
+    Combines old-format keywords, searches, and/or extraction files into a single
+    unified checkpoint with all pipeline stages. Automatically enriches resources
+    with DOI and publication dates from cache or OpenAlex API.
+
+    This command can be safely removed once all checkpoints are upgraded.
+
+    Examples:
+        # Upgrade all three stages
+        interaction-finder upgrade -k keywords.json -s searches.json -e extraction.json -o unified.json
+
+        # Upgrade just extraction (most common case)
+        interaction-finder upgrade -e old-extraction.json -o new-extraction.json
+
+        # Upgrade with custom config
+        interaction-finder upgrade -e old.json -o new.json -c custom-config.toml
+    """
+    config_path, mode, verbose, overrides = get_options_with_fallback(
+        config, mode, verbose, overrides
+    )
+
+    try:
+        # Load configuration
+        cfg = load_config(config_path, overrides, mode)
+
+        # Run upgrade process
+        asyncio.run(
+            cli_upgrade.run_upgrade(
+                keywords_path=keywords,
+                searches_path=searches,
+                extraction_path=extraction,
+                output_path=output,
+                config=cfg,
+                console=console,
+                verbose=verbose,
+            )
+        )
+    except SystemExit:
+        raise  # Pass through SystemExit from run_upgrade
+    except Exception as e:
         console.print(f"[red]Error:[/red] {e}")
         if verbose:
             console.print_exception()
