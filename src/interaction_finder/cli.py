@@ -264,8 +264,8 @@ def terms(
     """
     List available terms found in training data directory.
     """
-    config_path, verbose, overrides = get_options_with_fallback(
-        config, verbose, overrides
+    config_path, mode, verbose, overrides = get_options_with_fallback(
+        config, mode, verbose, overrides
     )
     try:
         cfg = load_config(config_path, overrides, mode)
@@ -318,8 +318,8 @@ def config(
       info      - Display current configuration
       validate  - Validate configuration file
     """
-    config_path, verbose, overrides = get_options_with_fallback(
-        config_path, verbose, overrides
+    config_path, mode, verbose, overrides = get_options_with_fallback(
+        config_path, mode, verbose, overrides
     )
     try:
         if action == "info":
@@ -439,8 +439,8 @@ def fetch(
       interaction-finder fetch https://example.com -O output.cache=custom_cache/
     """
     # Get effective options with fallback to global options
-    config_path, verbose, overrides = get_options_with_fallback(
-        config, verbose, overrides
+    config_path, mode, verbose, overrides = get_options_with_fallback(
+        config, mode, verbose, overrides
     )
 
     try:

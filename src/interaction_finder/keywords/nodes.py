@@ -603,6 +603,7 @@ class FinalizeNode(BaseNode[State, Deps, BridgingTermsOut]):
                 logfire.info("No bridging terms found after deduplication")
                 return End(
                     BridgingTermsOut(
+                        topic=ctx.state.topic,
                         terms=[],
                         scores=[],
                         total_documents_processed=len(ctx.state.document_summaries),
@@ -642,6 +643,7 @@ class FinalizeNode(BaseNode[State, Deps, BridgingTermsOut]):
             # Return final result
             return End(
                 BridgingTermsOut(
+                    topic=ctx.state.topic,
                     terms=final_terms,
                     scores=final_scores,
                     total_documents_processed=len(ctx.state.document_summaries),
