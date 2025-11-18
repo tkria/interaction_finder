@@ -1,10 +1,10 @@
 """Content processing and refinement for academic articles."""
 
-import logging
 import re
 from typing import List, Dict, Optional, Tuple
 from dataclasses import dataclass
 import numpy as np
+from interaction_finder.logging import logfire
 
 
 @dataclass
@@ -309,9 +309,6 @@ class HeadingInfo:
     is_paywall: bool = False
 
 
-logger = logging.getLogger(__name__)
-
-
 class ContentProcessor:
     """Processes and refines academic content by removing site chrome and focusing on core article content."""
 
@@ -328,8 +325,9 @@ class ContentProcessor:
                 markdown
             )  # Re-parse after trim
         except Exception as exc:
-            logger.warning(
-                "Failed to remove duplicate intro sections", exc_info=True
+            logfire.warning(
+                "Failed to remove duplicate intro sections",
+                error=str(exc),
             )
 
         return self._refine_with_headings(markdown, headings)

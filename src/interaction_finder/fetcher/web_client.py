@@ -1,8 +1,8 @@
 """Web client for fetching HTML and PDF content."""
 
-import logging
 from typing import Dict, List
 from rich.console import Console
+from interaction_finder.logging import logfire
 
 # Web client constants
 STEALTH_RETRY_THRESHOLD = 3000  # characters of raw markdown
@@ -69,8 +69,6 @@ DOI_EXTRACTION_SCHEMA = {
     ],
 }
 
-
-logger = logging.getLogger(__name__)
 
 # PubMed full-text link extraction schema
 PUBMED_FULLTEXT_LINKS_SCHEMA = {
@@ -782,7 +780,7 @@ class WebClient:
             IndexError,
             TypeError,
         ) as exc:
-            logger.debug("Failed to parse DOI metadata", exc_info=True)
+            logfire.debug("Failed to parse DOI metadata", error=str(exc))
         return doi
 
     def _is_pdf_url(self, url: str) -> bool:
@@ -824,10 +822,10 @@ class WebClient:
                 dict.fromkeys(urljoin(base_url, link) for link in links if link)
             )
         except Exception as exc:
-            logger.warning(
-                "Failed to parse PubMed full-text link list for %s",
-                base_url,
-                exc_info=True,
+            logfire.warning(
+                "Failed to parse PubMed full-text link list",
+                base_url=base_url,
+                error=str(exc),
             )
             return []
 
@@ -946,8 +944,10 @@ class WebClient:
                     else:
                         return None
                 except Exception as exc:
-                    logger.warning(
-                        "Failed to fetch full text candidate %s", link, exc_info=True
+                    logfire.warning(
+                        "Failed to fetch full text candidate",
+                        link=link,
+                        error=str(exc),
                     )
                     return None
 
@@ -1012,7 +1012,8 @@ class WebClient:
                 if cls.get("is_relevant"):
                     return True
         except Exception as exc:
-            logger.debug(
-                "Failed to detect academic sections in markdown", exc_info=True
+            logfire.debug(
+                "Failed to detect academic sections in markdown",
+                error=str(exc),
             )
         return False

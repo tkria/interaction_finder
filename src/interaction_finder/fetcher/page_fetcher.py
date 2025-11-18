@@ -1,6 +1,5 @@
 """High-level PageFetcher interface with eliminated duplication using higher-order functions."""
 
-import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,9 +8,7 @@ from .cache import URLCache
 from .web_client import WebClient
 from .batch_operations import BatchOperations
 from .content_processor import ContentProcessor
-
-
-logger = logging.getLogger(__name__)
+from interaction_finder.logging import logfire
 
 
 @dataclass
@@ -286,11 +283,11 @@ class PageFetcher:
                     await self.cache.set_content(url, "publication_date", pub_date)
                     return pub_date
             except Exception as exc:
-                logger.warning(
-                    "Failed to fetch DOI metadata for %s (doi=%s)",
-                    url,
-                    doi,
-                    exc_info=True,
+                logfire.warning(
+                    "Failed to fetch DOI metadata",
+                    url=url,
+                    doi=doi,
+                    error=str(exc),
                 )
 
         return None
@@ -343,12 +340,12 @@ class PageFetcher:
                         await self.cache.set_content(url, field, value)
                 return metadata
         except Exception as exc:
-            logger.warning(
-                "OpenAlex metadata fetch failed for %s (%s=%s)",
-                url,
-                id_type,
-                identifier,
-                exc_info=True,
+            logfire.warning(
+                "OpenAlex metadata fetch failed",
+                url=url,
+                id_type=id_type,
+                identifier=identifier,
+                error=str(exc),
             )
 
         return None
@@ -376,8 +373,10 @@ class PageFetcher:
                 except Exception as exc:
                     if fail_fast:
                         raise
-                    logger.warning(
-                        "Failed to create chunks for %s", single_url, exc_info=True
+                    logfire.warning(
+                        "Failed to create chunks for URL",
+                        url=single_url,
+                        error=str(exc),
                     )
                     results.append([])
             return results
