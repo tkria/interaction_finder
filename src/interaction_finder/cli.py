@@ -9,15 +9,15 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
-from typing import Annotated, Optional, List, Any
+from typing import Annotated, Any, List, Optional
 
-import typer
 import click
+import typer
 from rich.console import Console
 from rich.table import Table
 
-from .settings import IfetcherConfig
 from . import cli_fetch, cli_upgrade
+from .settings import IfetcherConfig
 
 app = typer.Typer(
     name="interaction-finder",
@@ -725,14 +725,23 @@ def keywords(
 
         # Import keywords pipeline
         from interaction_finder.keywords import run_keyword_research
+        from interaction_finder.keywords.progress import KeywordsProgress
 
-        # Run keywords stage
+        # Run keywords stage with progress display
         console.print(f"[bold]Extracting bridging terms for:[/bold] {topic}\n")
-        result_checkpoint = asyncio.run(
-            run_keyword_research(
-                topic, cfg, search_backend=search_backend, verbose=False
+        progress_counter = KeywordsProgress()
+        with progress_counter:
+            result_checkpoint = asyncio.run(
+                run_keyword_research(
+                    topic,
+                    cfg,
+                    search_backend=search_backend,
+                    verbose=False,
+                    progress=progress_counter,
+                )
             )
-        )
+
+        console.print()
 
         # Extract keywords data for display
         keywords_data = result_checkpoint.keywords
@@ -803,8 +812,9 @@ def widesearch(
         interaction-finder widesearch "cancer" -b perplexica --fetch -o out.json
     """
     try:
-        from interaction_finder.upgrade import ensure_search
         from pydantic import ValidationError
+
+        from interaction_finder.upgrade import ensure_search
 
         # Load config and parse input
         config_path, mode, verbose, overrides = get_options_with_fallback(
@@ -856,20 +866,24 @@ def widesearch(
             )
             _ = reranker._get_model()
 
-        # Run with progress display (ensure_search handles keywords automatically and prints stage messages)
-        from interaction_finder.widesearch.progress import WidesearchProgress
+        # Determine checkpoint path (for saving after each stage)
+        if output:
+            checkpoint_path = str(output)
+        elif input_is_file:
+            checkpoint_path = checkpoint_or_topic
+        else:
+            checkpoint_path = None
 
-        progress_counter = WidesearchProgress()
-        with progress_counter:
-            checkpoint = asyncio.run(
-                ensure_search(
-                    checkpoint,
-                    search_backend,
-                    cfg,
-                    progress=progress_counter,
-                    console=console,
-                )
+        # Run pipeline (ensure_search manages progress internally for each stage)
+        checkpoint = asyncio.run(
+            ensure_search(
+                checkpoint,
+                search_backend,
+                cfg,
+                console=console,
+                checkpoint_path=checkpoint_path,
             )
+        )
 
         console.print()
 
@@ -887,18 +901,10 @@ def widesearch(
                 f"({fetch_stats['cached']} cached, {fetch_stats['failed']} failed)"
             )
 
-        # Save checkpoint
-        input_was_file = (
-            Path(checkpoint_or_topic).exists() and Path(checkpoint_or_topic).is_file()
-        )
-        if output:
-            # Explicit output specified
-            output.write_text(checkpoint.model_dump_json(indent=2))
-            console.print(f"\n[dim]Saved checkpoint to {output}[/dim]")
-        else:
-            # Update input file in place (topic strings without -o exit early above)
-            Path(checkpoint_or_topic).write_text(checkpoint.model_dump_json(indent=2))
-            console.print(f"\n[dim]Updated {checkpoint_or_topic}[/dim]")
+            # Save checkpoint again after fetching (only if we have a path)
+            if checkpoint_path:
+                Path(checkpoint_path).write_text(checkpoint.model_dump_json(indent=2))
+                console.print(f"[dim]Saved checkpoint to {checkpoint_path}[/dim]")
 
     except (json.JSONDecodeError, ValidationError) as e:
         console.print(f"[red]Invalid checkpoint file:[/red] {e}")
@@ -951,8 +957,9 @@ def extract(
         interaction-finder extract search.json -e gene -e protein -o results.json
     """
     try:
-        from interaction_finder.upgrade import ensure_extraction
         from pydantic import ValidationError
+
+        from interaction_finder.upgrade import ensure_extraction
 
         # Load config and parse input
         config_path, mode, verbose, overrides = get_options_with_fallback(
@@ -976,21 +983,25 @@ def extract(
         backend_name = backend if backend else cfg.tools.widesearch.search_backend
         search_backend = create_search_backend(backend_name, cfg)
 
-        # Run with progress display (ensure_extraction handles all prerequisites and prints stage messages)
-        from interaction_finder.extraction.progress import ExtractionProgress
+        # Determine checkpoint path (for saving after each stage)
+        if output:
+            checkpoint_path = str(output)
+        elif input_is_file:
+            checkpoint_path = checkpoint_or_topic
+        else:
+            checkpoint_path = None
 
-        progress = ExtractionProgress()
-        with progress:
-            checkpoint = asyncio.run(
-                ensure_extraction(
-                    checkpoint,
-                    entity_types,
-                    search_backend,
-                    cfg,
-                    console=console,
-                    progress=progress,
-                )
+        # Run pipeline (ensure_extraction manages progress internally for each stage)
+        checkpoint = asyncio.run(
+            ensure_extraction(
+                checkpoint,
+                entity_types,
+                search_backend,
+                cfg,
+                console=console,
+                checkpoint_path=checkpoint_path,
             )
+        )
 
         console.print()
 
@@ -1012,16 +1023,6 @@ def extract(
                 )
             if len(accepted_judgments) > 5:
                 console.print(f"  ... and {len(accepted_judgments) - 5} more")
-
-        # Save checkpoint
-        if output:
-            # Explicit output specified
-            output.write_text(checkpoint.model_dump_json(indent=2))
-            console.print(f"\n[dim]Saved results to {output}[/dim]")
-        else:
-            # Update input file in place (topic strings without -o exit early above)
-            Path(checkpoint_or_topic).write_text(checkpoint.model_dump_json(indent=2))
-            console.print(f"\n[dim]Updated {checkpoint_or_topic}[/dim]")
 
     except (json.JSONDecodeError, ValidationError) as e:
         console.print(f"[red]Invalid checkpoint file:[/red] {e}")
@@ -1086,8 +1087,9 @@ def report(
             raise FileNotFoundError(f"Extraction file not found: {extraction_file}")
 
         # Load extraction checkpoint
-        from interaction_finder.checkpoint import PipelineCheckpoint
         from pydantic import ValidationError
+
+        from interaction_finder.checkpoint import PipelineCheckpoint
 
         log_console.print(
             f"\n[bold]Loading extraction results:[/bold] {extraction_file.name}"

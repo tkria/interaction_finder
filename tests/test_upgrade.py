@@ -237,7 +237,6 @@ class TestEnsureChaining:
         pass
 
 
-
 class TestUpgradeComposition:
     """Test that upgrades compose correctly (preserve data)."""
 
@@ -268,3 +267,114 @@ class TestUpgradeComposition:
         assert restored.topic == original.topic
         assert restored.keywords.terms == original.keywords.terms
         assert restored.keywords.scores == original.keywords.scores
+
+
+class TestCheckpointSaving:
+    """Test that ensure_* functions save checkpoints after stage completion."""
+
+    @pytest.mark.asyncio
+    async def test_ensure_keywords_no_save_when_idempotent(self, tmp_path):
+        """ensure_keywords does NOT save when stage already complete (idempotent)."""
+        from interaction_finder.checkpoint import KeywordsStageData
+
+        # Create checkpoint that already has keywords (idempotent case)
+        checkpoint = PipelineCheckpoint(
+            topic="test",
+            resources=ResourcePool(),
+            keywords=KeywordsStageData(
+                terms=["term1"],
+                scores=[0.9],
+                total_documents_processed=1,
+                rounds_completed=1,
+                coverage_assessment="Analysis complete with sufficient coverage across multiple research domains",
+                resource_urls=["http://example.com/1"],
+            ),
+        )
+        config = IfetcherConfig()
+        checkpoint_path = str(tmp_path / "checkpoint.json")
+
+        # Run ensure_keywords (should be idempotent, no save since stage already complete)
+        result = await ensure_keywords(
+            checkpoint, config, checkpoint_path=checkpoint_path
+        )
+
+        # Verify checkpoint was NOT saved (idempotent case doesn't write)
+        assert not (tmp_path / "checkpoint.json").exists()
+
+        # Verify result is unchanged
+        assert result.topic == "test"
+        assert result.keywords is not None
+        assert result.keywords.terms == ["term1"]
+
+    @pytest.mark.asyncio
+    async def test_ensure_keywords_no_save_without_path(self, tmp_path):
+        """ensure_keywords does not save when no path provided."""
+        from interaction_finder.checkpoint import KeywordsStageData
+
+        checkpoint = PipelineCheckpoint(
+            topic="test",
+            resources=ResourcePool(),
+            keywords=KeywordsStageData(
+                terms=["term1"],
+                scores=[0.9],
+                total_documents_processed=1,
+                rounds_completed=1,
+                coverage_assessment="Analysis complete with sufficient coverage across multiple research domains",
+                resource_urls=["http://example.com/1"],
+            ),
+        )
+        config = IfetcherConfig()
+
+        # Run without checkpoint_path
+        result = await ensure_keywords(checkpoint, config)
+
+        # No file should be created (we don't know where it would be)
+        assert not (tmp_path / "checkpoint.json").exists()
+
+    @pytest.mark.asyncio
+    async def test_ensure_search_no_save_when_idempotent(self, tmp_path):
+        """ensure_search does NOT save when stage already complete (idempotent)."""
+        from interaction_finder.checkpoint import KeywordsStageData, SearchStageData
+        from interaction_finder.search.backends.pubmed import PubMedBackend
+        from interaction_finder.search.models import SearchResult
+
+        # Create checkpoint with both keywords and search (idempotent case)
+        checkpoint = PipelineCheckpoint(
+            topic="test",
+            resources=ResourcePool(),
+            keywords=KeywordsStageData(
+                terms=["term1"],
+                scores=[0.9],
+                total_documents_processed=1,
+                rounds_completed=1,
+                coverage_assessment="Analysis complete with sufficient coverage across multiple research domains",
+                resource_urls=["http://example.com/1"],
+            ),
+            search=SearchStageData(
+                results=[
+                    SearchResult(
+                        url="http://example.com/paper1",
+                        title="Paper 1",
+                        snippet="Snippet",
+                    )
+                ],
+                queries=["query1"],
+                query_results={"query1": ["http://example.com/paper1"]},
+                keyphrases=["term1"],
+                rounds_completed=1,
+            ),
+        )
+        config = IfetcherConfig()
+        checkpoint_path = str(tmp_path / "checkpoint.json")
+
+        # Run ensure_search (idempotent, no save since stage already complete)
+        result = await ensure_search(
+            checkpoint, PubMedBackend(), config, checkpoint_path=checkpoint_path
+        )
+
+        # Verify checkpoint was NOT saved (idempotent case doesn't write)
+        assert not (tmp_path / "checkpoint.json").exists()
+
+        # Verify search stage is present
+        assert result.search is not None
+        assert len(result.search.results) == 1

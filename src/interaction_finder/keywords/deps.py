@@ -1,6 +1,7 @@
 """External service dependencies for keyword research pipeline."""
 
 from dataclasses import dataclass
+from typing import Any
 
 import httpx
 
@@ -27,3 +28,4 @@ class Deps:
     extractors: dict[str, KeywordExtractor]  # name -> extractor instance
     resource_pool: ResourcePool  # Document pool with provenance tracking
     config: IfetcherConfig  # Full configuration object
+    progress: Any | None = None  # Progress tracking (KeywordsProgress or DummyProgress)

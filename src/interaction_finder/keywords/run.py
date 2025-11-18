@@ -4,7 +4,7 @@ from typing import Any
 
 import httpx
 
-from interaction_finder.logging import logfire
+from interaction_finder.checkpoint import KeywordsStageData, PipelineCheckpoint
 from interaction_finder.fetcher import PageFetcher
 from interaction_finder.keywords.deps import Deps
 from interaction_finder.keywords.extractors import (
@@ -13,11 +13,11 @@ from interaction_finder.keywords.extractors import (
     TFIDFExtractor,
     YAKEExtractor,
 )
-from interaction_finder.checkpoint import KeywordsStageData, PipelineCheckpoint
 from interaction_finder.keywords.graph import graph
 from interaction_finder.keywords.nodes import ExpandQueryNode
 from interaction_finder.keywords.reranker import Reranker
 from interaction_finder.keywords.state import State
+from interaction_finder.logging import logfire
 from interaction_finder.resources import ResourcePool
 from interaction_finder.search.backends.pubmed import PubMedBackend
 from interaction_finder.settings import IfetcherConfig
@@ -28,6 +28,7 @@ async def run_keyword_research(
     config: IfetcherConfig,
     search_backend: Any | None = None,
     verbose: bool = False,
+    progress: Any | None = None,
 ) -> PipelineCheckpoint:
     """Run keyword research pipeline for a topic.
 
@@ -39,6 +40,7 @@ async def run_keyword_research(
         config: IfetcherConfig — configuration object
         search_backend: SearchBackend | None — search backend to use (creates PubMedBackend if None)
         verbose: bool — enable verbose logging (default: False)
+        progress: KeywordsProgress | None — progress tracking object
 
     Returns:
         PipelineCheckpoint — checkpoint with keywords stage data
@@ -101,6 +103,9 @@ async def run_keyword_research(
             }
             # Initialize resource pool
             resource_pool = ResourcePool()
+            # Initialize progress tracking (set max_rounds in progress)
+            if progress:
+                progress.set_round(0, kw_config.max_rounds)
             # Create dependencies
             deps = Deps(
                 http_client=http_client,
@@ -110,6 +115,7 @@ async def run_keyword_research(
                 extractors=extractors,
                 resource_pool=resource_pool,
                 config=config,
+                progress=progress,
             )
             # Create state
             state = State(topic=topic, max_rounds=kw_config.max_rounds)

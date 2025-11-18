@@ -9,12 +9,10 @@ import asyncio
 from dataclasses import dataclass
 from typing import Union
 
-from pydantic_graph import BaseNode, End, GraphRunContext
 from pydantic_ai.usage import RunUsage
+from pydantic_graph import BaseNode, End, GraphRunContext
 
 from interaction_finder.agent_utils import rename_agent
-from interaction_finder.logging import logfire
-from interaction_finder.resources import compute_chunk_spans
 from interaction_finder.keywords.agents import (
     get_document_summarizer_agent,
     get_query_expander_agent,
@@ -26,6 +24,8 @@ from interaction_finder.keywords.extractors.base import ScoredKeyword
 from interaction_finder.keywords.models import BridgingTermsOut
 from interaction_finder.keywords.normalization import normalize_term_for_deduplication
 from interaction_finder.keywords.state import State
+from interaction_finder.logging import logfire
+from interaction_finder.resources import compute_chunk_spans
 from interaction_finder.search.models import SearchQuery
 
 
@@ -103,6 +103,9 @@ class ExpandQueryNode(BaseNode[State, Deps, BridgingTermsOut]):
         """Generate search queries and increment round counter."""
         # Increment round counter
         ctx.state.current_round += 1
+        # Update progress (round counter)
+        if ctx.deps.progress:
+            ctx.deps.progress.set_round(ctx.state.current_round, ctx.state.max_rounds)
         # Use query expander agent with renamed span
         agent = get_query_expander_agent(ctx.deps.config)
         usage = RunUsage()
@@ -131,6 +134,10 @@ class SearchNode(BaseNode[State, Deps, BridgingTermsOut]):
 
     async def run(self, ctx: GraphRunContext[State, Deps]) -> "RerankNode":
         """Execute searches and store results."""
+        # Update progress to show searching status
+        if ctx.deps.progress:
+            backend_name = type(ctx.deps.search_backend).__name__.replace("Backend", "")
+            ctx.deps.progress.set_phase_searching(backend_name)
         with logfire.span(
             f"Keyword search: {ctx.state.topic}",
             topic=ctx.state.topic,
@@ -145,6 +152,10 @@ class SearchNode(BaseNode[State, Deps, BridgingTermsOut]):
                 )
                 results = await ctx.deps.search_backend.search(query)
                 all_results.extend(results)
+                # Update progress counters
+                if ctx.deps.progress:
+                    ctx.deps.progress.increment_searches()
+                    ctx.deps.progress.add_results(len(results))
             # Store in state
             ctx.state.all_search_results = all_results
 
@@ -193,6 +204,9 @@ class RerankNode(BaseNode[State, Deps, BridgingTermsOut]):
                     reranking_enabled=False,
                 )
                 return SelectResultsNode()
+            # Update progress to show reranking
+            if ctx.deps.progress:
+                ctx.deps.progress.set_phase_reranking()
             # Rerank using topic as query
             reranked = ctx.deps.reranker.rerank(
                 ctx.state.topic, ctx.state.all_search_results, top_k=top_k
@@ -222,6 +236,9 @@ class SelectResultsNode(BaseNode[State, Deps, BridgingTermsOut]):
         if not ctx.state.all_search_results:
             logfire.info("No search results available, skipping to finalization")
             return FinalizeNode()
+        # Update progress to show selection
+        if ctx.deps.progress:
+            ctx.deps.progress.set_phase_selecting()
         # Prepare context for agent
         results_context = "\n\n".join(
             [
@@ -268,6 +285,9 @@ class FetchDocumentsNode(BaseNode[State, Deps, BridgingTermsOut]):
 
     async def run(self, ctx: GraphRunContext[State, Deps]) -> "ExtractKeywordsNode":
         """Fetch documents and add to resource pool."""
+        # Update progress to show fetching
+        if ctx.deps.progress:
+            ctx.deps.progress.set_phase_fetching()
         with logfire.span(
             f"Fetch {len(ctx.state.selected_results)} documents",
             num_selected=len(ctx.state.selected_results),
@@ -289,6 +309,9 @@ class FetchDocumentsNode(BaseNode[State, Deps, BridgingTermsOut]):
                 logfire.info(
                     f"All {len(ctx.state.selected_results)} documents cached, proceeding to extraction"
                 )
+                # Update progress for cached documents
+                if ctx.deps.progress:
+                    ctx.deps.progress.add_documents(len(ctx.state.selected_results))
                 return ExtractKeywordsNode()
             # Fetch only new URLs
             urls = [url for url, _ in urls_to_fetch]
@@ -324,6 +347,10 @@ class FetchDocumentsNode(BaseNode[State, Deps, BridgingTermsOut]):
                     fetched_count += 1
                 else:
                     failed_count += 1
+            # Update progress with total documents (newly fetched + cached)
+            if ctx.deps.progress:
+                total_processed = len(ctx.state.selected_results)
+                ctx.deps.progress.add_documents(total_processed)
             cached_count = len(ctx.state.selected_results) - len(urls_to_fetch)
             logfire.info(
                 f"Fetched {fetched_count}/{len(urls_to_fetch)} new documents ({cached_count} from cache, {failed_count} failed)"
@@ -391,6 +418,9 @@ class ExtractKeywordsNode(BaseNode[State, Deps, BridgingTermsOut]):
 
     async def run(self, ctx: GraphRunContext[State, Deps]) -> "EvaluateKeywordsNode":
         """Extract keywords from all documents in resource pool (parallel)."""
+        # Update progress to show extraction
+        if ctx.deps.progress:
+            ctx.deps.progress.set_phase_extracting()
         resources = ctx.deps.resource_pool.resources
         with logfire.span("ExtractKeywordsNode", num_resources=len(resources)):
             if not resources:
@@ -426,6 +456,9 @@ class ExtractKeywordsNode(BaseNode[State, Deps, BridgingTermsOut]):
             total_keywords = sum(
                 len(kws) for kws in ctx.state.extracted_keywords.values()
             )
+            # Update progress with keyword extraction count
+            if ctx.deps.progress:
+                ctx.deps.progress.add_keywords_extracted(total_keywords)
             logfire.info(
                 f"Extracted {total_keywords} keywords from {len(new_resources)} new documents ({len(already_processed)} previously processed)"
             )
@@ -444,6 +477,9 @@ class EvaluateKeywordsNode(BaseNode[State, Deps, BridgingTermsOut]):
 
     async def run(self, ctx: GraphRunContext[State, Deps]) -> "ReflectNode":
         """Evaluate keywords and summarize documents."""
+        # Update progress to show evaluation
+        if ctx.deps.progress:
+            ctx.deps.progress.set_phase_evaluating()
         if not ctx.state.extracted_keywords:
             logfire.info("No extracted keywords, skipping to reflection")
             return ReflectNode()
@@ -507,7 +543,11 @@ Select fewer, higher-quality terms rather than reaching for quantity."""
                 )
             # Store summary
             ctx.state.document_summaries.append(summary_result.output)
-            total_bridging += len(summary_result.output.bridging_terms)
+            bridging_count = len(summary_result.output.bridging_terms)
+            total_bridging += bridging_count
+            # Update progress for each document's accepted keywords
+            if ctx.deps.progress:
+                ctx.deps.progress.add_keywords_accepted(bridging_count)
         logfire.info(
             f"Generated {len(ctx.state.document_summaries)} summaries with {total_bridging} bridging terms total"
         )
@@ -526,6 +566,9 @@ class ReflectNode(BaseNode[State, Deps, BridgingTermsOut]):
         self, ctx: GraphRunContext[State, Deps]
     ) -> Union["ExpandQueryNode", "FinalizeNode"]:
         """Reflect on coverage and decide whether to continue."""
+        # Update progress to show reflection
+        if ctx.deps.progress:
+            ctx.deps.progress.set_phase_reflecting()
         # Check iteration limit
         if ctx.state.current_round >= ctx.state.max_rounds:
             logfire.info(f"Max rounds reached ({ctx.state.max_rounds}), finalizing")
