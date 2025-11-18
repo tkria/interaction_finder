@@ -288,9 +288,11 @@ class PageFetcher:
             except Exception as exc:
                 logger.warning(
                     "Failed to fetch DOI metadata",
-                    url=url,
-                    doi=doi,
-                    error=str(exc),
+                    extra={
+                        "url": url,
+                        "doi": doi,
+                        "error": str(exc),
+                    },
                 )
 
         return None
@@ -345,10 +347,12 @@ class PageFetcher:
         except Exception as exc:
             logger.warning(
                 "OpenAlex metadata fetch failed",
-                url=url,
-                id_type=id_type,
-                identifier=identifier,
-                error=str(exc),
+                extra={
+                    "url": url,
+                    "id_type": id_type,
+                    "identifier": identifier,
+                    "error": str(exc),
+                },
             )
 
         return None
@@ -378,8 +382,10 @@ class PageFetcher:
                         raise
                     logger.warning(
                         "Failed to create chunks for URL",
-                        url=single_url,
-                        error=str(exc),
+                        extra={
+                            "url": single_url,
+                            "error": str(exc),
+                        },
                     )
                     results.append([])
             return results

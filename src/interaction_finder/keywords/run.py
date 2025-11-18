@@ -126,7 +126,7 @@ async def run_keyword_research(
             result = await graph.run(ExpandQueryNode(), state=state, deps=deps)
             logger.info(
                 f"Completed: {len(result.output.terms)} bridging terms from {result.output.total_documents_processed} documents in {result.output.rounds_completed} rounds",
-                terms=result.output.terms,
+                extra={"terms": result.output.terms},
             )
 
             # Snapshot resource URLs at end of keywords stage

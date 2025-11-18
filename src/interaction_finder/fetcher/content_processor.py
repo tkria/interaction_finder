@@ -330,7 +330,7 @@ class ContentProcessor:
         except Exception as exc:
             logger.warning(
                 "Failed to remove duplicate intro sections",
-                error=str(exc),
+                extra={"error": str(exc)},
             )
 
         return self._refine_with_headings(markdown, headings)

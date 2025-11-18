@@ -181,7 +181,9 @@ class PubMedBackend(SearchBackend):
                     # Log the problematic phrases but return empty results instead of failing
                     logger.warning(
                         f"PubMed rejected search phrases: {', '.join(errors)}",
-                        rejected_phrases=errors,
+                        extra={
+                            "rejected_phrases": errors,
+                        },
                     )
                     # Return empty result set - the query contained invalid syntax
                     return {
@@ -318,10 +320,12 @@ class PubMedBackend(SearchBackend):
                 if not pmids:
                     logger.info(
                         f"PubMed search returned 0 results",
-                        query=query_text,
-                        total_matches=total_count,
-                        pmids=[],
-                        results=[],
+                        extra={
+                            "query": query_text,
+                            "total_matches": total_count,
+                            "pmids": [],
+                            "results": [],
+                        },
                     )
                     return []
 
@@ -350,10 +354,12 @@ class PubMedBackend(SearchBackend):
 
                 logger.info(
                     f"PubMed search returned {len(results)} results (total matches: {total_count})",
-                    query=query_text,
-                    total_matches=total_count,
-                    pmids=pmids,
-                    results=results,
+                    extra={
+                        "query": query_text,
+                        "total_matches": total_count,
+                        "pmids": pmids,
+                        "results": results,
+                    },
                 )
                 return results
 
@@ -375,7 +381,11 @@ class PubMedBackend(SearchBackend):
             return True
         except Exception as exc:
             logger.warning(
-                "PubMed health check failed", error=str(exc), base_url=self.base_url
+                "PubMed health check failed",
+                extra={
+                    "error": str(exc),
+                    "base_url": self.base_url,
+                },
             )
             return False
 

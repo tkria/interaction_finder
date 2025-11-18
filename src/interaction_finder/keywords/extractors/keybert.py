@@ -114,7 +114,10 @@ class KeyBERTExtractor(KeywordExtractor):
         # Handle empty results or if keywords is empty
         if not keywords:
             logger.info(
-                "KeyBERT: no keywords extracted from text", text_length=len(text)
+                "KeyBERT: no keywords extracted from text",
+                extra={
+                    "text_length": len(text),
+                },
             )
             return []
         # Keywords are returned as (keyword, score) tuples
@@ -128,7 +131,9 @@ class KeyBERTExtractor(KeywordExtractor):
         final_results = results[:max_keywords]
         logger.info(
             f"KeyBERT: extracted {len(final_results)} keywords",
-            top_3=[kw.keyword for kw in final_results[:3]],
+            extra={
+                "top_3": [kw.keyword for kw in final_results[:3]],
+            },
         )
         return final_results
 
@@ -140,7 +145,9 @@ class KeyBERTExtractor(KeywordExtractor):
         except Exception as exc:
             logger.warning(
                 "KeyBERT extractor failed health check",
-                error=str(exc),
-                model=self.model_name,
+                extra={
+                    "error": str(exc),
+                    "model": self.model_name,
+                },
             )
             return False

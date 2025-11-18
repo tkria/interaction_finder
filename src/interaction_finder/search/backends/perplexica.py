@@ -163,8 +163,10 @@ class PerplexicaBackend(SearchBackend):
                 results = self._parse_perplexica_response(response_data, query)
                 logger.info(
                     f"Perplexica search returned {len(results)} results",
-                    query=query_text,
-                    results=results,
+                    extra={
+                        "query": query_text,
+                        "results": results,
+                    },
                 )
                 return results
 
@@ -199,8 +201,10 @@ class PerplexicaBackend(SearchBackend):
         except Exception as exc:
             logger.warning(
                 "Perplexica health check failed",
-                error=str(exc),
-                base_url=self.base_url,
+                extra={
+                    "error": str(exc),
+                    "base_url": self.base_url,
+                },
             )
             return False
 

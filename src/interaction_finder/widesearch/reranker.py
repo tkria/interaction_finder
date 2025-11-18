@@ -164,10 +164,12 @@ class Reranker:
                     if final_results
                     else ""
                 ),
-                input_count=len(results),
-                output_count=len(final_results),
-                score_range=score_range,
-                results=final_results,
+                extra={
+                    "input_count": len(results),
+                    "output_count": len(final_results),
+                    "score_range": score_range,
+                    "results": final_results,
+                },
             )
 
             return final_results
@@ -184,7 +186,9 @@ class Reranker:
         except Exception as exc:
             logger.warning(
                 "Wide search reranker failed health check",
-                error=str(exc),
-                model=self.model_name,
+                extra={
+                    "error": str(exc),
+                    "model": self.model_name,
+                },
             )
             return False

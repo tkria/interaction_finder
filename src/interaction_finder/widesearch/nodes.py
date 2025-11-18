@@ -54,8 +54,10 @@ Identify subject areas and research domains that should be covered to ensure com
         ctx.state.subject_goals = result.output.goals
         logger.info(
             f"Identified {len(result.output.goals)} subject goals",
-            goals=result.output.goals,
-            reasoning=result.output.reasoning[:200],
+            extra={
+                "goals": result.output.goals,
+                "reasoning": result.output.reasoning[:200],
+            },
         )
         return GenerateQueriesNode()
 
@@ -108,12 +110,14 @@ Generate search queries that target unsatisfied subject goals and incorporate th
             f"medium={len(result.output.medium_queries)}, "
             f"focused={len(result.output.focused_queries)}, "
             f"indirect={len(result.output.indirect_queries)})",
-            queries=result.output.queries,
-            broad_queries=result.output.broad_queries,
-            medium_queries=result.output.medium_queries,
-            focused_queries=result.output.focused_queries,
-            indirect_queries=result.output.indirect_queries,
-            reasoning=result.output.reasoning[:200],
+            extra={
+                "queries": result.output.queries,
+                "broad_queries": result.output.broad_queries,
+                "medium_queries": result.output.medium_queries,
+                "focused_queries": result.output.focused_queries,
+                "indirect_queries": result.output.indirect_queries,
+                "reasoning": result.output.reasoning[:200],
+            },
         )
         return SearchNode()
 
@@ -173,9 +177,11 @@ class SearchNode(BaseNode[State, Deps, list[SearchResult]]):
 
             logger.info(
                 f"Fetched {len(all_results)} results ({unique_urls} unique)",
-                total_results=len(all_results),
-                unique_urls=unique_urls,
-                results=all_results,
+                extra={
+                    "total_results": len(all_results),
+                    "unique_urls": unique_urls,
+                    "results": all_results,
+                },
             )
 
             return RerankNode()
@@ -199,9 +205,11 @@ class RerankNode(BaseNode[State, Deps, list[SearchResult]]):
             if not ctx.state.current_results:
                 logger.info(
                     "No results to rerank",
-                    input_count=0,
-                    output_count=0,
-                    results=[],
+                    extra={
+                        "input_count": 0,
+                        "output_count": 0,
+                        "results": [],
+                    },
                 )
                 return SelectResultsNode()
 
@@ -211,9 +219,11 @@ class RerankNode(BaseNode[State, Deps, list[SearchResult]]):
             if top_k == 0 or ctx.deps.reranker is None:
                 logger.info(
                     f"Reranking disabled, passing {len(ctx.state.current_results)} results unchanged",
-                    input_count=len(ctx.state.current_results),
-                    output_count=len(ctx.state.current_results),
-                    reranking_enabled=False,
+                    extra={
+                        "input_count": len(ctx.state.current_results),
+                        "output_count": len(ctx.state.current_results),
+                        "reranking_enabled": False,
+                    },
                 )
                 return SelectResultsNode()
             # Set phase to reranking
@@ -229,10 +239,12 @@ class RerankNode(BaseNode[State, Deps, list[SearchResult]]):
 
             logger.info(
                 f"Reranked {len(reranked)} results",
-                input_count=len(ctx.state.current_results),
-                output_count=len(reranked),
-                top_k=top_k,
-                results=reranked,
+                extra={
+                    "input_count": len(ctx.state.current_results),
+                    "output_count": len(reranked),
+                    "top_k": top_k,
+                    "results": reranked,
+                },
             )
 
             return SelectResultsNode()
@@ -364,15 +376,17 @@ Select the most relevant results and summarize what subject areas they cover."""
         ]
         logger.info(
             f"Batch processed: selected {len(result.output.selected_indices)} results ({registered_count} new URLs registered)",
-            batch_size=len(batch),
-            batch_offset=batch_offset,
-            selected_count=len(result.output.selected_indices),
-            registered_count=registered_count,
-            rejected_count=len(rejected_indices),
-            covered_topics=result.output.covered_topics_summary[:200],
-            reasoning=result.output.reasoning,
-            selected_results=selected_results_info,
-            rejected_results=rejected_results_info,
+            extra={
+                "batch_size": len(batch),
+                "batch_offset": batch_offset,
+                "selected_count": len(result.output.selected_indices),
+                "registered_count": registered_count,
+                "rejected_count": len(rejected_indices),
+                "covered_topics": result.output.covered_topics_summary[:200],
+                "reasoning": result.output.reasoning,
+                "selected_results": selected_results_info,
+                "rejected_results": rejected_results_info,
+            },
         )
 
 
@@ -443,16 +457,20 @@ Evaluate coverage and decide whether to continue searching or stop."""
             ctx.state.subject_goals.extend(result.output.new_goals)
             logger.info(
                 f"Added {len(result.output.new_goals)} new subject goals",
-                new_goals=result.output.new_goals,
+                extra={
+                    "new_goals": result.output.new_goals,
+                },
             )
         # Update continue flag
         ctx.state.should_continue = result.output.should_continue
         logger.info(
             f"Reflection complete: {'continue' if result.output.should_continue else 'stop'}",
-            satisfied_goals=len(ctx.state.satisfied_goals),
-            total_goals=len(ctx.state.subject_goals),
-            decision=result.output.should_continue,
-            reasoning=result.output.reasoning[:200],
+            extra={
+                "satisfied_goals": len(ctx.state.satisfied_goals),
+                "total_goals": len(ctx.state.subject_goals),
+                "decision": result.output.should_continue,
+                "reasoning": result.output.reasoning[:200],
+            },
         )
         # Decide next action
         if result.output.should_continue:

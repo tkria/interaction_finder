@@ -274,8 +274,10 @@ class OpenAIBackend(SearchBackend):
                 results = self._parse_openai_response(response_data, query)
                 logger.info(
                     f"OpenAI search returned {len(results)} results",
-                    query=query_text,
-                    results=results,
+                    extra={
+                        "query": query_text,
+                        "results": results,
+                    },
                 )
                 return results
 
@@ -310,8 +312,10 @@ class OpenAIBackend(SearchBackend):
         except Exception as exc:
             logger.warning(
                 "OpenAI search backend health check failed",
-                error=str(exc),
-                base_url=self.base_url,
+                extra={
+                    "error": str(exc),
+                    "base_url": self.base_url,
+                },
             )
             return False
 

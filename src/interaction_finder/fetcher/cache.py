@@ -38,9 +38,11 @@ CONTENT_TYPE_CONFIG = {
 def _log_cache_read_error(action: str, path: Path, exc: Exception) -> None:
     logger.warning(
         "Cache read failed",
-        action=action,
-        path=str(path),
-        error=str(exc),
+        extra={
+            "action": action,
+            "path": str(path),
+            "error": str(exc),
+        },
     )
 
 
@@ -471,8 +473,10 @@ class URLCache:
             except Exception as exc:
                 logger.warning(
                     "Failed to fetch cached content",
-                    url=url,
-                    error=str(exc),
+                    extra={
+                        "url": url,
+                        "error": str(exc),
+                    },
                 )
                 results.append((url, None))
         return results
