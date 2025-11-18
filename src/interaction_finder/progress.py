@@ -35,6 +35,10 @@ class LiveProgressCounter(ABC):
         """Check if display should be enabled based on TTY status."""
         if not self._console.is_terminal:
             self._enabled = False
+        # Configure logging to integrate with this console
+        from interaction_finder.logging import configure_logging
+
+        configure_logging(console=self._console, verbose=False)
 
     def start(self) -> None:
         """Start the live display."""

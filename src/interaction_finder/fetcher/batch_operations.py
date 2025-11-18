@@ -1,12 +1,15 @@
 """Batch operations for concurrent URL fetching."""
 
 import asyncio
+import logging
 from typing import List, Dict, Any, Callable, Optional, Tuple
 from urllib.parse import urlparse
 from .cache import URLCache
 from .web_client import WebClient
 from .progress_display import StatusDisplay
 from interaction_finder.logging import logfire
+
+logger = logging.getLogger(__name__)
 
 
 class PreviousFailure(Exception):
@@ -533,7 +536,7 @@ class BatchOperations:
         try:
             return await fetcher_func(url)
         except Exception as exc:
-            logfire.warning("Prefetch failed", url=url, error=str(exc))
+            logger.warning("Prefetch failed", extra={"url": url, "error": str(exc)})
             return None  # Ignore errors in prefetch
 
     def get_cached_urls_by_type(self, content_type: str) -> List[str]:

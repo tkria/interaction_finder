@@ -5,10 +5,13 @@ semantic similarity between queries and search results, improving result
 ordering for better relevance.
 """
 
+import logging
 import math
 from typing import List
 
 from sentence_transformers import CrossEncoder
+
+logger = logging.getLogger(__name__)
 
 from interaction_finder.logging import logfire
 from interaction_finder.search.models import SearchResult
@@ -154,7 +157,7 @@ class Reranker:
                 max_score = final_results[0].relevance
                 score_range = {"min": min_score, "max": max_score}
 
-            logfire.info(
+            logger.info(
                 f"Reranked {len(results)} results → {len(final_results)} results"
                 + (
                     f" (scores: {final_results[0].relevance:.2f}-{final_results[-1].relevance:.2f})"
@@ -179,7 +182,7 @@ class Reranker:
             self._get_model()
             return True
         except Exception as exc:
-            logfire.warning(
+            logger.warning(
                 "Wide search reranker failed health check",
                 error=str(exc),
                 model=self.model_name,

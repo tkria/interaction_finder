@@ -6,7 +6,10 @@ Perplexica, an AI-powered search engine running locally.
 """
 
 import asyncio
+import logging
 from typing import Dict, Any, List, Optional
+
+logger = logging.getLogger(__name__)
 
 try:
     import httpx
@@ -148,19 +151,17 @@ class PerplexicaBackend(SearchBackend):
 
                 # Handle HTTP errors
                 if response.status_code == 500:
-                    logfire.error("Perplexica internal server error")
+                    logger.error("Perplexica internal server error")
                     raise RuntimeError("Perplexica internal server error")
                 elif response.status_code != 200:
-                    logfire.error(
-                        f"Perplexica API returned HTTP {response.status_code}"
-                    )
+                    logger.error(f"Perplexica API returned HTTP {response.status_code}")
                     raise RuntimeError(
                         f"Perplexica API returned HTTP {response.status_code}: {response.text}"
                     )
 
                 response_data = response.json()
                 results = self._parse_perplexica_response(response_data, query)
-                logfire.info(
+                logger.info(
                     f"Perplexica search returned {len(results)} results",
                     query=query_text,
                     results=results,
@@ -168,22 +169,22 @@ class PerplexicaBackend(SearchBackend):
                 return results
 
             except httpx.TimeoutException:  # type: ignore[misc]
-                logfire.error(f"Perplexica search timed out after {self.timeout}s")
+                logger.error(f"Perplexica search timed out after {self.timeout}s")
                 raise RuntimeError(f"Perplexica search timed out after {self.timeout}s")
             except httpx.ConnectError:  # type: ignore[misc]
-                logfire.error(f"Could not connect to Perplexica at {self.base_url}")
+                logger.error(f"Could not connect to Perplexica at {self.base_url}")
                 raise RuntimeError(
                     f"Could not connect to Perplexica at {self.base_url}"
                 )
             except httpx.RequestError as e:  # type: ignore[misc]
-                logfire.error(f"Perplexica network error: {str(e)}")
+                logger.error(f"Perplexica network error: {str(e)}")
                 raise RuntimeError(f"Perplexica network error: {str(e)}")
             except RuntimeError:
                 # Re-raise runtime errors
                 raise
             except Exception as e:
                 # Wrap unexpected errors
-                logfire.error(f"Unexpected error during Perplexica search: {str(e)}")
+                logger.error(f"Unexpected error during Perplexica search: {str(e)}")
                 raise RuntimeError(
                     f"Unexpected error during Perplexica search: {str(e)}"
                 )
@@ -196,7 +197,7 @@ class PerplexicaBackend(SearchBackend):
             response = await session.get(f"{self.base_url}/api/models", timeout=10)
             return response.status_code == 200
         except Exception as exc:
-            logfire.warning(
+            logger.warning(
                 "Perplexica health check failed",
                 error=str(exc),
                 base_url=self.base_url,

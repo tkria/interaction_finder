@@ -6,9 +6,12 @@ web search tool using the Responses API with structured search results.
 """
 
 import asyncio
+import logging
 import os
 from typing import Dict, Any, List, Optional
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+
+logger = logging.getLogger(__name__)
 
 try:
     import httpx
@@ -254,22 +257,22 @@ class OpenAIBackend(SearchBackend):
 
                 # Handle HTTP errors
                 if response.status_code == 401:
-                    logfire.error("OpenAI API authentication failed")
+                    logger.error("OpenAI API authentication failed")
                     raise RuntimeError(
                         "OpenAI API authentication failed - check API key"
                     )
                 elif response.status_code == 429:
-                    logfire.error("OpenAI API rate limit exceeded")
+                    logger.error("OpenAI API rate limit exceeded")
                     raise RuntimeError("OpenAI API rate limit exceeded")
                 elif response.status_code != 200:
-                    logfire.error(f"OpenAI API returned HTTP {response.status_code}")
+                    logger.error(f"OpenAI API returned HTTP {response.status_code}")
                     raise RuntimeError(
                         f"OpenAI API returned HTTP {response.status_code}: {response.text}"
                     )
 
                 response_data = response.json()
                 results = self._parse_openai_response(response_data, query)
-                logfire.info(
+                logger.info(
                     f"OpenAI search returned {len(results)} results",
                     query=query_text,
                     results=results,
@@ -277,17 +280,17 @@ class OpenAIBackend(SearchBackend):
                 return results
 
             except httpx.TimeoutException:  # type: ignore[misc]
-                logfire.error(f"OpenAI search timed out after {self.timeout}s")
+                logger.error(f"OpenAI search timed out after {self.timeout}s")
                 raise RuntimeError(f"OpenAI search timed out after {self.timeout}s")
             except httpx.RequestError as e:  # type: ignore[misc]
-                logfire.error(f"OpenAI network error: {str(e)}")
+                logger.error(f"OpenAI network error: {str(e)}")
                 raise RuntimeError(f"OpenAI network error: {str(e)}")
             except RuntimeError:
                 # Re-raise runtime errors
                 raise
             except Exception as e:
                 # Wrap unexpected errors
-                logfire.error(f"Unexpected error during OpenAI search: {str(e)}")
+                logger.error(f"Unexpected error during OpenAI search: {str(e)}")
                 raise RuntimeError(f"Unexpected error during OpenAI search: {str(e)}")
 
     async def _async_health_check(self) -> bool:
@@ -305,7 +308,7 @@ class OpenAIBackend(SearchBackend):
             # Both 200 and 400 indicate API is reachable
             return response.status_code in [200, 400]
         except Exception as exc:
-            logfire.warning(
+            logger.warning(
                 "OpenAI search backend health check failed",
                 error=str(exc),
                 base_url=self.base_url,

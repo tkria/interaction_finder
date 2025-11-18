@@ -14,9 +14,12 @@ Rate Limit Handling:
 """
 
 import asyncio
+import logging
 import random
 import xml.etree.ElementTree as ET
 from typing import Dict, Any, List, Optional
+
+logger = logging.getLogger(__name__)
 
 try:
     import httpx
@@ -115,7 +118,7 @@ class PubMedBackend(SearchBackend):
 
             if response.status_code == 429 and attempt < MAX_RETRIES:
                 backoff = self._calculate_backoff(attempt)
-                logfire.warning(
+                logger.warning(
                     f"PubMed rate limit (429), retry {attempt + 1}/{MAX_RETRIES} "
                     f"after {backoff:.1f}s"
                 )
@@ -176,7 +179,7 @@ class PubMedBackend(SearchBackend):
                 ]
                 if errors:
                     # Log the problematic phrases but return empty results instead of failing
-                    logfire.warning(
+                    logger.warning(
                         f"PubMed rejected search phrases: {', '.join(errors)}",
                         rejected_phrases=errors,
                     )
@@ -313,7 +316,7 @@ class PubMedBackend(SearchBackend):
                 total_count = search_result["count"]
 
                 if not pmids:
-                    logfire.info(
+                    logger.info(
                         f"PubMed search returned 0 results",
                         query=query_text,
                         total_matches=total_count,
@@ -335,17 +338,17 @@ class PubMedBackend(SearchBackend):
                     except Exception as e:
                         # Log conversion error but don't fail the whole search
                         conversion_errors += 1
-                        logfire.warning(
+                        logger.warning(
                             f"Failed to convert PubMed summary to result: {e}"
                         )
                         continue
 
                 if conversion_errors > 0:
-                    logfire.warning(
+                    logger.warning(
                         f"Failed to convert {conversion_errors}/{len(summaries)} summaries"
                     )
 
-                logfire.info(
+                logger.info(
                     f"PubMed search returned {len(results)} results (total matches: {total_count})",
                     query=query_text,
                     total_matches=total_count,
@@ -356,11 +359,11 @@ class PubMedBackend(SearchBackend):
 
             except RuntimeError:
                 # Re-raise runtime errors
-                logfire.error("PubMed search failed with RuntimeError")
+                logger.error("PubMed search failed with RuntimeError")
                 raise
             except Exception as e:
                 # Wrap unexpected errors
-                logfire.error(f"Unexpected error during PubMed search: {str(e)}")
+                logger.error(f"Unexpected error during PubMed search: {str(e)}")
                 raise RuntimeError(f"Unexpected error during PubMed search: {str(e)}")
 
     async def _async_health_check(self) -> bool:
@@ -371,7 +374,7 @@ class PubMedBackend(SearchBackend):
             await self._esearch(test_query)
             return True
         except Exception as exc:
-            logfire.warning(
+            logger.warning(
                 "PubMed health check failed", error=str(exc), base_url=self.base_url
             )
             return False

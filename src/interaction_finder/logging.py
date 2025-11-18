@@ -1,40 +1,82 @@
-"""Logfire configuration and setup for interaction_finder.
+"""Logfire and logging configuration for interaction_finder.
 
-This module configures logfire on import, making it available throughout
-the application. Configuration is token-based (opt-in via LOGFIRE_WRITE_TOKEN)
-with automatic Pydantic AI instrumentation.
+Configures dual-handler logging: RichHandler (console, WARNING+) and
+LogfireLoggingHandler (structured telemetry, INFO+). This ensures clean
+console output during Live progress displays while preserving comprehensive
+structured logging for analysis.
+
+Configuration is token-based (opt-in via LOGFIRE_WRITE_TOKEN).
 """
 
 import contextlib
+import logging
 import os
 
 
 def configure_logfire(verbose: bool = False) -> None:
-    """Configure logfire if LOGFIRE_WRITE_TOKEN is available.
+    """Configure logfire with console output disabled.
 
-    Disables inspect_arguments because the codebase already uses explicit
-    keyword arguments for structured logging, making f-string introspection
-    redundant while avoiding AST parsing overhead and warnings.
+    Console output handled via Python logging with RichHandler to prevent
+    duplicates and integrate cleanly with Live displays.
 
     Parameters:
-        verbose: bool — enable verbose console output (default: False)
+        verbose: bool — unused (console output controlled via configure_logging)
     """
-    token = os.environ.get("LOGFIRE_WRITE_TOKEN")
     import logfire
-    from logfire import ConsoleOptions
 
-    if verbose:
-        coptions = ConsoleOptions()
-    else:
-        coptions = ConsoleOptions(min_log_level="warn", show_project_link=False)
-    _ = logfire.configure(
+    logfire.configure(
         send_to_logfire="if-token-present",
-        token=token,
+        token=os.environ.get("LOGFIRE_WRITE_TOKEN"),
         scrubbing=False,
-        console=coptions,
+        console=False,
         inspect_arguments=False,
     )
-    _ = logfire.instrument_pydantic_ai()
+    logfire.instrument_pydantic_ai()
+
+
+def configure_logging(console=None, verbose: bool = False) -> None:
+    """Configure Python logging with RichHandler + LogfireLoggingHandler.
+
+    Parameters:
+        console: Console | None — Rich console (creates if None)
+        verbose: bool — if True, RichHandler shows INFO+; otherwise WARNING+
+
+    Example:
+        >>> configure_logging(console=Console(), verbose=False)
+        >>> logging.warning("Shown above Live display")
+        >>> logging.info("Only to logfire")
+    """
+    try:
+        import logfire
+        from rich.console import Console
+        from rich.logging import RichHandler
+
+        console = console or Console()
+        console_level = logging.INFO if verbose else logging.WARNING
+
+        handlers = [
+            RichHandler(
+                console=console,
+                show_path=False,
+                rich_tracebacks=True,
+                tracebacks_show_locals=verbose,
+                level=console_level,
+            ),
+            logfire.LogfireLoggingHandler(level=logging.INFO),
+        ]
+
+        logging.basicConfig(
+            level=logging.DEBUG,
+            format="%(message)s",
+            handlers=handlers,
+            force=True,
+        )
+    except ImportError:
+        logging.basicConfig(
+            level=logging.INFO if verbose else logging.WARNING,
+            format="%(levelname)s: %(message)s",
+            force=True,
+        )
 
 
 # No-op fallback for when logfire is unavailable

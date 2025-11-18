@@ -1,6 +1,7 @@
 """URL caching functionality for the fetcher package."""
 
 import json
+import logging
 from pathlib import Path
 from typing import Optional, List, Tuple, Any
 import aiofiles
@@ -8,6 +9,8 @@ import aiofiles.os
 
 from .utils import normalize_url, url_to_hash_base36
 from interaction_finder.logging import logfire
+
+logger = logging.getLogger(__name__)
 
 # Caching constants
 COLLISION_PROBE_LIMIT = 10
@@ -33,7 +36,7 @@ CONTENT_TYPE_CONFIG = {
 
 
 def _log_cache_read_error(action: str, path: Path, exc: Exception) -> None:
-    logfire.warning(
+    logger.warning(
         "Cache read failed",
         action=action,
         path=str(path),
@@ -381,7 +384,9 @@ class URLCache:
                 if final_content_path.exists():
                     return final_content_path
             except (OSError, UnicodeDecodeError) as exc:
-                _log_cache_read_error("resolve redirected content path", redir_path, exc)
+                _log_cache_read_error(
+                    "resolve redirected content path", redir_path, exc
+                )
                 pass
 
         return None
@@ -464,7 +469,7 @@ class URLCache:
                 )
                 results.append((url, content))
             except Exception as exc:
-                logfire.warning(
+                logger.warning(
                     "Failed to fetch cached content",
                     url=url,
                     error=str(exc),

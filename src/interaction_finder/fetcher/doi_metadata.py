@@ -1,10 +1,13 @@
 """Metadata fetching via OpenAlex API."""
 
 import asyncio
+import logging
 from typing import Literal, Optional
 
 import httpx
 import logfire
+
+logger = logging.getLogger(__name__)
 
 
 async def fetch_work_metadata(
@@ -62,7 +65,7 @@ async def fetch_work_metadata(
         # OpenAlex ID (format: W1234567890)
         url = f"https://api.openalex.org/works/{identifier}"
     else:
-        logfire.warning(f"Unknown identifier type: {id_type}")
+        logger.warning(f"Unknown identifier type: {id_type}")
         return None
 
     async with httpx.AsyncClient(timeout=timeout) as client:
@@ -83,7 +86,7 @@ async def fetch_work_metadata(
 
                 # Return None for expected failures
                 if response.status_code != 200:
-                    logfire.debug(
+                    logger.debug(
                         f"OpenAlex returned {response.status_code} for {id_type}: {identifier}"
                     )
                     return None
@@ -96,12 +99,10 @@ async def fetch_work_metadata(
                 if attempt < 4:
                     await asyncio.sleep(2**attempt)
                     continue
-                logfire.debug(f"Failed to fetch metadata for {id_type}: {identifier}")
+                logger.debug(f"Failed to fetch metadata for {id_type}: {identifier}")
                 return None
             except Exception as e:
-                logfire.warning(
-                    f"Unexpected error fetching {id_type} {identifier}: {e}"
-                )
+                logger.warning(f"Unexpected error fetching {id_type} {identifier}: {e}")
                 return None
 
     return None

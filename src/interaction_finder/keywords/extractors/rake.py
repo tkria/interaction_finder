@@ -1,5 +1,6 @@
 """RAKE (Rapid Automatic Keyword Extraction) backend."""
 
+import logging
 from typing import List
 
 import nltk
@@ -7,6 +8,8 @@ from rake_nltk import Rake
 
 from interaction_finder.keywords.extractors.base import KeywordExtractor, ScoredKeyword
 from interaction_finder.logging import logfire
+
+logger = logging.getLogger(__name__)
 
 # Ensure NLTK data is downloaded
 try:
@@ -79,7 +82,10 @@ class RAKEExtractor(KeywordExtractor):
         ranked = rake.get_ranked_phrases_with_scores()
         # Handle empty results
         if not ranked:
-            logfire.info("RAKE: no keywords extracted from text", text_length=len(text))
+            logger.info(
+                "RAKE: no keywords extracted from text",
+                extra={"text_length": len(text)},
+            )
             return []
         # Normalize scores to [0, 1] range
         # RAKE scores are unbounded, so we normalize by dividing by max score
@@ -90,8 +96,8 @@ class RAKEExtractor(KeywordExtractor):
         for score, phrase in ranked[:max_keywords]:
             normalized_score = min(score / max_score, 1.0)
             results.append(ScoredKeyword(keyword=phrase, score=normalized_score))
-        logfire.info(
+        logger.info(
             f"RAKE: extracted {len(results)} keywords",
-            top_3=[kw.keyword for kw in results[:3]],
+            extra={"top_3": [kw.keyword for kw in results[:3]]},
         )
         return results

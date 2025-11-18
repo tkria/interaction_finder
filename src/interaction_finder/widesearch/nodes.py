@@ -6,8 +6,11 @@ agents only produce typed data.
 """
 
 import asyncio
+import logging
 from dataclasses import dataclass
 from typing import Union
+
+logger = logging.getLogger(__name__)
 
 from pydantic_graph import BaseNode, End, GraphRunContext
 from pydantic_ai.usage import RunUsage
@@ -36,7 +39,7 @@ class PlanGoalsNode(BaseNode[State, Deps, list[SearchResult]]):
 
     async def run(self, ctx: GraphRunContext[State, Deps]) -> "GenerateQueriesNode":
         """Plan subject goals and initialize the search session."""
-        logfire.info(f"Planning subject goals for topic: {ctx.state.topic}")
+        logger.info(f"Planning subject goals for topic: {ctx.state.topic}")
         # Use goal planner agent with renamed span
         agent = get_goal_planner_agent(ctx.deps.config)
         usage = RunUsage()
@@ -49,7 +52,7 @@ Identify subject areas and research domains that should be covered to ensure com
             result = await agent.run(prompt, deps=ctx.deps, usage=usage)
         # Store goals in state
         ctx.state.subject_goals = result.output.goals
-        logfire.info(
+        logger.info(
             f"Identified {len(result.output.goals)} subject goals",
             goals=result.output.goals,
             reasoning=result.output.reasoning[:200],
@@ -75,7 +78,7 @@ class GenerateQueriesNode(BaseNode[State, Deps, list[SearchResult]]):
             ctx.deps.progress.searches_in_progress = 0
             ctx.deps.progress.searches_total_this_round = 0
             ctx.deps.progress.set_round(ctx.state.current_round, ctx.state.max_rounds)
-        logfire.info(f"Starting round {ctx.state.current_round}/{ctx.state.max_rounds}")
+        logger.info(f"Starting round {ctx.state.current_round}/{ctx.state.max_rounds}")
         # Prepare context for agent
         unsatisfied = [
             g for g in ctx.state.subject_goals if g not in ctx.state.satisfied_goals
@@ -99,7 +102,7 @@ Generate search queries that target unsatisfied subject goals and incorporate th
         # Store queries in state
         ctx.state.current_queries = result.output.queries
         ctx.state.all_queries.extend(result.output.queries)
-        logfire.info(
+        logger.info(
             f"Generated {len(result.output.queries)} queries "
             f"(broad={len(result.output.broad_queries)}, "
             f"medium={len(result.output.medium_queries)}, "
@@ -168,7 +171,7 @@ class SearchNode(BaseNode[State, Deps, list[SearchResult]]):
             # Count unique URLs
             unique_urls = len(set(r.url for r in all_results))
 
-            logfire.info(
+            logger.info(
                 f"Fetched {len(all_results)} results ({unique_urls} unique)",
                 total_results=len(all_results),
                 unique_urls=unique_urls,
@@ -194,7 +197,7 @@ class RerankNode(BaseNode[State, Deps, list[SearchResult]]):
             round=ctx.state.current_round,
         ):
             if not ctx.state.current_results:
-                logfire.info(
+                logger.info(
                     "No results to rerank",
                     input_count=0,
                     output_count=0,
@@ -206,7 +209,7 @@ class RerankNode(BaseNode[State, Deps, list[SearchResult]]):
             top_k = ctx.deps.config.tools.widesearch.rerank_top_k
 
             if top_k == 0 or ctx.deps.reranker is None:
-                logfire.info(
+                logger.info(
                     f"Reranking disabled, passing {len(ctx.state.current_results)} results unchanged",
                     input_count=len(ctx.state.current_results),
                     output_count=len(ctx.state.current_results),
@@ -224,7 +227,7 @@ class RerankNode(BaseNode[State, Deps, list[SearchResult]]):
             # Update state with reranked results
             ctx.state.current_results = reranked
 
-            logfire.info(
+            logger.info(
                 f"Reranked {len(reranked)} results",
                 input_count=len(ctx.state.current_results),
                 output_count=len(reranked),
@@ -252,7 +255,7 @@ class SelectResultsNode(BaseNode[State, Deps, list[SearchResult]]):
             round=ctx.state.current_round,
         ):
             if not ctx.state.current_results:
-                logfire.info("No results available, skipping to reflection")
+                logger.info("No results available, skipping to reflection")
                 # Add empty summary for this round
                 ctx.state.search_summaries.append("(no results found this round)")
                 return ReflectNode()
@@ -268,7 +271,7 @@ class SelectResultsNode(BaseNode[State, Deps, list[SearchResult]]):
                 # Split into batches and process each
                 results = ctx.state.current_results
                 num_batches = (len(results) + batch_size - 1) // batch_size
-                logfire.info(
+                logger.info(
                     f"Processing {len(results)} results in {num_batches} batches of size {batch_size}"
                 )
 
@@ -359,7 +362,7 @@ Select the most relevant results and summarize what subject areas they cover."""
             {"index": idx, "title": batch[idx].title, "url": batch[idx].url}
             for idx in rejected_indices
         ]
-        logfire.info(
+        logger.info(
             f"Batch processed: selected {len(result.output.selected_indices)} results ({registered_count} new URLs registered)",
             batch_size=len(batch),
             batch_offset=batch_offset,
@@ -388,7 +391,7 @@ class ReflectNode(BaseNode[State, Deps, list[SearchResult]]):
         """Reflect on coverage and decide next action."""
         # Check if we've reached max_rounds
         if ctx.state.current_round >= ctx.state.max_rounds:
-            logfire.info(f"Reached max_rounds ({ctx.state.max_rounds}), stopping")
+            logger.info(f"Reached max_rounds ({ctx.state.max_rounds}), stopping")
             # Return all unique results collected, preserving metadata
             all_registered = [
                 url for urls in ctx.state.selected_results.values() for url in urls
@@ -438,13 +441,13 @@ Evaluate coverage and decide whether to continue searching or stop."""
         # Add any new goals discovered
         if result.output.new_goals:
             ctx.state.subject_goals.extend(result.output.new_goals)
-            logfire.info(
+            logger.info(
                 f"Added {len(result.output.new_goals)} new subject goals",
                 new_goals=result.output.new_goals,
             )
         # Update continue flag
         ctx.state.should_continue = result.output.should_continue
-        logfire.info(
+        logger.info(
             f"Reflection complete: {'continue' if result.output.should_continue else 'stop'}",
             satisfied_goals=len(ctx.state.satisfied_goals),
             total_goals=len(ctx.state.subject_goals),
@@ -464,7 +467,7 @@ Evaluate coverage and decide whether to continue searching or stop."""
             final_results = [
                 ctx.state.selected_search_results[url] for url in unique_urls
             ]
-            logfire.info(
+            logger.info(
                 f"Search complete: collected {len(unique_urls)} unique URLs across {ctx.state.current_round} rounds"
             )
             return End(final_results)

@@ -1,8 +1,11 @@
 """Main entry point for keyword research pipeline."""
 
+import logging
 from typing import Any
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 from interaction_finder.checkpoint import KeywordsStageData, PipelineCheckpoint
 from interaction_finder.fetcher import PageFetcher
@@ -121,7 +124,7 @@ async def run_keyword_research(
             state = State(topic=topic, max_rounds=kw_config.max_rounds)
             # Run graph
             result = await graph.run(ExpandQueryNode(), state=state, deps=deps)
-            logfire.info(
+            logger.info(
                 f"Completed: {len(result.output.terms)} bridging terms from {result.output.total_documents_processed} documents in {result.output.rounds_completed} rounds",
                 terms=result.output.terms,
             )

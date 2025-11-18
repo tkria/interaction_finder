@@ -1,11 +1,14 @@
 """YAKE (Yet Another Keyword Extractor) backend."""
 
+import logging
 from typing import List
 
 import yake as yake_lib
 
 from interaction_finder.logging import logfire
 from interaction_finder.keywords.extractors.base import KeywordExtractor, ScoredKeyword
+
+logger = logging.getLogger(__name__)
 
 
 class YAKEExtractor(KeywordExtractor):
@@ -81,7 +84,10 @@ class YAKEExtractor(KeywordExtractor):
         keywords = kw_extractor.extract_keywords(text)
         # Handle empty results
         if not keywords:
-            logfire.info("YAKE: no keywords extracted from text", text_length=len(text))
+            logger.info(
+                "YAKE: no keywords extracted from text",
+                extra={"text_length": len(text)},
+            )
             return []
         # YAKE scores are inverted (lower is better), so we convert to higher=better
         # and normalize to [0, 1]
@@ -92,8 +98,8 @@ class YAKEExtractor(KeywordExtractor):
             results.append(ScoredKeyword(keyword=phrase, score=normalized_score))
         # Sort by score descending
         results.sort(key=lambda x: x.score, reverse=True)
-        logfire.info(
+        logger.info(
             f"YAKE: extracted {len(results)} keywords",
-            top_3=[kw.keyword for kw in results[:3]],
+            extra={"top_3": [kw.keyword for kw in results[:3]]},
         )
         return results

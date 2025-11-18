@@ -1,5 +1,6 @@
 """High-level PageFetcher interface with eliminated duplication using higher-order functions."""
 
+import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,6 +10,8 @@ from .web_client import WebClient
 from .batch_operations import BatchOperations
 from .content_processor import ContentProcessor
 from interaction_finder.logging import logfire
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -283,7 +286,7 @@ class PageFetcher:
                     await self.cache.set_content(url, "publication_date", pub_date)
                     return pub_date
             except Exception as exc:
-                logfire.warning(
+                logger.warning(
                     "Failed to fetch DOI metadata",
                     url=url,
                     doi=doi,
@@ -340,7 +343,7 @@ class PageFetcher:
                         await self.cache.set_content(url, field, value)
                 return metadata
         except Exception as exc:
-            logfire.warning(
+            logger.warning(
                 "OpenAlex metadata fetch failed",
                 url=url,
                 id_type=id_type,
@@ -373,7 +376,7 @@ class PageFetcher:
                 except Exception as exc:
                     if fail_fast:
                         raise
-                    logfire.warning(
+                    logger.warning(
                         "Failed to create chunks for URL",
                         url=single_url,
                         error=str(exc),

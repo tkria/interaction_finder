@@ -24,6 +24,7 @@ from .upgrade import (
     ensure_search,
     ensure_extraction,
 )
+from .logging import configure_logging
 
 # Rebuild checkpoint models to resolve forward references after imports
 _rebuild_models()
@@ -49,4 +50,5 @@ __all__ = [
     "ensure_keywords",
     "ensure_search",
     "ensure_extraction",
+    "configure_logging",
 ]

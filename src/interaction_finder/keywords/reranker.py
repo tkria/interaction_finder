@@ -1,8 +1,11 @@
 """Semantic reranking of search results using cross-encoder models."""
 
+import logging
 from typing import List
 
 from sentence_transformers import CrossEncoder
+
+logger = logging.getLogger(__name__)
 
 from interaction_finder.logging import logfire
 from interaction_finder.search.models import SearchResult
@@ -125,7 +128,7 @@ class Reranker:
             max_score = final_results[0].relevance
             score_range = {"min": min_score, "max": max_score}
 
-        logfire.info(
+        logger.info(
             f"Reranked {len(results)} results → {len(final_results)} results"
             + (
                 f" (scores: {final_results[0].relevance:.2f}-{final_results[-1].relevance:.2f})"
@@ -167,7 +170,7 @@ class Reranker:
                 raise ValueError("Terms cannot be empty")
             if top_k is not None and top_k < 1:
                 raise ValueError(f"top_k must be >= 1 or None, got {top_k}")
-            logfire.info(f"Reranking {len(terms)} terms for query: {query[:50]}...")
+            logger.info(f"Reranking {len(terms)} terms for query: {query[:50]}...")
             # Get model
             model = self._get_model()
             # Create query-term pairs
@@ -187,7 +190,7 @@ class Reranker:
             # Return top_k or all
             if top_k is not None:
                 scored_terms = scored_terms[:top_k]
-            logfire.info(f"Reranking complete: returned {len(scored_terms)} terms")
+            logger.info(f"Reranking complete: returned {len(scored_terms)} terms")
             return scored_terms
 
     def healthy(self) -> bool:
@@ -196,7 +199,7 @@ class Reranker:
             self._get_model()
             return True
         except Exception as exc:
-            logfire.warning(
+            logger.warning(
                 "Keyword reranker failed health check",
                 error=str(exc),
                 model=self.model_name,

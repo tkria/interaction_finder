@@ -4,9 +4,12 @@ Provides a high-level async function that handles all the setup and
 orchestration, making it easy to run widesearch with minimal boilerplate.
 """
 
+import logging
 from typing import Any
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 from interaction_finder.checkpoint import PipelineCheckpoint, SearchStageData
 from interaction_finder.fetcher import PageFetcher
@@ -299,7 +302,7 @@ async def fetch_and_populate_results(
             )
             fetched += 1
         else:
-            logfire.warning(f"Failed to fetch content for {url}")
+            logger.warning(f"Failed to fetch content for {url}")
 
     return {
         "total": len(checkpoint.search.results),

@@ -1,5 +1,6 @@
 """TF-IDF (Term Frequency-Inverse Document Frequency) backend."""
 
+import logging
 from typing import List
 
 import numpy as np
@@ -7,6 +8,8 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 
 from interaction_finder.keywords.extractors.base import KeywordExtractor, ScoredKeyword
 from interaction_finder.logging import logfire
+
+logger = logging.getLogger(__name__)
 
 
 class TFIDFExtractor(KeywordExtractor):
@@ -81,8 +84,9 @@ class TFIDFExtractor(KeywordExtractor):
         ]
         # Need at least one sentence
         if not sentences:
-            logfire.info(
-                "TF-IDF: no keywords extracted from text", text_length=len(text)
+            logger.info(
+                "TF-IDF: no keywords extracted from text",
+                extra={"text_length": len(text)},
             )
             return []
         # Handle case where we have only one sentence
@@ -109,8 +113,9 @@ class TFIDFExtractor(KeywordExtractor):
             tfidf_matrix = vectorizer.fit_transform(sentences)
         except ValueError:
             # No valid terms found (e.g., all stop words)
-            logfire.info(
-                "TF-IDF: no keywords extracted (no valid terms)", text_length=len(text)
+            logger.info(
+                "TF-IDF: no keywords extracted (no valid terms)",
+                extra={"text_length": len(text)},
             )
             return []
         # Get feature names (keywords)
@@ -128,10 +133,12 @@ class TFIDFExtractor(KeywordExtractor):
             for keyword, score in keyword_scores[:max_keywords]:
                 normalized_score = min(score / max_score, 1.0)
                 results.append(ScoredKeyword(keyword=keyword, score=normalized_score))
-            logfire.info(
+            logger.info(
                 f"TF-IDF: extracted {len(results)} keywords",
-                top_3=[kw.keyword for kw in results[:3]],
+                extra={"top_3": [kw.keyword for kw in results[:3]]},
             )
             return results
-        logfire.info("TF-IDF: no keywords extracted from text", text_length=len(text))
+        logger.info(
+            "TF-IDF: no keywords extracted from text", extra={"text_length": len(text)}
+        )
         return []
