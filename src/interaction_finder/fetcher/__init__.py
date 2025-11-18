@@ -25,6 +25,9 @@ from .utils import url_to_hash, normalize_url, url_to_hash_base36
 # Import the URLCache class for direct use if needed
 from .cache import URLCache
 
+# Import OpenAlex metadata fetchers
+from .doi_metadata import fetch_doi_metadata, fetch_work_metadata
+
 # Export the public API
 __all__ = [
     "PageFetcher",
@@ -42,4 +45,7 @@ __all__ = [
     "url_to_hash",
     "normalize_url",
     "url_to_hash_base36",
+    # OpenAlex metadata
+    "fetch_doi_metadata",
+    "fetch_work_metadata",
 ]

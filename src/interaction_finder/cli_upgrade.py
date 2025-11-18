@@ -237,18 +237,32 @@ async def enrich_resources(
             # Try to get DOI from cache first, otherwise None
             doi = resource_dict.get("doi")
             if doi is None:
-                cached_doi = await fetcher.get_doi(url)
-                if cached_doi:
-                    doi = cached_doi
-                    stats["doi_cached"] += 1
+                try:
+                    cached_doi = await fetcher.get_doi(url)
+                    if cached_doi:
+                        doi = cached_doi
+                        stats["doi_cached"] += 1
+                except Exception as e:
+                    # Fetch failures during enrichment are non-fatal; log and continue
+                    if console:
+                        console.print(
+                            f"[dim yellow]Warning: Could not fetch DOI for {url}: {e}[/dim yellow]"
+                        )
 
             # Try to get publication date (requires DOI)
             publication_date = resource_dict.get("publication_date")
             if publication_date is None and doi:
-                cached_date = await fetcher.get_publication_date(url, doi=doi)
-                if cached_date:
-                    publication_date = cached_date
-                    stats["date_cached"] += 1
+                try:
+                    cached_date = await fetcher.get_publication_date(url, doi=doi)
+                    if cached_date:
+                        publication_date = cached_date
+                        stats["date_cached"] += 1
+                except Exception as e:
+                    # Fetch failures during enrichment are non-fatal; log and continue
+                    if console:
+                        console.print(
+                            f"[dim yellow]Warning: Could not fetch publication date for {url}: {e}[/dim yellow]"
+                        )
 
             # Create ResourceId and Resource
             resource_id = ResourceId(url=url, counter=idx)

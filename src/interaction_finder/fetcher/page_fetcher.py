@@ -1,8 +1,9 @@
 """High-level PageFetcher interface with eliminated duplication using higher-order functions."""
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Union, List, Optional, Callable, Any, Dict
+from typing import Union, List, Optional, Callable, Any, Dict, Tuple, Literal
 from .cache import URLCache
 from .web_client import WebClient
 from .batch_operations import BatchOperations
@@ -228,10 +229,15 @@ class PageFetcher:
         if await self.cache.has_path(url, "doi"):
             return await self.cache.get_content(url, "doi")
 
-        # Fetch HTML to populate DOI cache (PDFs don't have DOI extraction)
+        # Try OpenAlex direct lookup for PubMed/PMC URLs
+        if metadata := await self._fetch_metadata_from_openalex(
+            url, ["doi", "publication_date"]
+        ):
+            return metadata.get("doi")
+
+        # Fall back to HTML fetching for non-PubMed URLs (PDFs don't have DOI extraction)
         if not self.web_client._is_pdf_url(url):
             await self.get_html(url, retry=retry)
-            # Try again after fetching
             if await self.cache.has_path(url, "doi"):
                 return await self.cache.get_content(url, "doi")
 
@@ -243,8 +249,8 @@ class PageFetcher:
         """
         Get publication date for URL (YYYY-MM-DD format).
 
-        Publication dates are cached during initial HTML fetch when DOI is extracted.
-        If not cached, will fetch from OpenAlex using the DOI.
+        For PubMed/PMC URLs, queries OpenAlex directly via PMID/PMCID.
+        Otherwise uses DOI-based lookup.
 
         Parameters:
             url: URL to get publication date for
@@ -253,11 +259,16 @@ class PageFetcher:
         Returns:
             Publication date string or None if not available
         """
-        # Check cache first
         if await self.cache.has_path(url, "publication_date"):
             return await self.cache.get_content(url, "publication_date")
 
-        # Cache miss - try to fetch from OpenAlex if we have a DOI
+        # Try OpenAlex direct lookup for PubMed/PMC URLs
+        if metadata := await self._fetch_metadata_from_openalex(
+            url, ["publication_date", "doi"]
+        ):
+            return metadata.get("publication_date")
+
+        # Fall back to DOI-based lookup
         if doi is None:
             doi = await self.get_doi(url, retry=False)
 
@@ -268,11 +279,9 @@ class PageFetcher:
                 metadata = await fetch_doi_metadata(doi)
                 if metadata and metadata.get("publication_date"):
                     pub_date = metadata["publication_date"]
-                    # Cache for future use
                     await self.cache.set_content(url, "publication_date", pub_date)
                     return pub_date
             except Exception:
-                # Don't fail if publication date lookup fails
                 pass
 
         return None
@@ -280,6 +289,54 @@ class PageFetcher:
     async def list_cached_urls(self) -> List[str]:
         """Get a list of all cached URLs."""
         return await self.cache.list_cached_urls()
+
+    def _extract_pubmed_identifier(
+        self, url: str
+    ) -> Tuple[Optional[str], Optional[Literal["pmid", "pmcid"]]]:
+        """Extract PubMed or PMC identifier from URL."""
+        # Try PMID: pubmed.ncbi.nlm.nih.gov/{PMID}/
+        if match := re.search(r"pubmed\.ncbi\.nlm\.nih\.gov/(\d+)", url):
+            return match.group(1), "pmid"
+        # Try PMCID: ncbi.nlm.nih.gov/pmc/articles/PMC{ID}/
+        if match := re.search(r"ncbi\.nlm\.nih\.gov/pmc/articles/PMC(\d+)", url):
+            return match.group(1), "pmcid"
+        return None, None
+
+    async def _fetch_metadata_from_openalex(
+        self, url: str, fields: List[str]
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Fetch metadata from OpenAlex using PMID/PMCID if URL is PubMed, otherwise return None.
+
+        Caches all fetched fields for the URL.
+
+        Parameters:
+            url: URL to fetch metadata for
+            fields: Fields to request from OpenAlex
+
+        Returns:
+            Dict with requested fields, or None if not a PubMed URL or fetch failed
+        """
+        identifier, id_type = self._extract_pubmed_identifier(url)
+        if not identifier or not id_type:
+            return None
+
+        try:
+            from .doi_metadata import fetch_work_metadata
+
+            metadata = await fetch_work_metadata(
+                identifier, id_type=id_type, select=fields
+            )
+            if metadata:
+                # Cache all available fields
+                for field in fields:
+                    if value := metadata.get(field):
+                        await self.cache.set_content(url, field, value)
+                return metadata
+        except Exception:
+            pass
+
+        return None
 
     def _process_multiple_results(
         self, results: List[Any], progress_display
