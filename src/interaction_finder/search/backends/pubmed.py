@@ -166,7 +166,7 @@ class PubMedBackend(SearchBackend):
         try:
             root = ET.fromstring(xml_content)
 
-            # Check for errors
+            # Check for errors - log but don't fail on PhraseNotFound
             error_list = root.find("ErrorList")
             if error_list is not None:
                 errors = [
@@ -175,7 +175,18 @@ class PubMedBackend(SearchBackend):
                     if error.text
                 ]
                 if errors:
-                    raise RuntimeError(f"PubMed search errors: {', '.join(errors)}")
+                    # Log the problematic phrases but return empty results instead of failing
+                    logfire.warning(
+                        f"PubMed rejected search phrases: {', '.join(errors)}",
+                        rejected_phrases=errors,
+                    )
+                    # Return empty result set - the query contained invalid syntax
+                    return {
+                        "pmids": [],
+                        "count": 0,
+                        "web_env": None,
+                        "query_key": None,
+                    }
 
             # Extract search results
             id_list = root.find("IdList")

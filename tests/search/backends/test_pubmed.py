@@ -504,9 +504,14 @@ class TestXMLParsing:
         assert result["pmids"] == []
 
     def test_parse_esearch_error(self, pubmed_backend):
-        """Test parsing ESearch response with errors."""
-        with pytest.raises(RuntimeError, match="PubMed search errors"):
-            pubmed_backend._parse_esearch_response(ESEARCH_ERROR_XML)
+        """Test parsing ESearch response with PhraseNotFound errors returns empty results."""
+        result = pubmed_backend._parse_esearch_response(ESEARCH_ERROR_XML)
+
+        # Should return empty results instead of raising
+        assert result["count"] == 0
+        assert result["pmids"] == []
+        assert result["web_env"] is None
+        assert result["query_key"] is None
 
     def test_parse_esearch_malformed_xml(self, pubmed_backend):
         """Test parsing malformed XML raises appropriate error."""
@@ -518,7 +523,7 @@ class TestXMLParsing:
             pubmed_backend._parse_esearch_response(malformed_xml)
 
     def test_parse_esearch_error_with_none_text(self, pubmed_backend):
-        """Test parsing ESearch errors filters out None text values."""
+        """Test parsing ESearch errors filters out None text values and returns empty results."""
         xml_with_none = """<?xml version="1.0" encoding="UTF-8"?>
         <eSearchResult>
             <Count>0</Count>
@@ -529,8 +534,11 @@ class TestXMLParsing:
         </eSearchResult>
         """
 
-        with pytest.raises(RuntimeError, match="valid error"):
-            pubmed_backend._parse_esearch_response(xml_with_none)
+        result = pubmed_backend._parse_esearch_response(xml_with_none)
+
+        # Should return empty results and filter out None text values
+        assert result["count"] == 0
+        assert result["pmids"] == []
 
     def test_parse_esummary_success(self, pubmed_backend):
         """Test parsing successful ESummary response."""
