@@ -696,6 +696,13 @@ def keywords(
         interaction-finder keywords "machine learning" -o keywords.json
     """
     try:
+        # Check output early to fail fast
+        if not output:
+            console.print(
+                "[red]Error:[/red] Output file required. Use -o/--output to specify where to save results."
+            )
+            raise typer.Exit(1)
+
         # Get effective options (local flags override global)
         config_path, mode, verbose, overrides = get_options_with_fallback(
             config, mode, verbose, overrides
@@ -731,10 +738,9 @@ def keywords(
         else:
             console.print("[yellow]No bridging terms found[/yellow]")
 
-        # Save checkpoint if requested
-        if output:
-            output.write_text(result_checkpoint.model_dump_json(indent=2))
-            console.print(f"\n[dim]Saved to {output}[/dim]")
+        # Save checkpoint
+        output.write_text(result_checkpoint.model_dump_json(indent=2))
+        console.print(f"\n[dim]Saved to {output}[/dim]")
 
     except Exception as e:
         console.print(f"\n[red]Error:[/red] {e}")
@@ -791,6 +797,17 @@ def widesearch(
         )
         cfg = load_config(config_path, overrides, mode)
         checkpoint, topic = load_checkpoint_or_create(checkpoint_or_topic)
+
+        # Check if output is required (topic string with no -o specified)
+        input_is_file = (
+            Path(checkpoint_or_topic).exists() and Path(checkpoint_or_topic).is_file()
+        )
+        if not output and not input_is_file:
+            console.print(
+                "[red]Error:[/red] Output file required when using topic string. "
+                "Use -o/--output to specify where to save results."
+            )
+            raise typer.Exit(1)
 
         # Apply CLI overrides
         if max_rounds is not None:
@@ -850,9 +867,17 @@ def widesearch(
             )
 
         # Save checkpoint
+        input_was_file = (
+            Path(checkpoint_or_topic).exists() and Path(checkpoint_or_topic).is_file()
+        )
         if output:
+            # Explicit output specified
             output.write_text(checkpoint.model_dump_json(indent=2))
             console.print(f"\n[dim]Saved checkpoint to {output}[/dim]")
+        else:
+            # Update input file in place (topic strings without -o exit early above)
+            Path(checkpoint_or_topic).write_text(checkpoint.model_dump_json(indent=2))
+            console.print(f"\n[dim]Updated {checkpoint_or_topic}[/dim]")
 
     except (json.JSONDecodeError, ValidationError) as e:
         console.print(f"[red]Invalid checkpoint file:[/red] {e}")
@@ -915,6 +940,17 @@ def extract(
         cfg = load_config(config_path, overrides, mode)
         checkpoint, topic = load_checkpoint_or_create(checkpoint_or_topic)
 
+        # Check if output is required (topic string with no -o specified)
+        input_is_file = (
+            Path(checkpoint_or_topic).exists() and Path(checkpoint_or_topic).is_file()
+        )
+        if not output and not input_is_file:
+            console.print(
+                "[red]Error:[/red] Output file required when using topic string. "
+                "Use -o/--output to specify where to save results."
+            )
+            raise typer.Exit(1)
+
         # Create search backend (needed if search stage must run)
         backend_name = backend if backend else cfg.tools.widesearch.search_backend
         search_backend = create_search_backend(backend_name, cfg)
@@ -955,10 +991,13 @@ def extract(
 
         # Save checkpoint
         if output:
+            # Explicit output specified
             output.write_text(checkpoint.model_dump_json(indent=2))
             console.print(f"\n[dim]Saved results to {output}[/dim]")
         else:
-            console.print("\n[dim]Use -o/--output to save results to a file[/dim]")
+            # Update input file in place (topic strings without -o exit early above)
+            Path(checkpoint_or_topic).write_text(checkpoint.model_dump_json(indent=2))
+            console.print(f"\n[dim]Updated {checkpoint_or_topic}[/dim]")
 
     except (json.JSONDecodeError, ValidationError) as e:
         console.print(f"[red]Invalid checkpoint file:[/red] {e}")
@@ -1090,15 +1129,15 @@ def report(
         log_console.print(f"[green]✓[/green] Report generated: {destination_label}")
 
         # Show statistics (all pairs are included)
-        log_console.print(f"\n[bold]Report contains:[/bold]")
+        log_console.print("\n[bold]Report contains:[/bold]")
         log_console.print(
             f"  • {checkpoint.extraction.metadata.total_pairs_found} pairs ({checkpoint.extraction.metadata.pairs_accepted} accepted, {checkpoint.extraction.metadata.pairs_rejected} rejected)"
         )
         log_console.print(
             f"  • {checkpoint.extraction.metadata.resource_count} documents"
         )
-        log_console.print(f"  • Interactive filtering and search")
-        log_console.print(f"  • Full provenance tracking")
+        log_console.print("  • Interactive filtering and search")
+        log_console.print("  • Full provenance tracking")
 
     except FileNotFoundError as e:
         log_console.print(f"[red]Error:[/red] {e}")

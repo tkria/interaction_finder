@@ -38,19 +38,29 @@ uv sync
 # Full pipeline from topic string (no intermediate files needed)
 uv run interaction-finder extract "pulmonary arterial hypertension" -e gene -e disease -o results.json
 
-# Traditional staged workflow (checkpoint files optional)
+# Traditional staged workflow with in-place checkpoint updates
 # Stage 1: Extract bridging terms (keywords) from review articles
-uv run interaction-finder keywords "pulmonary arterial hypertension" -o keywords.json
+uv run interaction-finder keywords "pulmonary arterial hypertension" -o research.json
 
-# Stage 2: Wide search (accepts checkpoint OR topic, runs keywords automatically if needed)
-uv run interaction-finder widesearch keywords.json -o searches.json
+# Stage 2: Wide search (updates research.json in place with search results)
+uv run interaction-finder widesearch research.json
+
+# Stage 3: Extract entity associations (updates research.json in place with extraction results)
+uv run interaction-finder extract research.json -e gene -e disease
+
+# Alternative: Start from any stage with topic strings
 uv run interaction-finder widesearch "pulmonary arterial hypertension" -o searches.json
-
-# Stage 3: Extract entity associations (accepts checkpoint OR topic, runs all prior stages automatically)
-uv run interaction-finder extract searches.json -e gene -e disease -o results.json
-uv run interaction-finder extract keywords.json -e gene -e disease -o results.json
 uv run interaction-finder extract "PAH genetics" -e gene -e disease -o results.json
+
+# Alternative: Create separate output files instead of updating in place
+uv run interaction-finder widesearch keywords.json -o searches.json
+uv run interaction-finder extract searches.json -e gene -e disease -o results.json
 ```
+
+**Checkpoint File Behavior**:
+- When input is a checkpoint file and no `-o` specified: **updates the input file in place**
+- When input is a checkpoint file and `-o` specified: **writes to the output file**, leaves input unchanged
+- When input is a topic string: **requires `-o` to save results**
 
 **Entity Kind Pair Filtering**:
 The extraction stage filters pairs based on entity kinds. By default, specifying two different kinds (e.g., `-e gene -e disease`) only permits cross-kind pairs (gene-disease). To allow same-kind pairs (gene-gene, disease-disease), repeat the kind flag:
