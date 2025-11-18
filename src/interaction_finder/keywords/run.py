@@ -1,5 +1,7 @@
 """Main entry point for keyword research pipeline."""
 
+from typing import Any
+
 import httpx
 
 from interaction_finder.logging import logfire
@@ -24,6 +26,7 @@ from interaction_finder.settings import IfetcherConfig
 async def run_keyword_research(
     topic: str,
     config: IfetcherConfig,
+    search_backend: Any | None = None,
     verbose: bool = False,
 ) -> PipelineCheckpoint:
     """Run keyword research pipeline for a topic.
@@ -34,6 +37,7 @@ async def run_keyword_research(
     Parameters:
         topic: str — research topic to find bridging terms for
         config: IfetcherConfig — configuration object
+        search_backend: SearchBackend | None — search backend to use (creates PubMedBackend if None)
         verbose: bool — enable verbose logging (default: False)
 
     Returns:
@@ -60,11 +64,11 @@ async def run_keyword_research(
                 show_status=verbose,
                 verbose=verbose,
             )
-            # Initialize search backend (currently only PubMed is supported)
-            # In future, add backend factory to support multiple backends
-            search_backend = PubMedBackend(
-                config={"timeout": config.tools.search.timeout}
-            )
+            # Initialize search backend (use provided or create PubMed default)
+            if search_backend is None:
+                search_backend = PubMedBackend(
+                    config={"timeout": config.tools.search.timeout}
+                )
             # Initialize reranker if enabled (rerank_top_k > 0)
             reranker = None
             if kw_config.rerank_top_k > 0:

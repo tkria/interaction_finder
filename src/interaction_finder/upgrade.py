@@ -14,7 +14,7 @@ Properties:
 - Minimal: Direct calls to underlying pipeline functions
 """
 
-from typing import Literal
+from typing import Any, Literal
 
 from interaction_finder.checkpoint import PipelineCheckpoint
 from interaction_finder.resources import ResourcePool
@@ -47,12 +47,16 @@ def checkpoint_stage(checkpoint: PipelineCheckpoint) -> StageLevel:
 async def ensure_keywords(
     checkpoint: PipelineCheckpoint,
     config: IfetcherConfig,
+    search_backend: SearchBackend | None = None,
+    progress: Any | None = None,
 ) -> PipelineCheckpoint:
     """Ensure keywords stage complete. Idempotent.
 
     Parameters:
         checkpoint: Checkpoint at any stage
         config: Configuration
+        search_backend: Search backend for keyword extraction (defaults to PubMed)
+        progress: Optional progress counter for live display (currently unused in keywords)
 
     Returns:
         Checkpoint with at least keywords stage
@@ -62,9 +66,11 @@ async def ensure_keywords(
 
     from interaction_finder.keywords import run_keyword_research
 
+    # Note: run_keyword_research doesn't yet support progress parameter
     return await run_keyword_research(
         topic=checkpoint.topic,
         config=config,
+        search_backend=search_backend,
         verbose=False,
     )
 
@@ -73,13 +79,17 @@ async def ensure_search(
     checkpoint: PipelineCheckpoint,
     search_backend: SearchBackend,
     config: IfetcherConfig,
+    keywords_backend: SearchBackend | None = None,
+    progress: Any | None = None,
 ) -> PipelineCheckpoint:
     """Ensure search stage complete. Idempotent. Runs keywords if needed.
 
     Parameters:
         checkpoint: Checkpoint at any stage
-        search_backend: Search backend
+        search_backend: Search backend for widesearch
         config: Configuration
+        keywords_backend: Search backend for keywords stage (defaults to same as search_backend)
+        progress: Optional progress counter for live display
 
     Returns:
         Checkpoint with at least search stage
@@ -87,8 +97,11 @@ async def ensure_search(
     if checkpoint.search is not None:
         return checkpoint
 
-    # Ensure keywords first
-    checkpoint = await ensure_keywords(checkpoint, config)
+    # Ensure keywords first (use keywords_backend or fall back to search_backend)
+    kw_backend = keywords_backend if keywords_backend is not None else search_backend
+    checkpoint = await ensure_keywords(
+        checkpoint, config, search_backend=kw_backend, progress=progress
+    )
 
     # Run search
     from interaction_finder.widesearch import run_widesearch_with_checkpoint
@@ -97,6 +110,7 @@ async def ensure_search(
         input_checkpoint=checkpoint,
         search_backend=search_backend,
         config=config,
+        progress=progress,
     )
 
 
@@ -134,7 +148,6 @@ async def ensure_extraction(
         target_entity_types=target_entity_types,
         config=config,
     )
-
 
 
 def create_empty_checkpoint(topic: str) -> PipelineCheckpoint:

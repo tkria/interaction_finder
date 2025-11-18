@@ -675,6 +675,12 @@ def keywords(
     output: Optional[Path] = typer.Option(
         None, "-o", "--output", help="Output file for results (JSON)"
     ),
+    backend: Optional[str] = typer.Option(
+        None,
+        "-b",
+        "--backend",
+        help="Search backend to use (pubmed, perplexica, openai)",
+    ),
     max_rounds: Optional[int] = typer.Option(
         None, "--max-rounds", help="Override maximum search rounds"
     ),
@@ -712,12 +718,21 @@ def keywords(
         # Apply CLI overrides
         if max_rounds is not None:
             cfg.tools.keywords.max_rounds = max_rounds
+
+        # Create search backend
+        backend_name = backend if backend else cfg.tools.keywords.search_backend
+        search_backend = create_search_backend(backend_name, cfg)
+
         # Import keywords pipeline
         from interaction_finder.keywords import run_keyword_research
 
         # Run keywords stage
         console.print(f"[bold]Extracting bridging terms for:[/bold] {topic}\n")
-        result_checkpoint = asyncio.run(run_keyword_research(topic, cfg, verbose=False))
+        result_checkpoint = asyncio.run(
+            run_keyword_research(
+                topic, cfg, search_backend=search_backend, verbose=False
+            )
+        )
 
         # Extract keywords data for display
         keywords_data = result_checkpoint.keywords
@@ -848,7 +863,11 @@ def widesearch(
 
         progress_counter = WidesearchProgress()
         with progress_counter:
-            checkpoint = asyncio.run(ensure_search(checkpoint, search_backend, cfg))
+            checkpoint = asyncio.run(
+                ensure_search(
+                    checkpoint, search_backend, cfg, progress=progress_counter
+                )
+            )
 
         console.print()
 
