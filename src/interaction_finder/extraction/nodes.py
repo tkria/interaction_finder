@@ -26,7 +26,6 @@ from interaction_finder.extraction.document_pipeline import (
     assess_document_pairs,
     extract_document_entities,
     extract_document_pairs,
-    identify_document_proximal_sets,
     validate_entity_kinds,
 )
 from interaction_finder.extraction.judge_cross_document import (
@@ -45,6 +44,7 @@ from interaction_finder.extraction.models import (
 from interaction_finder.extraction.state import State
 from interaction_finder.extraction.utils import (
     collect_relevant_text_for_quotes,
+    identify_proximal_sets,
     make_entity_pair_key,
     normalize_for_comparison,
 )
@@ -184,10 +184,10 @@ class ProcessDocumentsNode(BaseNode[State, Deps, ExtractionResult]):
                 if ctx.deps.progress:
                     ctx.deps.progress.set_phase_proximal()
 
-                proximal_sets = identify_document_proximal_sets(
+                proximal_sets = identify_proximal_sets(
                     validated,
-                    resource,
                     ctx.deps.config.tools.extraction.proximal_window_chunks,
+                    resource,
                 )
 
                 if not proximal_sets:

@@ -178,27 +178,6 @@ def validate_entity_kinds(
     }
 
 
-# Proximal set identification and pair extraction
-
-
-def identify_document_proximal_sets(
-    entities: dict[str, EntityMention],
-    resource: Resource,
-    proximal_window_chunks: int,
-) -> list[ProximalEntitySet]:
-    """Find groups of entities appearing in close proximity within a document.
-
-    Parameters:
-        entities: Validated entities from document
-        resource: Source document
-        proximal_window_chunks: Window size for considering entities proximal
-
-    Returns:
-        List of ProximalEntitySet objects representing co-occurring entity groups
-    """
-    return identify_proximal_sets(entities, proximal_window_chunks, resource)
-
-
 async def extract_pairs_from_proximal_set(
     proximal_set: ProximalEntitySet,
     entities: dict[str, EntityMention],
