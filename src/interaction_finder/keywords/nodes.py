@@ -6,16 +6,16 @@ agents only produce typed data.
 """
 
 import asyncio
-import logging
 from dataclasses import dataclass
 from typing import Union
-
-logger = logging.getLogger(__name__)
 
 from pydantic_ai.usage import RunUsage
 from pydantic_graph import BaseNode, End, GraphRunContext
 
 from interaction_finder.agent_utils import rename_agent
+from interaction_finder.logging import get_logger
+
+logger = get_logger(__name__)
 from interaction_finder.keywords.agents import (
     get_document_summarizer_agent,
     get_query_expander_agent,
@@ -122,10 +122,8 @@ class ExpandQueryNode(BaseNode[State, Deps, BridgingTermsOut]):
         ctx.state.search_queries = result.output.queries
         logger.info(
             f"Generated {len(result.output.queries)} queries for round {ctx.state.current_round}",
-            extra={
-                "queries": result.output.queries,
-                "reasoning": result.output.reasoning[:200],
-            },
+            queries=result.output.queries,
+            reasoning=result.output.reasoning[:200],
         )
         return SearchNode()
 
@@ -169,12 +167,10 @@ class SearchNode(BaseNode[State, Deps, BridgingTermsOut]):
 
             logger.info(
                 f"Fetched {len(all_results)} results ({unique_urls} unique)",
-                extra={
-                    "queries": ctx.state.search_queries,
-                    "total_results": len(all_results),
-                    "unique_urls": unique_urls,
-                    "results": all_results,
-                },
+                queries=ctx.state.search_queries,
+                total_results=len(all_results),
+                unique_urls=unique_urls,
+                results=all_results,
             )
             return RerankNode()
 
@@ -196,11 +192,9 @@ class RerankNode(BaseNode[State, Deps, BridgingTermsOut]):
             if not ctx.state.all_search_results:
                 logger.info(
                     "No results to rerank",
-                    extra={
-                        "input_count": 0,
-                        "output_count": 0,
-                        "results": [],
-                    },
+                    input_count=0,
+                    output_count=0,
+                    results=[],
                 )
                 return SelectResultsNode()
             # Check if reranking is enabled (rerank_top_k > 0)
@@ -208,11 +202,9 @@ class RerankNode(BaseNode[State, Deps, BridgingTermsOut]):
             if top_k == 0 or ctx.deps.reranker is None:
                 logger.info(
                     f"Reranking disabled, passing {len(ctx.state.all_search_results)} results unchanged",
-                    extra={
-                        "input_count": len(ctx.state.all_search_results),
-                        "output_count": len(ctx.state.all_search_results),
-                        "reranking_enabled": False,
-                    },
+                    input_count=len(ctx.state.all_search_results),
+                    output_count=len(ctx.state.all_search_results),
+                    reranking_enabled=False,
                 )
                 return SelectResultsNode()
             # Update progress to show reranking
@@ -227,12 +219,10 @@ class RerankNode(BaseNode[State, Deps, BridgingTermsOut]):
 
             logger.info(
                 f"Reranked {len(reranked)} results",
-                extra={
-                    "input_count": len(ctx.state.all_search_results),
-                    "output_count": len(reranked),
-                    "top_k": top_k,
-                    "results": reranked,
-                },
+                input_count=len(ctx.state.all_search_results),
+                output_count=len(reranked),
+                top_k=top_k,
+                results=reranked,
             )
             return SelectResultsNode()
 
@@ -282,10 +272,8 @@ Select the indices of results that are most likely to be valuable review article
         ]
         logger.info(
             f"Selected {len(ctx.state.selected_results)} results from {len(ctx.state.all_search_results)} available",
-            extra={
-                "selected_titles": [r.title[:60] for r in ctx.state.selected_results],
-                "reasoning": result.output.reasoning[:200],
-            },
+            selected_titles=[r.title[:60] for r in ctx.state.selected_results],
+            reasoning=result.output.reasoning[:200],
         )
         return FetchDocumentsNode()
 
@@ -463,12 +451,10 @@ class ExtractKeywordsNode(BaseNode[State, Deps, BridgingTermsOut]):
                 for name, error in failed:
                     logger.warning(
                         f"Extractor {name} failed for document",
-                        extra={
-                            "extractor": name,
-                            "url": url,
-                            "title": title[:60],
-                            "error": str(error),
-                        },
+                        extractor=name,
+                        url=url,
+                        title=title[:60],
+                        error=str(error),
                     )
             total_keywords = sum(
                 len(kws) for kws in ctx.state.extracted_keywords.values()
@@ -626,11 +612,9 @@ Decide whether coverage is sufficient (stop) or more searches are needed (contin
         decision = result.output.decision
         logger.info(
             f"Reflection: {decision} after round {ctx.state.current_round}",
-            extra={
-                "decision": decision,
-                "reasoning": result.output.reasoning,
-                "new_search_angles": result.output.new_search_angles,
-            },
+            decision=decision,
+            reasoning=result.output.reasoning,
+            new_search_angles=result.output.new_search_angles,
         )
         if decision == "stop":
             return FinalizeNode()
@@ -698,12 +682,9 @@ class FinalizeNode(BaseNode[State, Deps, BridgingTermsOut]):
             )
             logger.info(
                 f"Finalized: {len(final_terms)} bridging terms from {len(ctx.state.document_summaries)} documents",
-                extra={
-                    "top_5": [
-                        (t, f"{s:.3f}")
-                        for t, s in zip(final_terms[:5], final_scores[:5])
-                    ],
-                },
+                top_5=[
+                    (t, f"{s:.3f}") for t, s in zip(final_terms[:5], final_scores[:5])
+                ],
             )
             # Return final result
             return End(

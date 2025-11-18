@@ -1,15 +1,14 @@
 """KeyBERT (BERT-based keyword extraction) backend."""
 
-import logging
 import threading
 from typing import List
 
 from keybert import KeyBERT as KeyBERTModel
 
 from interaction_finder.keywords.extractors.base import KeywordExtractor, ScoredKeyword
-from interaction_finder.logging import logfire
+from interaction_finder.logging import logfire, get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class KeyBERTExtractor(KeywordExtractor):
@@ -115,9 +114,7 @@ class KeyBERTExtractor(KeywordExtractor):
         if not keywords:
             logger.info(
                 "KeyBERT: no keywords extracted from text",
-                extra={
-                    "text_length": len(text),
-                },
+                text_length=len(text),
             )
             return []
         # Keywords are returned as (keyword, score) tuples
@@ -131,9 +128,7 @@ class KeyBERTExtractor(KeywordExtractor):
         final_results = results[:max_keywords]
         logger.info(
             f"KeyBERT: extracted {len(final_results)} keywords",
-            extra={
-                "top_3": [kw.keyword for kw in final_results[:3]],
-            },
+            top_3=[kw.keyword for kw in final_results[:3]],
         )
         return final_results
 
@@ -145,9 +140,7 @@ class KeyBERTExtractor(KeywordExtractor):
         except Exception as exc:
             logger.warning(
                 "KeyBERT extractor failed health check",
-                extra={
-                    "error": str(exc),
-                    "model": self.model_name,
-                },
+                error=str(exc),
+                model=self.model_name,
             )
             return False

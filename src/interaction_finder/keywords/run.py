@@ -1,11 +1,12 @@
 """Main entry point for keyword research pipeline."""
 
-import logging
 from typing import Any
 
 import httpx
 
-logger = logging.getLogger(__name__)
+from interaction_finder.logging import get_logger
+
+logger = get_logger(__name__)
 
 from interaction_finder.checkpoint import KeywordsStageData, PipelineCheckpoint
 from interaction_finder.fetcher import PageFetcher
@@ -126,7 +127,7 @@ async def run_keyword_research(
             result = await graph.run(ExpandQueryNode(), state=state, deps=deps)
             logger.info(
                 f"Completed: {len(result.output.terms)} bridging terms from {result.output.total_documents_processed} documents in {result.output.rounds_completed} rounds",
-                extra={"terms": result.output.terms},
+                terms=result.output.terms,
             )
 
             # Snapshot resource URLs at end of keywords stage

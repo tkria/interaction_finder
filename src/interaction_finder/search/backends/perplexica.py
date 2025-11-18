@@ -6,10 +6,7 @@ Perplexica, an AI-powered search engine running locally.
 """
 
 import asyncio
-import logging
 from typing import Dict, Any, List, Optional
-
-logger = logging.getLogger(__name__)
 
 try:
     import httpx
@@ -19,7 +16,9 @@ except ImportError:
     HTTPX_AVAILABLE = False
     httpx = None  # type: ignore
 
-from interaction_finder.logging import logfire
+from interaction_finder.logging import logfire, get_logger
+
+logger = get_logger(__name__)
 from ..models import (
     SearchBackend,
     SearchQuery,

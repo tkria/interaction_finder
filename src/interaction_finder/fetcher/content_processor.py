@@ -1,13 +1,12 @@
 """Content processing and refinement for academic articles."""
 
-import logging
 import re
 from typing import List, Dict, Optional, Tuple
 from dataclasses import dataclass
 import numpy as np
-from interaction_finder.logging import logfire
+from interaction_finder.logging import logfire, get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @dataclass

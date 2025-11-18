@@ -1,6 +1,5 @@
 """High-level PageFetcher interface with eliminated duplication using higher-order functions."""
 
-import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,9 +8,9 @@ from .cache import URLCache
 from .web_client import WebClient
 from .batch_operations import BatchOperations
 from .content_processor import ContentProcessor
-from interaction_finder.logging import logfire
+from interaction_finder.logging import logfire, get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @dataclass

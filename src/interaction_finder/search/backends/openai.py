@@ -6,12 +6,9 @@ web search tool using the Responses API with structured search results.
 """
 
 import asyncio
-import logging
 import os
 from typing import Dict, Any, List, Optional
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
-
-logger = logging.getLogger(__name__)
 
 try:
     import httpx
@@ -21,7 +18,9 @@ except ImportError:
     HTTPX_AVAILABLE = False
     httpx = None  # type: ignore
 
-from interaction_finder.logging import logfire
+from interaction_finder.logging import logfire, get_logger
+
+logger = get_logger(__name__)
 from ..models import (
     SearchBackend,
     SearchQuery,

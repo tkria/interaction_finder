@@ -6,17 +6,16 @@ agents only produce typed data.
 """
 
 import asyncio
-import logging
 from dataclasses import dataclass
 from typing import Union
-
-logger = logging.getLogger(__name__)
 
 from pydantic_graph import BaseNode, End, GraphRunContext
 from pydantic_ai.usage import RunUsage
 
 from interaction_finder.agent_utils import rename_agent
-from interaction_finder.logging import logfire
+from interaction_finder.logging import logfire, get_logger
+
+logger = get_logger(__name__)
 from interaction_finder.search.models import SearchQuery, SearchResult
 from interaction_finder.widesearch.agents import (
     get_goal_planner_agent,
@@ -54,10 +53,8 @@ Identify subject areas and research domains that should be covered to ensure com
         ctx.state.subject_goals = result.output.goals
         logger.info(
             f"Identified {len(result.output.goals)} subject goals",
-            extra={
-                "goals": result.output.goals,
-                "reasoning": result.output.reasoning[:200],
-            },
+            goals=result.output.goals,
+            reasoning=result.output.reasoning[:200],
         )
         return GenerateQueriesNode()
 
@@ -110,14 +107,12 @@ Generate search queries that target unsatisfied subject goals and incorporate th
             f"medium={len(result.output.medium_queries)}, "
             f"focused={len(result.output.focused_queries)}, "
             f"indirect={len(result.output.indirect_queries)})",
-            extra={
-                "queries": result.output.queries,
-                "broad_queries": result.output.broad_queries,
-                "medium_queries": result.output.medium_queries,
-                "focused_queries": result.output.focused_queries,
-                "indirect_queries": result.output.indirect_queries,
-                "reasoning": result.output.reasoning[:200],
-            },
+            queries=result.output.queries,
+            broad_queries=result.output.broad_queries,
+            medium_queries=result.output.medium_queries,
+            focused_queries=result.output.focused_queries,
+            indirect_queries=result.output.indirect_queries,
+            reasoning=result.output.reasoning[:200],
         )
         return SearchNode()
 
@@ -177,11 +172,9 @@ class SearchNode(BaseNode[State, Deps, list[SearchResult]]):
 
             logger.info(
                 f"Fetched {len(all_results)} results ({unique_urls} unique)",
-                extra={
-                    "total_results": len(all_results),
-                    "unique_urls": unique_urls,
-                    "results": all_results,
-                },
+                total_results=len(all_results),
+                unique_urls=unique_urls,
+                results=all_results,
             )
 
             return RerankNode()
@@ -205,11 +198,9 @@ class RerankNode(BaseNode[State, Deps, list[SearchResult]]):
             if not ctx.state.current_results:
                 logger.info(
                     "No results to rerank",
-                    extra={
-                        "input_count": 0,
-                        "output_count": 0,
-                        "results": [],
-                    },
+                    input_count=0,
+                    output_count=0,
+                    results=[],
                 )
                 return SelectResultsNode()
 
@@ -219,11 +210,9 @@ class RerankNode(BaseNode[State, Deps, list[SearchResult]]):
             if top_k == 0 or ctx.deps.reranker is None:
                 logger.info(
                     f"Reranking disabled, passing {len(ctx.state.current_results)} results unchanged",
-                    extra={
-                        "input_count": len(ctx.state.current_results),
-                        "output_count": len(ctx.state.current_results),
-                        "reranking_enabled": False,
-                    },
+                    input_count=len(ctx.state.current_results),
+                    output_count=len(ctx.state.current_results),
+                    reranking_enabled=False,
                 )
                 return SelectResultsNode()
             # Set phase to reranking
@@ -239,12 +228,10 @@ class RerankNode(BaseNode[State, Deps, list[SearchResult]]):
 
             logger.info(
                 f"Reranked {len(reranked)} results",
-                extra={
-                    "input_count": len(ctx.state.current_results),
-                    "output_count": len(reranked),
-                    "top_k": top_k,
-                    "results": reranked,
-                },
+                input_count=len(ctx.state.current_results),
+                output_count=len(reranked),
+                top_k=top_k,
+                results=reranked,
             )
 
             return SelectResultsNode()
@@ -376,17 +363,15 @@ Select the most relevant results and summarize what subject areas they cover."""
         ]
         logger.info(
             f"Batch processed: selected {len(result.output.selected_indices)} results ({registered_count} new URLs registered)",
-            extra={
-                "batch_size": len(batch),
-                "batch_offset": batch_offset,
-                "selected_count": len(result.output.selected_indices),
-                "registered_count": registered_count,
-                "rejected_count": len(rejected_indices),
-                "covered_topics": result.output.covered_topics_summary[:200],
-                "reasoning": result.output.reasoning,
-                "selected_results": selected_results_info,
-                "rejected_results": rejected_results_info,
-            },
+            batch_size=len(batch),
+            batch_offset=batch_offset,
+            selected_count=len(result.output.selected_indices),
+            registered_count=registered_count,
+            rejected_count=len(rejected_indices),
+            covered_topics=result.output.covered_topics_summary[:200],
+            reasoning=result.output.reasoning,
+            selected_results=selected_results_info,
+            rejected_results=rejected_results_info,
         )
 
 
@@ -457,20 +442,16 @@ Evaluate coverage and decide whether to continue searching or stop."""
             ctx.state.subject_goals.extend(result.output.new_goals)
             logger.info(
                 f"Added {len(result.output.new_goals)} new subject goals",
-                extra={
-                    "new_goals": result.output.new_goals,
-                },
+                new_goals=result.output.new_goals,
             )
         # Update continue flag
         ctx.state.should_continue = result.output.should_continue
         logger.info(
             f"Reflection complete: {'continue' if result.output.should_continue else 'stop'}",
-            extra={
-                "satisfied_goals": len(ctx.state.satisfied_goals),
-                "total_goals": len(ctx.state.subject_goals),
-                "decision": result.output.should_continue,
-                "reasoning": result.output.reasoning[:200],
-            },
+            satisfied_goals=len(ctx.state.satisfied_goals),
+            total_goals=len(ctx.state.subject_goals),
+            decision=result.output.should_continue,
+            reasoning=result.output.reasoning[:200],
         )
         # Decide next action
         if result.output.should_continue:

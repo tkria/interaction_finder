@@ -1,11 +1,10 @@
 """Web client for fetching HTML and PDF content."""
 
-import logging
 from typing import Dict, List
 from rich.console import Console
-from interaction_finder.logging import logfire
+from interaction_finder.logging import logfire, get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Web client constants
 STEALTH_RETRY_THRESHOLD = 3000  # characters of raw markdown
@@ -783,7 +782,7 @@ class WebClient:
             IndexError,
             TypeError,
         ) as exc:
-            logger.debug("Failed to parse DOI metadata", extra={"error": str(exc)})
+            logger.debug("Failed to parse DOI metadata", error=str(exc))
         return doi
 
     def _is_pdf_url(self, url: str) -> bool:
@@ -827,7 +826,8 @@ class WebClient:
         except Exception as exc:
             logger.warning(
                 "Failed to parse PubMed full-text link list",
-                extra={"base_url": base_url, "error": str(exc)},
+                base_url=base_url,
+                error=str(exc),
             )
             return []
 
@@ -948,7 +948,8 @@ class WebClient:
                 except Exception as exc:
                     logger.warning(
                         "Failed to fetch full text candidate",
-                        extra={"link": link, "error": str(exc)},
+                        link=link,
+                        error=str(exc),
                     )
                     return None
 
@@ -1015,6 +1016,6 @@ class WebClient:
         except Exception as exc:
             logger.debug(
                 "Failed to detect academic sections in markdown",
-                extra={"error": str(exc)},
+                error=str(exc),
             )
         return False

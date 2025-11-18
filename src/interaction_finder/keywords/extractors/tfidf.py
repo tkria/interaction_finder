@@ -1,15 +1,14 @@
 """TF-IDF (Term Frequency-Inverse Document Frequency) backend."""
 
-import logging
 from typing import List
 
 import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
 
 from interaction_finder.keywords.extractors.base import KeywordExtractor, ScoredKeyword
-from interaction_finder.logging import logfire
+from interaction_finder.logging import logfire, get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class TFIDFExtractor(KeywordExtractor):
@@ -86,7 +85,7 @@ class TFIDFExtractor(KeywordExtractor):
         if not sentences:
             logger.info(
                 "TF-IDF: no keywords extracted from text",
-                extra={"text_length": len(text)},
+                text_length=len(text),
             )
             return []
         # Handle case where we have only one sentence
@@ -115,7 +114,7 @@ class TFIDFExtractor(KeywordExtractor):
             # No valid terms found (e.g., all stop words)
             logger.info(
                 "TF-IDF: no keywords extracted (no valid terms)",
-                extra={"text_length": len(text)},
+                text_length=len(text),
             )
             return []
         # Get feature names (keywords)
@@ -135,10 +134,8 @@ class TFIDFExtractor(KeywordExtractor):
                 results.append(ScoredKeyword(keyword=keyword, score=normalized_score))
             logger.info(
                 f"TF-IDF: extracted {len(results)} keywords",
-                extra={"top_3": [kw.keyword for kw in results[:3]]},
+                top_3=[kw.keyword for kw in results[:3]],
             )
             return results
-        logger.info(
-            "TF-IDF: no keywords extracted from text", extra={"text_length": len(text)}
-        )
+        logger.info("TF-IDF: no keywords extracted from text", text_length=len(text))
         return []

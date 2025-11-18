@@ -4,16 +4,15 @@ Provides a high-level async function that handles all the setup and
 orchestration, making it easy to run widesearch with minimal boilerplate.
 """
 
-import logging
 from typing import Any
 
 import httpx
 
-logger = logging.getLogger(__name__)
-
 from interaction_finder.checkpoint import PipelineCheckpoint, SearchStageData
 from interaction_finder.fetcher import PageFetcher
-from interaction_finder.logging import logfire
+from interaction_finder.logging import logfire, get_logger
+
+logger = get_logger(__name__)
 from interaction_finder.resources import ResourcePool, compute_chunk_spans
 from interaction_finder.search.models import SearchBackend, SearchResult
 from interaction_finder.settings import IfetcherConfig

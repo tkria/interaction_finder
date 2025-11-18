@@ -13,7 +13,7 @@ from interaction_finder.extraction.graph import graph
 from interaction_finder.extraction.nodes import ProcessDocumentsNode
 from interaction_finder.extraction.state import State
 from interaction_finder.extraction.utils import build_permitted_pairs
-from interaction_finder.logging import logfire
+from interaction_finder.logging import logfire, get_logger
 from interaction_finder.settings import IfetcherConfig
 
 
@@ -57,7 +57,7 @@ async def run_extraction(
 
         # Initialize logger
         if logger is None:
-            logger = logging.getLogger(__name__)
+            logger = get_logger(__name__)
 
         # Create agent concurrency semaphore
         agent_semaphore = asyncio.Semaphore(

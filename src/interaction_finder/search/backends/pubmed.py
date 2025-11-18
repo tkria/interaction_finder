@@ -14,12 +14,9 @@ Rate Limit Handling:
 """
 
 import asyncio
-import logging
 import random
 import xml.etree.ElementTree as ET
 from typing import Dict, Any, List, Optional
-
-logger = logging.getLogger(__name__)
 
 try:
     import httpx
@@ -29,7 +26,9 @@ except ImportError:
     HTTPX_AVAILABLE = False
     httpx = None  # type: ignore
 
-from interaction_finder.logging import logfire
+from interaction_finder.logging import logfire, get_logger
+
+logger = get_logger(__name__)
 from ..models import (
     SearchBackend,
     SearchQuery,

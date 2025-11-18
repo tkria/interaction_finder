@@ -11,6 +11,7 @@ Configuration is token-based (opt-in via LOGFIRE_WRITE_TOKEN).
 import contextlib
 import logging
 import os
+from typing import Any
 
 
 def configure_logfire(verbose: bool = False) -> None:
@@ -32,6 +33,40 @@ def configure_logfire(verbose: bool = False) -> None:
         inspect_arguments=False,
     )
     logfire.instrument_pydantic_ai()
+
+
+_STANDARD_KWARGS = frozenset(("exc_info", "stack_info", "stacklevel", "extra"))
+
+
+class StructuredLogger:
+    """Logger wrapper auto-wrapping kwargs in extra={} for Python logging."""
+
+    def __init__(self, name: str):
+        self._logger = logging.getLogger(name)
+
+    def _log(self, level: int, msg: str, *args: Any, **kwargs: Any) -> None:
+        standard = {k: v for k, v in kwargs.items() if k in _STANDARD_KWARGS}
+        extra = {k: v for k, v in kwargs.items() if k not in _STANDARD_KWARGS}
+        if extra:
+            standard["extra"] = {**standard.get("extra", {}), **extra}
+        self._logger.log(level, msg, *args, **standard)
+
+    def debug(self, msg: str, *args: Any, **kwargs: Any) -> None:
+        self._log(logging.DEBUG, msg, *args, **kwargs)
+
+    def info(self, msg: str, *args: Any, **kwargs: Any) -> None:
+        self._log(logging.INFO, msg, *args, **kwargs)
+
+    def warning(self, msg: str, *args: Any, **kwargs: Any) -> None:
+        self._log(logging.WARNING, msg, *args, **kwargs)
+
+    def error(self, msg: str, *args: Any, **kwargs: Any) -> None:
+        self._log(logging.ERROR, msg, *args, **kwargs)
+
+
+def get_logger(name: str) -> StructuredLogger:
+    """Get StructuredLogger accepting logfire-style keyword arguments."""
+    return StructuredLogger(name)
 
 
 def configure_logging(console=None, verbose: bool = False) -> None:

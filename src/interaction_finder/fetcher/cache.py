@@ -1,16 +1,15 @@
 """URL caching functionality for the fetcher package."""
 
 import json
-import logging
 from pathlib import Path
 from typing import Optional, List, Tuple, Any
 import aiofiles
 import aiofiles.os
 
 from .utils import normalize_url, url_to_hash_base36
-from interaction_finder.logging import logfire
+from interaction_finder.logging import logfire, get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Caching constants
 COLLISION_PROBE_LIMIT = 10
@@ -38,11 +37,9 @@ CONTENT_TYPE_CONFIG = {
 def _log_cache_read_error(action: str, path: Path, exc: Exception) -> None:
     logger.warning(
         "Cache read failed",
-        extra={
-            "action": action,
-            "path": str(path),
-            "error": str(exc),
-        },
+        action=action,
+        path=str(path),
+        error=str(exc),
     )
 
 

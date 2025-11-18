@@ -1,13 +1,12 @@
 """Metadata fetching via OpenAlex API."""
 
 import asyncio
-import logging
 from typing import Literal, Optional
 
 import httpx
-import logfire
+from interaction_finder.logging import logfire, get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 async def fetch_work_metadata(
