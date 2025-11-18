@@ -16,6 +16,8 @@ Properties:
 
 from typing import Any, Literal
 
+from rich.console import Console
+
 from interaction_finder.checkpoint import PipelineCheckpoint
 from interaction_finder.resources import ResourcePool
 from interaction_finder.search.models import SearchBackend
@@ -49,6 +51,7 @@ async def ensure_keywords(
     config: IfetcherConfig,
     search_backend: SearchBackend | None = None,
     progress: Any | None = None,
+    console: Console | None = None,
 ) -> PipelineCheckpoint:
     """Ensure keywords stage complete. Idempotent.
 
@@ -57,12 +60,17 @@ async def ensure_keywords(
         config: Configuration
         search_backend: Search backend for keyword extraction (defaults to PubMed)
         progress: Optional progress counter for live display (currently unused in keywords)
+        console: Optional console for status messages
 
     Returns:
         Checkpoint with at least keywords stage
     """
     if checkpoint.keywords is not None:
         return checkpoint
+
+    # Print stage start message
+    if console:
+        console.print(f"[bold]Running keywords stage for:[/bold] {checkpoint.topic}\n")
 
     from interaction_finder.keywords import run_keyword_research
 
@@ -81,6 +89,7 @@ async def ensure_search(
     config: IfetcherConfig,
     keywords_backend: SearchBackend | None = None,
     progress: Any | None = None,
+    console: Console | None = None,
 ) -> PipelineCheckpoint:
     """Ensure search stage complete. Idempotent. Runs keywords if needed.
 
@@ -90,6 +99,7 @@ async def ensure_search(
         config: Configuration
         keywords_backend: Search backend for keywords stage (defaults to same as search_backend)
         progress: Optional progress counter for live display
+        console: Optional console for status messages
 
     Returns:
         Checkpoint with at least search stage
@@ -100,8 +110,18 @@ async def ensure_search(
     # Ensure keywords first (use keywords_backend or fall back to search_backend)
     kw_backend = keywords_backend if keywords_backend is not None else search_backend
     checkpoint = await ensure_keywords(
-        checkpoint, config, search_backend=kw_backend, progress=progress
+        checkpoint,
+        config,
+        search_backend=kw_backend,
+        progress=progress,
+        console=console,
     )
+
+    # Print stage start message
+    if console:
+        console.print(
+            f"[bold]Running widesearch stage for:[/bold] {checkpoint.topic}\n"
+        )
 
     # Run search
     from interaction_finder.widesearch import run_widesearch_with_checkpoint
@@ -119,6 +139,8 @@ async def ensure_extraction(
     target_entity_types: list[str],
     search_backend: SearchBackend,
     config: IfetcherConfig,
+    console: Console | None = None,
+    progress: Any | None = None,
 ) -> PipelineCheckpoint:
     """Ensure extraction stage complete. Idempotent. Runs all prerequisites if needed.
 
@@ -127,6 +149,8 @@ async def ensure_extraction(
         target_entity_types: Entity types to extract
         search_backend: Search backend (if search needed)
         config: Configuration
+        console: Optional console for status messages
+        progress: Optional progress counter for live display
 
     Returns:
         Checkpoint with extraction stage
@@ -135,7 +159,16 @@ async def ensure_extraction(
         return checkpoint
 
     # Ensure search first (which ensures keywords)
-    checkpoint = await ensure_search(checkpoint, search_backend, config)
+    checkpoint = await ensure_search(
+        checkpoint, search_backend, config, console=console, progress=progress
+    )
+
+    # Print stage start message
+    if console:
+        console.print(
+            f"[bold]Running extraction stage for:[/bold] {checkpoint.topic} "
+            f"(types: {', '.join(target_entity_types)})\n"
+        )
 
     # Fetch content and run extraction
     from interaction_finder.extraction import run_extraction

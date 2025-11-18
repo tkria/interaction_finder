@@ -845,8 +845,6 @@ def widesearch(
                 "Get your free key at: https://www.ncbi.nlm.nih.gov/account/settings/\n"
             )
 
-        console.print(f"[bold]Running widesearch for:[/bold] {topic}\n")
-
         # Pre-load reranker if enabled
         reranker = None
         if cfg.tools.widesearch.rerank_top_k > 0:
@@ -858,14 +856,18 @@ def widesearch(
             )
             _ = reranker._get_model()
 
-        # Run with progress display (ensure_search handles keywords automatically)
+        # Run with progress display (ensure_search handles keywords automatically and prints stage messages)
         from interaction_finder.widesearch.progress import WidesearchProgress
 
         progress_counter = WidesearchProgress()
         with progress_counter:
             checkpoint = asyncio.run(
                 ensure_search(
-                    checkpoint, search_backend, cfg, progress=progress_counter
+                    checkpoint,
+                    search_backend,
+                    cfg,
+                    progress=progress_counter,
+                    console=console,
                 )
             )
 
@@ -974,17 +976,20 @@ def extract(
         backend_name = backend if backend else cfg.tools.widesearch.search_backend
         search_backend = create_search_backend(backend_name, cfg)
 
-        console.print(
-            f"\n[bold]Running extraction:[/bold] {topic} (types: {', '.join(entity_types)})\n"
-        )
-
-        # Run with progress display (ensure_extraction handles all prerequisites)
+        # Run with progress display (ensure_extraction handles all prerequisites and prints stage messages)
         from interaction_finder.extraction.progress import ExtractionProgress
 
         progress = ExtractionProgress()
         with progress:
             checkpoint = asyncio.run(
-                ensure_extraction(checkpoint, entity_types, search_backend, cfg)
+                ensure_extraction(
+                    checkpoint,
+                    entity_types,
+                    search_backend,
+                    cfg,
+                    console=console,
+                    progress=progress,
+                )
             )
 
         console.print()
