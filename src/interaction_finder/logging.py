@@ -85,8 +85,15 @@ def configure_logging(console=None, verbose: bool = False) -> None:
         import logfire
         from rich.console import Console
         from rich.logging import RichHandler
+        from rich.theme import Theme
 
-        console = console or Console()
+        # Custom theme with dim grey (bright_black) timestamps
+        theme = Theme({"log.time": "dim bright_black"})
+        if console is None:
+            console = Console(theme=theme)
+        else:
+            # Push custom theme onto existing console (inherits other styles)
+            console.push_theme(theme, inherit=True)
         console_level = logging.INFO if verbose else logging.WARNING
 
         handlers = [
