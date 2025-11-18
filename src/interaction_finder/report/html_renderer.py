@@ -15,6 +15,14 @@ from interaction_finder.text_mapping import TextPositionMapper
 
 
 @dataclass
+class DocumentQuoteEntry:
+    """Quote entry paired with the referencing pair indices."""
+
+    quote: ResourceQuote
+    pair_indices: set[int]
+
+
+@dataclass
 class HTMLTag:
     """Represents an HTML tag found in text."""
 
@@ -804,7 +812,7 @@ class DocumentAnnotator:
     def annotate(
         self,
         doc_idx: int,
-        quotes: list[ResourceQuote],
+        quotes: list[DocumentQuoteEntry],
         entities: dict[str, Any],  # pair_idx -> {entity1: ..., entity2: ...}
     ) -> PrerenderedDocument:
         """Annotate HTML with quote and entity spans using numeric doc index.
@@ -827,7 +835,8 @@ class DocumentAnnotator:
             tuple[int, int, str, list[int]]
         ] = []  # (start, end, span_id, pair_indices)
 
-        for quote_idx, quote in enumerate(quotes):
+        for quote_idx, quote_entry in enumerate(quotes):
+            quote = quote_entry.quote
             # Map quote spans from original to HTML
             html_spans = []
             for orig_start, orig_end in quote.spans:
@@ -841,7 +850,7 @@ class DocumentAnnotator:
             # Record quote metadata
             quote_map[quote_id] = QuoteMetadata(
                 span_id=quote_id,
-                pair_indices=[],  # Will be populated later
+                pair_indices=sorted(quote_entry.pair_indices),
                 original_spans=quote.spans,
                 html_spans=html_spans,
             )
@@ -856,10 +865,6 @@ class DocumentAnnotator:
                         [],  # pair_indices
                     )
                 )
-
-        # Build mapping from quote_id to pair_indices
-        # We'll populate this as we find entities within quotes
-        quote_to_pairs: dict[str, set[int]] = {qid: set() for qid in quote_map.keys()}
 
         # Step 2: Find entity mentions within quotes
         # Use normalized search via Resource._position_mapper for Greek letter support
@@ -904,9 +909,6 @@ class DocumentAnnotator:
                                     break
 
                         if in_quote:
-                            # Mark these quotes as belonging to this pair
-                            for quote_id in containing_quote_ids:
-                                quote_to_pairs[quote_id].add(pair_idx)
                             # Extract the actual matched text from original document
                             actual_matched_text = self.resource.text[
                                 orig_start:orig_end
@@ -1153,13 +1155,13 @@ class DocumentAnnotator:
                 # Collect all pair indices for quotes in this region
                 region_pair_indices = set()
                 for quote_id in quote_ids:
-                    region_pair_indices.update(quote_to_pairs.get(quote_id, set()))
+                    quote_meta = quote_map.get(quote_id)
+                    if quote_meta:
+                        region_pair_indices.update(quote_meta.pair_indices)
                 # Format as space-separated list of numeric indices
                 pairs_attr = " ".join(str(idx) for idx in sorted(region_pair_indices))
-                # Use first quote_id as the HTML id attribute for navigation
-                primary_quote_id = sorted(quote_ids)[0] if quote_ids else ""
                 html_parts.append(
-                    f'<span id="{primary_quote_id}" class="quote-span {quote_classes}" data-pairs="{pairs_attr}">'
+                    f'<span class="quote-span {quote_classes}" data-pairs="{pairs_attr}">'
                 )
 
                 # Add content with entity spans

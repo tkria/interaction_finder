@@ -17,6 +17,7 @@ from rich.progress import (
 )
 
 from interaction_finder.checkpoint import PipelineCheckpoint
+from interaction_finder.report.html_renderer import DocumentQuoteEntry
 from interaction_finder.report.parallel_renderer import render_documents_parallel
 from interaction_finder.report.reasoning_renderer import render_all_reasoning_templates
 
@@ -251,8 +252,10 @@ def prepare_report_data(
         )
 
     # Build document rendering data structures
-    # doc_idx -> [ResourceQuote objects]
-    doc_to_quotes: dict[int, list[Any]] = defaultdict(list)
+    # doc_idx -> [DocumentQuoteEntry]
+    doc_to_quotes: dict[int, list[DocumentQuoteEntry]] = defaultdict(list)
+    # Helpers for deduplicating quotes per document
+    doc_quote_lookup: dict[int, dict[tuple, DocumentQuoteEntry]] = defaultdict(dict)
     # doc_idx -> {pair_idx: {entity1, entity2}}
     doc_to_entities: dict[int, dict[int, dict[str, Any]]] = defaultdict(dict)
 
@@ -278,10 +281,23 @@ def prepare_report_data(
             if doc_idx is None:
                 continue
 
-            # Store the actual ResourceQuote objects
+            # Store the actual ResourceQuote objects with pair indices
             for quote in assess.quotes:
-                if quote not in doc_to_quotes[doc_idx]:
-                    doc_to_quotes[doc_idx].append(quote)
+                quote_key = (
+                    tuple((start, end) for start, end in quote.spans),
+                    quote.query_text,
+                    quote.is_disjoint,
+                    bool(quote.fuzzy_corrected),
+                    quote.original_query,
+                )
+                quote_lookup = doc_quote_lookup[doc_idx]
+                entry = quote_lookup.get(quote_key)
+                if entry is None:
+                    entry = DocumentQuoteEntry(quote=quote, pair_indices={pair_idx})
+                    doc_to_quotes[doc_idx].append(entry)
+                    quote_lookup[quote_key] = entry
+                else:
+                    entry.pair_indices.add(pair_idx)
 
             # Store entities for this pair in this document
             if pair_idx not in doc_to_entities[doc_idx]:

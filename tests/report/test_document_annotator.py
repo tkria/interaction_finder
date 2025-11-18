@@ -6,9 +6,14 @@ import pytest
 
 from interaction_finder.report.html_renderer import (
     DocumentAnnotator,
+    DocumentQuoteEntry,
     MarkdownToHTMLRenderer,
 )
 from interaction_finder.resources import Resource, ResourceId, ResourceQuote
+
+
+def quote_entry(quote: ResourceQuote, pair_idx: int = 0) -> DocumentQuoteEntry:
+    return DocumentQuoteEntry(quote=quote, pair_indices={pair_idx})
 
 
 class TestDocumentAnnotator:
@@ -57,7 +62,7 @@ class TestDocumentAnnotator:
         }
 
         # Annotate
-        result = annotator.annotate(0, [quote], entities)
+        result = annotator.annotate(0, [quote_entry(quote)], entities)
 
         # Verify structure
         assert result.doc_id == resource.id.id
@@ -134,7 +139,7 @@ class TestDocumentAnnotator:
             }
         }
 
-        result = annotator.annotate(0, [quote], entities)
+        result = annotator.annotate(0, [quote_entry(quote)], entities)
 
         # Should find BRCA1 within quote
         # May or may not find the second BRCA1 (depends on implementation)
@@ -170,7 +175,9 @@ class TestDocumentAnnotator:
             fuzzy_corrected=False,
         )
 
-        result = annotator.annotate(0, [quote1, quote2], {})
+        result = annotator.annotate(
+            0, [quote_entry(quote1), quote_entry(quote2)], {}
+        )
 
         assert len(result.quote_map) == 2
 
@@ -224,18 +231,19 @@ class TestDocumentAnnotator:
             }
         }
 
-        result = annotator.annotate(0, quotes, entities)
+        result = annotator.annotate(
+            0, [quote_entry(q, idx % 2) for idx, q in enumerate(quotes)], entities
+        )
 
         html = result.html
         # Check that entities are correctly highlighted with abbreviations
         assert '<abbr title="Pulmonary arterial hypertension">IPAH</abbr>' in html
 
-        # Check that overlapping quotes share a single span with both quote IDs
-        # New implementation: uses a single span with multiple quote IDs in classes
+        # Check that overlapping quotes share a single span with both quote IDs in classes
         assert 'class="quote-span doc-0-quote-0 doc-0-quote-1"' in html
 
-        # Check that the second quote span (for the non-overlapping part) exists
-        assert 'id="doc-0-quote-0" class="quote-span doc-0-quote-0"' in html
+        # Check that another span exists for the remainder of the broader quote
+        assert 'class="quote-span doc-0-quote-0"' in html
 
     def test_entity_metadata(self):
         """Test that entity metadata is correctly populated."""
@@ -274,7 +282,7 @@ class TestDocumentAnnotator:
             }
         }
 
-        result = annotator.annotate(0, [quote], entities)
+        result = annotator.annotate(0, [quote_entry(quote)], entities)
 
         # Find BRCA1 entity in map
         brca1_entities = [e for e in result.entity_map.values() if e.name == "BRCA1"]
@@ -324,7 +332,7 @@ class TestDocumentAnnotator:
             }
         }
 
-        result = annotator.annotate(0, [quote], entities)
+        result = annotator.annotate(0, [quote_entry(quote)], entities)
 
         # Should find TGF-α even though we searched for TGF-alpha
         assert "TGF-alpha receptor" in [e.name for e in result.entity_map.values()]

@@ -13,9 +13,10 @@ from typing import Any
 
 from interaction_finder.report.html_renderer import (
     DocumentAnnotator,
+    DocumentQuoteEntry,
     MarkdownToHTMLRenderer,
 )
-from interaction_finder.resources import Resource, ResourceQuote
+from interaction_finder.resources import Resource
 
 
 def _render_document_worker(
@@ -60,7 +61,7 @@ def _render_document_worker(
 
 def render_documents_parallel(
     indexed_docs: list[tuple[int, Resource]],
-    doc_to_quotes: dict[int, list[ResourceQuote]],
+    doc_to_quotes: dict[int, list[DocumentQuoteEntry]],
     doc_to_entities: dict[int, dict[int, dict[str, Any]]],
     progress_callback: Callable[[], None] | None = None,
 ) -> dict[int, str]:
@@ -68,7 +69,7 @@ def render_documents_parallel(
 
     Args:
         indexed_docs: List of (doc_idx, Resource) tuples
-        doc_to_quotes: Mapping of doc_idx -> list of ResourceQuote objects
+        doc_to_quotes: Mapping of doc_idx -> list of quote entries
         doc_to_entities: Mapping of doc_idx -> {pair_idx: {entity1, entity2}}
         progress_callback: Optional callback function called after each document completes
 

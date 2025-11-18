@@ -10,6 +10,7 @@ from interaction_finder.extraction.models import (
     ExtractionMetadata,
     PairAssessment,
     PairJudgment,
+    PairSpread,
     SimpleEntity,
 )
 from interaction_finder.report import generate_report
@@ -45,11 +46,13 @@ def create_minimal_checkpoint() -> PipelineCheckpoint:
         reasoning="test",
     )
 
+    spread = PairSpread(supporting=[assessment])
+
     judgment = PairJudgment(
         entity1=SimpleEntity(name="BRCA1", kind="gene", aliases=["BRCA1"]),
         entity2=SimpleEntity(name="Cancer", kind="disease", aliases=["Cancer"]),
         relationship="associated_with",
-        assessments=[assessment],
+        spread=spread,
         accepted=True,
         confidence="high",
         reasoning="test reasoning",

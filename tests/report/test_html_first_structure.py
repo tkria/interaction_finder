@@ -20,6 +20,7 @@ from interaction_finder.extraction.models import (
     ExtractionResult,
     PairAssessment,
     PairJudgment,
+    PairSpread,
     SimpleEntity,
 )
 from interaction_finder.report import generate_report
@@ -93,6 +94,7 @@ def create_test_checkpoint(
             assessments.append(assessment)
 
         # Create judgment
+        spread = PairSpread(supporting=list(assessments))
         judgment = PairJudgment(
             entity1=SimpleEntity(
                 name=f"Entity{pair_idx}_A",
@@ -105,7 +107,7 @@ def create_test_checkpoint(
                 aliases=[f"Entity{pair_idx}_B", f"E{pair_idx}B"],
             ),
             relationship="associated_with",
-            assessments=assessments,
+            spread=spread,
             accepted=True,
             confidence="high",
             reasoning=f"Test judgment {pair_idx}",

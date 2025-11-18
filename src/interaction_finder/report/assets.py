@@ -845,12 +845,31 @@ REPORT_JS = """
 // Global state
 const state = {
     data: null,
-    selectedPairIdx: null,
+    selectedPairId: null,
     openDocumentIdx: null,
     searchQuery: '',
     showRejected: false,
     currentScrolledQuote: null,
 };
+
+function getPairIdFromCard(card) {
+    if (!card || !card.id) return NaN;
+    const parts = card.id.split('-');
+    if (parts.length < 2) return NaN;
+    const id = parseInt(parts[1], 10);
+    return Number.isNaN(id) ? NaN : id;
+}
+
+function findFilteredPairById(pairId, filteredPairs) {
+    const list = filteredPairs || getFilteredPairs();
+    for (let idx = 0; idx < list.length; idx += 1) {
+        const card = list[idx];
+        if (getPairIdFromCard(card) === pairId) {
+            return { card, index: idx };
+        }
+    }
+    return null;
+}
 
 // Initialize report
 function initReport() {
@@ -862,8 +881,9 @@ function initReport() {
 
     // Add click handlers to pre-rendered pair cards
     const sidebar = document.getElementById('sidebar');
-    sidebar.querySelectorAll('.pair-card').forEach((card, idx) => {
-        card.addEventListener('click', () => selectPair(idx));
+    sidebar.querySelectorAll('.pair-card').forEach((card) => {
+        const pairId = getPairIdFromCard(card);
+        card.addEventListener('click', () => selectPair(pairId));
 
         // Add click handlers to entity names for filtering
         const entityNames = card.querySelectorAll('.entity-name');
@@ -888,6 +908,8 @@ function handleSearch(e) {
     state.searchQuery = e.target.value.toLowerCase();
     updateHeaderCounts();
     updatePairListDisplay();
+    renderContent();
+    renderReasoning();
 }
 
 // Toggle rejected pairs
@@ -895,6 +917,8 @@ function handleToggleRejected(e) {
     state.showRejected = e.target.checked;
     updateHeaderCounts();
     updatePairListDisplay();
+    renderContent();
+    renderReasoning();
 }
 
 // Update header counts based on current filter
@@ -977,19 +1001,26 @@ function updatePairListDisplay() {
     const sidebar = document.getElementById('sidebar');
     const allCards = sidebar.querySelectorAll('.pair-card');
 
-    // Build set of filtered cards for comparison
     const filteredSet = new Set(filtered);
 
-    allCards.forEach((card, idx) => {
-        // Show/hide based on filter
+    if (state.selectedPairId !== null) {
+        const selectedExists = !!findFilteredPairById(state.selectedPairId, filtered);
+        if (!selectedExists) {
+            state.selectedPairId = null;
+            state.openDocumentIdx = null;
+        }
+    }
+
+    allCards.forEach((card) => {
+        const pairId = getPairIdFromCard(card);
+
         if (filteredSet.has(card)) {
             card.classList.remove('hidden');
         } else {
             card.classList.add('hidden');
         }
 
-        // Update selected state
-        if (state.selectedPairIdx === idx) {
+        if (state.selectedPairId === pairId) {
             card.classList.add('selected');
         } else {
             card.classList.remove('selected');
@@ -998,8 +1029,14 @@ function updatePairListDisplay() {
 }
 
 // Select a pair
-function selectPair(idx) {
-    state.selectedPairIdx = idx;
+function selectPair(pairId) {
+    const filtered = getFilteredPairs();
+    const match = findFilteredPairById(pairId, filtered);
+    if (!match) {
+        console.warn(`Pair ${pairId} not available with current filters`);
+        return;
+    }
+    state.selectedPairId = pairId;
     state.openDocumentIdx = null;
     updatePairListDisplay();
     renderContent();
@@ -1019,16 +1056,20 @@ function filterByEntity(entityName) {
 function renderContent() {
     const content = document.getElementById('content');
 
-    if (state.selectedPairIdx === null) {
+    if (state.selectedPairId === null) {
         content.innerHTML = '<div class="content-placeholder">Select a pair to view documents</div>';
         return;
     }
 
     const filtered = getFilteredPairs();
-    const pairCard = filtered[state.selectedPairIdx];
-    if (!pairCard) return;
+    const match = findFilteredPairById(state.selectedPairId, filtered);
+    if (!match) {
+        content.innerHTML = '<div class="content-placeholder">Select a pair to view documents</div>';
+        return;
+    }
 
-    const pairIdx = parseInt(pairCard.id.split('-')[1]);
+    const pairCard = match.card;
+    const pairIdx = getPairIdFromCard(pairCard);
     const docIndices = pairCard.dataset.docs.trim().split(' ').map(n => parseInt(n));
 
     // Render document accordions
@@ -1170,14 +1211,7 @@ function updateDocumentHighlights(docIdx, currentPairIdx) {
                 span.classList.add('clickable');
                 span.onclick = () => {
                     const targetPairIdx = parseInt(entityPairs[0]);
-                    // Find this pair in filtered list
-                    const filtered = getFilteredPairs();
-                    const filteredIdx = Array.from(filtered).findIndex(card =>
-                        parseInt(card.id.split('-')[1]) === targetPairIdx
-                    );
-                    if (filteredIdx !== -1) {
-                        selectPair(filteredIdx);
-                    }
+                    selectPair(targetPairIdx);
                 };
             }
         }
@@ -1219,16 +1253,20 @@ function renderDocument(docIdx, pairIdx) {
 function renderReasoning() {
     const rightbar = document.getElementById('rightbar');
 
-    if (state.selectedPairIdx === null) {
+    if (state.selectedPairId === null) {
         rightbar.innerHTML = '<div class="reasoning-panel"><p>Select a pair to view reasoning</p></div>';
         return;
     }
 
     const filtered = getFilteredPairs();
-    const pairCard = filtered[state.selectedPairIdx];
-    if (!pairCard) return;
+    const match = findFilteredPairById(state.selectedPairId, filtered);
+    if (!match) {
+        rightbar.innerHTML = '<div class="reasoning-panel"><p>Select a pair to view reasoning</p></div>';
+        return;
+    }
 
-    const pairIdx = parseInt(pairCard.id.split('-')[1]);
+    const pairCard = match.card;
+    const pairIdx = getPairIdFromCard(pairCard);
 
     // Determine template ID based on state
     let templateId;
@@ -1256,34 +1294,34 @@ function renderReasoning() {
 
 // Scroll to quote with emphasis
 function scrollToQuote(quoteId) {
-    const quote = document.getElementById(quoteId);
-    if (quote) {
-        quote.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        quote.classList.add('quote-blink');
-        setTimeout(() => {
-            quote.classList.remove('quote-blink');
-        }, 2000);
+    const selector = `.quote-span.${CSS.escape(quoteId)}`;
+    const firstQuote = document.querySelector(selector);
+    if (firstQuote) {
+        firstQuote.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
+
+    document.querySelectorAll(selector).forEach(span => {
+        span.classList.add('quote-blink');
+        setTimeout(() => {
+            span.classList.remove('quote-blink');
+        }, 2000);
+    });
 }
 
 // Select pair and open specific document by doc_idx
 function selectPairAndDocument(pairIdx, docIdx) {
     // Find pairIdx in filtered pairs
     const filtered = getFilteredPairs();
-    const filteredIdx = Array.from(filtered).findIndex(card =>
-        parseInt(card.id.split('-')[1]) === pairIdx
-    );
+    const match = findFilteredPairById(pairIdx, filtered);
 
-    if (filteredIdx === -1) {
+    if (!match) {
         console.warn(`Pair ${pairIdx} not in filtered list`);
         return;
     }
 
-    // Select the pair
-    state.selectedPairIdx = filteredIdx;
+    state.selectedPairId = pairIdx;
 
-    // Find which assessment index corresponds to this doc_idx
-    const pairCard = filtered[filteredIdx];
+    const pairCard = match.card;
     const docIndices = pairCard.dataset.docs.trim().split(' ').map(n => parseInt(n));
     const assessIdx = docIndices.indexOf(docIdx);
 
