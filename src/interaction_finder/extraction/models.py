@@ -12,7 +12,7 @@ to enable proper JSON serialization via model_dump().
 """
 
 from dataclasses import dataclass
-from typing import Literal, NamedTuple
+from typing import Iterable, Literal, NamedTuple
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -315,6 +315,25 @@ class PairJudgment(BaseModel):
     )
     reasoning: str = Field(description="Explanation of final decision")
 
+    def iter_assessments(self) -> Iterable[PairAssessment]:
+        """Iterate over all assessments regardless of polarity.
+
+        Provides a compatibility bridge for legacy code that expected a flat
+        ``assessments`` list on ``PairJudgment``. Prefer accessing the
+        structured ``spread`` attribute directly when possible.
+        """
+
+        yield from self.spread.supporting
+        yield from self.spread.refuting
+        yield from self.spread.neutral
+        yield from self.spread.irrelevant
+
+    @property
+    def assessments(self) -> list[PairAssessment]:
+        """Backward-compatible view exposing all assessments as a list."""
+
+        return list(self.iter_assessments())
+
 
 class ExtractionMetadata(BaseModel):
     """Summary statistics for extraction run."""
@@ -374,12 +393,28 @@ class ExtractionResult(BaseModel):
         if not judgments or not isinstance(judgments[0], dict):
             return data
 
+        def iter_assessment_dicts(judgment_dict: dict) -> Iterable[dict]:
+            """Yield assessment dicts from legacy and spread-based structures."""
+            assessments = judgment_dict.get("assessments")
+            if isinstance(assessments, list):
+                for assessment in assessments:
+                    if isinstance(assessment, dict):
+                        yield assessment
+
+            spread = judgment_dict.get("spread")
+            if isinstance(spread, dict):
+                for category in ("supporting", "refuting", "neutral", "irrelevant"):
+                    category_list = spread.get(category)
+                    if isinstance(category_list, list):
+                        for assessment in category_list:
+                            if isinstance(assessment, dict):
+                                yield assessment
+
         # Check first assessment for resource_url (indicates serialized data)
         first_judgment = judgments[0]
-        if not first_judgment.get("assessments"):
+        first_assessment = next(iter_assessment_dicts(first_judgment), None)
+        if not first_assessment:
             return data
-
-        first_assessment = first_judgment["assessments"][0]
         if not first_assessment.get("quotes"):
             return data
 
@@ -401,15 +436,17 @@ class ExtractionResult(BaseModel):
 
         # Process all quotes in all assessments in all judgments
         for judgment in judgments:
-            for assessment in judgment["assessments"]:
+            for assessment in iter_assessment_dicts(judgment):
                 # Inject resources into quotes
-                for quote_dict in assessment["quotes"]:
+                for quote_dict in assessment.get("quotes", []):
                     inject_resource(quote_dict)
 
                 # Inject resources into entity quotes (entity1 and entity2)
                 for entity_key in ["entity1", "entity2"]:
-                    entity = assessment[entity_key]
-                    for quote_dict in entity["quotes"]:
+                    entity = assessment.get(entity_key)
+                    if not isinstance(entity, dict):
+                        continue
+                    for quote_dict in entity.get("quotes", []):
                         inject_resource(quote_dict)
 
         return data

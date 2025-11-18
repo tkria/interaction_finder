@@ -703,7 +703,13 @@ class ConsolidateRelationshipsNode(BaseNode[State, Deps, ExtractionResult]):
             )
 
             if not consolidations:
-                ctx.deps.logger.info("No relationship consolidations from LLM")
+                ctx.deps.logger.warning(
+                    "Relationship consolidation agent returned no data; "
+                    "defaulting all relationship polarities to neutral"
+                )
+                self._ensure_polarities_for_all_relationships(
+                    unique_relationships, ctx
+                )
                 return JudgeCrossDocumentNode()
 
             # Step 3: Apply consolidations to assessments
@@ -711,6 +717,9 @@ class ConsolidateRelationshipsNode(BaseNode[State, Deps, ExtractionResult]):
 
             # Step 4: Store polarity mappings
             self._store_polarity_mappings(consolidations, ctx)
+            self._ensure_polarities_for_all_relationships(
+                unique_relationships, ctx, log_missing=True
+            )
 
             ctx.deps.logger.info(
                 f"Relationship consolidation: {len(consolidations)} relationships processed, "
@@ -831,6 +840,33 @@ For each relationship, provide:
             ctx.state.relationship_polarities[cons.original] = cons.polarity
             ctx.state.relationship_polarities[cons.consolidated] = cons.polarity
 
+    def _ensure_polarities_for_all_relationships(
+        self,
+        relationships: set[str],
+        ctx: GraphRunContext[State, Deps],
+        log_missing: bool = False,
+    ) -> None:
+        """Ensure every relationship label has a polarity mapping.
+
+        Used both for total consolidation failures (all defaults) and partial
+        responses where the LLM omitted some labels. Missing entries default to
+        "neutral" so downstream spread grouping never raises KeyError.
+        """
+        missing = [
+            rel for rel in relationships if rel not in ctx.state.relationship_polarities
+        ]
+        if not missing:
+            return
+
+        for rel in missing:
+            ctx.state.relationship_polarities[rel] = "neutral"
+
+        if log_missing:
+            ctx.deps.logger.warning(
+                f"Assigned neutral polarity to {len(missing)} "
+                "relationships missing classification"
+            )
+
     def _filter_irrelevant_assessments(self, ctx: GraphRunContext[State, Deps]) -> None:
         """Remove assessments with irrelevant polarity.
 
@@ -849,7 +885,7 @@ For each relationship, provide:
                 grouped[pair_key].append(assessment)
 
         # Create pre-rejected judgments for pairs that are ALL irrelevant
-        filtered = 0
+        filtered_pairs: set[EntityPairKey] = set()
         for pair_key, assessments in grouped.items():
             # Check if all assessments are irrelevant
             all_irrelevant = all(
@@ -881,12 +917,31 @@ For each relationship, provide:
                     confidence="high",
                     reasoning="All relationship types for this pair were classified as irrelevant to the research question",
                 )
-                filtered += 1
+                filtered_pairs.add(pair_key)
 
-        if filtered > 0:
+        if filtered_pairs:
+            self._remove_assessments_for_pairs(filtered_pairs, ctx)
             ctx.deps.logger.info(
-                f"Filtered {filtered} pairs with only irrelevant relationships"
+                f"Filtered {len(filtered_pairs)} pairs with only irrelevant relationships"
             )
+
+    def _remove_assessments_for_pairs(
+        self,
+        pair_keys: set[EntityPairKey],
+        ctx: GraphRunContext[State, Deps],
+    ) -> None:
+        """Remove assessments for the provided pair keys from state."""
+
+        for resource_id, assessments in list(
+            ctx.state.pair_assessments_by_resource.items()
+        ):
+            filtered = [
+                assessment
+                for assessment in assessments
+                if make_entity_pair_key(assessment.entity1, assessment.entity2)
+                not in pair_keys
+            ]
+            ctx.state.pair_assessments_by_resource[resource_id] = filtered
 
 
 @dataclass
@@ -920,6 +975,8 @@ class JudgeCrossDocumentNode(BaseNode[State, Deps, ExtractionResult]):
                     pair_key = make_entity_pair_key(
                         assessment.entity1, assessment.entity2
                     )
+                    if pair_key in ctx.state.pair_judgments:
+                        continue
                     assessments_by_pair[pair_key].append(assessment)
 
             # Update unique pairs count and set in-progress

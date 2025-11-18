@@ -9,16 +9,19 @@ from pydantic import ValidationError
 from interaction_finder.extraction.models import (
     EntityExtractionOut,
     EntityInfo,
+    EntityMention,
     EntityMergeDecision,
     EntityMergeDecisions,
     ExtractionMetadata,
+    ExtractionResult,
     PairJudgment,
+    PairAssessment,
     PairSpread,
     ProximalPairExtraction,
     ProximalPairInfo,
     SimpleEntity,
 )
-from interaction_finder.resources import ResourcePool
+from interaction_finder.resources import ResourcePool, ResourceQuote
 
 
 class TestEntityInfo:
@@ -285,6 +288,63 @@ class TestPairJudgment:
         )
         assert judgment.accepted is False
         assert judgment.confidence == "low"
+
+    def test_assessments_property_flattens_spread(self):
+        """Test backward-compatible assessments property."""
+        pool = ResourcePool()
+        resource = pool.add(
+            url="http://example.com",
+            title="Doc",
+            document_text="Doc text",
+        )
+
+        entity1 = EntityMention(
+            kind="gene", name="BRCA1", aliases=["BRCA1"], quotes=[], reasoning="test"
+        )
+        entity2 = EntityMention(
+            kind="disease",
+            name="Cancer",
+            aliases=["Cancer"],
+            quotes=[],
+            reasoning="test",
+        )
+
+        supporting = PairAssessment(
+            resource_id=resource.id,
+            entity1=entity1,
+            entity2=entity2,
+            relationship="increases_risk_of",
+            quotes=[],
+            confidence="high",
+            reasoning="support",
+        )
+        refuting = PairAssessment(
+            resource_id=resource.id,
+            entity1=entity1,
+            entity2=entity2,
+            relationship="protects_against",
+            quotes=[],
+            confidence="medium",
+            reasoning="refute",
+        )
+
+        spread = PairSpread(supporting=[supporting], refuting=[refuting])
+        judgment = PairJudgment(
+            entity1=SimpleEntity(name="BRCA1", kind="gene", aliases=["BRCA1"]),
+            entity2=SimpleEntity(
+                name="Cancer", kind="disease", aliases=["Cancer"]
+            ),
+            relationship="increases_risk_of",
+            spread=spread,
+            accepted=True,
+            confidence="high",
+            reasoning="test",
+        )
+
+        flattened = judgment.assessments
+        assert len(flattened) == 2
+        assert flattened[0].relationship == "increases_risk_of"
+        assert flattened[1].relationship == "protects_against"
 
 
 class TestPairSpread:
@@ -592,3 +652,98 @@ class TestPairJudgmentSerialization:
 
         assert len(judgment_restored.spread.supporting) == 1
         assert len(judgment_restored.spread.refuting) == 1
+
+
+class TestExtractionResultRehydration:
+    """Tests for ExtractionResult serialization/deserialization."""
+
+    def test_rehydrate_spread_based_judgments(self):
+        """Ensure rehydration injects Resource objects for spread assessments."""
+        pool = ResourcePool()
+        resource = pool.add(
+            url="http://example.com/doc",
+            title="Doc",
+            document_text="Doc text content",
+        )
+
+        def make_quote(text: str) -> ResourceQuote:
+            return ResourceQuote.model_construct(
+                resource=resource,
+                query_text=text,
+                spans=[(0, len(text))],
+                is_disjoint=False,
+                fuzzy_corrected=False,
+                original_query=None,
+                fuzzy_similarity=None,
+            )
+
+        entity1 = EntityMention(
+            kind="gene",
+            name="BRCA1",
+            aliases=["BRCA1"],
+            quotes=[make_quote("BRCA1")],
+            reasoning="test entity 1",
+        )
+        entity2 = EntityMention(
+            kind="disease",
+            name="Cancer",
+            aliases=["Cancer"],
+            quotes=[make_quote("Cancer")],
+            reasoning="test entity 2",
+        )
+
+        assessment = PairAssessment(
+            resource_id=resource.id,
+            entity1=entity1,
+            entity2=entity2,
+            relationship="increases_risk_of",
+            quotes=[make_quote("pair quote")],
+            confidence="high",
+            reasoning="supporting evidence",
+        )
+
+        judgement = PairJudgment(
+            entity1=SimpleEntity(name="BRCA1", kind="gene", aliases=["BRCA1"]),
+            entity2=SimpleEntity(name="Cancer", kind="disease", aliases=["Cancer"]),
+            relationship="increases_risk_of",
+            spread=PairSpread(supporting=[assessment]),
+            accepted=True,
+            confidence="high",
+            reasoning="Strong evidence",
+        )
+
+        metadata = ExtractionMetadata(
+            topic="Topic",
+            resource_count=1,
+            total_entities_found=1,
+            entities_after_validation=1,
+            entities_merged=0,
+            merge_cache_hits=0,
+            merge_cache_misses=0,
+            proximal_sets_found=0,
+            total_pairs_found=1,
+            pairs_accepted=1,
+            pairs_rejected=0,
+            quotes_validated=1,
+            quotes_failed=0,
+        )
+
+        result = ExtractionResult(
+            topic="Topic",
+            target_entity_types=["gene", "disease"],
+            permitted_pairs={"gene": ["disease"], "disease": ["gene"]},
+            resources=pool,
+            judgments=[judgement],
+            metadata=metadata,
+        )
+
+        serialized = result.model_dump(mode="json")
+        restored = ExtractionResult.model_validate(serialized)
+
+        restored_assessment = restored.judgments[0].spread.supporting[0]
+        quote = restored_assessment.quotes[0]
+        assert isinstance(quote.resource, type(resource))
+        assert quote.resource.id == resource.id
+
+        entity_quote = restored_assessment.entity1.quotes[0]
+        assert entity_quote.resource.id == resource.id
