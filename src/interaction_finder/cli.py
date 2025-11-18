@@ -94,6 +94,56 @@ def get_options_with_fallback(
     return effective_config, effective_mode, effective_verbose, effective_overrides
 
 
+def load_checkpoint_or_create(checkpoint_or_topic: str) -> tuple[Any, str]:
+    """Load checkpoint from file or create empty checkpoint from topic string.
+
+    Parameters:
+        checkpoint_or_topic: File path or topic string
+
+    Returns:
+        Tuple of (checkpoint, topic)
+    """
+    from interaction_finder.checkpoint import PipelineCheckpoint
+    from interaction_finder.upgrade import create_empty_checkpoint
+
+    # Check if input is an existing file
+    path = Path(checkpoint_or_topic)
+    if path.exists() and path.is_file():
+        checkpoint = PipelineCheckpoint.model_validate_json(path.read_text())
+        return checkpoint, checkpoint.topic
+
+    # Treat as topic string
+    return create_empty_checkpoint(checkpoint_or_topic), checkpoint_or_topic
+
+
+def create_search_backend(backend_name: str, config: IfetcherConfig) -> Any:
+    """Create search backend instance from name.
+
+    Parameters:
+        backend_name: Backend identifier (pubmed, perplexica, openai)
+        config: Configuration for timeout settings
+
+    Returns:
+        SearchBackend instance
+    """
+    from interaction_finder.search.backends.openai import OpenAIBackend
+    from interaction_finder.search.backends.perplexica import PerplexicaBackend
+    from interaction_finder.search.backends.pubmed import PubMedBackend
+
+    backends = {
+        "pubmed": PubMedBackend,
+        "perplexica": PerplexicaBackend,
+        "openai": OpenAIBackend,
+    }
+
+    backend_class = backends.get(backend_name)
+    if not backend_class:
+        valid = ", ".join(backends.keys())
+        raise ValueError(f"Unknown backend '{backend_name}'. Valid: {valid}")
+
+    return backend_class(config={"timeout": config.tools.search.timeout})
+
+
 def _parse_filter_options(filter_args: List[str]) -> dict[str, str]:
     parsed: dict[str, str] = {}
     allowed_keys = {"accepted", "confidence"}
@@ -695,12 +745,8 @@ def keywords(
 
 @app.command()
 def widesearch(
-    keywords_file: Path = typer.Argument(
-        help="Path to keywords JSON file from keywords command"
-    ),
-    topic: Optional[str] = typer.Argument(
-        None,
-        help="Research topic being investigated (inferred from keywords file if not provided)",
+    checkpoint_or_topic: str = typer.Argument(
+        help="Checkpoint file path OR research topic string"
     ),
     output: Optional[Path] = typer.Option(
         None, "-o", "--output", help="Output file for checkpoint (JSON)"
@@ -723,64 +769,37 @@ def widesearch(
     overrides: List[str] = overrides_option(),
 ):
     """
-    Execute widesearch using keywords from keywords command.
+    Execute widesearch with automatic stage progression.
 
-    Performs iterative query expansion and search using provided keyphrases,
-    saving complete checkpoint (results, queries, resource pool) to JSON.
-    The checkpoint format enables downstream processing and search resumption.
-
-    Topic is inferred from the keywords file's run_metadata if not explicitly provided.
+    Accepts either a checkpoint file OR a topic string. Missing stages
+    (keywords) are run automatically.
 
     Example:
+        interaction-finder widesearch "cancer genomics" -o results.json
+
         interaction-finder widesearch keywords.json -o results.json
 
-        interaction-finder widesearch keywords.json "cancer" -b perplexica -o out.json
-
-        interaction-finder widesearch keywords.json --fetch -o results.json
+        interaction-finder widesearch "cancer" -b perplexica --fetch -o out.json
     """
     try:
-        # Get effective options
+        from interaction_finder.upgrade import ensure_search
+        from pydantic import ValidationError
+
+        # Load config and parse input
         config_path, mode, verbose, overrides = get_options_with_fallback(
             config, mode, verbose, overrides
         )
-        # Load config
         cfg = load_config(config_path, overrides, mode)
-        # Validate keywords file exists
-        if not keywords_file.exists():
-            raise FileNotFoundError(f"Keywords file not found: {keywords_file}")
-        # Parse checkpoint JSON
-        from interaction_finder.checkpoint import PipelineCheckpoint
-        from pydantic import ValidationError
+        checkpoint, topic = load_checkpoint_or_create(checkpoint_or_topic)
 
-        input_checkpoint = PipelineCheckpoint.model_validate_json(
-            keywords_file.read_text()
-        )
-
-        # Infer topic from checkpoint if not provided
-        if topic is None:
-            topic = input_checkpoint.topic
-            console.print(f"[dim]Inferred topic from checkpoint:[/dim] {topic}")
-        # Apply CLI overrides to config
+        # Apply CLI overrides
         if max_rounds is not None:
             cfg.tools.widesearch.max_rounds = max_rounds
-        # Determine backend
-        backend_name = backend if backend else cfg.tools.widesearch.search_backend
-        # Import backends and create mapping
-        from interaction_finder.search.backends.openai import OpenAIBackend
-        from interaction_finder.search.backends.perplexica import PerplexicaBackend
-        from interaction_finder.search.backends.pubmed import PubMedBackend
 
-        BACKENDS = {
-            "pubmed": PubMedBackend,
-            "perplexica": PerplexicaBackend,
-            "openai": OpenAIBackend,
-        }
-        # Instantiate backend
-        backend_class = BACKENDS.get(backend_name)
-        if not backend_class:
-            valid = ", ".join(BACKENDS.keys())
-            raise ValueError(f"Unknown backend '{backend_name}'. Valid: {valid}")
-        search_backend = backend_class(config={"timeout": cfg.tools.search.timeout})
+        # Create search backend
+        backend_name = backend if backend else cfg.tools.widesearch.search_backend
+        search_backend = create_search_backend(backend_name, cfg)
+
         # Show PubMed API key warning if applicable
         if (
             backend_name == "pubmed"
@@ -793,27 +812,10 @@ def widesearch(
                 "With an API key, you can increase to 10 req/sec. "
                 "Get your free key at: https://www.ncbi.nlm.nih.gov/account/settings/\n"
             )
-        # Display start message
-        console.print(f"[bold]Running widesearch for:[/bold] {topic}")
-        # Show keyphrases info if keywords stage present
-        if input_checkpoint.keywords:
-            console.print(
-                f"Using {len(input_checkpoint.keywords.terms)} keyphrases from {keywords_file.name}"
-            )
-        # Show resource pool info if present
-        resource_count = len(input_checkpoint.resources.resource_map)
-        if resource_count > 0:
-            console.print(f"Starting with {resource_count} existing resources in pool")
 
-        # Check prerequisite stage (must have keywords)
-        if input_checkpoint.keywords is None:
-            raise ValueError(
-                "Widesearch requires checkpoint with keywords stage completed. "
-                "Run keywords command first."
-            )
+        console.print(f"[bold]Running widesearch for:[/bold] {topic}\n")
 
-        console.print()
-        # Pre-load reranker if enabled to avoid debug messages during progress display
+        # Pre-load reranker if enabled
         reranker = None
         if cfg.tools.widesearch.rerank_top_k > 0:
             from interaction_finder.widesearch.reranker import Reranker
@@ -822,29 +824,17 @@ def widesearch(
                 model_name=cfg.tools.widesearch.reranker_model,
                 device=cfg.tools.widesearch.reranker_device,
             )
-            # Trigger model loading before progress display starts
             _ = reranker._get_model()
-        # Create progress display
+
+        # Run with progress display (ensure_search handles keywords automatically)
         from interaction_finder.widesearch.progress import WidesearchProgress
 
         progress_counter = WidesearchProgress()
-        # Use upgrade system to advance from keywords to search
         with progress_counter:
-            # Import run function for progress integration
-            from interaction_finder.widesearch import run_widesearch_with_checkpoint
+            checkpoint = asyncio.run(ensure_search(checkpoint, search_backend, cfg))
 
-            checkpoint = asyncio.run(
-                run_widesearch_with_checkpoint(
-                    input_checkpoint=input_checkpoint,
-                    search_backend=search_backend,
-                    config=cfg,
-                    max_rounds=max_rounds,
-                    reranker=reranker,
-                    progress=progress_counter,
-                )
-            )
-        # Progress display already shows completion summary, just add newline
         console.print()
+
         # Fetch content if requested
         if fetch:
             from interaction_finder.widesearch import fetch_and_populate_results
@@ -858,22 +848,16 @@ def widesearch(
                 f"[green]✓[/green] Fetched {fetch_stats['fetched']}/{fetch_stats['total']} "
                 f"({fetch_stats['cached']} cached, {fetch_stats['failed']} failed)"
             )
-        # Save to file if requested
+
+        # Save checkpoint
         if output:
-            checkpoint_data = checkpoint.model_dump(mode="json")
-            output.write_text(json.dumps(checkpoint_data, indent=2))
+            output.write_text(checkpoint.model_dump_json(indent=2))
             console.print(f"\n[dim]Saved checkpoint to {output}[/dim]")
 
-    except FileNotFoundError as e:
-        console.print(f"[red]Error:[/red] {e}")
-        raise typer.Exit(1)
     except (json.JSONDecodeError, ValidationError) as e:
-        console.print(f"[red]Invalid keywords file:[/red] {e}")
+        console.print(f"[red]Invalid checkpoint file:[/red] {e}")
         if verbose:
             console.print_exception()
-        raise typer.Exit(1)
-    except ValueError as e:
-        console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(1)
     except Exception as e:
         console.print(f"\n[red]Error:[/red] {e}")
@@ -884,12 +868,8 @@ def widesearch(
 
 @app.command()
 def extract(
-    checkpoint_file: Path = typer.Argument(
-        help="Path to widesearch checkpoint JSON file"
-    ),
-    topic: Optional[str] = typer.Argument(
-        None,
-        help="Research topic for extraction context (inferred from checkpoint file if not provided)",
+    checkpoint_or_topic: str = typer.Argument(
+        help="Checkpoint file path OR research topic string"
     ),
     entity_types: List[str] = typer.Option(
         ...,
@@ -900,107 +880,62 @@ def extract(
     output: Optional[Path] = typer.Option(
         None, "-o", "--output", help="Output file for extraction results (JSON)"
     ),
+    backend: Optional[str] = typer.Option(
+        None,
+        "-b",
+        "--backend",
+        help="Search backend (pubmed, perplexica, openai) if search stage needed",
+    ),
     config: Optional[str] = config_option(),
     mode: Optional[str] = mode_option(),
     verbose: bool = verbose_option(),
     overrides: List[str] = overrides_option(),
 ):
     """
-    Extract entity-entity associations from widesearch results.
+    Extract entity-entity associations with automatic stage progression.
 
-    Takes a widesearch checkpoint JSON file and runs the extraction pipeline
-    to identify and validate associations between entities with comprehensive
-    quote-level provenance tracking. Automatically fetches missing content.
-
-    Topic is inferred from the checkpoint file's run_metadata if not explicitly provided.
+    Accepts either a checkpoint file OR a topic string. Missing stages
+    (keywords, search) are run automatically.
 
     Example:
-        interaction-finder extract searches.json -e gene -e disease -o results.json
+        interaction-finder extract "cancer genomics" -e gene -e disease -o results.json
 
-        interaction-finder extract pah-searches.json "PAH genetics" -e gene -e protein -o pah-pairs.json
+        interaction-finder extract keywords.json -e gene -e disease -o results.json
+
+        interaction-finder extract search.json -e gene -e protein -o results.json
     """
     try:
-        # Get effective options
+        from interaction_finder.upgrade import ensure_extraction
+        from pydantic import ValidationError
+
+        # Load config and parse input
         config_path, mode, verbose, overrides = get_options_with_fallback(
             config, mode, verbose, overrides
         )
-        # Load config
         cfg = load_config(config_path, overrides, mode)
-        # Validate checkpoint file exists
-        if not checkpoint_file.exists():
-            raise FileNotFoundError(f"Checkpoint file not found: {checkpoint_file}")
-        # Load and validate checkpoint
-        from interaction_finder.checkpoint import PipelineCheckpoint
-        from pydantic import ValidationError
+        checkpoint, topic = load_checkpoint_or_create(checkpoint_or_topic)
 
-        input_checkpoint = PipelineCheckpoint.model_validate_json(
-            checkpoint_file.read_text()
-        )
+        # Create search backend (needed if search stage must run)
+        backend_name = backend if backend else cfg.tools.widesearch.search_backend
+        search_backend = create_search_backend(backend_name, cfg)
 
-        # Infer topic from checkpoint file if not provided
-        if topic is None:
-            topic = input_checkpoint.topic
-            console.print(f"[dim]Inferred topic from checkpoint:[/dim] {topic}")
-
-        # Display checkpoint info
-        console.print(f"\n[bold]Loading checkpoint:[/bold] {checkpoint_file.name}")
-        console.print(f"Topic: {input_checkpoint.topic}")
-        if input_checkpoint.search:
-            console.print(f"Results: {len(input_checkpoint.search.results)}")
-            console.print(f"Queries executed: {len(input_checkpoint.search.queries)}")
         console.print(
-            f"Resources in pool: {len(input_checkpoint.resources.resource_map)}"
+            f"\n[bold]Running extraction:[/bold] {topic} (types: {', '.join(entity_types)})\n"
         )
-        # Check if content needs to be fetched
-        resources_with_content = sum(
-            1 for r in input_checkpoint.resources.resource_map.values() if r is not None
-        )
-        resources_without_content = (
-            len(input_checkpoint.resources.resource_map) - resources_with_content
-        )
-        if resources_without_content > 0:
-            from interaction_finder.widesearch import fetch_and_populate_results
 
-            console.print(
-                f"\n[bold]Fetching content for {resources_without_content} resources...[/bold]"
-            )
-            fetch_stats = asyncio.run(fetch_and_populate_results(input_checkpoint, cfg))
-            console.print(
-                f"[green]✓[/green] Fetched {fetch_stats['fetched']}/{fetch_stats['total']} "
-                f"({fetch_stats['cached']} cached, {fetch_stats['failed']} failed)"
-            )
-            resources_with_content = sum(
-                1
-                for r in input_checkpoint.resources.resource_map.values()
-                if r is not None
-            )
-        # Run extraction
-        console.print(
-            f"\n[bold]Running extraction:[/bold] {topic} (types: {', '.join(entity_types)})"
-        )
-        console.print(f"Processing {resources_with_content} resources with content\n")
-        from interaction_finder.extraction import run_extraction
+        # Run with progress display (ensure_extraction handles all prerequisites)
         from interaction_finder.extraction.progress import ExtractionProgress
 
-        # Create progress display
         progress = ExtractionProgress()
-
-        # Run extraction with config and progress
         with progress:
-            result_checkpoint = asyncio.run(
-                run_extraction(
-                    input_checkpoint=input_checkpoint,
-                    target_entity_types=entity_types,
-                    config=cfg,
-                    progress=progress,
-                )
+            checkpoint = asyncio.run(
+                ensure_extraction(checkpoint, entity_types, search_backend, cfg)
             )
-        # Progress display already shows completion summary
+
         console.print()
+
         # Show sample of accepted pairs
-        accepted_judgments = [
-            j for j in result_checkpoint.extraction.judgments if j.accepted
-        ]
+        accepted_judgments = [j for j in checkpoint.extraction.judgments if j.accepted]
         if accepted_judgments:
             console.print("\n[bold]Sample accepted pairs:[/bold]")
             for judgment in accepted_judgments[:5]:
@@ -1009,7 +944,6 @@ def extract(
                     f"[dim]{judgment.relationship}[/dim] "
                     f"{judgment.entity2.name} ({judgment.entity2.kind})"
                 )
-                # Count total quotes across all assessments
                 total_quotes = sum(len(a.quotes) for a in judgment.assessments)
                 console.print(
                     f"    Evidence: {total_quotes} quotes, "
@@ -1018,17 +952,14 @@ def extract(
                 )
             if len(accepted_judgments) > 5:
                 console.print(f"  ... and {len(accepted_judgments) - 5} more")
-        # Save to file if requested
+
+        # Save checkpoint
         if output:
-            output_data = result_checkpoint.model_dump(mode="json")
-            output.write_text(json.dumps(output_data, indent=2))
+            output.write_text(checkpoint.model_dump_json(indent=2))
             console.print(f"\n[dim]Saved results to {output}[/dim]")
         else:
             console.print("\n[dim]Use -o/--output to save results to a file[/dim]")
 
-    except FileNotFoundError as e:
-        console.print(f"[red]Error:[/red] {e}")
-        raise typer.Exit(1)
     except (json.JSONDecodeError, ValidationError) as e:
         console.print(f"[red]Invalid checkpoint file:[/red] {e}")
         if verbose:

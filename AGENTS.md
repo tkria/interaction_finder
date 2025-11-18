@@ -32,20 +32,24 @@ uv run pyright
 uv sync
 ```
 
-**Primary Workflow**: Three-stage pipeline for literature discovery and extraction:
+**Primary Workflow**: Three-stage pipeline with automatic progression:
 
 ```bash
+# Full pipeline from topic string (no intermediate files needed)
+uv run interaction-finder extract "pulmonary arterial hypertension" -e gene -e disease -o results.json
+
+# Traditional staged workflow (checkpoint files optional)
 # Stage 1: Extract bridging terms (keywords) from review articles
 uv run interaction-finder keywords "pulmonary arterial hypertension" -o keywords.json
 
-# Stage 2: Wide search using extracted keywords
-uv run interaction-finder widesearch keywords.json "pulmonary arterial hypertension" -o searches.json
+# Stage 2: Wide search (accepts checkpoint OR topic, runs keywords automatically if needed)
+uv run interaction-finder widesearch keywords.json -o searches.json
+uv run interaction-finder widesearch "pulmonary arterial hypertension" -o searches.json
 
-# Stage 3: Extract entity associations from search results
-uv run interaction-finder extract searches.json "PAH genetics" -e gene -e disease -o results.json
-
-# Stage 3 with self-pair control: allow gene-gene and disease-disease pairs
-uv run interaction-finder extract searches.json "PAH genetics" -e gene -e gene -e disease -e disease -o results.json
+# Stage 3: Extract entity associations (accepts checkpoint OR topic, runs all prior stages automatically)
+uv run interaction-finder extract searches.json -e gene -e disease -o results.json
+uv run interaction-finder extract keywords.json -e gene -e disease -o results.json
+uv run interaction-finder extract "PAH genetics" -e gene -e disease -o results.json
 ```
 
 **Entity Kind Pair Filtering**:
@@ -53,27 +57,27 @@ The extraction stage filters pairs based on entity kinds. By default, specifying
 
 ```bash
 # Only gene-disease pairs allowed (no gene-gene or disease-disease)
-uv run interaction-finder extract searches.json "topic" -e gene -e disease -o results.json
+uv run interaction-finder extract "topic" -e gene -e disease -o results.json
 
 # Allow gene-gene AND gene-disease pairs (no disease-disease)
-uv run interaction-finder extract searches.json "topic" -e gene -e gene -e disease -o results.json
+uv run interaction-finder extract "topic" -e gene -e gene -e disease -o results.json
 
 # Allow all combinations: gene-gene, gene-disease, disease-disease
-uv run interaction-finder extract searches.json "topic" -e gene -e gene -e disease -e disease -o results.json
+uv run interaction-finder extract "topic" -e gene -e gene -e disease -e disease -o results.json
 
 # Single kind always allows self-pairs
-uv run interaction-finder extract searches.json "topic" -e gene -o results.json
+uv run interaction-finder extract "topic" -e gene -o results.json
 ```
 
 **Agent Configuration**: Configure LLM models for different pipeline stages:
 
 ```bash
 # Override agent models via CLI
-uv run interaction-finder extract searches.json "topic" -e gene \
+uv run interaction-finder extract "topic" -e gene \
   -O agents.extraction.judge.llm=openai:gpt-4o
 
 # Use configuration modes
-uv run interaction-finder widesearch keywords.json "topic" -m development
+uv run interaction-finder widesearch "topic" -m development
 ```
 
 **Additional Commands**:
@@ -89,11 +93,8 @@ uv run interaction-finder config validate
 # List available terms (from training data)
 uv run interaction-finder terms
 
-# Use configuration modes
-uv run interaction-finder widesearch keywords.json "topic" -m development
-
-# Override configuration values
-uv run interaction-finder extract searches.json "topic" -e gene -O agents.llm=openai:gpt-4o
+# Override configuration values and specify backend
+uv run interaction-finder extract "topic" -e gene -b perplexica -O agents.llm=openai:gpt-4o
 ```
 
 **Search Backend Options**:
