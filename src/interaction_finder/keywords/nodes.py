@@ -468,42 +468,45 @@ class ExtractKeywordsNode(BaseNode[State, Deps, BridgingTermsOut]):
             return EvaluateKeywordsNode()
 
 
-@dataclass
-class EvaluateKeywordsNode(BaseNode[State, Deps, BridgingTermsOut]):
-    """Evaluate keywords and summarize each document.
+async def _evaluate_single_document(
+    url: str,
+    keywords: list[ScoredKeyword],
+    topic: str,
+    config,
+    reranker,
+    resource_pool,
+    deps,
+):
+    """Evaluate keywords and summarize a single document.
 
-    Uses keyword_evaluator_agent and document_summarizer_agent to:
-    1. Identify useful bridging terms
-    2. Summarize document content
-    3. Assess coverage contribution
+    Parameters:
+        url: str — document URL
+        keywords: list[ScoredKeyword] — extracted keywords for this document
+        topic: str — research topic
+        config — configuration object
+        reranker — reranker instance (or None)
+        resource_pool — resource pool to fetch document from
+        deps — agent dependencies
+
+    Returns:
+        tuple[DocumentSummary, int] | None — (summary, bridging_count) or None on failure
     """
+    try:
+        # Get content from resource pool
+        resource = resource_pool.get(url)
+        if not resource:
+            return None
+        # Clean, deduplicate, and rerank keywords for LLM review
+        max_keywords_for_llm = config.tools.keywords.max_keywords_for_llm
+        keywords_text = _clean_and_rerank_keywords_for_display(
+            keywords, topic, reranker, max_keywords_for_llm
+        )
+        # Get document context length from config
+        context_chars = config.tools.keywords.document_context_chars
+        # Summarize document with strict filtering instructions
+        summary_prompt = f"""Review this document and identify HIGH-QUALITY bridging terms.
 
-    async def run(self, ctx: GraphRunContext[State, Deps]) -> "ReflectNode":
-        """Evaluate keywords and summarize documents."""
-        # Update progress to show evaluation
-        if ctx.deps.progress:
-            ctx.deps.progress.set_phase_evaluating()
-        if not ctx.state.extracted_keywords:
-            logger.info("No extracted keywords, skipping to reflection")
-            return ReflectNode()
-        # Process each document
-        total_bridging = 0
-        for url, keywords in ctx.state.extracted_keywords.items():
-            # Get content from resource pool
-            resource = ctx.deps.resource_pool.get(url)
-            if not resource:
-                continue
-            # Clean, deduplicate, and rerank keywords for LLM review
-            max_keywords_for_llm = ctx.deps.config.tools.keywords.max_keywords_for_llm
-            keywords_text = _clean_and_rerank_keywords_for_display(
-                keywords, ctx.state.topic, ctx.deps.reranker, max_keywords_for_llm
-            )
-            # Get document context length from config
-            context_chars = ctx.deps.config.tools.keywords.document_context_chars
-            # Summarize document with strict filtering instructions
-            summary_prompt = f"""Review this document and identify HIGH-QUALITY bridging terms.
-
-**Target topic:** {ctx.state.topic}
+**Target topic:** {topic}
 
 **Document content:**
 {resource.text[:context_chars]}
@@ -524,7 +527,7 @@ The extracted keywords above are suggestions—you may use them directly, combin
 
 Each bridging term must:
   - Be a specific concept, mechanism, pathway, gene, protein, or biological entity
-  - Be directly relevant to "{ctx.state.topic}" (not to tangential topics mentioned in the document)
+  - Be directly relevant to "{topic}" (not to tangential topics mentioned in the document)
   - Use precise scientific terminology (e.g., "BMPR2 gene" not "genetic mutations")
   - Be a term that commonly appears in scientific literature about the target topic
 
@@ -534,25 +537,72 @@ Each bridging term must:
   - Methodological terms: "genome-wide association studies", "next-generation sequencing", "statistical analysis"
   - Multi-word descriptive phrases: prefer concise established terms (e.g., "endothelial dysfunction" not "dysfunction of endothelial cells")
 
-**Test:** For each term, ask "Would this term appear frequently in papers specifically about {ctx.state.topic}?" If no, exclude it.
+**Test:** For each term, ask "Would this term appear frequently in papers specifically about {topic}?" If no, exclude it.
 
 Select fewer, higher-quality terms rather than reaching for quantity."""
-            # Use document summarizer agent with renamed span (include doc title for context)
-            agent = get_document_summarizer_agent(ctx.deps.config)
-            usage = RunUsage()
-            with rename_agent(agent, f"EvaluateKeywordsNode: {resource.title[:60]}"):
-                summary_result = await agent.run(
-                    summary_prompt, deps=ctx.deps, usage=usage
-                )
-            # Store summary
-            ctx.state.document_summaries.append(summary_result.output)
-            bridging_count = len(summary_result.output.bridging_terms)
-            total_bridging += bridging_count
-            # Update progress for each document's accepted keywords
+        # Use document summarizer agent with renamed span (include doc title for context)
+        agent = get_document_summarizer_agent(config)
+        usage = RunUsage()
+        with rename_agent(agent, f"EvaluateKeywordsNode: {resource.title[:60]}"):
+            summary_result = await agent.run(summary_prompt, deps=deps, usage=usage)
+        # Return summary and bridging term count
+        bridging_count = len(summary_result.output.bridging_terms)
+        return (summary_result.output, bridging_count)
+    except Exception as e:
+        # Log error and return None (following codebase pattern)
+        logger.warning(
+            f"Document evaluation failed",
+            url=url,
+            error=str(e),
+        )
+        return None
+
+
+@dataclass
+class EvaluateKeywordsNode(BaseNode[State, Deps, BridgingTermsOut]):
+    """Evaluate keywords and summarize each document.
+
+    Uses keyword_evaluator_agent and document_summarizer_agent to:
+    1. Identify useful bridging terms
+    2. Summarize document content
+    3. Assess coverage contribution
+
+    Processes all documents concurrently for improved performance.
+    """
+
+    async def run(self, ctx: GraphRunContext[State, Deps]) -> "ReflectNode":
+        """Evaluate keywords and summarize documents (parallel processing)."""
+        # Update progress to show evaluation
+        if ctx.deps.progress:
+            ctx.deps.progress.set_phase_evaluating()
+        if not ctx.state.extracted_keywords:
+            logger.info("No extracted keywords, skipping to reflection")
+            return ReflectNode()
+        # Process all documents in parallel
+        tasks = [
+            _evaluate_single_document(
+                url,
+                keywords,
+                ctx.state.topic,
+                ctx.deps.config,
+                ctx.deps.reranker,
+                ctx.deps.resource_pool,
+                ctx.deps,
+            )
+            for url, keywords in ctx.state.extracted_keywords.items()
+        ]
+        results = await asyncio.gather(*tasks)
+        # Filter out failures (None) and extract summaries
+        successful_results = [r for r in results if r is not None]
+        # Add summaries to state and update progress
+        for summary, bridging_count in successful_results:
+            ctx.state.document_summaries.append(summary)
             if ctx.deps.progress:
                 ctx.deps.progress.add_keywords_accepted(bridging_count)
+        total_bridging = sum(count for _, count in successful_results)
+        failed_count = len(results) - len(successful_results)
         logger.info(
-            f"Generated {len(ctx.state.document_summaries)} summaries with {total_bridging} bridging terms total"
+            f"Generated {len(successful_results)} summaries with {total_bridging} bridging terms total ({failed_count} failed)"
         )
         return ReflectNode()
 
