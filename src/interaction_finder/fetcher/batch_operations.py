@@ -1,6 +1,7 @@
 """Batch operations for concurrent URL fetching."""
 
 import asyncio
+import logging
 from typing import List, Dict, Any, Callable, Optional, Tuple
 from urllib.parse import urlparse
 from .cache import URLCache
@@ -18,6 +19,9 @@ class PreviousFailure(Exception):
 
 # Batch operation constants
 DEFAULT_MAX_CONCURRENT = 5
+
+
+logger = logging.getLogger(__name__)
 
 
 class BatchOperations:
@@ -531,7 +535,8 @@ class BatchOperations:
         """Safely fetch a single URL, returning None on error."""
         try:
             return await fetcher_func(url)
-        except Exception:
+        except Exception as exc:
+            logger.warning("Prefetch failed for %s", url, exc_info=True)
             return None  # Ignore errors in prefetch
 
     def get_cached_urls_by_type(self, content_type: str) -> List[str]:

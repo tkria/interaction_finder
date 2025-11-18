@@ -359,7 +359,10 @@ class PubMedBackend(SearchBackend):
             test_query = SearchQuery(query="covid", max_results=1)
             await self._esearch(test_query)
             return True
-        except Exception:
+        except Exception as exc:
+            logfire.warning(
+                "PubMed health check failed", error=str(exc), base_url=self.base_url
+            )
             return False
 
     def healthy(self) -> bool:

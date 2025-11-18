@@ -1,5 +1,6 @@
 """High-level PageFetcher interface with eliminated duplication using higher-order functions."""
 
+import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -8,6 +9,9 @@ from .cache import URLCache
 from .web_client import WebClient
 from .batch_operations import BatchOperations
 from .content_processor import ContentProcessor
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -281,8 +285,13 @@ class PageFetcher:
                     pub_date = metadata["publication_date"]
                     await self.cache.set_content(url, "publication_date", pub_date)
                     return pub_date
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning(
+                    "Failed to fetch DOI metadata for %s (doi=%s)",
+                    url,
+                    doi,
+                    exc_info=True,
+                )
 
         return None
 
@@ -333,8 +342,14 @@ class PageFetcher:
                     if value := metadata.get(field):
                         await self.cache.set_content(url, field, value)
                 return metadata
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning(
+                "OpenAlex metadata fetch failed for %s (%s=%s)",
+                url,
+                id_type,
+                identifier,
+                exc_info=True,
+            )
 
         return None
 
@@ -358,9 +373,12 @@ class PageFetcher:
                         single_url, retry=retry
                     )
                     results.append([chunk["text"] for chunk in chunks_data])
-                except Exception:
+                except Exception as exc:
                     if fail_fast:
                         raise
+                    logger.warning(
+                        "Failed to create chunks for %s", single_url, exc_info=True
+                    )
                     results.append([])
             return results
         else:

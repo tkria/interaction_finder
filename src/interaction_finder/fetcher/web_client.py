@@ -1,5 +1,6 @@
 """Web client for fetching HTML and PDF content."""
 
+import logging
 from typing import Dict, List
 from rich.console import Console
 
@@ -67,6 +68,9 @@ DOI_EXTRACTION_SCHEMA = {
         },
     ],
 }
+
+
+logger = logging.getLogger(__name__)
 
 # PubMed full-text link extraction schema
 PUBMED_FULLTEXT_LINKS_SCHEMA = {
@@ -771,8 +775,14 @@ class WebClient:
 
                     if doi:
                         break
-        except (json.JSONDecodeError, AttributeError, KeyError, IndexError, TypeError):
-            pass
+        except (
+            json.JSONDecodeError,
+            AttributeError,
+            KeyError,
+            IndexError,
+            TypeError,
+        ) as exc:
+            logger.debug("Failed to parse DOI metadata", exc_info=True)
         return doi
 
     def _is_pdf_url(self, url: str) -> bool:
@@ -813,7 +823,12 @@ class WebClient:
             return list(
                 dict.fromkeys(urljoin(base_url, link) for link in links if link)
             )
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "Failed to parse PubMed full-text link list for %s",
+                base_url,
+                exc_info=True,
+            )
             return []
 
     def _is_content_superset(self, candidate_md: str, baseline_md: str) -> bool:
@@ -930,8 +945,10 @@ class WebClient:
                         return (link, result, len(candidate_md))
                     else:
                         return None
-                except Exception:
-                    # Silently ignore failures for individual links
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to fetch full text candidate %s", link, exc_info=True
+                    )
                     return None
 
         # Try all links concurrently
@@ -994,6 +1011,8 @@ class WebClient:
                 cls = classify_heading_relevance(h["text"])
                 if cls.get("is_relevant"):
                     return True
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug(
+                "Failed to detect academic sections in markdown", exc_info=True
+            )
         return False

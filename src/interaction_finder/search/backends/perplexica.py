@@ -195,7 +195,12 @@ class PerplexicaBackend(SearchBackend):
             # Try to get available models as a health check
             response = await session.get(f"{self.base_url}/api/models", timeout=10)
             return response.status_code == 200
-        except Exception:
+        except Exception as exc:
+            logfire.warning(
+                "Perplexica health check failed",
+                error=str(exc),
+                base_url=self.base_url,
+            )
             return False
 
     def healthy(self) -> bool:

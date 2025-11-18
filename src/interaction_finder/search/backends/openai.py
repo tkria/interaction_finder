@@ -304,7 +304,12 @@ class OpenAIBackend(SearchBackend):
             )
             # Both 200 and 400 indicate API is reachable
             return response.status_code in [200, 400]
-        except Exception:
+        except Exception as exc:
+            logfire.warning(
+                "OpenAI search backend health check failed",
+                error=str(exc),
+                base_url=self.base_url,
+            )
             return False
 
     def healthy(self) -> bool:

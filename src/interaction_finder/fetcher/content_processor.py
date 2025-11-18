@@ -1,5 +1,6 @@
 """Content processing and refinement for academic articles."""
 
+import logging
 import re
 from typing import List, Dict, Optional, Tuple
 from dataclasses import dataclass
@@ -308,6 +309,9 @@ class HeadingInfo:
     is_paywall: bool = False
 
 
+logger = logging.getLogger(__name__)
+
+
 class ContentProcessor:
     """Processes and refines academic content by removing site chrome and focusing on core article content."""
 
@@ -323,8 +327,10 @@ class ContentProcessor:
             headings = self._extract_and_classify_headings(
                 markdown
             )  # Re-parse after trim
-        except Exception:
-            pass  # Fall back to original content
+        except Exception as exc:
+            logger.warning(
+                "Failed to remove duplicate intro sections", exc_info=True
+            )
 
         return self._refine_with_headings(markdown, headings)
 

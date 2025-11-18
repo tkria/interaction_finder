@@ -1,6 +1,7 @@
 """URL caching functionality for the fetcher package."""
 
 import json
+import logging
 from pathlib import Path
 from typing import Optional, List, Tuple, Any
 import aiofiles
@@ -29,6 +30,15 @@ CONTENT_TYPE_CONFIG = {
         "deserialize": lambda x: x.strip(),
     },
 }
+
+
+logger = logging.getLogger(__name__)
+
+
+def _log_cache_read_error(action: str, path: Path, exc: Exception) -> None:
+    logger.warning(
+        "Cache %s failed for %s: %s", action, path, exc, exc_info=True
+    )
 
 
 class URLCache:
@@ -71,9 +81,9 @@ class URLCache:
                     return tuple(
                         self.base_path / f"{hash_str}.{ext}" for ext in extensions
                     )
-            except (OSError, UnicodeDecodeError):
+            except (OSError, UnicodeDecodeError) as exc:
+                _log_cache_read_error("scan url slot", url_path, exc)
                 # Corrupted file, skip this slot
-                pass
 
             probe += 1
 
@@ -123,7 +133,8 @@ class URLCache:
                 async with aiofiles.open(url_path, "r", encoding="utf-8") as f:
                     stored_url = (await f.read()).strip()
                 return stored_url == normalized_url
-            except (OSError, UnicodeDecodeError):
+            except (OSError, UnicodeDecodeError) as exc:
+                _log_cache_read_error("verify url mapping", url_path, exc)
                 return False
         return False
 
@@ -147,7 +158,8 @@ class URLCache:
                     final_url = (await f.read()).strip()
                 (final_content_path,) = await self._get_paths(final_url, extension)
                 return final_content_path.exists()
-            except (OSError, UnicodeDecodeError):
+            except (OSError, UnicodeDecodeError) as exc:
+                _log_cache_read_error("read redirect info", redir_path, exc)
                 pass
         return False
 
@@ -179,7 +191,8 @@ class URLCache:
                         final_content_path, "r", encoding="utf-8"
                     ) as f:
                         return await f.read()
-            except (OSError, UnicodeDecodeError):
+            except (OSError, UnicodeDecodeError) as exc:
+                _log_cache_read_error("follow redirect content", redir_path, exc)
                 pass
 
         raise KeyError(
@@ -324,7 +337,8 @@ class URLCache:
             try:
                 async with aiofiles.open(url_path, "r", encoding="utf-8") as f:
                     return (await f.read()).strip()
-            except (OSError, UnicodeDecodeError):
+            except (OSError, UnicodeDecodeError) as exc:
+                _log_cache_read_error("read original url", url_path, exc)
                 return None
         return None
 
@@ -338,7 +352,8 @@ class URLCache:
                 # Validate that the content looks like a URL
                 if content and "://" in content:
                     return content
-            except (OSError, UnicodeDecodeError):
+            except (OSError, UnicodeDecodeError) as exc:
+                _log_cache_read_error("read redirect target", redir_path, exc)
                 pass
         return None
 
@@ -365,7 +380,8 @@ class URLCache:
                 (final_content_path,) = await self._get_paths(final_url, extension)
                 if final_content_path.exists():
                     return final_content_path
-            except (OSError, UnicodeDecodeError):
+            except (OSError, UnicodeDecodeError) as exc:
+                _log_cache_read_error("resolve redirected content path", redir_path, exc)
                 pass
 
         return None
@@ -377,7 +393,8 @@ class URLCache:
             try:
                 async with aiofiles.open(failed_path, "r", encoding="utf-8") as f:
                     return (await f.read()).strip()
-            except (OSError, UnicodeDecodeError):
+            except (OSError, UnicodeDecodeError) as exc:
+                _log_cache_read_error("read failure reason", failed_path, exc)
                 return None
         return None
 
@@ -428,7 +445,8 @@ class URLCache:
                 # Verify at least one content file exists
                 if await self.has_url(url):
                     urls.append(url)
-            except (OSError, UnicodeDecodeError):
+            except (OSError, UnicodeDecodeError) as exc:
+                _log_cache_read_error("list cached urls", url_file, exc)
                 continue
         return urls
 
@@ -445,6 +463,9 @@ class URLCache:
                     else None
                 )
                 results.append((url, content))
-            except Exception:
+            except Exception as exc:
+                logger.warning(
+                    "Failed to fetch cached content for %s", url, exc_info=True
+                )
                 results.append((url, None))
         return results

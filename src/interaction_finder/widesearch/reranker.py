@@ -178,5 +178,10 @@ class Reranker:
         try:
             self._get_model()
             return True
-        except Exception:
+        except Exception as exc:
+            logfire.warning(
+                "Wide search reranker failed health check",
+                error=str(exc),
+                model=self.model_name,
+            )
             return False
