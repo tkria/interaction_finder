@@ -100,6 +100,9 @@ class ProcessDocumentsNode(BaseNode[State, Deps, ExtractionResult]):
     def _empty_result(self, ctx: GraphRunContext[State, Deps]) -> ExtractionResult:
         """Create empty result for early termination."""
         return ExtractionResult(
+            topic=ctx.state.topic,
+            target_entity_types=ctx.state.target_entity_types,
+            permitted_pairs={k: list(v) for k, v in ctx.state.permitted_pairs.items()},
             resources=ctx.deps.resource_pool,
             judgments=[],
             metadata=ExtractionMetadata(
@@ -1313,6 +1316,11 @@ class FinalizeNode(BaseNode[State, Deps, ExtractionResult]):
             )
 
             result = ExtractionResult(
+                topic=ctx.state.topic,
+                target_entity_types=ctx.state.target_entity_types,
+                permitted_pairs={
+                    k: list(v) for k, v in ctx.state.permitted_pairs.items()
+                },
                 resources=ctx.deps.resource_pool,
                 judgments=all_judgments,
                 metadata=metadata,
