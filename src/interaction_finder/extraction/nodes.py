@@ -47,8 +47,10 @@ from interaction_finder.extraction.state import State
 from interaction_finder.extraction.utils import (
     collect_relevant_text_for_quotes,
     identify_proximal_sets,
+    is_obvious_variant,
     make_entity_pair_key,
     normalize_for_comparison,
+    osa_distance,
 )
 from interaction_finder.logging import logfire
 from interaction_finder.resources import Resource
@@ -349,18 +351,21 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
     def _find_merge_candidates(
         self, unique_entities: dict[str, dict[str, set[str]]]
     ) -> tuple[dict[tuple[str, str], str], dict[str, list[tuple[str, str]]]]:
-        """Find merge candidates: exact matches and substring pairs.
+        """Find merge candidates: exact matches, fuzzy matches, and substring pairs.
 
         For exact normalized matches (multiple capitalization variants), selects
         canonical form by capitalization complexity (lowercase * uppercase).
 
+        For near-matches (spelling variants, pluralization), uses OSA distance
+        with a threshold to identify candidates for LLM review.
+
         Returns:
             Tuple of:
             - {(norm, kind): norm} for exact matches (auto-merge without LLM)
-            - {kind: [(norm_parent, norm_child), ...]} for substring pairs (need LLM)
+            - {kind: [(norm_parent, norm_child), ...]} for fuzzy/substring pairs (need LLM)
         """
         exact_match_rules: dict[tuple[str, str], str] = {}
-        substring_pairs: dict[str, list[tuple[str, str]]] = {}
+        candidate_pairs: dict[str, list[tuple[str, str]]] = {}
 
         for kind, normalized_entities in unique_entities.items():
             # Handle exact matches: multiple variants with same normalized form
@@ -377,20 +382,45 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
                         if variant != canonical:
                             exact_match_rules[(norm_name, kind)] = norm_name
 
-            # Find substring relationships between normalized forms
+            # Find substring and fuzzy matches between normalized forms
+            # Note: norm1/norm2 are already lowercase and normalized
             norm_list = list(normalized_entities.keys())
             pairs = []
             for i, norm1 in enumerate(norm_list):
                 for norm2 in norm_list[i + 1 :]:
+                    # Check substring relationship
                     if norm1 in norm2 and norm1 != norm2:
                         pairs.append((norm1, norm2))
                     elif norm2 in norm1:
                         pairs.append((norm2, norm1))
+                    else:
+                        # Check fuzzy match using OSA distance
+                        max_len = max(len(norm1), len(norm2))
+                        min_len = min(len(norm1), len(norm2))
+
+                        # Only check if entity names are long enough to avoid false positives
+                        if max_len >= 10:
+                            distance = osa_distance(norm1, norm2)
+                            ratio = distance / max_len
+
+                            # Tier 1: Distance 1 + obvious pattern → auto-merge
+                            if distance == 1 and is_obvious_variant(norm1, norm2):
+                                # Auto-merge: shorter form is canonical
+                                canonical = norm1 if len(norm1) <= len(norm2) else norm2
+                                child = norm2 if canonical == norm1 else norm1
+                                exact_match_rules[(child, kind)] = canonical
+                            # Tier 2: Low edit distance (2-10% diff) → ask LLM
+                            elif ratio <= 0.10:
+                                # Order by length (shorter = more general)
+                                if len(norm1) <= len(norm2):
+                                    pairs.append((norm1, norm2))
+                                else:
+                                    pairs.append((norm2, norm1))
 
             if pairs:
-                substring_pairs[kind] = pairs
+                candidate_pairs[kind] = pairs
 
-        return exact_match_rules, substring_pairs
+        return exact_match_rules, candidate_pairs
 
     async def _get_global_merge_decisions(
         self,

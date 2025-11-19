@@ -107,6 +107,143 @@ def normalize_for_comparison(text: str) -> str:
     return NormalizedTextMapper.normalize(text)
 
 
+def osa_distance(a: str, b: str) -> int:
+    """Calculate Optimal String Alignment (restricted Damerau-Levenshtein) distance.
+
+    Returns the minimum number of edits (insertion, deletion, substitution, or
+    transposition of adjacent characters) required to transform a to b, with the
+    restriction that no substring is edited more than once.
+
+    This is particularly useful for catching spelling variants where characters
+    are swapped or slightly modified (e.g., "hemorrhagic" vs "haemorrhagic").
+
+    Parameters:
+        a: First string
+        b: Second string
+
+    Returns:
+        Edit distance between strings
+
+    Examples:
+        >>> osa_distance("typo", "tpyo")
+        1
+        >>> osa_distance("hemorrhagic", "haemorrhagic")
+        2
+        >>> osa_distance("frog", "cat")
+        4
+    """
+    # Ensure a is shorter for efficiency
+    if len(a) > len(b):
+        a, b = b, a
+
+    # Skip common prefix
+    start = 0
+    for i, (char_a, char_b) in enumerate(zip(a, b)):
+        if char_a == char_b:
+            start += 1
+        else:
+            break
+
+    # If a is prefix of b, distance is remaining length of b
+    if start == len(a):
+        return len(b) - start
+
+    # Initialize distance vectors
+    len_b_tail = len(b) - start
+    v0 = list(range(1, len_b_tail + 1))
+    v1 = [0] * len_b_tail
+
+    a_prev = a[0] if a else ""
+    b_prev = b[0] if b else ""
+    current = 0
+
+    for i, a_char in enumerate(a):
+        if i < start:
+            a_prev = a_char
+            continue
+
+        left = i - start
+        current = i - start + 1
+        transition_next = 0
+
+        for j, b_char in enumerate(b):
+            if j < start:
+                b_prev = b_char
+                continue
+
+            above = current
+            this_transition = transition_next
+            transition_next = v1[j - start]
+            v1[j - start] = current = left
+            left = v0[j - start]
+
+            if a_char != b_char:
+                # Minimum of: substitution, deletion, insertion
+                current = min(current + 1, above + 1, left + 1)
+                # Check for transposition
+                if i > start and j > start and a_char == b_prev and a_prev == b_char:
+                    current = min(current, this_transition + 1)
+
+            v0[j - start] = current
+            b_prev = b_char
+
+        a_prev = a_char
+
+    return current
+
+
+def is_obvious_variant(a: str, b: str) -> bool:
+    """Check if strings are obvious variants (plurals or common spelling differences).
+
+    Detects:
+    - Plural patterns: +s, +es, y→ies
+    - US/UK spelling: ae↔e, our↔or, ise↔ize, re↔er
+
+    Parameters:
+        a: First string (normalized)
+        b: Second string (normalized)
+
+    Returns:
+        True if they match known variant patterns
+
+    Examples:
+        >>> is_obvious_variant("telangiectasia", "telangiectasias")
+        True
+        >>> is_obvious_variant("haemorrhagic", "hemorrhagic")
+        True
+        >>> is_obvious_variant("colour", "color")
+        True
+        >>> is_obvious_variant("cat", "dog")
+        False
+    """
+    shorter, longer = (a, b) if len(a) <= len(b) else (b, a)
+
+    # Plural patterns
+    if longer == shorter + "s" or longer == shorter + "es":
+        return True
+    if shorter.endswith("y") and longer == shorter[:-1] + "ies":
+        return True
+
+    # US/UK spelling variants (bidirectional)
+    for pattern_from, pattern_to in [("ae", "e"), ("our", "or")]:
+        if pattern_from in a and b == a.replace(pattern_from, pattern_to):
+            return True
+        if pattern_from in b and a == b.replace(pattern_from, pattern_to):
+            return True
+
+    # Suffix variants
+    if a.endswith("ise") and b == a[:-3] + "ize":
+        return True
+    if b.endswith("ise") and a == b[:-3] + "ize":
+        return True
+    if a.endswith("re") and len(a) > 3 and b == a[:-2] + "er":
+        return True
+    if b.endswith("re") and len(b) > 3 and a == b[:-2] + "er":
+        return True
+
+    return False
+
+
 def find_substring_entities(
     entities: dict[str, EntityMention],
 ) -> list[tuple[str, str]]:
