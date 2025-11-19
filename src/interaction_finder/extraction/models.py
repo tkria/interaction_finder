@@ -379,74 +379,17 @@ class ExtractionResult(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _rehydrate_quotes(cls, data):
-        """Restore Resource objects in quotes from resource_url references.
+        """Restore Resource objects in quotes from resource_url references."""
+        from interaction_finder.checkpoint import (
+            _needs_rehydration,
+            _rehydrate_judgments_quotes,
+        )
 
-        During deserialization, ResourceQuotes contain resource_url instead of
-        full Resource. This validator looks up resources from the pool and
-        injects them into quote dicts before Pydantic validates the structure.
-        """
         if not isinstance(data, dict) or "resources" not in data:
             return data
-
-        # Check if this is serialized data (judgments are dicts with resource_url in quotes)
         judgments = data.get("judgments", [])
-        if not judgments or not isinstance(judgments[0], dict):
+        if not _needs_rehydration(judgments):
             return data
-
-        def iter_assessment_dicts(judgment_dict: dict) -> Iterable[dict]:
-            """Yield assessment dicts from legacy and spread-based structures."""
-            assessments = judgment_dict.get("assessments")
-            if isinstance(assessments, list):
-                for assessment in assessments:
-                    if isinstance(assessment, dict):
-                        yield assessment
-
-            spread = judgment_dict.get("spread")
-            if isinstance(spread, dict):
-                for category in ("supporting", "refuting", "neutral", "irrelevant"):
-                    category_list = spread.get(category)
-                    if isinstance(category_list, list):
-                        for assessment in category_list:
-                            if isinstance(assessment, dict):
-                                yield assessment
-
-        # Check first assessment for resource_url (indicates serialized data)
-        first_judgment = judgments[0]
-        first_assessment = next(iter_assessment_dicts(first_judgment), None)
-        if not first_assessment:
-            return data
-        if not first_assessment.get("quotes"):
-            return data
-
-        first_quote = first_assessment["quotes"][0]
-        if not isinstance(first_quote, dict) or "resource_url" not in first_quote:
-            return data
-
-        # Deserialize pool and inject resources into all quotes
         pool = ResourcePool.model_validate(data["resources"])
-
-        def inject_resource(quote_dict: dict) -> None:
-            """Replace resource_url with actual Resource from pool."""
-            url = quote_dict["resource_url"]
-            resource = pool.get(url)
-            if resource is None:
-                raise ValueError(f"Resource with URL {url} not found in pool")
-            quote_dict["resource"] = resource
-            del quote_dict["resource_url"]
-
-        # Process all quotes in all assessments in all judgments
-        for judgment in judgments:
-            for assessment in iter_assessment_dicts(judgment):
-                # Inject resources into quotes
-                for quote_dict in assessment.get("quotes", []):
-                    inject_resource(quote_dict)
-
-                # Inject resources into entity quotes (entity1 and entity2)
-                for entity_key in ["entity1", "entity2"]:
-                    entity = assessment.get(entity_key)
-                    if not isinstance(entity, dict):
-                        continue
-                    for quote_dict in entity.get("quotes", []):
-                        inject_resource(quote_dict)
-
+        _rehydrate_judgments_quotes(judgments, pool)
         return data

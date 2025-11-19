@@ -22,6 +22,65 @@ if TYPE_CHECKING:
     )
 
 
+def _needs_rehydration(judgments: list[dict]) -> bool:
+    """Check if judgments need quote rehydration (have resource_url instead of resource)."""
+    if not judgments or not isinstance(judgments[0], dict):
+        return False
+    first = judgments[0]
+    # Check both structures: old (assessments list) and new (spread dict with categories)
+    for key in ["assessments", "spread"]:
+        container = first.get(key)
+        if not container:
+            continue
+        # Extract first assessment from either structure
+        assessments = container if isinstance(container, list) else []
+        if not assessments and isinstance(container, dict):
+            for cat in ("supporting", "refuting", "neutral", "irrelevant"):
+                if container.get(cat):
+                    assessments = container[cat]
+                    break
+        if assessments and isinstance(assessments[0], dict):
+            quotes = assessments[0].get("quotes", [])
+            if quotes and isinstance(quotes[0], dict):
+                return "resource_url" in quotes[0]
+    return False
+
+
+def _rehydrate_judgments_quotes(judgments: list[dict], pool: ResourcePool) -> None:
+    """Rehydrate ResourceQuote objects by replacing resource_url with Resource.
+
+    Modifies judgments in-place. Shared by PipelineCheckpoint and ExtractionResult.
+    """
+
+    def iter_assessments(judgment: dict):
+        """Yield assessment dicts from assessments list or spread categories."""
+        for a in judgment.get("assessments", []):
+            if isinstance(a, dict):
+                yield a
+        spread = judgment.get("spread", {})
+        for cat in ("supporting", "refuting", "neutral", "irrelevant"):
+            for a in spread.get(cat, []):
+                if isinstance(a, dict):
+                    yield a
+
+    def inject(quote: dict):
+        """Replace resource_url with Resource from pool."""
+        resource = pool.get(quote["resource_url"])
+        if resource is None:
+            raise ValueError(f"Resource {quote['resource_url']} not in pool")
+        quote["resource"] = resource
+        del quote["resource_url"]
+
+    for judgment in judgments:
+        for assessment in iter_assessments(judgment):
+            for quote in assessment.get("quotes", []):
+                inject(quote)
+            for entity in [assessment.get(k) for k in ["entity1", "entity2"]]:
+                if isinstance(entity, dict):
+                    for quote in entity.get("quotes", []):
+                        inject(quote)
+
+
 class KeywordsStageData(BaseModel):
     """Keyword extraction stage results.
 
@@ -147,71 +206,19 @@ class PipelineCheckpoint(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _rehydrate_extraction_quotes(cls, data):
-        """Rehydrate ResourceQuote objects in extraction stage if present.
-
-        During deserialization, ResourceQuotes contain resource_url instead of
-        full Resource objects. This validator looks up resources from the pool
-        and injects them into quote dicts before Pydantic validates the structure.
-
-        This preserves the existing ResourceQuote dehydration/rehydration pattern
-        while working with the nested extraction structure.
-        """
+        """Rehydrate ResourceQuote objects in extraction stage if present."""
         if not isinstance(data, dict):
             return data
-
-        # Only rehydrate if extraction stage is present
         extraction = data.get("extraction")
-        if extraction is None or not isinstance(extraction, dict):
+        if not isinstance(extraction, dict):
             return data
-
         judgments = extraction.get("judgments", [])
-        if not judgments or not isinstance(judgments[0], dict):
+        if not _needs_rehydration(judgments):
             return data
-
-        # Check if rehydration is needed (presence of resource_url)
-        first_judgment = judgments[0]
-        assessments = first_judgment.get("assessments", [])
-        if not assessments:
-            return data
-
-        first_assessment = assessments[0]
-        quotes = first_assessment.get("quotes", [])
-        if not quotes:
-            return data
-
-        first_quote = quotes[0]
-        if not isinstance(first_quote, dict) or "resource_url" not in first_quote:
-            return data
-
-        # Rehydrate using top-level resources pool
         if "resources" not in data:
             raise ValueError("Cannot rehydrate quotes: resources pool missing")
-
         pool = ResourcePool.model_validate(data["resources"])
-
-        def inject_resource(quote_dict: dict) -> None:
-            """Replace resource_url with actual Resource from pool."""
-            url = quote_dict["resource_url"]
-            resource = pool.get(url)
-            if resource is None:
-                raise ValueError(f"Resource with URL {url} not found in pool")
-            quote_dict["resource"] = resource
-            del quote_dict["resource_url"]
-
-        # Process all quotes in all assessments in all judgments
-        for judgment in judgments:
-            for assessment in judgment.get("assessments", []):
-                # Inject resources into quotes
-                for quote_dict in assessment.get("quotes", []):
-                    inject_resource(quote_dict)
-
-                # Inject resources into entity quotes (entity1 and entity2)
-                for entity_key in ["entity1", "entity2"]:
-                    entity = assessment.get(entity_key)
-                    if entity:
-                        for quote_dict in entity.get("quotes", []):
-                            inject_resource(quote_dict)
-
+        _rehydrate_judgments_quotes(judgments, pool)
         return data
 
 
