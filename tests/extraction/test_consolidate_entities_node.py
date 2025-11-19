@@ -219,7 +219,7 @@ class TestCollectUniqueEntities:
 
 
 class TestFindGlobalSubstringPairs:
-    """Test _find_global_substring_pairs method."""
+    """Test _find_merge_candidates method."""
 
     def test_finds_simple_substring(self):
         """Should find substring relationships."""
@@ -227,7 +227,7 @@ class TestFindGlobalSubstringPairs:
 
         unique_entities = {"gene": {"brca": {"BRCA"}, "brca1": {"BRCA1"}}}
 
-        pairs = node._find_global_substring_pairs(unique_entities)
+        exact_matches, pairs = node._find_merge_candidates(unique_entities)
 
         assert "gene" in pairs
         assert len(pairs["gene"]) == 1
@@ -246,7 +246,7 @@ class TestFindGlobalSubstringPairs:
             }
         }
 
-        pairs = node._find_global_substring_pairs(unique_entities)
+        exact_matches, pairs = node._find_merge_candidates(unique_entities)
 
         assert "gene" in pairs
         assert len(pairs["gene"]) == 2
@@ -260,20 +260,21 @@ class TestFindGlobalSubstringPairs:
 
         unique_entities = {"gene": {"brca1": {"BRCA1"}, "tp53": {"TP53"}}}
 
-        pairs = node._find_global_substring_pairs(unique_entities)
+        exact_matches, pairs = node._find_merge_candidates(unique_entities)
 
         assert pairs == {}
 
     def test_handles_exact_normalized_match(self):
-        """Should not create pairs for identical normalized names."""
+        """Should create exact match rules for identical normalized names."""
         node = ConsolidateEntitiesNode()
 
         unique_entities = {"gene": {"brca1": {"BRCA1", "brca1", "Brca1"}}}
 
-        pairs = node._find_global_substring_pairs(unique_entities)
+        exact_matches, pairs = node._find_merge_candidates(unique_entities)
 
-        # No pairs since all are same normalized form
+        # Should have exact match rules but no substring pairs
         assert pairs == {}
+        assert len(exact_matches) > 0  # Multiple variants should create merge rules
 
     def test_bidirectional_substring_detection(self):
         """Should detect substrings in both directions."""
@@ -287,7 +288,7 @@ class TestFindGlobalSubstringPairs:
             }
         }
 
-        pairs = node._find_global_substring_pairs(unique_entities)
+        exact_matches, pairs = node._find_merge_candidates(unique_entities)
 
         assert "gene" in pairs
         pair_set = set(pairs["gene"])

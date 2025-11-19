@@ -288,26 +288,30 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
     ) -> "ConsolidateRelationshipsNode":
         """Consolidate entities globally and update pair references."""
         with logfire.span("ConsolidateEntitiesNode"):
-            # Step 1: Collect unique normalized entities with canonical variants
+            # Step 1: Collect normalized entities and generate exact-match merge rules
             unique_entities = self._collect_unique_entities(ctx)
 
-            # Step 2: Find substring pairs globally
-            substring_pairs = self._find_global_substring_pairs(unique_entities)
+            # Step 2: Find merge candidates (exact matches + substring pairs)
+            exact_match_rules, substring_pairs = self._find_merge_candidates(
+                unique_entities
+            )
 
-            # Step 3: Get merge decisions from LLM (with caching)
-            merge_rules = await self._get_global_merge_decisions(substring_pairs, ctx)
+            # Step 3: Get LLM decisions for substring pairs (with caching)
+            llm_merge_rules = await self._get_global_merge_decisions(
+                substring_pairs, ctx
+            )
 
-            # Step 4: Resolve transitive merge chains (A→B→C becomes A→C)
-            resolved_rules = self._resolve_transitive_merges(merge_rules)
+            # Step 4: Combine rules and resolve transitive chains
+            all_rules = {**exact_match_rules, **llm_merge_rules}
+            resolved_rules = self._resolve_transitive_merges(all_rules)
 
-            # Step 5: Apply merge rules to entity dictionaries
+            # Step 5: Apply merge rules globally
             self._apply_merge_rules_globally(resolved_rules, ctx)
-
-            # Step 6: Update entity references in all pair assessments
             self._update_pair_entity_references(resolved_rules, ctx)
 
             ctx.deps.logger.info(
-                f"Global consolidation: {len(resolved_rules)} rules applied, "
+                f"Global consolidation: {len(resolved_rules)} rules applied "
+                f"({len(exact_match_rules)} exact matches, {len(llm_merge_rules)} LLM decisions), "
                 f"{ctx.state.entities_merged} entities consolidated"
             )
 
@@ -342,35 +346,51 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
 
         return unique_by_kind
 
-    def _find_global_substring_pairs(
+    def _find_merge_candidates(
         self, unique_entities: dict[str, dict[str, set[str]]]
-    ) -> dict[str, list[tuple[str, str]]]:
-        """Find substring relationships between normalized entity names.
+    ) -> tuple[dict[tuple[str, str], str], dict[str, list[tuple[str, str]]]]:
+        """Find merge candidates: exact matches and substring pairs.
+
+        For exact normalized matches (multiple capitalization variants), selects
+        canonical form by capitalization complexity (lowercase * uppercase).
 
         Returns:
-            {kind: [(norm_parent, norm_child), ...]}
+            Tuple of:
+            - {(norm, kind): norm} for exact matches (auto-merge without LLM)
+            - {kind: [(norm_parent, norm_child), ...]} for substring pairs (need LLM)
         """
-        pairs_by_kind: dict[str, list[tuple[str, str]]] = {}
+        exact_match_rules: dict[tuple[str, str], str] = {}
+        substring_pairs: dict[str, list[tuple[str, str]]] = {}
 
         for kind, normalized_entities in unique_entities.items():
+            # Handle exact matches: multiple variants with same normalized form
+            for norm_name, variants in normalized_entities.items():
+                if len(variants) > 1:
+                    # Select canonical by capitalization complexity
+                    canonical = max(
+                        variants,
+                        key=lambda v: sum(1 for c in v if c.islower())
+                        * sum(1 for c in v if c.isupper()),
+                    )
+                    # Merge all other variants into canonical
+                    for variant in variants:
+                        if variant != canonical:
+                            exact_match_rules[(norm_name, kind)] = norm_name
+
+            # Find substring relationships between normalized forms
             norm_list = list(normalized_entities.keys())
             pairs = []
-
             for i, norm1 in enumerate(norm_list):
                 for norm2 in norm_list[i + 1 :]:
-                    if norm1 == norm2:
-                        continue
-                    elif norm1 in norm2:
-                        # norm1 is parent (general), norm2 is child (specific)
+                    if norm1 in norm2 and norm1 != norm2:
                         pairs.append((norm1, norm2))
                     elif norm2 in norm1:
-                        # norm2 is parent (general), norm1 is child (specific)
                         pairs.append((norm2, norm1))
 
             if pairs:
-                pairs_by_kind[kind] = pairs
+                substring_pairs[kind] = pairs
 
-        return pairs_by_kind
+        return exact_match_rules, substring_pairs
 
     async def _get_global_merge_decisions(
         self,
