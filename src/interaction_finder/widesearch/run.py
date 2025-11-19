@@ -279,9 +279,9 @@ async def fetch_and_populate_results(
     # Fetch and populate
     urls = [url for url, _, _ in urls_to_fetch]
     # Fetch documents with DOI metadata
-    documents = await fetcher.fetch_documents(urls, progress=False, fail_fast=False)
+    documents = await fetcher.fetch_documents(urls, progress=True, fail_fast=False)
     # Fetch chunks for all URLs in batch
-    chunk_lists = await fetcher.get_chunks(urls, progress=False, fail_fast=False)
+    chunk_lists = await fetcher.get_chunks(urls, progress=True, fail_fast=False)
 
     fetched = 0
     for (url, title, rid), chunks in zip(urls_to_fetch, chunk_lists):

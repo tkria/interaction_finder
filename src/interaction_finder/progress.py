@@ -99,9 +99,9 @@ class LiveProgressCounter(ABC):
             total_is_final: bool — whether total is static (True) or still updating (False)
 
         Returns:
-            str — Rich markup string like "[bold yellow]5[/]/[bright_yellow]3[/]/[dim]10[/]"
+            str — Rich markup string like "[bold green]5[/]/[bright_yellow]3[/]/[dim]10[/]"
         """
-        complete_style = "bold yellow"
+        complete_style = "bold green"
         in_progress_style = "bold bright_yellow" if is_highlighted else "bold yellow"
         total_style = "bold bright_blue" if total_is_final else "dim"
         total_str = str(total) if total is not None else "?"

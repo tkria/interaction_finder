@@ -92,7 +92,7 @@ async def ensure_keywords(
 
             Path(checkpoint_path).write_text(checkpoint.model_dump_json(indent=2))
             if console:
-                console.print(f"[dim]Saved checkpoint to {checkpoint_path}[/dim]\n")
+                console.print(f"[dim]Saved checkpoint to {checkpoint_path}[/dim]")
 
     return checkpoint
 
@@ -142,7 +142,15 @@ async def ensure_search(
         from interaction_finder.widesearch import run_widesearch_with_checkpoint
         from interaction_finder.widesearch.progress import WidesearchProgress
 
-        widesearch_progress = WidesearchProgress()
+        # Pre-calculate max_rounds to initialize progress counter properly
+        ws_config = config.tools.widesearch
+        effective_max_rounds = ws_config.max_rounds
+        # Initialize progress counter with max_rounds and initial round
+        # current_round=1 because GenerateQueriesNode will increment state.current_round to 1 before first update
+        widesearch_progress = WidesearchProgress(
+            max_rounds=effective_max_rounds, current_round=1
+        )
+        widesearch_progress.set_status("Planning goals", highlight="search")
         with widesearch_progress:
             checkpoint = await run_widesearch_with_checkpoint(
                 input_checkpoint=checkpoint,
@@ -157,7 +165,7 @@ async def ensure_search(
 
             Path(checkpoint_path).write_text(checkpoint.model_dump_json(indent=2))
             if console:
-                console.print(f"[dim]Saved checkpoint to {checkpoint_path}[/dim]\n")
+                console.print(f"[dim]Saved checkpoint to {checkpoint_path}[/dim]")
 
     return checkpoint
 
@@ -223,7 +231,7 @@ async def ensure_extraction(
 
             Path(checkpoint_path).write_text(checkpoint.model_dump_json(indent=2))
             if console:
-                console.print(f"[dim]Saved checkpoint to {checkpoint_path}[/dim]\n")
+                console.print(f"[dim]Saved checkpoint to {checkpoint_path}[/dim]")
 
     return checkpoint
 

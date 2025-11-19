@@ -885,15 +885,14 @@ def widesearch(
             )
         )
 
-        console.print()
-
         # Fetch content if requested
         if fetch:
             from interaction_finder.widesearch import fetch_and_populate_results
 
             results_count = len(checkpoint.search.results) if checkpoint.search else 0
+            console.print()
             console.print(
-                f"\n[bold]Fetching content for {results_count} results...[/bold]"
+                f"[bold]Fetching content for {results_count} results...[/bold]"
             )
             fetch_stats = asyncio.run(fetch_and_populate_results(checkpoint, cfg))
             console.print(

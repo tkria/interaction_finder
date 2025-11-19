@@ -82,21 +82,13 @@ class ProcessDocumentsNode(BaseNode[State, Deps, ExtractionResult]):
             # Set up progress tracking
             if ctx.deps.progress:
                 ctx.deps.progress.documents_total = len(resources)
-                ctx.deps.progress.documents_in_progress = len(resources)
                 ctx.deps.progress.set_phase_extracting()
 
             # Process all documents in parallel, tracking progress as they complete
+            # Note: counter updates happen inside _process_document for tight scoping
             tasks = [self._process_document(resource, ctx) for resource in resources]
             for coro in asyncio.as_completed(tasks):
                 await coro
-                # Update progress: decrement in-progress as each document completes
-                if ctx.deps.progress:
-                    # documents_processed is incremented inside _process_document
-                    # Here we just need to decrement in_progress
-                    ctx.deps.progress.documents_in_progress = max(
-                        0, ctx.deps.progress.documents_in_progress - 1
-                    )
-                    ctx.deps.progress.update()
 
             # Check if we found any validated entities
             if not ctx.state.validated_entities_by_resource:
@@ -131,6 +123,11 @@ class ProcessDocumentsNode(BaseNode[State, Deps, ExtractionResult]):
         self, resource: Resource, ctx: GraphRunContext[State, Deps]
     ):
         """Process a single document through the full per-document pipeline."""
+        # Increment in-progress counter when work starts (tight scoping)
+        if ctx.deps.progress:
+            ctx.deps.progress.documents_in_progress += 1
+            ctx.deps.progress.update()
+
         with logfire.span(
             f"Document {resource.id.id}: {resource.title[:60]}",
             url=resource.id.url,
@@ -172,9 +169,8 @@ class ProcessDocumentsNode(BaseNode[State, Deps, ExtractionResult]):
 
                 ctx.state.validated_entities_by_resource[resource.id] = validated
 
-                # Update progress
+                # Update progress (documents_processed incremented in main loop for atomicity)
                 if ctx.deps.progress:
-                    ctx.deps.progress.documents_processed += 1
                     ctx.deps.progress.entities_found = sum(
                         len(e) for e in ctx.state.entities_by_resource.values()
                     )
@@ -219,37 +215,33 @@ class ProcessDocumentsNode(BaseNode[State, Deps, ExtractionResult]):
                 if not pairs:
                     return  # No pairs found in proximal sets
 
-                # Update pairs_found counter
+                # Stage 5: Deduplicate and assess pairs
                 if ctx.deps.progress:
+                    ctx.deps.progress.set_phase_assessing()
                     ctx.deps.progress.pairs_found += len(pairs)
                     ctx.deps.progress.pairs_in_progress += len(pairs)
                     ctx.deps.progress.update()
 
-                # Stage 5: Deduplicate and assess pairs
-                if ctx.deps.progress:
-                    ctx.deps.progress.set_phase_assessing()
-                assessments = await assess_document_pairs(
-                    pairs,
-                    validated,
-                    resource,
-                    ctx.state.topic,
-                    ctx.deps.config.tools.extraction.region_padding_chunks,
-                    ctx.deps.config,
-                    ctx.deps,
-                )
+                try:
+                    assessments = await assess_document_pairs(
+                        pairs,
+                        validated,
+                        resource,
+                        ctx.state.topic,
+                        ctx.deps.config.tools.extraction.region_padding_chunks,
+                        ctx.deps.config,
+                        ctx.deps,
+                    )
 
-                if assessments:
-                    ctx.state.pair_assessments_by_resource[resource.id] = assessments
-
-                    # Update progress: increment assessed, decrement in-progress
-                    if ctx.deps.progress:
-                        ctx.deps.progress.pairs_assessed += len(assessments)
-                        ctx.deps.progress.pairs_in_progress = max(
-                            0, ctx.deps.progress.pairs_in_progress - len(assessments)
+                    if assessments:
+                        ctx.state.pair_assessments_by_resource[resource.id] = (
+                            assessments
                         )
-                        ctx.deps.progress.update()
-                else:
-                    # No assessments means pairs were filtered out, still need to decrement in-progress
+                        # Update progress: increment assessed
+                        if ctx.deps.progress:
+                            ctx.deps.progress.pairs_assessed += len(assessments)
+                finally:
+                    # Always decrement in-progress by pairs count (tight scoping)
                     if ctx.deps.progress:
                         ctx.deps.progress.pairs_in_progress = max(
                             0, ctx.deps.progress.pairs_in_progress - len(pairs)
@@ -262,6 +254,14 @@ class ProcessDocumentsNode(BaseNode[State, Deps, ExtractionResult]):
                     f"[red]Document processing failed for {resource.title}: {type(e).__name__}: {e}[/red]",
                     extra={"markup": True},
                 )
+            finally:
+                # Update counters when work completes (tight scoping, even on error)
+                if ctx.deps.progress:
+                    ctx.deps.progress.documents_processed += 1
+                    ctx.deps.progress.documents_in_progress = max(
+                        0, ctx.deps.progress.documents_in_progress - 1
+                    )
+                    ctx.deps.progress.update()
 
 
 @dataclass
@@ -707,9 +707,7 @@ class ConsolidateRelationshipsNode(BaseNode[State, Deps, ExtractionResult]):
                     "Relationship consolidation agent returned no data; "
                     "defaulting all relationship polarities to neutral"
                 )
-                self._ensure_polarities_for_all_relationships(
-                    unique_relationships, ctx
-                )
+                self._ensure_polarities_for_all_relationships(unique_relationships, ctx)
                 return JudgeCrossDocumentNode()
 
             # Step 3: Apply consolidations to assessments
@@ -979,32 +977,21 @@ class JudgeCrossDocumentNode(BaseNode[State, Deps, ExtractionResult]):
                         continue
                     assessments_by_pair[pair_key].append(assessment)
 
-            # Update unique pairs count and set in-progress
+            # Update unique pairs count
             if ctx.deps.progress:
                 ctx.deps.progress.unique_pairs = len(assessments_by_pair)
-                ctx.deps.progress.judgments_in_progress = len(assessments_by_pair)
                 ctx.deps.progress.update()
 
-            # Judge each pair
+            # Judge each pair (counter updates happen inside _judge_pair for tight scoping)
             tasks = []
             for pair_key, assessments in assessments_by_pair.items():
                 tasks.append(self._judge_pair(pair_key, assessments, ctx))
 
-            # Run all judgments in parallel, tracking progress as they complete
+            # Run all judgments in parallel
             if tasks:
                 for coro in asyncio.as_completed(tasks):
                     pair_key, judgment = await coro
                     ctx.state.pair_judgments[pair_key] = judgment
-                    # Update accepted/rejected counts and decrement in-progress
-                    if ctx.deps.progress:
-                        if judgment.accepted:
-                            ctx.deps.progress.accepted += 1
-                        else:
-                            ctx.deps.progress.rejected += 1
-                        ctx.deps.progress.judgments_in_progress = max(
-                            0, ctx.deps.progress.judgments_in_progress - 1
-                        )
-                        ctx.deps.progress.update()
 
             return FinalizeNode()
 
@@ -1167,17 +1154,89 @@ Decide: accepted (true/false), relationship (selected label), confidence (high/m
         ctx: GraphRunContext[State, Deps],
     ) -> tuple[EntityPairKey, PairJudgment]:
         """Make final judgment on a single pair."""
-        from interaction_finder.extraction.utils import build_pair_spread
+        # Increment in-progress counter when work starts (tight scoping)
+        if ctx.deps.progress:
+            ctx.deps.progress.judgments_in_progress += 1
+            ctx.deps.progress.update()
 
-        # Build PairSpread by polarity
-        spread = build_pair_spread(assessments, ctx.state.relationship_polarities)
+        try:
+            from interaction_finder.extraction.utils import build_pair_spread
 
-        # Try deterministic accept
-        can_accept, relationship, reasoning = self._can_accept_deterministically(
-            assessments
-        )
-        if can_accept:
-            # Create judgment without LLM call
+            # Build PairSpread by polarity
+            spread = build_pair_spread(assessments, ctx.state.relationship_polarities)
+
+            # Try deterministic accept
+            can_accept, relationship, reasoning = self._can_accept_deterministically(
+                assessments
+            )
+            if can_accept:
+                # Create judgment without LLM call
+                first_assessment = assessments[0]
+                judgment = PairJudgment(
+                    entity1=SimpleEntity(
+                        name=first_assessment.entity1.name,
+                        kind=first_assessment.entity1.kind,
+                        aliases=first_assessment.entity1.aliases,
+                    ),
+                    entity2=SimpleEntity(
+                        name=first_assessment.entity2.name,
+                        kind=first_assessment.entity2.kind,
+                        aliases=first_assessment.entity2.aliases,
+                    ),
+                    relationship=relationship,
+                    spread=spread,
+                    accepted=True,
+                    confidence="high",
+                    reasoning=reasoning,
+                )
+                return (pair_key, judgment)
+            # Need LLM investigation
+            # Detect contentious pairs (supporting + refuting evidence)
+            is_contentious = bool(spread.supporting and spread.refuting)
+
+            if is_contentious:
+                prompt = self._build_contentious_prompt(pair_key, spread, ctx)
+            else:
+                prompt = self._build_unidirectional_prompt(pair_key, spread, ctx)
+            # Call cross-document judge with renamed span
+            agent = get_cross_document_judge_agent(ctx.deps.config)
+            usage = RunUsage()
+            try:
+                with rename_agent(
+                    agent,
+                    name=f"JudgeCrossDocumentNode: {pair_key.entity1_name} ⇌ {pair_key.entity2_name}",
+                ):
+                    async with ctx.deps.agent_semaphore:
+                        result = await agent.run(prompt, deps=ctx.deps, usage=usage)
+            except (TimeoutError, ConnectionError, ValueError) as e:
+                ctx.deps.logger.error(
+                    f"Cross-document judgment failed for {pair_key}: "
+                    f"{type(e).__name__}: {e}"
+                )
+                # Default to rejection with low confidence
+                first_assessment = assessments[0]
+                return (
+                    pair_key,
+                    PairJudgment(
+                        entity1=SimpleEntity(
+                            name=first_assessment.entity1.name,
+                            kind=first_assessment.entity1.kind,
+                            aliases=first_assessment.entity1.aliases,
+                        ),
+                        entity2=SimpleEntity(
+                            name=first_assessment.entity2.name,
+                            kind=first_assessment.entity2.kind,
+                            aliases=first_assessment.entity2.aliases,
+                        ),
+                        relationship=first_assessment.relationship,
+                        spread=spread,
+                        accepted=False,
+                        confidence="low",
+                        reasoning=f"Judgment failed due to error: {e}",
+                    ),
+                )
+
+            # Create judgment using LLM-selected relationship
             first_assessment = assessments[0]
             judgment = PairJudgment(
                 entity1=SimpleEntity(
@@ -1190,79 +1249,26 @@ Decide: accepted (true/false), relationship (selected label), confidence (high/m
                     kind=first_assessment.entity2.kind,
                     aliases=first_assessment.entity2.aliases,
                 ),
-                relationship=relationship,
+                relationship=result.output.relationship,
                 spread=spread,
-                accepted=True,
-                confidence="high",
-                reasoning=reasoning,
+                accepted=result.output.accepted,
+                confidence=result.output.confidence,
+                reasoning=result.output.reasoning,
             )
             return (pair_key, judgment)
-        # Need LLM investigation
-        # Detect contentious pairs (supporting + refuting evidence)
-        is_contentious = bool(spread.supporting and spread.refuting)
-
-        if is_contentious:
-            prompt = self._build_contentious_prompt(pair_key, spread, ctx)
-        else:
-            prompt = self._build_unidirectional_prompt(pair_key, spread, ctx)
-        # Call cross-document judge with renamed span
-        agent = get_cross_document_judge_agent(ctx.deps.config)
-        usage = RunUsage()
-        try:
-            with rename_agent(
-                agent,
-                name=f"JudgeCrossDocumentNode: {pair_key.entity1_name} ⇌ {pair_key.entity2_name}",
-            ):
-                async with ctx.deps.agent_semaphore:
-                    result = await agent.run(prompt, deps=ctx.deps, usage=usage)
-        except (TimeoutError, ConnectionError, ValueError) as e:
-            ctx.deps.logger.error(
-                f"Cross-document judgment failed for {pair_key}: "
-                f"{type(e).__name__}: {e}"
-            )
-            # Default to rejection with low confidence
-            first_assessment = assessments[0]
-            return (
-                pair_key,
-                PairJudgment(
-                    entity1=SimpleEntity(
-                        name=first_assessment.entity1.name,
-                        kind=first_assessment.entity1.kind,
-                        aliases=first_assessment.entity1.aliases,
-                    ),
-                    entity2=SimpleEntity(
-                        name=first_assessment.entity2.name,
-                        kind=first_assessment.entity2.kind,
-                        aliases=first_assessment.entity2.aliases,
-                    ),
-                    relationship=first_assessment.relationship,
-                    spread=spread,
-                    accepted=False,
-                    confidence="low",
-                    reasoning=f"Judgment failed due to error: {e}",
-                ),
-            )
-
-        # Create judgment using LLM-selected relationship
-        first_assessment = assessments[0]
-        judgment = PairJudgment(
-            entity1=SimpleEntity(
-                name=first_assessment.entity1.name,
-                kind=first_assessment.entity1.kind,
-                aliases=first_assessment.entity1.aliases,
-            ),
-            entity2=SimpleEntity(
-                name=first_assessment.entity2.name,
-                kind=first_assessment.entity2.kind,
-                aliases=first_assessment.entity2.aliases,
-            ),
-            relationship=result.output.relationship,
-            spread=spread,
-            accepted=result.output.accepted,
-            confidence=result.output.confidence,
-            reasoning=result.output.reasoning,
-        )
-        return (pair_key, judgment)
+        finally:
+            # Update counters when work completes (tight scoping, even on error)
+            if ctx.deps.progress:
+                # judgment is in locals() if we got to the return statement
+                if "judgment" in locals():
+                    if judgment.accepted:
+                        ctx.deps.progress.accepted += 1
+                    else:
+                        ctx.deps.progress.rejected += 1
+                ctx.deps.progress.judgments_in_progress = max(
+                    0, ctx.deps.progress.judgments_in_progress - 1
+                )
+                ctx.deps.progress.update()
 
 
 @dataclass
