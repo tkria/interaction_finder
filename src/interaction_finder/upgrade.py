@@ -14,7 +14,7 @@ Properties:
 - Minimal: Direct calls to underlying pipeline functions
 """
 
-from typing import Any, Literal
+from typing import Literal
 
 from rich.console import Console
 
@@ -52,6 +52,7 @@ async def ensure_keywords(
     search_backend: SearchBackend | None = None,
     console: Console | None = None,
     checkpoint_path: str | None = None,
+    force: bool = False,
 ) -> PipelineCheckpoint:
     """Ensure keywords stage complete. Idempotent.
 
@@ -61,12 +62,21 @@ async def ensure_keywords(
         search_backend: Search backend for keyword extraction (defaults to PubMed)
         console: Optional console for status messages
         checkpoint_path: Optional path to save checkpoint after completion
+        force: Replace existing keywords results if present
 
     Returns:
         Checkpoint with at least keywords stage
     """
-    # Run keywords stage if not already complete
-    if checkpoint.keywords is None:
+    # Check if keywords already exist and force not specified
+    if checkpoint.keywords is not None and not force:
+        if console:
+            console.print(
+                "[yellow]⚠ Keywords results already exist. Use --force to replace.[/yellow]"
+            )
+        return checkpoint
+
+    # Run keywords stage if not already complete or force specified
+    if checkpoint.keywords is None or force:
         # Print stage start message
         if console:
             console.print(
@@ -104,6 +114,7 @@ async def ensure_search(
     keywords_backend: SearchBackend | None = None,
     console: Console | None = None,
     checkpoint_path: str | None = None,
+    force: bool = False,
 ) -> PipelineCheckpoint:
     """Ensure search stage complete. Idempotent. Runs keywords if needed.
 
@@ -114,13 +125,23 @@ async def ensure_search(
         keywords_backend: Search backend for keywords stage (defaults to same as search_backend)
         console: Optional console for status messages
         checkpoint_path: Optional path to save checkpoint after completion
+        force: Replace existing search results if present (does NOT propagate to keywords)
 
     Returns:
         Checkpoint with at least search stage
     """
-    # Run search stage if not already complete
-    if checkpoint.search is None:
+    # Check if search already exists and force not specified
+    if checkpoint.search is not None and not force:
+        if console:
+            console.print(
+                "[yellow]⚠ Search results already exist. Use --force to replace.[/yellow]"
+            )
+        return checkpoint
+
+    # Run search stage if not already complete or force specified
+    if checkpoint.search is None or force:
         # Ensure keywords first (use keywords_backend or fall back to search_backend)
+        # NOTE: force is NOT propagated - we only replace search results, not keywords
         kw_backend = (
             keywords_backend if keywords_backend is not None else search_backend
         )
@@ -130,6 +151,7 @@ async def ensure_search(
             search_backend=kw_backend,
             console=console,
             checkpoint_path=checkpoint_path,
+            force=False,  # Never propagate force to prerequisites
         )
 
         # Print stage start message
@@ -177,6 +199,7 @@ async def ensure_extraction(
     config: IfetcherConfig,
     console: Console | None = None,
     checkpoint_path: str | None = None,
+    force: bool = False,
 ) -> PipelineCheckpoint:
     """Ensure extraction stage complete. Idempotent. Runs all prerequisites if needed.
 
@@ -187,19 +210,30 @@ async def ensure_extraction(
         config: Configuration
         console: Optional console for status messages
         checkpoint_path: Optional path to save checkpoint after completion
+        force: Replace existing extraction results if present (does NOT propagate to search/keywords)
 
     Returns:
         Checkpoint with extraction stage
     """
-    # Run extraction stage if not already complete
-    if checkpoint.extraction is None:
+    # Check if extraction already exists and force not specified
+    if checkpoint.extraction is not None and not force:
+        if console:
+            console.print(
+                "[yellow]⚠ Extraction results already exist. Use --force to replace.[/yellow]"
+            )
+        return checkpoint
+
+    # Run extraction stage if not already complete or force specified
+    if checkpoint.extraction is None or force:
         # Ensure search first (which ensures keywords)
+        # NOTE: force is NOT propagated - we only replace extraction results, not search/keywords
         checkpoint = await ensure_search(
             checkpoint,
             search_backend,
             config,
             console=console,
             checkpoint_path=checkpoint_path,
+            force=False,  # Never propagate force to prerequisites
         )
 
         # Print stage start message

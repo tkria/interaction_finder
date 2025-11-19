@@ -684,6 +684,9 @@ def keywords(
     max_rounds: Optional[int] = typer.Option(
         None, "--max-rounds", help="Override maximum search rounds"
     ),
+    force: bool = typer.Option(
+        False, "--force", help="Replace existing results if present"
+    ),
     config: Optional[str] = config_option(),
     mode: Optional[str] = mode_option(),
     verbose: bool = verbose_option(),
@@ -708,6 +711,24 @@ def keywords(
                 "[red]Error:[/red] Output file required. Use -o/--output to specify where to save results."
             )
             raise typer.Exit(1)
+
+        # Check if output file exists and has keywords results
+        if output.exists() and not force:
+            from pydantic import ValidationError
+            from interaction_finder.checkpoint import PipelineCheckpoint
+
+            try:
+                existing_checkpoint = PipelineCheckpoint.model_validate_json(
+                    output.read_text()
+                )
+                if existing_checkpoint.keywords is not None:
+                    console.print(
+                        "[yellow]⚠ Keywords results already exist in output file. Use --force to replace.[/yellow]"
+                    )
+                    raise typer.Exit(1)
+            except (json.JSONDecodeError, ValidationError):
+                # File exists but is not a valid checkpoint, proceed with warning
+                pass
 
         # Get effective options (local flags override global)
         config_path, mode, verbose, overrides = get_options_with_fallback(
@@ -792,6 +813,9 @@ def widesearch(
     ),
     fetch: bool = typer.Option(
         False, "--fetch", help="Fetch and cache content for all selected results"
+    ),
+    force: bool = typer.Option(
+        False, "--force", help="Replace existing results if present"
     ),
     config: Optional[str] = config_option(),
     mode: Optional[str] = mode_option(),
@@ -882,6 +906,7 @@ def widesearch(
                 cfg,
                 console=console,
                 checkpoint_path=checkpoint_path,
+                force=force,
             )
         )
 
@@ -936,6 +961,9 @@ def extract(
         "-b",
         "--backend",
         help="Search backend (pubmed, perplexica, openai) if search stage needed",
+    ),
+    force: bool = typer.Option(
+        False, "--force", help="Replace existing results if present"
     ),
     config: Optional[str] = config_option(),
     mode: Optional[str] = mode_option(),
@@ -999,6 +1027,7 @@ def extract(
                 cfg,
                 console=console,
                 checkpoint_path=checkpoint_path,
+                force=force,
             )
         )
 
