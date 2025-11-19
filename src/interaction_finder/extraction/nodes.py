@@ -46,6 +46,7 @@ from interaction_finder.extraction.models import (
 from interaction_finder.extraction.state import State
 from interaction_finder.extraction.utils import (
     collect_relevant_text_for_quotes,
+    extract_all_forms,
     identify_proximal_sets,
     is_obvious_variant,
     make_entity_pair_key,
@@ -322,10 +323,15 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
     def _collect_unique_entities(
         self, ctx: GraphRunContext[State, Deps]
     ) -> dict[str, dict[str, set[str]]]:
-        """Collect all unique normalized entities with their canonical variants.
+        """Collect all unique normalized entity forms with their canonical names.
+
+        Expands each entity to all its variant forms (name, aliases, parenthetical
+        expansions) and creates a mapping from normalized forms to canonical entity
+        names. When multiple entities map to the same normalized form, they become
+        merge candidates.
 
         Returns:
-            {kind: {normalized_name: {canonical_variant1, canonical_variant2, ...}}}
+            {kind: {normalized_form: {canonical_name1, canonical_name2, ...}}}
         """
         unique_by_kind: dict[str, dict[str, set[str]]] = {}
 
@@ -334,17 +340,22 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
                 if entity.kind not in unique_by_kind:
                     unique_by_kind[entity.kind] = {}
 
-                norm_name = normalize_for_comparison(entity_name)
-                if norm_name not in unique_by_kind[entity.kind]:
-                    unique_by_kind[entity.kind][norm_name] = set()
+                # Extract all forms: name + aliases + parenthetical expansions
+                all_forms = extract_all_forms(entity_name, entity.aliases)
 
-                unique_by_kind[entity.kind][norm_name].add(entity_name)
+                # Normalize each form and map it to this entity's canonical name
+                for form in all_forms:
+                    norm_form = normalize_for_comparison(form)
+                    if norm_form not in unique_by_kind[entity.kind]:
+                        unique_by_kind[entity.kind][norm_form] = set()
 
-                # Track canonical variant globally
-                norm_key = (norm_name, entity.kind)
-                if norm_key not in ctx.state.canonical_name_variants:
-                    ctx.state.canonical_name_variants[norm_key] = set()
-                ctx.state.canonical_name_variants[norm_key].add(entity_name)
+                    unique_by_kind[entity.kind][norm_form].add(entity_name)
+
+                    # Track canonical variant globally
+                    norm_key = (norm_form, entity.kind)
+                    if norm_key not in ctx.state.canonical_name_variants:
+                        ctx.state.canonical_name_variants[norm_key] = set()
+                    ctx.state.canonical_name_variants[norm_key].add(entity_name)
 
         return unique_by_kind
 
@@ -353,34 +364,37 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
     ) -> tuple[dict[tuple[str, str], str], dict[str, list[tuple[str, str]]]]:
         """Find merge candidates: exact matches, fuzzy matches, and substring pairs.
 
-        For exact normalized matches (multiple capitalization variants), selects
-        canonical form by capitalization complexity (lowercase * uppercase).
+        The unique_entities structure maps normalized forms to canonical entity names.
+        When multiple entities map to the same normalized form (via name/aliases/expansions),
+        they become exact match candidates.
 
         For near-matches (spelling variants, pluralization), uses OSA distance
-        with a threshold to identify candidates for LLM review.
+        with tiered thresholds.
 
         Returns:
             Tuple of:
-            - {(norm, kind): norm} for exact matches (auto-merge without LLM)
+            - {(norm_child, kind): norm_parent} for exact matches (auto-merge without LLM)
             - {kind: [(norm_parent, norm_child), ...]} for fuzzy/substring pairs (need LLM)
         """
         exact_match_rules: dict[tuple[str, str], str] = {}
         candidate_pairs: dict[str, list[tuple[str, str]]] = {}
 
         for kind, normalized_entities in unique_entities.items():
-            # Handle exact matches: multiple variants with same normalized form
-            for norm_name, variants in normalized_entities.items():
-                if len(variants) > 1:
+            # Phase 1: Handle exact matches
+            # When multiple entities map to same normalized form, they should merge
+            for norm_form, canonical_names in normalized_entities.items():
+                if len(canonical_names) > 1:
+                    # Multiple entities map to this normalized form → merge them
                     # Select canonical by capitalization complexity
                     canonical = max(
-                        variants,
+                        canonical_names,
                         key=lambda v: sum(1 for c in v if c.islower())
                         * sum(1 for c in v if c.isupper()),
                     )
-                    # Merge all other variants into canonical
-                    for variant in variants:
-                        if variant != canonical:
-                            exact_match_rules[(norm_name, kind)] = norm_name
+                    # Create merge rules for all other entities
+                    for child_name in canonical_names:
+                        if child_name != canonical:
+                            exact_match_rules[(norm_form, kind)] = norm_form
 
             # Find substring and fuzzy matches between normalized forms
             # Note: norm1/norm2 are already lowercase and normalized

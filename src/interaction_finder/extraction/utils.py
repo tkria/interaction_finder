@@ -192,6 +192,57 @@ def osa_distance(a: str, b: str) -> int:
     return current
 
 
+def extract_all_forms(entity_name: str, aliases: list[str]) -> list[str]:
+    """Extract all distinct forms an entity can take.
+
+    Expands entity name and aliases by extracting content from parenthetical
+    forms like "Name (abbreviation)". Filters out likely kind annotations
+    (single lowercase words in parens).
+
+    Parameters:
+        entity_name: Canonical entity name
+        aliases: List of alias forms
+
+    Returns:
+        List of all distinct forms (name, aliases, expanded parentheticals)
+
+    Examples:
+        >>> extract_all_forms("PAH (Pulmonary arterial hypertension)", [])
+        ['PAH (Pulmonary arterial hypertension)', 'PAH', 'Pulmonary arterial hypertension']
+
+        >>> extract_all_forms("Telangiectasia", ["HHT"])
+        ['Telangiectasia', 'HHT']
+
+        >>> extract_all_forms("BRCA1 (gene)", [])
+        ['BRCA1']  # Strips kind annotation
+    """
+    all_forms = {entity_name}
+    all_forms.update(aliases)
+
+    # Expand parenthetical forms
+    expanded = set()
+    for form in all_forms:
+        expanded.add(form)
+
+        # Check for parenthetical content
+        match = re.match(r"^(.+?)\s*\(([^)]+)\)$", form.strip())
+        if match:
+            base = match.group(1).strip()
+            paren_content = match.group(2).strip()
+
+            # Always add the base without parens
+            expanded.add(base)
+
+            # Add paren content if it looks like an abbreviation/alternative name
+            # Skip single lowercase words (likely kind annotations like "(gene)", "(phenotype)")
+            if paren_content and not (
+                paren_content.islower() and " " not in paren_content
+            ):
+                expanded.add(paren_content)
+
+    return sorted(expanded)
+
+
 def is_obvious_variant(a: str, b: str) -> bool:
     """Check if strings are obvious variants (plurals or common spelling differences).
 
