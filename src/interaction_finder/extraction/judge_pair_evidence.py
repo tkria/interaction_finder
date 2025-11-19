@@ -53,6 +53,7 @@ You will be given:
 2. If candidates are too generic and text supports a more specific type, suggest it
 3. If multiple types are valid, choose the one with strongest evidence
 4. Consider directionality (e.g., "activates" vs "inhibits" vs "regulates")
+5. Output only the relationship type label - no explanations, details, or parenthetical notes
 
 **Evidence evaluation:**
 - Direct experimental findings > clinical observations > review statements > speculation

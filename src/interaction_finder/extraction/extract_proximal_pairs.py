@@ -44,6 +44,8 @@ You will be given:
 - "treats" - therapeutic relationship
 - "mutated_in" - genetic mutations associated with condition
 
+**Relationship labels must be concise, high-level types only. No entity-specific details or explanations.**
+
 **Quality standards:**
 - Be conservative: only extract well-supported associations
 - Quotes must directly support the claimed relationship
