@@ -61,6 +61,12 @@ REPORT_CSS = """
     --doc-badge-bg: var(--pico-color-azure-600);
     --doc-badge-hover-bg: var(--pico-color-azure-500);
     --doc-badge-text: var(--pico-color-slate-50);
+    --polarity-supporting-bg: var(--pico-color-green-100);
+    --polarity-supporting-text: var(--pico-color-green-700);
+    --polarity-refuting-bg: var(--pico-color-red-100);
+    --polarity-refuting-text: var(--pico-color-red-700);
+    --polarity-neutral-bg: var(--pico-color-zinc-100);
+    --polarity-neutral-text: var(--pico-color-slate-600);
 }
 
 /* Dark theme colors (prefers-color-scheme: dark without explicit theme) */
@@ -111,6 +117,12 @@ REPORT_CSS = """
         --doc-badge-bg: var(--pico-color-azure-400);
         --doc-badge-hover-bg: var(--pico-color-azure-500);
         --doc-badge-text: var(--pico-color-slate-950);
+        --polarity-supporting-bg: var(--pico-color-green-850);
+        --polarity-supporting-text: var(--pico-color-green-300);
+        --polarity-refuting-bg: var(--pico-color-red-900);
+        --polarity-refuting-text: var(--pico-color-red-300);
+        --polarity-neutral-bg: var(--pico-color-slate-900);
+        --polarity-neutral-text: var(--pico-color-slate-200);
     }
 }
 
@@ -161,6 +173,12 @@ REPORT_CSS = """
     --doc-badge-bg: var(--pico-color-azure-400);
     --doc-badge-hover-bg: var(--pico-color-azure-500);
     --doc-badge-text: var(--pico-color-slate-950);
+    --polarity-supporting-bg: var(--pico-color-green-850);
+    --polarity-supporting-text: var(--pico-color-green-300);
+    --polarity-refuting-bg: var(--pico-color-red-900);
+    --polarity-refuting-text: var(--pico-color-red-300);
+    --polarity-neutral-bg: var(--pico-color-slate-900);
+    --polarity-neutral-text: var(--pico-color-slate-200);
 }
 
 body {
@@ -290,6 +308,11 @@ header {
     border-color: var(--rejected-border);
 }
 
+.pair-card.contentious {
+    border-color: var(--pico-color-amber-500);
+    box-shadow: 0 0 0 1px var(--pico-color-amber-200) inset;
+}
+
 .pair-entities {
     display: grid;
     grid-template-columns: 1fr auto 1fr;
@@ -345,27 +368,91 @@ header {
     margin-bottom: var(--spacing-compact);
 }
 
-.pair-variants {
-    margin-top: 0.5rem;
-    padding-top: 0.5rem;
-    border-top: 1px solid var(--pico-muted-border-color);
-}
-
-.variant-item {
-    padding: 0.25rem 0;
-    font-size: 0.8rem;
+.pair-evidence {
+    margin-top: 0.35rem;
     display: flex;
-    justify-content: space-between;
+    gap: 0.35rem;
+    flex-wrap: wrap;
+}
+
+.polarity-chip {
+    padding: 0.1rem 0.45rem;
+    border-radius: 999px;
+    font-size: 0.65rem;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+}
+
+.polarity-chip.supporting {
+    background: var(--polarity-supporting-bg);
+    color: var(--polarity-supporting-text);
+}
+
+.polarity-chip.refuting {
+    background: var(--polarity-refuting-bg);
+    color: var(--polarity-refuting-text);
+}
+
+.polarity-chip.neutral {
+    background: var(--polarity-neutral-bg);
+    color: var(--polarity-neutral-text);
+}
+
+.pc-chip {
+    display: inline-flex;
+    border-radius: 1.2em;
+    background: transparent;
+    gap: 0.2em;
+    text-transform: uppercase;
+    font-size: 0.65rem;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+}
+
+.pc-chip .pc-part {
+    padding: 0.1rem 0.45rem;
+    display: inline-flex;
     align-items: center;
+    justify-content: center;
+    gap: 0.2rem;
+    border-radius: 1.2em;
 }
 
-.variant-relationship {
-    font-style: italic;
-    color: var(--pico-muted-color);
+.pc-chip .pc-count {
+    font-size: 0.6rem;
+    opacity: 0.8;
 }
 
-.variant-badge {
-    font-size: 0.7rem;
+.pc-chip.polarity-supporting .pc-part:first-child {
+    background: var(--polarity-supporting-bg);
+    color: var(--polarity-supporting-text);
+}
+
+.pc-chip.polarity-refuting .pc-part:first-child {
+    background: var(--polarity-refuting-bg);
+    color: var(--polarity-refuting-text);
+}
+
+.pc-chip.polarity-neutral .pc-part:first-child,
+.pc-chip.polarity-irrelevant .pc-part:first-child {
+    background: var(--polarity-neutral-bg);
+    color: var(--polarity-neutral-text);
+}
+
+.pc-chip.confidence-high .pc-part:last-child {
+    background: var(--confidence-high-bg);
+    color: white;
+}
+
+.pc-chip.confidence-medium .pc-part:last-child {
+    background: var(--confidence-medium-bg);
+    color: white;
+}
+
+.pc-chip.confidence-low .pc-part:last-child {
+    background: var(--confidence-low-bg);
+    color: white;
 }
 
 .pair-meta {
@@ -1098,9 +1185,26 @@ function renderContent() {
         const assessments = JSON.parse(pairCard.dataset.assessments || '[]');
         const assessment = assessments.find(a => a.doc_idx === docIdx);
         const confidence = assessment ? assessment.confidence : '';
+        const polarity = assessment ? assessment.polarity : '';
         const quoteCount = assessment ? assessment.quote_count : 0;
-        const confidenceBadge = confidence ?
-            `<span class="confidence-badge confidence-${escapeHtml(confidence)}">${escapeHtml(confidence)}</span>` : '';
+        const polarityAbbrev = {
+            supporting: 'S',
+            refuting: 'R',
+            neutral: 'N',
+            irrelevant: 'I',
+        }[polarity] || '';
+        let chipMarkup = '';
+        if (polarity && confidence) {
+            chipMarkup = `
+                <span class="pc-chip">
+                    <span class="pc-part polarity ${escapeHtml(polarity)}">${escapeHtml(polarityAbbrev || polarity)}</span>
+                    <span class="pc-part confidence confidence-${escapeHtml(confidence)}">${escapeHtml(confidence)}</span>
+                </span>`;
+        } else if (confidence) {
+            chipMarkup = `<span class="confidence-badge confidence-${escapeHtml(confidence)}">${escapeHtml(confidence)}</span>`;
+        } else if (polarity) {
+            chipMarkup = `<span class="polarity-chip ${escapeHtml(polarity)}">${escapeHtml(polarityAbbrev || polarity)}</span>`;
+        }
 
         return `
         <div class="document-accordion">
@@ -1111,7 +1215,7 @@ function renderContent() {
                 </div>
                 <div class="document-stats">
                     <span>${quoteCount} quote${quoteCount !== 1 ? 's' : ''}</span>
-                    ${confidenceBadge}
+                    ${chipMarkup}
                 </div>
             </div>
             <div class="document-content ${state.openDocumentIdx === idx ? 'open' : ''}"

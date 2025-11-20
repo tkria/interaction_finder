@@ -30,6 +30,8 @@ def _render_pair_cards(pairs: list[dict[str, Any]]) -> str:
     show_kinds = len(all_kinds) > 2 or has_self_pair
 
     cards = []
+    polarity_label = {"supporting": "S", "refuting": "R", "neutral": "N"}
+
     for idx, pair in enumerate(pairs):
         # Build entity aliases (comma-separated for data-attribute)
         entity1_aliases_data = ",".join(pair["entity1"]["aliases"])
@@ -49,6 +51,7 @@ def _render_pair_cards(pairs: list[dict[str, Any]]) -> str:
                     "doc_idx": assess["doc_idx"],
                     "confidence": assess["confidence"],
                     "quote_count": len(assess["quotes"]),
+                    "polarity": assess.get("polarity"),
                 }
                 for assess in pair["assessments"]
             ]
@@ -58,6 +61,8 @@ def _render_pair_cards(pairs: list[dict[str, Any]]) -> str:
         card_classes = ["pair-card"]
         if not pair["accepted"]:
             card_classes.append("rejected")
+        if pair.get("contentious"):
+            card_classes.append("contentious")
 
         # Build kinds/relationship row
         if show_kinds:
@@ -73,19 +78,29 @@ def _render_pair_cards(pairs: list[dict[str, Any]]) -> str:
                 <span class="relationship-label">{_escape_html(pair["relationship"])}</span>
             </div>"""
 
-        # Build variants section if present
-        variants_html = ""
-        if "variants" in pair and pair["variants"]:
-            variant_items = []
-            for variant in pair["variants"]:
-                variant_items.append(f"""
-                        <div class="variant-item">
-                            <span class="variant-relationship">{_escape_html(variant["relationship"])}</span>
-                            <span class="confidence-badge variant-badge confidence-{_escape_html(variant["confidence"])}">{_escape_html(variant["confidence"])}</span>
-                        </div>""")
-            variants_html = f"""
-                <div class="pair-variants">
-                    {"".join(variant_items)}
+        # Evidence breakdown (supporting / refuting / neutral)
+        evidence_html = ""
+        polarity_summary = pair.get("polarity_summary", {})
+        if polarity_summary:
+            chips = []
+            for polarity in ("supporting", "refuting", "neutral"):
+                info = polarity_summary.get(polarity)
+                if not info or not info.get("count"):
+                    continue
+                label = polarity_label[polarity]
+                best_conf = info.get("confidence")
+                conf_key = best_conf if best_conf in {"high", "medium", "low"} else "low"
+                conf_text = best_conf.upper() if best_conf else "N/A"
+                chip = (
+                    f'<span class="pc-chip polarity-{polarity} confidence-{_escape_html(conf_key)}">'
+                    f'<span class="pc-part">{label}<span class="pc-count">×{info["count"]}</span></span>'
+                    f'<span class="pc-part">{_escape_html(conf_text)}</span>'
+                    "</span>"
+                )
+                chips.append(chip)
+            evidence_html = f"""
+                <div class="pair-evidence">
+                    {"".join(chips)}
                 </div>"""
 
         # Build complete card with minimal data-attributes
@@ -98,6 +113,7 @@ def _render_pair_cards(pairs: list[dict[str, Any]]) -> str:
              data-rel="{_escape_html(pair["relationship"])}"
              data-accepted="{str(pair["accepted"]).lower()}"
              data-docs="{doc_indices}"
+             data-contentious="{str(bool(pair.get("contentious"))).lower()}"
              data-assessments='{assessments_data}'>
             <div class="pair-entities">
                 <span class="entity-name left"
@@ -112,7 +128,7 @@ def _render_pair_cards(pairs: list[dict[str, Any]]) -> str:
             <div class="pair-meta">
                 <span class="pair-counts">{pair["doc_count"]} docs, {pair["quote_count"]} quotes</span>
                 <span class="confidence-badge confidence-{_escape_html(pair["confidence"])}">{_escape_html(pair["confidence"])}</span>
-            </div>{variants_html}
+            </div>{evidence_html}
         </div>"""
 
         cards.append(card_html)

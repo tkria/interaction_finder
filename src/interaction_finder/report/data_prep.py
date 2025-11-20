@@ -21,6 +21,104 @@ from interaction_finder.report.html_renderer import DocumentQuoteEntry
 from interaction_finder.report.parallel_renderer import render_documents_parallel
 from interaction_finder.report.reasoning_renderer import render_all_reasoning_templates
 
+POLARITY_ORDER = ("supporting", "refuting", "neutral", "irrelevant")
+CONFIDENCE_ORDER = {"high": 3, "medium": 2, "low": 1}
+
+
+def _pair_key(name_a: str, name_b: str) -> tuple[str, str]:
+    """Create deterministic key for unordered entity names."""
+
+    return tuple(sorted([name_a, name_b]))
+
+
+def _iter_assessments_with_polarity(judgment):
+    """Yield (assessment, polarity) tuples from a PairJudgment."""
+
+    spread = judgment.spread
+    for polarity in POLARITY_ORDER:
+        for assessment in getattr(spread, polarity):
+            yield assessment, polarity
+
+
+def _build_pair_entry(judgment, resource_pool) -> dict[str, Any]:
+    """Convert a PairJudgment into the lightweight dict used by the report."""
+
+    doc_ids: set[str] = set()
+    total_quotes = 0
+    polarity_counts = {polarity: 0 for polarity in POLARITY_ORDER}
+    polarity_best_conf = {polarity: None for polarity in POLARITY_ORDER}
+    assessments: list[dict[str, Any]] = []
+
+    for assessment, polarity in _iter_assessments_with_polarity(judgment):
+        doc_ids.add(assessment.resource_id.id)
+        total_quotes += len(assessment.quotes)
+        polarity_counts[polarity] += 1
+        confidence = assessment.confidence
+
+        resource = resource_pool.get(assessment.resource_id)
+        if resource is None:
+            continue
+
+        quote_data = [
+            {
+                "text": quote.query_text,
+                "spans": quote.spans,
+                "fuzzy_corrected": quote.fuzzy_corrected,
+            }
+            for quote in assessment.quotes
+        ]
+
+        assessments.append(
+            {
+                "resource_id": assessment.resource_id.id,
+                "title": resource.title or "Untitled",
+                "url": resource.id.url,
+                "confidence": assessment.confidence,
+                "reasoning": assessment.reasoning,
+                "relationship": assessment.relationship,
+                "quotes": quote_data,
+                "polarity": polarity,
+            }
+        )
+
+        if confidence:
+            current = polarity_best_conf[polarity]
+            current_rank = CONFIDENCE_ORDER.get(current, -1) if current else -1
+            new_rank = CONFIDENCE_ORDER.get(confidence, -1)
+            if new_rank > current_rank:
+                polarity_best_conf[polarity] = confidence
+
+    return {
+        "entity1": {
+            "name": judgment.entity1.name,
+            "kind": judgment.entity1.kind,
+            "aliases": judgment.entity1.aliases,
+        },
+        "entity2": {
+            "name": judgment.entity2.name,
+            "kind": judgment.entity2.kind,
+            "aliases": judgment.entity2.aliases,
+        },
+        "relationship": judgment.relationship,
+        "confidence": judgment.confidence,
+        "accepted": judgment.accepted,
+        "reasoning": judgment.reasoning,
+        "doc_count": len(doc_ids),
+        "quote_count": total_quotes,
+        "assessments": assessments,
+        "polarity_counts": polarity_counts,
+        "polarity_summary": {
+            polarity: {
+                "count": polarity_counts[polarity],
+                "confidence": polarity_best_conf[polarity],
+            }
+            for polarity in POLARITY_ORDER
+        },
+        "contentious": bool(
+            polarity_counts["supporting"] and polarity_counts["refuting"]
+        ),
+    }
+
 
 def _sort_assessments_by_date(
     assessments: list[dict[str, Any]],
@@ -89,117 +187,13 @@ def prepare_report_data(
         else checkpoint.extraction.judgments
     )
 
-    # Group judgments by entity pair (to collapse different relationships)
-    pair_groups: dict[tuple[str, str], list] = defaultdict(list)
+    pair_entries: list[tuple[tuple[str, str], Any, dict[str, Any]]] = []
     for judgment in judgments:
-        # Create a sorted key for the entity pair
-        entities_key = tuple(sorted([judgment.entity1.name, judgment.entity2.name]))
-        pair_groups[entities_key].append(judgment)
+        key = _pair_key(judgment.entity1.name, judgment.entity2.name)
+        pair_data = _build_pair_entry(judgment, checkpoint.resources)
+        pair_entries.append((key, judgment, pair_data))
 
-    # Transform grouped judgments to compact representation
-    pairs = []
-    for group in pair_groups.values():
-        # If multiple judgments for same entity pair, create variants
-        if len(group) > 1:
-            # Main judgment (first one)
-            main_judgment = group[0]
-
-            # Collect data from all judgments in group
-            all_doc_ids = set()
-            all_assessments = []
-            total_quotes = 0
-
-            for judgment in group:
-                all_doc_ids.update(
-                    assess.resource_id.id for assess in judgment.assessments
-                )
-                total_quotes += sum(
-                    len(assess.quotes) for assess in judgment.assessments
-                )
-                all_assessments.extend(judgment.assessments)
-
-            # Build relationship variants list
-            variants = []
-            for judgment in group:
-                doc_count = len(
-                    {assess.resource_id.id for assess in judgment.assessments}
-                )
-                quote_count = sum(len(assess.quotes) for assess in judgment.assessments)
-                variants.append(
-                    {
-                        "relationship": judgment.relationship,
-                        "confidence": judgment.confidence,
-                        "accepted": judgment.accepted,
-                        "reasoning": judgment.reasoning,
-                        "doc_count": doc_count,
-                        "quote_count": quote_count,
-                    }
-                )
-
-            # Use first judgment's entities
-            judgment = main_judgment
-        else:
-            judgment = group[0]
-            variants = None
-            all_doc_ids = {assess.resource_id.id for assess in judgment.assessments}
-            total_quotes = sum(len(assess.quotes) for assess in judgment.assessments)
-            all_assessments = judgment.assessments
-
-        # Transform assessments for this pair
-        assessments = []
-        for assess in all_assessments:
-            # Get resource information
-            resource = checkpoint.resources.get(assess.resource_id.url)
-            if resource is None:
-                continue
-
-            # Transform quotes with spans
-            quote_data = [
-                {
-                    "text": q.query_text,
-                    "spans": q.spans,
-                    "fuzzy_corrected": q.fuzzy_corrected,
-                }
-                for q in assess.quotes
-            ]
-
-            assessments.append(
-                {
-                    "resource_id": assess.resource_id.id,
-                    "title": resource.title or "Untitled",
-                    "url": resource.id.url,
-                    "confidence": assess.confidence,
-                    "reasoning": assess.reasoning,
-                    "relationship": assess.relationship,
-                    "quotes": quote_data,
-                }
-            )
-
-        pair_data = {
-            "entity1": {
-                "name": judgment.entity1.name,
-                "kind": judgment.entity1.kind,
-                "aliases": judgment.entity1.aliases,
-            },
-            "entity2": {
-                "name": judgment.entity2.name,
-                "kind": judgment.entity2.kind,
-                "aliases": judgment.entity2.aliases,
-            },
-            "relationship": judgment.relationship,
-            "confidence": judgment.confidence,
-            "accepted": judgment.accepted,
-            "reasoning": judgment.reasoning,
-            "doc_count": len(all_doc_ids),
-            "quote_count": total_quotes,
-            "assessments": assessments,
-        }
-
-        # Add variants if present
-        if variants:
-            pair_data["variants"] = variants
-
-        pairs.append(pair_data)
+    pairs = [entry[2] for entry in pair_entries]
 
     # Sort pairs by: accepted status > confidence > doc count > lexicographic
     confidence_order = {"high": 0, "medium": 1, "low": 2}
@@ -218,6 +212,14 @@ def prepare_report_data(
         )
 
     pairs.sort(key=pair_sort_key)
+
+    pair_idx_map = {
+        _pair_key(pair["entity1"]["name"], pair["entity2"]["name"]): idx
+        for idx, pair in enumerate(pairs)
+    }
+    judgment_refs = [
+        (pair_idx_map[key], judgment) for key, judgment, _ in pair_entries
+    ]
 
     # Sort assessments within each pair (do this before document rendering
     # since documents dict is needed for sorting)
@@ -259,30 +261,15 @@ def prepare_report_data(
     # doc_idx -> {pair_idx: {entity1, entity2}}
     doc_to_entities: dict[int, dict[int, dict[str, Any]]] = defaultdict(dict)
 
-    # Map from sorted (entity1, entity2) to pair_idx for tracking
-    pair_idx_map = {}
-    for pair_idx, pair in enumerate(pairs):
-        e1, e2 = sorted([pair["entity1"]["name"], pair["entity2"]["name"]])
-        pair_idx_map[(e1, e2)] = pair_idx
-
-    # Go back to original judgments to get ResourceQuote objects
-    for judgment in judgments:
-        e1, e2 = sorted([judgment.entity1.name, judgment.entity2.name])
-        pair_idx = pair_idx_map.get((e1, e2))
-
-        if pair_idx is None:
-            continue
-
-        # Collect quotes and entities from each assessment
-        for assess in judgment.assessments:
-            doc_id = assess.resource_id.id
+    for pair_idx, judgment in judgment_refs:
+        for assessment, _ in _iter_assessments_with_polarity(judgment):
+            doc_id = assessment.resource_id.id
             doc_idx = doc_idx_map.get(doc_id)
 
             if doc_idx is None:
                 continue
 
-            # Store the actual ResourceQuote objects with pair indices
-            for quote in assess.quotes:
+            for quote in assessment.quotes:
                 quote_key = (
                     tuple((start, end) for start, end in quote.spans),
                     quote.query_text,
@@ -299,19 +286,11 @@ def prepare_report_data(
                 else:
                     entry.pair_indices.add(pair_idx)
 
-            # Store entities for this pair in this document
             if pair_idx not in doc_to_entities[doc_idx]:
+                pair_entities = pairs[pair_idx]
                 doc_to_entities[doc_idx][pair_idx] = {
-                    "entity1": {
-                        "name": judgment.entity1.name,
-                        "kind": judgment.entity1.kind,
-                        "aliases": judgment.entity1.aliases,
-                    },
-                    "entity2": {
-                        "name": judgment.entity2.name,
-                        "kind": judgment.entity2.kind,
-                        "aliases": judgment.entity2.aliases,
-                    },
+                    "entity1": pair_entities["entity1"],
+                    "entity2": pair_entities["entity2"],
                 }
 
     # Pre-render documents in parallel using multiprocessing
