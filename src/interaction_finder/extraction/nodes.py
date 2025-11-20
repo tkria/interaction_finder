@@ -482,6 +482,8 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
                     # Build prompt using canonical names (not normalized forms)
                     # This presents the LLM with the actual entity names as they appear
                     pairs_description = []
+                    identical_canonical_pairs = []  # Track pairs to auto-merge
+
                     for norm_parent, norm_child in batch:
                         # Get canonical names for this normalized form
                         # Pick the most complex (mixed-case) version as representative
@@ -496,10 +498,28 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
                             * sum(1 for c in v if c.isupper()),
                         )
 
+                        # Skip pairs where canonical names are identical after lookup
+                        # This happens when aliases expand the same entity under multiple normalized forms
+                        if parent_canonical == child_canonical:
+                            identical_canonical_pairs.append((norm_parent, norm_child))
+                            continue
+
                         pairs_description.append(
                             f"- Parent: '{parent_canonical}' (type: {kind})\n"
                             f"  Child: '{child_canonical}' (type: {kind})"
                         )
+
+                    # Auto-merge pairs with identical canonical names
+                    for norm_parent, norm_child in identical_canonical_pairs:
+                        # Cache as should_merge=True
+                        cache_key = (norm_parent, norm_child, kind)
+                        ctx.state.merge_decision_cache[cache_key] = True
+                        # Create merge rule
+                        merge_rules[(norm_child, kind)] = norm_parent
+
+                    # Skip LLM call if no pairs remain after filtering
+                    if not pairs_description:
+                        continue
 
                     entity_types_str = ", ".join(ctx.state.target_entity_types)
 
