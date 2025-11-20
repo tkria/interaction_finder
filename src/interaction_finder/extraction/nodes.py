@@ -301,7 +301,7 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
 
             # Step 3: Get LLM decisions for substring pairs (with caching)
             llm_merge_rules = await self._get_global_merge_decisions(
-                substring_pairs, ctx
+                substring_pairs, unique_entities, ctx
             )
 
             # Step 4: Combine rules and resolve transitive chains
@@ -439,9 +439,15 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
     async def _get_global_merge_decisions(
         self,
         substring_pairs_by_kind: dict[str, list[tuple[str, str]]],
+        unique_entities: dict[str, dict[str, set[str]]],
         ctx: GraphRunContext[State, Deps],
     ) -> dict[tuple[str, str], str]:
-        """Query LLM for all unique normalized pairs.
+        """Query LLM for all unique normalized pairs using canonical names.
+
+        Args:
+            substring_pairs_by_kind: Pairs of normalized forms to evaluate
+            unique_entities: Mapping from normalized forms to canonical names
+            ctx: Graph execution context
 
         Returns:
             {(norm_child, kind): norm_parent} for pairs that should merge
@@ -473,12 +479,26 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
                 for i in range(0, len(uncached_pairs), batch_size):
                     batch = uncached_pairs[i : i + batch_size]
 
-                    # Build prompt
+                    # Build prompt using canonical names (not normalized forms)
+                    # This presents the LLM with the actual entity names as they appear
                     pairs_description = []
                     for norm_parent, norm_child in batch:
+                        # Get canonical names for this normalized form
+                        # Pick the most complex (mixed-case) version as representative
+                        parent_canonical = max(
+                            unique_entities[kind].get(norm_parent, {norm_parent}),
+                            key=lambda v: sum(1 for c in v if c.islower())
+                            * sum(1 for c in v if c.isupper()),
+                        )
+                        child_canonical = max(
+                            unique_entities[kind].get(norm_child, {norm_child}),
+                            key=lambda v: sum(1 for c in v if c.islower())
+                            * sum(1 for c in v if c.isupper()),
+                        )
+
                         pairs_description.append(
-                            f"- Parent: '{norm_parent}' (type: {kind})\n"
-                            f"  Child: '{norm_child}' (type: {kind})"
+                            f"- Parent: '{parent_canonical}' (type: {kind})\n"
+                            f"  Child: '{child_canonical}' (type: {kind})"
                         )
 
                     entity_types_str = ", ".join(ctx.state.target_entity_types)
@@ -503,6 +523,7 @@ For each pair, decide if they should be merged (child absorbed into parent) or k
                     # Call LLM
                     agent = get_entity_merge_agent(ctx.deps.config)
                     usage = RunUsage()
+                    result = None  # Initialize before try block
                     try:
                         with rename_agent(
                             agent,
@@ -514,24 +535,25 @@ For each pair, decide if they should be merged (child absorbed into parent) or k
                                 )
 
                         # Store decisions in cache
-                        for decision in result.output.decisions:
-                            cache_key = (
-                                normalize_for_comparison(decision.parent_entity),
-                                normalize_for_comparison(decision.child_entity),
-                                kind,
-                            )
-                            ctx.state.merge_decision_cache[cache_key] = (
-                                decision.should_merge
-                            )
+                        if result is not None:
+                            for decision in result.output.decisions:
+                                cache_key = (
+                                    normalize_for_comparison(decision.parent_entity),
+                                    normalize_for_comparison(decision.child_entity),
+                                    kind,
+                                )
+                                ctx.state.merge_decision_cache[cache_key] = (
+                                    decision.should_merge
+                                )
 
-                            if decision.should_merge:
-                                norm_child = normalize_for_comparison(
-                                    decision.child_entity
-                                )
-                                norm_parent = normalize_for_comparison(
-                                    decision.parent_entity
-                                )
-                                merge_rules[(norm_child, kind)] = norm_parent
+                                if decision.should_merge:
+                                    norm_child = normalize_for_comparison(
+                                        decision.child_entity
+                                    )
+                                    norm_parent = normalize_for_comparison(
+                                        decision.parent_entity
+                                    )
+                                    merge_rules[(norm_child, kind)] = norm_parent
 
                     except (TimeoutError, ConnectionError, ValueError) as e:
                         ctx.deps.logger.error(

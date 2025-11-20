@@ -313,6 +313,7 @@ class TestGetGlobalMergeDecisions:
         ctx = GraphRunContext(state=state, deps=mock_deps)
 
         substring_pairs = {"gene": [("brca", "brca1")]}
+        unique_entities = {"gene": {"brca": {"BRCA"}, "brca1": {"BRCA1"}}}
 
         # Mock LLM response
         mock_result = MagicMock()
@@ -334,7 +335,9 @@ class TestGetGlobalMergeDecisions:
         nodes_module.get_entity_merge_agent = lambda config: mock_agent
 
         try:
-            merge_rules = await node._get_global_merge_decisions(substring_pairs, ctx)
+            merge_rules = await node._get_global_merge_decisions(
+                substring_pairs, unique_entities, ctx
+            )
 
             # Should have called LLM
             assert mock_agent.run.called
@@ -365,6 +368,7 @@ class TestGetGlobalMergeDecisions:
         ctx.state.merge_decision_cache[("brca", "brca1", "gene")] = True
 
         substring_pairs = {"gene": [("brca", "brca1")]}
+        unique_entities = {"gene": {"brca": {"BRCA"}, "brca1": {"BRCA1"}}}
 
         # Mock LLM (should not be called)
         mock_agent = create_mock_agent_with_override(None)
@@ -375,7 +379,9 @@ class TestGetGlobalMergeDecisions:
         nodes_module.get_entity_merge_agent = lambda config: mock_agent
 
         try:
-            merge_rules = await node._get_global_merge_decisions(substring_pairs, ctx)
+            merge_rules = await node._get_global_merge_decisions(
+                substring_pairs, unique_entities, ctx
+            )
 
             # Should NOT have called LLM
             assert not mock_agent.run.called
@@ -406,8 +412,11 @@ class TestGetGlobalMergeDecisions:
         ctx.state.merge_decision_cache[("tp", "tp53", "gene")] = False
 
         substring_pairs = {"gene": [("tp", "tp53")]}
+        unique_entities = {"gene": {"tp": {"TP"}, "tp53": {"TP53"}}}
 
-        merge_rules = await node._get_global_merge_decisions(substring_pairs, ctx)
+        merge_rules = await node._get_global_merge_decisions(
+            substring_pairs, unique_entities, ctx
+        )
 
         # No merge rules created
         assert len(merge_rules) == 0
@@ -428,6 +437,14 @@ class TestGetGlobalMergeDecisions:
         ctx.state.merge_decision_cache[("brca", "brca1", "gene")] = True
 
         substring_pairs = {"gene": [("brca", "brca1"), ("tp", "tp53")]}
+        unique_entities = {
+            "gene": {
+                "brca": {"BRCA"},
+                "brca1": {"BRCA1"},
+                "tp": {"TP"},
+                "tp53": {"TP53"},
+            }
+        }
 
         # Mock LLM for uncached pair only
         mock_result = MagicMock()
@@ -449,7 +466,9 @@ class TestGetGlobalMergeDecisions:
         nodes_module.get_entity_merge_agent = lambda config: mock_agent
 
         try:
-            merge_rules = await node._get_global_merge_decisions(substring_pairs, ctx)
+            merge_rules = await node._get_global_merge_decisions(
+                substring_pairs, unique_entities, ctx
+            )
 
             # Should call LLM only for uncached pair
             assert mock_agent.run.called
@@ -477,6 +496,7 @@ class TestGetGlobalMergeDecisions:
         ctx = GraphRunContext(state=state, deps=mock_deps)
 
         substring_pairs = {"gene": [("brca", "brca1")]}
+        unique_entities = {"gene": {"brca": {"BRCA"}, "brca1": {"BRCA1"}}}
 
         # Mock LLM to raise error
         mock_agent = MagicMock()
@@ -489,7 +509,9 @@ class TestGetGlobalMergeDecisions:
         nodes_module.get_entity_merge_agent = lambda config: mock_agent
 
         try:
-            merge_rules = await node._get_global_merge_decisions(substring_pairs, ctx)
+            merge_rules = await node._get_global_merge_decisions(
+                substring_pairs, unique_entities, ctx
+            )
 
             # Should return empty (no merge rules)
             assert len(merge_rules) == 0
