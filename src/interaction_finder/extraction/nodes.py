@@ -626,6 +626,10 @@ For each pair, decide if they should be merged (child absorbed into parent) or k
 
         Merge rules are resolved transitively before application, so if A→B→C,
         we apply A→C directly.
+
+        For each normalized form that has a merge rule, selects ONE canonical name
+        globally (based on capitalization complexity) and renames all entities
+        across all documents to use that canonical name.
         """
         if not merge_rules:
             return
@@ -633,8 +637,38 @@ For each pair, decide if they should be merged (child absorbed into parent) or k
         # Resolve transitive chains first
         resolved_rules = self._resolve_transitive_merges(merge_rules)
 
+        # Step 1: Select global canonical names for each normalized form
+        # Use canonical_name_variants to find all variants and pick the most complex
+        global_canonical_names: dict[tuple[str, str], str] = {}
+        # Collect all unique (norm_form, kind) pairs from the rules
+        unique_targets = {
+            (norm_form, key[1]) for key, norm_form in resolved_rules.items()
+        }
+        for norm_form, kind in unique_targets:
+            # Get all canonical variants for this normalized form
+            variants = ctx.state.canonical_name_variants.get(
+                (norm_form, kind), {norm_form}
+            )
+            # Pick most complex by capitalization
+            # Primary: maximize mixed-case complexity (lowercase_count * uppercase_count)
+            # Tie-breaker: prefer all-UPPERCASE > mixed-case > all-lowercase
+            canonical = max(
+                variants,
+                key=lambda v: (
+                    sum(1 for c in v if c.islower())
+                    * sum(1 for c in v if c.isupper()),  # Mixed-case score
+                    sum(1 for c in v if c.isupper()),  # Uppercase count
+                    -sum(
+                        1 for c in v if c.islower()
+                    ),  # Negative lowercase count (prefer fewer lowercase)
+                ),
+            )
+            global_canonical_names[(norm_form, kind)] = canonical
+
+        # Step 2: Apply merges using global canonical names
         for resource_id, entities in ctx.state.validated_entities_by_resource.items():
             entities_to_merge = []
+            entities_to_rename = []
 
             for child_canonical in list(entities.keys()):
                 child_entity = entities[child_canonical]
@@ -643,6 +677,12 @@ For each pair, decide if they should be merged (child absorbed into parent) or k
 
                 if rule_key in resolved_rules:
                     parent_norm = resolved_rules[rule_key]
+                    parent_key = (parent_norm, child_entity.kind)
+
+                    # Get the global canonical name for the parent
+                    global_parent_name = global_canonical_names.get(
+                        parent_key, parent_norm
+                    )
 
                     # Find parent in this document by normalized lookup
                     parent_canonical = None
@@ -654,17 +694,58 @@ For each pair, decide if they should be merged (child absorbed into parent) or k
                             parent_canonical = candidate_name
                             break
 
-                    # Merge if parent exists
-                    if parent_canonical and parent_canonical != child_canonical:
-                        entities_to_merge.append((parent_canonical, child_canonical))
+                    if parent_canonical:
+                        # Parent exists in this document
+                        if parent_canonical != child_canonical:
+                            # Merge child into parent
+                            entities_to_merge.append(
+                                (parent_canonical, child_canonical, global_parent_name)
+                            )
+                        elif parent_canonical != global_parent_name:
+                            # Parent exists but has wrong name, rename it
+                            entities_to_rename.append(
+                                (parent_canonical, global_parent_name)
+                            )
+                    else:
+                        # Parent doesn't exist in this document, but child needs renaming
+                        # This happens with fuzzy/spelling variants across documents
+                        if child_canonical != global_parent_name:
+                            entities_to_rename.append(
+                                (child_canonical, global_parent_name)
+                            )
+
+            # Apply renames first (to establish global canonical names)
+            for old_name, new_name in entities_to_rename:
+                if old_name not in entities:
+                    continue
+                if old_name == new_name:
+                    continue
+
+                entity = entities[old_name]
+
+                # Add old name to aliases if not already there
+                if old_name not in entity.aliases:
+                    entity.aliases.append(old_name)
+
+                # Update entity name
+                entity.name = new_name
+
+                # Move entity to new key in dict
+                entities[new_name] = entity
+                del entities[old_name]
 
             # Apply merges - with transitive resolution, no entity should be missing
-            for parent_name, child_name in entities_to_merge:
-                if parent_name not in entities or child_name not in entities:
+            for parent_name, child_name, global_name in entities_to_merge:
+                # After renames, parent might now be under global_name
+                actual_parent_name = (
+                    global_name if global_name in entities else parent_name
+                )
+
+                if actual_parent_name not in entities or child_name not in entities:
                     # This shouldn't happen with transitive resolution, but check anyway
                     continue
 
-                parent = entities[parent_name]
+                parent = entities[actual_parent_name]
                 child = entities[child_name]
 
                 # Merge child into parent
