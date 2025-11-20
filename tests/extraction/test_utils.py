@@ -8,10 +8,12 @@ from interaction_finder.extraction.models import (
     ProximalEntitySet,
 )
 from interaction_finder.extraction.utils import (
+    _is_valid_entity_form,
     build_pair_spread,
     build_permitted_pairs,
     build_text_region,
     collect_relevant_text_for_quotes,
+    extract_all_forms,
     find_substring_entities,
     get_relationship_polarity,
     identify_proximal_sets,
@@ -829,3 +831,179 @@ class TestBuildPairSpread:
         assert is_contentious
         assert len(spread.supporting) == 1
         assert len(spread.refuting) == 1
+
+
+class TestIsValidEntityForm:
+    """Tests for _is_valid_entity_form validation function."""
+
+    def test_accepts_valid_gene_names(self):
+        """Test that valid gene names are accepted."""
+        assert _is_valid_entity_form("BRCA1")
+        assert _is_valid_entity_form("TP53")
+        assert _is_valid_entity_form("p53")
+        assert _is_valid_entity_form("PAH")
+        assert _is_valid_entity_form("BMPR2")
+        assert _is_valid_entity_form("ACVRL1")
+
+    def test_rejects_pure_numbers(self):
+        """Test that pure numbers are rejected."""
+        assert not _is_valid_entity_form("1")
+        assert not _is_valid_entity_form("5")
+        assert not _is_valid_entity_form("123")
+        assert not _is_valid_entity_form("1-5")
+        assert not _is_valid_entity_form("1 2 3")
+
+    def test_rejects_list_like_content(self):
+        """Test that list-like content is rejected."""
+        assert not _is_valid_entity_form("1, 5, 8")
+        assert not _is_valid_entity_form("1,5,8")
+        assert not _is_valid_entity_form("BRCA1, BRCA2")
+        assert not _is_valid_entity_form("gene; protein")
+        assert not _is_valid_entity_form("1/5/8")  # Multiple slashes
+
+    def test_rejects_single_slash_but_accepts_gene_aliases(self):
+        """Test slash handling."""
+        # Single slash is OK for gene names like "SMAD1/5/9"
+        # But we reject multiple slashes as they indicate lists
+        assert _is_valid_entity_form("SMAD1/5")  # Single slash OK
+        assert not _is_valid_entity_form("1/5/8")  # Multiple slashes rejected
+
+    def test_rejects_very_short_forms(self):
+        """Test that very short forms (< 3 chars) are rejected."""
+        assert not _is_valid_entity_form("1")
+        assert not _is_valid_entity_form("X")
+        assert not _is_valid_entity_form("Y")
+        assert not _is_valid_entity_form("ab")
+        assert not _is_valid_entity_form("52")
+
+    def test_rejects_empty_strings(self):
+        """Test that empty strings are rejected."""
+        assert not _is_valid_entity_form("")
+        assert not _is_valid_entity_form("   ")
+
+    def test_requires_sufficient_alphabetic_characters(self):
+        """Test that sufficient alphabetic characters are required."""
+        assert _is_valid_entity_form("p53")  # Short form: 1 letter OK
+        assert _is_valid_entity_form("HLA")  # 3 letters = valid
+        assert not _is_valid_entity_form(
+            "1a2"
+        )  # Only 1 letter in short form, but mostly numbers
+        assert not _is_valid_entity_form(
+            "123a"
+        )  # Only 1 letter but > 4 chars total = needs 2+ letters
+
+    def test_accepts_valid_disease_names(self):
+        """Test that valid disease names are accepted."""
+        assert _is_valid_entity_form("Pulmonary arterial hypertension")
+        assert _is_valid_entity_form("breast cancer")
+        assert _is_valid_entity_form("hereditary hemorrhagic telangiectasia")
+
+    def test_handles_whitespace(self):
+        """Test proper handling of whitespace."""
+        assert _is_valid_entity_form("  BRCA1  ")  # Leading/trailing spaces OK
+        assert _is_valid_entity_form("bone morphogenetic protein")  # Internal spaces OK
+
+
+class TestExtractAllForms:
+    """Tests for extract_all_forms function."""
+
+    def test_expands_parenthetical_content(self):
+        """Test expansion of parenthetical content."""
+        forms = extract_all_forms("PAH (Pulmonary arterial hypertension)", [])
+        assert "PAH" in forms
+        assert "Pulmonary arterial hypertension" in forms
+        # Original form may or may not be included depending on validation
+        assert len(forms) >= 2
+
+    def test_includes_aliases(self):
+        """Test that aliases are included."""
+        forms = extract_all_forms("Telangiectasia", ["HHT"])
+        assert "Telangiectasia" in forms
+        assert "HHT" in forms
+
+    def test_filters_kind_annotations(self):
+        """Test that kind annotations are filtered."""
+        forms = extract_all_forms("BRCA1 (gene)", [])
+        assert "BRCA1" in forms
+        assert "gene" not in forms  # Single lowercase word filtered
+        assert "BRCA1 (gene)" not in forms  # Invalid form filtered
+
+    def test_filters_list_content_from_parens(self):
+        """Test that list-like parenthetical content is filtered."""
+        forms = extract_all_forms("R-SMADs (1, 5, 8)", [])
+        assert "R-SMADs" in forms
+        assert "1, 5, 8" not in forms  # List content filtered
+        assert "1" not in forms
+        assert "5" not in forms
+        assert "8" not in forms
+
+    def test_filters_pure_numbers(self):
+        """Test that pure numbers are filtered out."""
+        # Even if somehow passed as entity name or alias
+        forms = extract_all_forms("ACVRL1", ["1", "52"])
+        assert "ACVRL1" in forms
+        assert "1" not in forms  # Pure number filtered
+        assert "52" not in forms  # Pure number filtered
+
+    def test_handles_gene_names_with_numbers(self):
+        """Test proper handling of gene names containing numbers."""
+        forms = extract_all_forms("ACVRL1", [])
+        assert "ACVRL1" in forms
+        # Should not extract "1" separately
+
+        forms = extract_all_forms("HLA-DPA1", [])
+        assert "HLA-DPA1" in forms
+        # Should not extract "1" separately
+
+    def test_handles_slash_separated_genes(self):
+        """Test handling of slash-separated gene names."""
+        forms = extract_all_forms("SMAD1/5/9", [])
+        assert "SMAD1/5/9" not in forms  # Multiple slashes = invalid
+        # Should not extract individual numbers
+
+    def test_complex_parenthetical_case(self):
+        """Test complex case with gene name and abbreviation."""
+        # When parens are at the end, should expand properly
+        forms = extract_all_forms(
+            "bone morphogenetic protein receptor type 2 (BMPR2)", []
+        )
+        # Should keep both forms
+        assert "BMPR2" in forms
+        assert "bone morphogenetic protein receptor type 2" in forms
+
+        # When entity name has trailing words after parens, nothing expandable
+        # (This is not a valid pattern for extraction - should be caught earlier)
+        forms = extract_all_forms(
+            "bone morphogenetic protein receptor type 2 (BMPR2) gene", []
+        )
+        # Has parens but not at end, so rejected as a whole
+        assert len(forms) == 0
+
+    def test_filters_single_characters_from_complex_names(self):
+        """Test that single characters from complex names are filtered."""
+        # Simulating entity names that might be extracted
+        forms = extract_all_forms("activin receptor like kinase 1", ["ALK1", "1"])
+        assert "activin receptor like kinase 1" in forms
+        assert "ALK1" in forms
+        assert "1" not in forms  # Single character filtered
+
+    def test_handles_multiple_aliases_with_parentheticals(self):
+        """Test multiple aliases with parenthetical content."""
+        forms = extract_all_forms(
+            "Hereditary hemorrhagic telangiectasia (HHT)",
+            ["HHT", "Osler-Weber-Rendu syndrome"],
+        )
+        assert "Hereditary hemorrhagic telangiectasia" in forms
+        assert "HHT" in forms
+        assert "Osler-Weber-Rendu syndrome" in forms
+
+    def test_deduplicates_forms(self):
+        """Test that duplicate forms are removed."""
+        forms = extract_all_forms("PAH (PAH)", ["PAH"])
+        # Should only have one "PAH" entry
+        assert forms.count("PAH") == 1
+
+    def test_returns_sorted_list(self):
+        """Test that output is sorted."""
+        forms = extract_all_forms("Zebra (AAA)", ["MMM"])
+        assert forms == sorted(forms)

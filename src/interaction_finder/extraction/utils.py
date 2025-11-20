@@ -192,12 +192,81 @@ def osa_distance(a: str, b: str) -> int:
     return current
 
 
+def _is_valid_entity_form(form: str) -> bool:
+    """Check if a form is valid as a standalone entity name.
+
+    Filters out:
+    - Pure numbers (including with spaces/dashes)
+    - Very short forms (< 3 characters total)
+    - Forms with list separators (commas, semicolons, multiple slashes)
+    - Forms without sufficient alphabetic content or starting with numbers
+    - Forms with parenthetical content (should be expanded separately)
+
+    Parameters:
+        form: Entity form to validate
+
+    Returns:
+        True if form is valid as an entity name
+
+    Examples:
+        >>> _is_valid_entity_form("BRCA1")
+        True
+        >>> _is_valid_entity_form("1")
+        False
+        >>> _is_valid_entity_form("1, 5, 8")
+        False
+        >>> _is_valid_entity_form("X")
+        False
+        >>> _is_valid_entity_form("PAH")
+        True
+        >>> _is_valid_entity_form("p53")
+        True
+        >>> _is_valid_entity_form("1a2")
+        False
+        >>> _is_valid_entity_form("BRCA1 (gene)")
+        False
+    """
+    form = form.strip()
+    # Reject empty strings
+    if not form:
+        return False
+    # Reject forms with parenthetical content (these should be expanded, not kept whole)
+    # This catches both kind annotations like "(gene)" and should-be-expanded forms
+    if "(" in form and ")" in form:
+        return False
+    # Reject pure numbers (including with spaces/dashes)
+    if re.match(r"^[\d\s\-]+$", form):
+        return False
+    # Reject forms starting with a digit (like "1a2", "123abc")
+    # Valid gene names like "p53" start with a letter
+    if form[0].isdigit():
+        return False
+    # Reject forms with list separators (commas, semicolons, multiple slashes)
+    if "," in form or ";" in form or form.count("/") > 1:
+        return False
+    # Count alphabetic characters and check length requirements
+    alpha_count = sum(1 for c in form if c.isalpha())
+    # For short forms (3-4 chars), require at least 1 alphabetic character
+    # For longer forms, require at least 2 alphabetic characters
+    # This allows "p53" but combined with the digit-start check, rejects "1a2"
+    if len(form) <= 4:
+        min_alpha = 1
+    else:
+        min_alpha = 2
+    if alpha_count < min_alpha:
+        return False
+    # Reject very short forms (< 3 characters)
+    if len(form) < 3:
+        return False
+    return True
+
+
 def extract_all_forms(entity_name: str, aliases: list[str]) -> list[str]:
     """Extract all distinct forms an entity can take.
 
     Expands entity name and aliases by extracting content from parenthetical
     forms like "Name (abbreviation)". Filters out likely kind annotations
-    (single lowercase words in parens).
+    (single lowercase words in parens), list-like content, and invalid forms.
 
     Parameters:
         entity_name: Canonical entity name
@@ -208,13 +277,19 @@ def extract_all_forms(entity_name: str, aliases: list[str]) -> list[str]:
 
     Examples:
         >>> extract_all_forms("PAH (Pulmonary arterial hypertension)", [])
-        ['PAH (Pulmonary arterial hypertension)', 'PAH', 'Pulmonary arterial hypertension']
+        ['PAH', 'PAH (Pulmonary arterial hypertension)', 'Pulmonary arterial hypertension']
 
         >>> extract_all_forms("Telangiectasia", ["HHT"])
-        ['Telangiectasia', 'HHT']
+        ['HHT', 'Telangiectasia']
 
         >>> extract_all_forms("BRCA1 (gene)", [])
-        ['BRCA1']  # Strips kind annotation
+        ['BRCA1']
+
+        >>> extract_all_forms("R-SMADs (1, 5, 8)", [])
+        ['R-SMADs']
+
+        >>> extract_all_forms("ACVRL1", [])
+        ['ACVRL1']
     """
     all_forms = {entity_name}
     all_forms.update(aliases)
@@ -222,7 +297,9 @@ def extract_all_forms(entity_name: str, aliases: list[str]) -> list[str]:
     # Expand parenthetical forms
     expanded = set()
     for form in all_forms:
-        expanded.add(form)
+        # Always add the original form if valid
+        if _is_valid_entity_form(form):
+            expanded.add(form)
 
         # Check for parenthetical content
         match = re.match(r"^(.+?)\s*\(([^)]+)\)$", form.strip())
@@ -230,13 +307,18 @@ def extract_all_forms(entity_name: str, aliases: list[str]) -> list[str]:
             base = match.group(1).strip()
             paren_content = match.group(2).strip()
 
-            # Always add the base without parens
-            expanded.add(base)
+            # Add the base without parens if valid
+            if _is_valid_entity_form(base):
+                expanded.add(base)
 
             # Add paren content if it looks like an abbreviation/alternative name
-            # Skip single lowercase words (likely kind annotations like "(gene)", "(phenotype)")
-            if paren_content and not (
-                paren_content.islower() and " " not in paren_content
+            # Skip:
+            # - Single lowercase words (likely kind annotations like "(gene)", "(phenotype)")
+            # - Invalid forms (numbers, lists, etc.)
+            if (
+                paren_content
+                and not (paren_content.islower() and " " not in paren_content)
+                and _is_valid_entity_form(paren_content)
             ):
                 expanded.add(paren_content)
 

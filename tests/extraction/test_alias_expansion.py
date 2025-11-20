@@ -28,8 +28,8 @@ class TestExtractAllForms:
     def test_expands_parenthetical_abbreviation(self):
         """Should expand 'Name (Abbrev)' into both forms."""
         result = extract_all_forms("Pulmonary arterial hypertension (PAH)", [])
+        # Forms with parentheses are expanded, not kept as-is
         assert set(result) == {
-            "Pulmonary arterial hypertension (PAH)",
             "Pulmonary arterial hypertension",
             "PAH",
         }
@@ -43,10 +43,11 @@ class TestExtractAllForms:
     def test_strips_kind_annotation(self):
         """Should not expand single lowercase word in parens (kind annotation)."""
         result = extract_all_forms("BRCA1 (gene)", [])
-        # Should strip (gene) annotation, only return base
+        # Should strip (gene) annotation and only return base form
+        # Forms with parens are not kept as-is
         assert "BRCA1" in result
-        assert "gene" not in result
-        assert "BRCA1 (gene)" in result  # Original form kept
+        assert "gene" not in result  # Single lowercase word filtered
+        assert "BRCA1 (gene)" not in result  # Parenthetical form not kept
 
     def test_strips_phenotype_annotation(self):
         """Should not expand phenotype annotations."""
@@ -77,10 +78,13 @@ class TestExtractAllForms:
         assert "pah" in result
 
     def test_handles_nested_parens(self):
-        """Should handle forms with parenthetical in base name."""
+        """Should reject forms with parenthetical in base name."""
         result = extract_all_forms("Disease (Type A) (subtype)", [])
-        # Will only match last parens due to greedy regex
-        assert "Disease (Type A)" in result
+        # Forms with parens (nested or otherwise) are not kept as-is
+        # They should be expanded, but nested parens don't match the regex
+        assert "Disease (Type A)" not in result
+        # Only the expansion might work if regex can handle it
+        # In this case, regex won't match nested parens properly
 
 
 class TestAliasBasedMatching:
@@ -138,15 +142,13 @@ class TestParentheticalExpansion:
         """'Name (Abbrev)' should match standalone 'Abbrev' entity."""
         node = ConsolidateEntitiesNode()
 
-        # Entity A: "Name (Abbrev)" expands to "abbrev"
+        # Entity A: "Name (Abbrev)" expands to both "Name" and "Abbrev"
         # Entity B: "Abbrev" normalizes to "abbrev"
+        # Both should map to the "pah" normalized form
         unique_entities = {
             "phenotype": {
                 "pah": {"PAH", "Pulmonary arterial hypertension (PAH)"},
                 "pulmonary arterial hypertension": {
-                    "Pulmonary arterial hypertension (PAH)"
-                },
-                "pulmonary arterial hypertension (pah)": {
                     "Pulmonary arterial hypertension (PAH)"
                 },
             }
@@ -161,19 +163,21 @@ class TestParentheticalExpansion:
         """'Name (Abbrev)' should also match standalone 'Name' entity."""
         node = ConsolidateEntitiesNode()
 
-        # Both normalize to "pulmonary arterial hypertension"
+        # Both expand/normalize to "pulmonary arterial hypertension"
+        # The form with (PAH) expands to both "Pulmonary arterial hypertension" and "PAH"
         unique_entities = {
             "phenotype": {
                 "pulmonary arterial hypertension": {
                     "Pulmonary arterial hypertension",
                     "Pulmonary arterial hypertension (PAH)",
                 },
+                "pah": {"Pulmonary arterial hypertension (PAH)"},
             }
         }
 
         exact_matches, llm_pairs = node._find_merge_candidates(unique_entities)
 
-        # Should detect exact match
+        # Should detect exact match via "pulmonary arterial hypertension"
         assert len(unique_entities["phenotype"]["pulmonary arterial hypertension"]) == 2
 
 
