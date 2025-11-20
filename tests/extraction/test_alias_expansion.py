@@ -112,9 +112,14 @@ class TestAliasBasedMatching:
 
         exact_matches, llm_pairs = node._find_merge_candidates(unique_entities)
 
-        # Should find exact match via shared "hht" alias
-        assert len(unique_entities["phenotype"]["hht"]) == 2
-        assert len(exact_matches) > 0
+        # Should create exact match rules for each normalized form with multiple variants
+        # "hht" has 2 variants → 1 rule
+        # But there are also entries for the full names, which also get consolidated
+        assert len(exact_matches) >= 1, "Should create at least 1 exact match rule"
+        # After consolidation, "hht" should have only 1 canonical name
+        assert len(unique_entities["phenotype"]["hht"]) == 1, (
+            "Should consolidate to 1 canonical name after Phase 1"
+        )
 
     def test_abbreviation_alias_matches_full_name(self):
         """Entity with abbreviation alias should match standalone abbreviation."""
@@ -130,9 +135,12 @@ class TestAliasBasedMatching:
 
         exact_matches, llm_pairs = node._find_merge_candidates(unique_entities)
 
-        # Both should merge via "pah"
-        assert len(unique_entities["phenotype"]["pah"]) == 2
-        assert len(exact_matches) > 0
+        # Should create exact match rule and consolidate
+        assert len(exact_matches) == 1, "Should create 1 exact match rule"
+        # After consolidation, "pah" should have only 1 canonical name
+        assert len(unique_entities["phenotype"]["pah"]) == 1, (
+            "Should consolidate to 1 canonical name"
+        )
 
 
 class TestParentheticalExpansion:
@@ -177,8 +185,12 @@ class TestParentheticalExpansion:
 
         exact_matches, llm_pairs = node._find_merge_candidates(unique_entities)
 
-        # Should detect exact match via "pulmonary arterial hypertension"
-        assert len(unique_entities["phenotype"]["pulmonary arterial hypertension"]) == 2
+        # Should create exact match rule and consolidate
+        assert len(exact_matches) == 1, "Should create 1 exact match rule"
+        # After consolidation, should have 1 canonical name
+        assert (
+            len(unique_entities["phenotype"]["pulmonary arterial hypertension"]) == 1
+        ), "Should consolidate to 1 canonical name"
 
 
 class TestMultiPathDetection:

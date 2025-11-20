@@ -30,79 +30,14 @@ def mock_deps():
     return deps
 
 
-class TestFindCanonicalName:
-    """Test _find_canonical_name helper method."""
+# TestFindCanonicalName class removed - _find_canonical_name no longer exists
+# The new implementation uses canonical names directly in rules, eliminating
+# the need for normalized-to-canonical lookups.
 
-    def test_finds_exact_match(self):
-        """Should find entity by normalized name match."""
-        node = ConsolidateEntitiesNode()
-        entities = {
-            "BRCA1": EntityMention(
-                kind="gene",
-                name="BRCA1",
-                aliases=[],
-                quotes=[],
-                reasoning="test",
-            ),
-            "TP53": EntityMention(
-                kind="gene", name="TP53", aliases=[], quotes=[], reasoning="test"
-            ),
-        }
 
-        result = node._find_canonical_name("brca1", entities, "gene")
-        assert result == "BRCA1"
-
-    def test_returns_none_for_no_match(self):
-        """Should return None if no matching entity found."""
-        node = ConsolidateEntitiesNode()
-        entities = {
-            "BRCA1": EntityMention(
-                kind="gene",
-                name="BRCA1",
-                aliases=[],
-                quotes=[],
-                reasoning="test",
-            )
-        }
-
-        result = node._find_canonical_name("tp53", entities, "gene")
-        assert result is None
-
-    def test_respects_kind_filter(self):
-        """Should not match if kind differs."""
-        node = ConsolidateEntitiesNode()
-        entities = {
-            "BRCA1": EntityMention(
-                kind="gene",
-                name="BRCA1",
-                aliases=[],
-                quotes=[],
-                reasoning="test",
-            )
-        }
-
-        result = node._find_canonical_name("brca1", entities, "disease")
-        assert result is None
-
-    def test_handles_whitespace_normalization(self):
-        """Should match despite whitespace differences in normalized input."""
-        from interaction_finder.extraction.utils import normalize_for_comparison
-
-        node = ConsolidateEntitiesNode()
-        entities = {
-            "Alzheimer's disease": EntityMention(
-                kind="disease",
-                name="Alzheimer's disease",
-                aliases=[],
-                quotes=[],
-                reasoning="test",
-            )
-        }
-
-        # _find_canonical_name expects already-normalized input
-        normalized_search = normalize_for_comparison("alzheimer's  disease")
-        result = node._find_canonical_name(normalized_search, entities, "disease")
-        assert result == "Alzheimer's disease"
+# NOTE: TestFindCanonicalName tests removed
+# _find_canonical_name() no longer exists in the new implementation.
+# Rules now use canonical names directly, eliminating normalized-to-canonical lookups.
 
 
 class TestUpdateEntityInAssessment:
@@ -275,10 +210,10 @@ class TestUpdatePairEntityReferences:
 
         ctx = GraphRunContext(state=state, deps=mock_deps)
 
-        # Merge rules: BRCA→BRCA1, cancer→Cancer
+        # Merge rules: BRCA→BRCA1, cancer→Cancer (using canonical names)
         merge_rules = {
-            ("brca", "gene"): "brca1",
-            ("cancer", "disease"): "cancer",
+            ("BRCA", "gene"): "BRCA1",
+            ("cancer", "disease"): "Cancer",
         }
 
         node._update_pair_entity_references(merge_rules, ctx)
@@ -390,8 +325,9 @@ class TestUpdatePairEntityReferences:
 
         ctx = GraphRunContext(state=state, deps=mock_deps)
 
+        # New format: canonical names
         merge_rules = {
-            ("brca", "gene"): "brca1",
+            ("BRCA", "gene"): "BRCA1",
         }
 
         node._update_pair_entity_references(merge_rules, ctx)
@@ -476,8 +412,9 @@ class TestUpdatePairEntityReferences:
 
         ctx = GraphRunContext(state=state, deps=mock_deps)
 
+        # New format: canonical names
         merge_rules = {
-            ("brca", "gene"): "brca1",
+            ("BRCA", "gene"): "BRCA1",
         }
 
         node._update_pair_entity_references(merge_rules, ctx)
@@ -538,8 +475,9 @@ class TestUpdatePairEntityReferences:
 
         ctx = GraphRunContext(state=state, deps=mock_deps)
 
+        # New format: canonical names
         merge_rules = {
-            ("brca", "gene"): "brca1",
+            ("BRCA", "gene"): "BRCA1",
         }
 
         node._update_pair_entity_references(merge_rules, ctx)

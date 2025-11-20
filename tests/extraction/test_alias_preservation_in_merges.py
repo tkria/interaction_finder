@@ -75,12 +75,10 @@ def test_merge_combines_aliases_from_both_entities(mock_deps):
     node = ConsolidateEntitiesNode()
     ctx = GraphRunContext(state=state, deps=mock_deps)
 
-    # Create merge rule: BRCA1 → BRCA
-    merge_rules = {("brca1", "gene"): "brca"}
+    # Create merge rule: BRCA1 → BRCA (using canonical names)
+    merge_rules = {("BRCA1", "gene"): "BRCA"}
 
-    # Populate canonical_name_variants (normally done by _collect_unique_entities)
-    ctx.state.canonical_name_variants[("brca", "gene")] = {"BRCA"}
-    ctx.state.canonical_name_variants[("brca1", "gene")] = {"BRCA1"}
+    # Note: canonical_name_variants no longer needed with new implementation
 
     node._apply_merge_rules_globally(merge_rules, ctx)
 
@@ -128,20 +126,14 @@ def test_rename_preserves_existing_aliases(mock_deps):
     node = ConsolidateEntitiesNode()
     ctx = GraphRunContext(state=state, deps=mock_deps)
 
-    # Populate canonical_name_variants to trigger rename to title case
-    ctx.state.canonical_name_variants[
-        ("pulmonary arterial hypertension", "phenotype")
-    ] = {
-        "pulmonary arterial hypertension",
-        "Pulmonary Arterial Hypertension",
-    }
-
-    # Create rule that will rename to global canonical
+    # Create rule that renames to title case (cross-document merge scenario)
+    # This simulates: another document has "Pulmonary Arterial Hypertension"
+    # and the merge rule says this entity should adopt that canonical name
     merge_rules = {
         (
             "pulmonary arterial hypertension",
             "phenotype",
-        ): "pulmonary arterial hypertension"
+        ): "Pulmonary Arterial Hypertension"
     }
 
     node._apply_merge_rules_globally(merge_rules, ctx)
@@ -266,16 +258,13 @@ def test_multiple_merges_accumulate_aliases(mock_deps):
     node = ConsolidateEntitiesNode()
     ctx = GraphRunContext(state=state, deps=mock_deps)
 
-    # Create transitive merge rules: BRCA2→BRCA1, BRCA1→BRCA
+    # Create transitive merge rules: BRCA2→BRCA1, BRCA1→BRCA (using canonical names)
     merge_rules = {
-        ("brca2", "gene"): "brca1",
-        ("brca1", "gene"): "brca",
+        ("BRCA2", "gene"): "BRCA1",
+        ("BRCA1", "gene"): "BRCA",
     }
 
-    # Populate canonical_name_variants
-    ctx.state.canonical_name_variants[("brca", "gene")] = {"BRCA"}
-    ctx.state.canonical_name_variants[("brca1", "gene")] = {"BRCA1"}
-    ctx.state.canonical_name_variants[("brca2", "gene")] = {"BRCA2"}
+    # Note: canonical_name_variants no longer needed with new implementation
 
     node._apply_merge_rules_globally(merge_rules, ctx)
 

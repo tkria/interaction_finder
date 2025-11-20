@@ -330,9 +330,15 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
         names. When multiple entities map to the same normalized form, they become
         merge candidates.
 
+        Also populates ctx.state.canonical_name_variants for debugging/introspection.
+        This is cleared at the start of each collection to prevent stale data.
+
         Returns:
             {kind: {normalized_form: {canonical_name1, canonical_name2, ...}}}
         """
+        # Clear canonical_name_variants to prevent accumulation across multiple runs
+        ctx.state.canonical_name_variants.clear()
+
         unique_by_kind: dict[str, dict[str, set[str]]] = {}
 
         for entities in ctx.state.validated_entities_by_resource.values():
@@ -359,47 +365,110 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
 
         return unique_by_kind
 
+    def _select_best_canonical_name(self, canonical_names: set[str]) -> str:
+        """Select the best canonical name from a set of capitalization variants.
+
+        Uses a multi-tier heuristic to prefer mixed-case over all-uppercase or
+        all-lowercase:
+        1. Primary: Maximize mixed-case complexity (lowercase_count * uppercase_count)
+        2. Tie-breaker 1: Prefer more uppercase letters
+        3. Tie-breaker 2: Minimize lowercase letters
+
+        This prefers: "Pulmonary Arterial Hypertension" > "PULMONARY" > "pulmonary"
+
+        Parameters:
+            canonical_names: Set of canonical name variants (same normalized form)
+
+        Returns:
+            The canonical name with best capitalization
+        """
+        return max(
+            canonical_names,
+            key=lambda v: (
+                sum(1 for c in v if c.islower())
+                * sum(1 for c in v if c.isupper()),  # Mixed-case score
+                sum(1 for c in v if c.isupper()),  # Uppercase count
+                -sum(1 for c in v if c.islower()),  # Minimize lowercase
+            ),
+        )
+
     def _find_merge_candidates(
         self, unique_entities: dict[str, dict[str, set[str]]]
     ) -> tuple[dict[tuple[str, str], str], dict[str, list[tuple[str, str]]]]:
         """Find merge candidates: exact matches, fuzzy matches, and substring pairs.
 
-        The unique_entities structure maps normalized forms to canonical entity names.
-        When multiple entities map to the same normalized form (via name/aliases/expansions),
-        they become exact match candidates.
+        Three-phase approach:
+        1. Auto-merge exact normalized matches (capitalization variants)
+        2. Consolidate unique_entities to reflect merges (1:1 norm→canonical mapping)
+        3. Find substring/fuzzy pairs for LLM review on consolidated entities
 
-        For near-matches (spelling variants, pluralization), uses OSA distance
-        with tiered thresholds.
+        The key insight: exact matches must be resolved BEFORE substring matching,
+        otherwise capitalization variants of "pulmonary hypertension" both match
+        against "pulmonary arterial hypertension", creating redundant LLM prompts.
 
         Returns:
             Tuple of:
-            - {(norm_child, kind): norm_parent} for exact matches (auto-merge without LLM)
-            - {kind: [(norm_parent, norm_child), ...]} for fuzzy/substring pairs (need LLM)
+            - {(canonical_child, kind): canonical_parent} for auto-merge rules
+            - {kind: [(norm_parent, norm_child), ...]} for LLM review pairs
         """
-        exact_match_rules: dict[tuple[str, str], str] = {}
+        auto_merge_rules: dict[tuple[str, str], str] = {}
+
+        # PHASE 1: Handle exact normalized matches (capitalization variants)
+        # When multiple canonical names map to the same normalized form, merge them
+        for kind, normalized_entities in unique_entities.items():
+            for norm_form, canonical_names in list(normalized_entities.items()):
+                if len(canonical_names) > 1:
+                    # Select best canonical name using capitalization complexity
+                    canonical = self._select_best_canonical_name(canonical_names)
+
+                    # Create merge rules: each child → canonical parent
+                    for child_name in canonical_names:
+                        if child_name != canonical:
+                            auto_merge_rules[(child_name, kind)] = canonical
+
+                    # CONSOLIDATE: Update unique_entities to have single canonical
+                    # This ensures phase 2 works with consolidated 1:1 mappings
+                    normalized_entities[norm_form] = {canonical}
+
+        # PHASE 2: Handle fuzzy matches (spelling variants, pluralization)
+        # Now that capitalization variants are consolidated, check for OSA patterns
+        for kind, normalized_entities in unique_entities.items():
+            norm_list = list(normalized_entities.keys())
+
+            for i, norm1 in enumerate(norm_list):
+                for norm2 in norm_list[i + 1 :]:
+                    # Only check if entity names are long enough to avoid false positives
+                    max_len = max(len(norm1), len(norm2))
+                    if max_len >= 10:
+                        distance = osa_distance(norm1, norm2)
+                        ratio = distance / max_len
+
+                        # Tier 1: Distance 1 + obvious pattern → auto-merge
+                        if distance == 1 and is_obvious_variant(norm1, norm2):
+                            # Get canonical names (now 1:1 after phase 1 consolidation)
+                            canonical1 = next(iter(normalized_entities[norm1]))
+                            canonical2 = next(iter(normalized_entities[norm2]))
+
+                            # Shorter normalized form = more general = parent
+                            if len(norm1) <= len(norm2):
+                                auto_merge_rules[(canonical2, kind)] = canonical1
+                                # Remove merged entity from unique_entities
+                                del normalized_entities[norm2]
+                            else:
+                                auto_merge_rules[(canonical1, kind)] = canonical2
+                                # Remove merged entity from unique_entities
+                                del normalized_entities[norm1]
+                            # Skip to next pair (one norm_form is now gone)
+                            break
+
+        # PHASE 3: Find substring and fuzzy Tier 2 pairs for LLM review
+        # These work on fully consolidated entities (no capitalization variants)
         candidate_pairs: dict[str, list[tuple[str, str]]] = {}
 
         for kind, normalized_entities in unique_entities.items():
-            # Phase 1: Handle exact matches
-            # When multiple entities map to same normalized form, they should merge
-            for norm_form, canonical_names in normalized_entities.items():
-                if len(canonical_names) > 1:
-                    # Multiple entities map to this normalized form → merge them
-                    # Select canonical by capitalization complexity
-                    canonical = max(
-                        canonical_names,
-                        key=lambda v: sum(1 for c in v if c.islower())
-                        * sum(1 for c in v if c.isupper()),
-                    )
-                    # Create merge rules for all other entities
-                    for child_name in canonical_names:
-                        if child_name != canonical:
-                            exact_match_rules[(norm_form, kind)] = norm_form
-
-            # Find substring and fuzzy matches between normalized forms
-            # Note: norm1/norm2 are already lowercase and normalized
             norm_list = list(normalized_entities.keys())
             pairs = []
+
             for i, norm1 in enumerate(norm_list):
                 for norm2 in norm_list[i + 1 :]:
                     # Check substring relationship
@@ -408,23 +477,13 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
                     elif norm2 in norm1:
                         pairs.append((norm2, norm1))
                     else:
-                        # Check fuzzy match using OSA distance
+                        # Check fuzzy Tier 2: 2-10% edit distance → ask LLM
                         max_len = max(len(norm1), len(norm2))
-                        min_len = min(len(norm1), len(norm2))
-
-                        # Only check if entity names are long enough to avoid false positives
                         if max_len >= 10:
                             distance = osa_distance(norm1, norm2)
                             ratio = distance / max_len
 
-                            # Tier 1: Distance 1 + obvious pattern → auto-merge
-                            if distance == 1 and is_obvious_variant(norm1, norm2):
-                                # Auto-merge: shorter form is canonical
-                                canonical = norm1 if len(norm1) <= len(norm2) else norm2
-                                child = norm2 if canonical == norm1 else norm1
-                                exact_match_rules[(child, kind)] = canonical
-                            # Tier 2: Low edit distance (2-10% diff) → ask LLM
-                            elif ratio <= 0.10:
+                            if ratio <= 0.10:
                                 # Order by length (shorter = more general)
                                 if len(norm1) <= len(norm2):
                                     pairs.append((norm1, norm2))
@@ -434,7 +493,7 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
             if pairs:
                 candidate_pairs[kind] = pairs
 
-        return exact_match_rules, candidate_pairs
+        return auto_merge_rules, candidate_pairs
 
     async def _get_global_merge_decisions(
         self,
@@ -487,15 +546,11 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
                     for norm_parent, norm_child in batch:
                         # Get canonical names for this normalized form
                         # Pick the most complex (mixed-case) version as representative
-                        parent_canonical = max(
-                            unique_entities[kind].get(norm_parent, {norm_parent}),
-                            key=lambda v: sum(1 for c in v if c.islower())
-                            * sum(1 for c in v if c.isupper()),
+                        parent_canonical = self._select_best_canonical_name(
+                            unique_entities[kind].get(norm_parent, {norm_parent})
                         )
-                        child_canonical = max(
-                            unique_entities[kind].get(norm_child, {norm_child}),
-                            key=lambda v: sum(1 for c in v if c.islower())
-                            * sum(1 for c in v if c.isupper()),
+                        child_canonical = self._select_best_canonical_name(
+                            unique_entities[kind].get(norm_child, {norm_child})
                         )
 
                         # Skip pairs where canonical names are identical after lookup
@@ -622,14 +677,14 @@ For each pair, decide if they should be merged (child absorbed into parent) or k
         merge_rules: dict[tuple[str, str], str],
         ctx: GraphRunContext[State, Deps],
     ) -> None:
-        """Apply merge rules to all documents using normalized lookups.
+        """Apply merge rules to all documents.
 
-        Merge rules are resolved transitively before application, so if A→B→C,
-        we apply A→C directly.
+        Merge rules map (canonical_child, kind) -> canonical_parent directly.
+        Resolved transitively before application, so if A→B→C, we apply A→C.
 
-        For each normalized form that has a merge rule, selects ONE canonical name
-        globally (based on capitalization complexity) and renames all entities
-        across all documents to use that canonical name.
+        Parameters:
+            merge_rules: {(canonical_child, kind): canonical_parent}
+            ctx: Graph run context
         """
         if not merge_rules:
             return
@@ -637,115 +692,48 @@ For each pair, decide if they should be merged (child absorbed into parent) or k
         # Resolve transitive chains first
         resolved_rules = self._resolve_transitive_merges(merge_rules)
 
-        # Step 1: Select global canonical names for each normalized form
-        # Use canonical_name_variants to find all variants and pick the most complex
-        global_canonical_names: dict[tuple[str, str], str] = {}
-        # Collect all unique (norm_form, kind) pairs from the rules
-        unique_targets = {
-            (norm_form, key[1]) for key, norm_form in resolved_rules.items()
-        }
-        for norm_form, kind in unique_targets:
-            # Get all canonical variants for this normalized form
-            variants = ctx.state.canonical_name_variants.get(
-                (norm_form, kind), {norm_form}
-            )
-            # Pick most complex by capitalization
-            # Primary: maximize mixed-case complexity (lowercase_count * uppercase_count)
-            # Tie-breaker: prefer all-UPPERCASE > mixed-case > all-lowercase
-            canonical = max(
-                variants,
-                key=lambda v: (
-                    sum(1 for c in v if c.islower())
-                    * sum(1 for c in v if c.isupper()),  # Mixed-case score
-                    sum(1 for c in v if c.isupper()),  # Uppercase count
-                    -sum(
-                        1 for c in v if c.islower()
-                    ),  # Negative lowercase count (prefer fewer lowercase)
-                ),
-            )
-            global_canonical_names[(norm_form, kind)] = canonical
-
-        # Step 2: Apply merges using global canonical names
+        # Apply merges to each document
         for resource_id, entities in ctx.state.validated_entities_by_resource.items():
             entities_to_merge = []
-            entities_to_rename = []
 
             for child_canonical in list(entities.keys()):
                 child_entity = entities[child_canonical]
-                child_norm = normalize_for_comparison(child_canonical)
-                rule_key = (child_norm, child_entity.kind)
+                rule_key = (child_canonical, child_entity.kind)
 
                 if rule_key in resolved_rules:
-                    parent_norm = resolved_rules[rule_key]
-                    parent_key = (parent_norm, child_entity.kind)
+                    parent_canonical = resolved_rules[rule_key]
 
-                    # Get the global canonical name for the parent
-                    global_parent_name = global_canonical_names.get(
-                        parent_key, parent_norm
-                    )
-
-                    # Find parent in this document by normalized lookup
-                    parent_canonical = None
-                    for candidate_name, candidate_entity in entities.items():
-                        if (
-                            normalize_for_comparison(candidate_name) == parent_norm
-                            and candidate_entity.kind == child_entity.kind
-                        ):
-                            parent_canonical = candidate_name
-                            break
-
-                    if parent_canonical:
-                        # Parent exists in this document
+                    # Check if parent exists in this document
+                    if parent_canonical in entities:
+                        # Both child and parent exist - merge them
                         if parent_canonical != child_canonical:
-                            # Merge child into parent
                             entities_to_merge.append(
-                                (parent_canonical, child_canonical, global_parent_name)
-                            )
-                        elif parent_canonical != global_parent_name:
-                            # Parent exists but has wrong name, rename it
-                            entities_to_rename.append(
-                                (parent_canonical, global_parent_name)
+                                (parent_canonical, child_canonical)
                             )
                     else:
-                        # Parent doesn't exist in this document, but child needs renaming
-                        # This happens with fuzzy/spelling variants across documents
-                        if child_canonical != global_parent_name:
-                            entities_to_rename.append(
-                                (child_canonical, global_parent_name)
-                            )
+                        # Parent doesn't exist in this document - this is a rename
+                        # Happens with cross-document merges (e.g., fuzzy spelling variants)
+                        # Rename child to parent name so all documents use same canonical name
+                        entity = entities[child_canonical]
 
-            # Apply renames first (to establish global canonical names)
-            for old_name, new_name in entities_to_rename:
-                if old_name not in entities:
-                    continue
-                if old_name == new_name:
-                    continue
+                        # Add old name to aliases
+                        if child_canonical not in entity.aliases:
+                            entity.aliases.append(child_canonical)
 
-                entity = entities[old_name]
+                        # Update entity name
+                        entity.name = parent_canonical
 
-                # Add old name to aliases if not already there
-                if old_name not in entity.aliases:
-                    entity.aliases.append(old_name)
+                        # Move entity to new key in dict
+                        entities[parent_canonical] = entity
+                        del entities[child_canonical]
 
-                # Update entity name
-                entity.name = new_name
-
-                # Move entity to new key in dict
-                entities[new_name] = entity
-                del entities[old_name]
-
-            # Apply merges - with transitive resolution, no entity should be missing
-            for parent_name, child_name, global_name in entities_to_merge:
-                # After renames, parent might now be under global_name
-                actual_parent_name = (
-                    global_name if global_name in entities else parent_name
-                )
-
-                if actual_parent_name not in entities or child_name not in entities:
-                    # This shouldn't happen with transitive resolution, but check anyway
+            # Apply merges (both entities exist in same document)
+            for parent_name, child_name in entities_to_merge:
+                if parent_name not in entities or child_name not in entities:
+                    # Shouldn't happen with transitive resolution, but check anyway
                     continue
 
-                parent = entities[actual_parent_name]
+                parent = entities[parent_name]
                 child = entities[child_name]
 
                 # Merge child into parent
@@ -771,66 +759,38 @@ For each pair, decide if they should be merged (child absorbed into parent) or k
         After entities are merged, pair assessments may reference old entity names.
         This method updates those references to use the canonical merged names.
 
+        Since entities are merged via shared references, the EntityMention objects
+        in pair assessments are automatically updated. This method provides additional
+        tracking and validation.
+
         Parameters:
-            merge_rules: Mapping of (normalized_child, kind) → normalized_parent
+            merge_rules: Mapping of (canonical_child, kind) → canonical_parent
             ctx: Graph run context with state containing assessments
         """
         if not merge_rules:
             return
 
         for resource_id, assessments in ctx.state.pair_assessments_by_resource.items():
-            entities = ctx.state.validated_entities_by_resource.get(resource_id, {})
-
             for assessment in assessments:
-                # Check if entity1 was merged
-                e1_norm = normalize_for_comparison(assessment.entity1.name)
-                e1_key = (e1_norm, assessment.entity1.kind)
+                # Check if entity1 was merged (by canonical name)
+                e1_key = (assessment.entity1.name, assessment.entity1.kind)
 
                 if e1_key in merge_rules:
-                    merged_name = self._find_canonical_name(
-                        merge_rules[e1_key], entities, assessment.entity1.kind
-                    )
-                    if merged_name and merged_name != assessment.entity1.name:
+                    merged_name = merge_rules[e1_key]
+                    if merged_name != assessment.entity1.name:
                         self._update_entity_in_assessment(
                             assessment, "entity1", merged_name
                         )
 
                 # Check if entity2 was merged
-                e2_norm = normalize_for_comparison(assessment.entity2.name)
-                e2_key = (e2_norm, assessment.entity2.kind)
+                e2_key = (assessment.entity2.name, assessment.entity2.kind)
 
                 if e2_key in merge_rules:
-                    merged_name = self._find_canonical_name(
-                        merge_rules[e2_key], entities, assessment.entity2.kind
-                    )
-                    if merged_name and merged_name != assessment.entity2.name:
+                    merged_name = merge_rules[e2_key]
+                    if merged_name != assessment.entity2.name:
                         self._update_entity_in_assessment(
                             assessment, "entity2", merged_name
                         )
-
-    def _find_canonical_name(
-        self,
-        normalized_target: str,
-        entities: dict[str, EntityMention],
-        kind: str,
-    ) -> str | None:
-        """Find canonical entity name matching normalized target.
-
-        Parameters:
-            normalized_target: Normalized name to find
-            entities: Entity dictionary to search
-            kind: Entity kind to match
-
-        Returns:
-            Canonical name if found, None otherwise
-        """
-        for name, entity in entities.items():
-            if (
-                normalize_for_comparison(name) == normalized_target
-                and entity.kind == kind
-            ):
-                return name
-        return None
 
     def _update_entity_in_assessment(
         self,

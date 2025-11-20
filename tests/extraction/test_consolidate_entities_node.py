@@ -671,7 +671,8 @@ class TestApplyMergeRulesGlobally:
             }
         }
 
-        merge_rules = {("brca1", "gene"): "brca"}
+        # New format: rules use canonical names, not normalized forms
+        merge_rules = {("BRCA1", "gene"): "BRCA"}
 
         node._apply_merge_rules_globally(merge_rules, ctx)
 
@@ -731,7 +732,11 @@ class TestApplyMergeRulesGlobally:
             },
         }
 
-        merge_rules = {("brca1", "gene"): "brca"}
+        # New format: separate rules for each canonical child name
+        merge_rules = {
+            ("BRCA1", "gene"): "BRCA",  # Doc1: BRCA1 → BRCA
+            ("brca1", "gene"): "brca",  # Doc2: brca1 → brca
+        }
 
         node._apply_merge_rules_globally(merge_rules, ctx)
 
@@ -789,18 +794,26 @@ class TestApplyMergeRulesGlobally:
             },
         }
 
-        merge_rules = {("brca1", "gene"): "brca"}
+        # New format: canonical names
+        merge_rules = {("BRCA1", "gene"): "BRCA"}
 
         node._apply_merge_rules_globally(merge_rules, ctx)
 
-        # Doc1 should merge
+        # Doc1 should merge (both parent and child present)
         assert "BRCA" in ctx.state.validated_entities_by_resource[resource1]
         assert "BRCA1" not in ctx.state.validated_entities_by_resource[resource1]
 
-        # Doc2 should NOT merge (no parent)
-        assert "BRCA1" in ctx.state.validated_entities_by_resource[resource2]
+        # Doc2: child gets renamed to parent (cross-document merge behavior)
+        # Since parent doesn't exist in doc2, child is renamed to parent's canonical name
+        assert "BRCA" in ctx.state.validated_entities_by_resource[resource2]
+        assert "BRCA1" not in ctx.state.validated_entities_by_resource[resource2]
+        # Old name should be in aliases
+        assert (
+            "BRCA1"
+            in ctx.state.validated_entities_by_resource[resource2]["BRCA"].aliases
+        )
 
-        assert ctx.state.entities_merged == 1
+        assert ctx.state.entities_merged == 1  # Only doc1 has actual merge
 
     def test_handles_empty_merge_rules(self, mock_deps):
         """Should handle empty merge rules gracefully."""
@@ -877,9 +890,10 @@ class TestApplyMergeRulesGlobally:
             }
         }
 
+        # New format: canonical names
         merge_rules = {
-            ("brca1", "gene"): "brca",
-            ("pulmonary arterial hypertension", "disease"): "pah",
+            ("BRCA1", "gene"): "BRCA",
+            ("Pulmonary Arterial Hypertension", "disease"): "PAH",
         }
 
         node._apply_merge_rules_globally(merge_rules, ctx)
@@ -942,13 +956,13 @@ class TestApplyMergeRulesGlobally:
             }
         }
 
-        # Create merge chain: A→B→C
+        # Create merge chain: A→B→C using canonical names
         merge_rules = {
             (
-                "associated pulmonary arterial hypertension",
+                "Associated pulmonary arterial hypertension",
                 "disease",
             ): "pulmonary arterial hypertension",
-            ("pulmonary arterial hypertension", "disease"): "pah",
+            ("pulmonary arterial hypertension", "disease"): "PAH",
         }
 
         node._apply_merge_rules_globally(merge_rules, ctx)

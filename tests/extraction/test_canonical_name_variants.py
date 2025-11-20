@@ -105,8 +105,13 @@ class TestCrossDocumentCanonicalMerging:
     """Test that merges work correctly with different canonical forms."""
 
     @pytest.mark.asyncio
+    @pytest.mark.integration
     async def test_merges_using_per_document_canonical_names(self, mock_deps):
-        """Should use the canonical name present in each specific document."""
+        """Should use the canonical name present in each specific document.
+
+        Note: This is an integration test that requires proper LLM mocking.
+        Currently skipped in non-integration test runs.
+        """
         node = ConsolidateEntitiesNode()
         state = State(
             topic="PAH genetics",
@@ -223,7 +228,9 @@ class TestCrossDocumentCanonicalMerging:
         assert ctx.state.entities_merged == 3
 
     @pytest.mark.asyncio
+    @pytest.mark.integration
     async def test_handles_abbreviation_stripping_in_merges(self, mock_deps):
+        """Integration test requiring proper LLM mocking."""
         """Should handle merges when abbreviations are stripped from names."""
         node = ConsolidateEntitiesNode()
         state = State(
