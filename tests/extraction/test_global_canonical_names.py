@@ -89,7 +89,7 @@ def test_capitalization_variants_use_same_canonical_name(mock_deps):
 
     # Collect and apply merges
     unique_entities = node._collect_unique_entities(ctx)
-    exact_rules, _ = node._find_merge_candidates(unique_entities)
+    exact_rules, _, _ = node._find_merge_candidates(unique_entities)
     resolved_rules = node._resolve_transitive_merges(exact_rules)
     node._apply_merge_rules_globally(resolved_rules, ctx)
 
@@ -164,7 +164,7 @@ def test_spelling_variants_use_same_canonical_name(mock_deps):
 
     # Collect and apply merges (fuzzy matching should catch these)
     unique_entities = node._collect_unique_entities(ctx)
-    exact_rules, substring_pairs = node._find_merge_candidates(unique_entities)
+    exact_rules, substring_pairs, _ = node._find_merge_candidates(unique_entities)
     # Fuzzy auto-merge rules are in exact_rules (Tier 2 fuzzy matching)
     resolved_rules = node._resolve_transitive_merges(exact_rules)
     node._apply_merge_rules_globally(resolved_rules, ctx)
@@ -224,7 +224,7 @@ def test_mixed_variants_across_many_documents(mock_deps):
 
     # Collect and apply merges
     unique_entities = node._collect_unique_entities(ctx)
-    exact_rules, _ = node._find_merge_candidates(unique_entities)
+    exact_rules, _, _ = node._find_merge_candidates(unique_entities)
     resolved_rules = node._resolve_transitive_merges(exact_rules)
     node._apply_merge_rules_globally(resolved_rules, ctx)
 

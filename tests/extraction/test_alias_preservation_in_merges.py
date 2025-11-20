@@ -193,7 +193,7 @@ def test_cross_document_fuzzy_merge_preserves_all_variants(mock_deps):
     unique_entities = node._collect_unique_entities(ctx)
 
     # Find fuzzy match rules (should auto-merge UK→US spelling)
-    exact_rules, _ = node._find_merge_candidates(unique_entities)
+    exact_rules, _, _ = node._find_merge_candidates(unique_entities)
     resolved_rules = node._resolve_transitive_merges(exact_rules)
 
     node._apply_merge_rules_globally(resolved_rules, ctx)

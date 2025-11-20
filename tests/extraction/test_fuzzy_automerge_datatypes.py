@@ -85,7 +85,7 @@ def test_fuzzy_automerge_uses_canonical_names_not_normalized(mock_deps):
     ctx = GraphRunContext(state=state, deps=mock_deps)
 
     unique_entities = node._collect_unique_entities(ctx)
-    auto_merge_rules, _ = node._find_merge_candidates(unique_entities)
+    auto_merge_rules, _, _ = node._find_merge_candidates(unique_entities)
 
     # Should have exactly 1 fuzzy auto-merge rule
     assert len(auto_merge_rules) == 1, (
@@ -170,7 +170,7 @@ def test_fuzzy_automerge_after_capitalization_consolidation(mock_deps):
     ctx = GraphRunContext(state=state, deps=mock_deps)
 
     unique_entities = node._collect_unique_entities(ctx)
-    auto_merge_rules, _ = node._find_merge_candidates(unique_entities)
+    auto_merge_rules, _, _ = node._find_merge_candidates(unique_entities)
 
     # Should have 2 rules:
     # 1. Phase 1: haemorrhagic → Haemorrhagic (capitalization)

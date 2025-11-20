@@ -630,6 +630,13 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
                     # This presents the LLM with the actual entity names as they appear
                     pairs_description = []
                     identical_canonical_pairs = []  # Track pairs to auto-merge
+                    seen_canonical_pairs = (
+                        set()
+                    )  # Track seen (parent_canonical, child_canonical)
+                    # Map canonical pairs to their normalized form pairs
+                    canonical_to_norm_pairs: dict[
+                        tuple[str, str], list[tuple[str, str]]
+                    ] = {}
                     # Track details for logging
                     batch_details = []
 
@@ -654,6 +661,19 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
                         if parent_canonical == child_canonical:
                             identical_canonical_pairs.append((norm_parent, norm_child))
                             continue
+
+                        # Track mapping from canonical pair to all norm pairs
+                        canonical_pair = (parent_canonical, child_canonical)
+                        if canonical_pair not in canonical_to_norm_pairs:
+                            canonical_to_norm_pairs[canonical_pair] = []
+                        canonical_to_norm_pairs[canonical_pair].append(
+                            (norm_parent, norm_child)
+                        )
+
+                        # Skip duplicate canonical pairs in prompt (show each pair once)
+                        if canonical_pair in seen_canonical_pairs:
+                            continue
+                        seen_canonical_pairs.add(canonical_pair)
 
                         pairs_description.append(
                             f"- Parent: '{parent_canonical}' (type: {kind})\n"
@@ -722,26 +742,62 @@ For each pair, decide if they should be merged (child absorbed into parent) or k
                                     prompt, deps=ctx.deps, usage=usage
                                 )
 
-                        # Store decisions in cache
+                        # Store decisions in cache for all normalized pairs
                         if result is not None:
                             for decision in result.output.decisions:
-                                cache_key = (
-                                    normalize_for_comparison(decision.parent_entity),
-                                    normalize_for_comparison(decision.child_entity),
-                                    kind,
+                                # Normalize decision entities to find matching canonical pairs
+                                # (LLM returns canonical names, but may vary in capitalization)
+                                norm_decision_parent = normalize_for_comparison(
+                                    decision.parent_entity
                                 )
-                                ctx.state.merge_decision_cache[cache_key] = (
-                                    decision.should_merge
+                                norm_decision_child = normalize_for_comparison(
+                                    decision.child_entity
                                 )
 
-                                if decision.should_merge:
-                                    norm_child = normalize_for_comparison(
-                                        decision.child_entity
-                                    )
-                                    norm_parent = normalize_for_comparison(
-                                        decision.parent_entity
-                                    )
-                                    merge_rules[(norm_child, kind)] = norm_parent
+                                # Find canonical pair by looking up decision entities in canonical_lookup
+                                decision_parent_canonical = None
+                                decision_child_canonical = None
+
+                                # Search canonical_lookup for matching normalized forms
+                                for (
+                                    norm_form,
+                                    kind_key,
+                                ), canonical_name in canonical_lookup.items():
+                                    if kind_key == kind:
+                                        if norm_form == norm_decision_parent:
+                                            decision_parent_canonical = canonical_name
+                                        if norm_form == norm_decision_child:
+                                            decision_child_canonical = canonical_name
+
+                                # Skip if we can't find matching canonical names
+                                if (
+                                    decision_parent_canonical is None
+                                    or decision_child_canonical is None
+                                ):
+                                    continue
+
+                                canonical_pair = (
+                                    decision_parent_canonical,
+                                    decision_child_canonical,
+                                )
+
+                                # Apply decision to ALL normalized pairs that map to this canonical pair
+                                if canonical_pair in canonical_to_norm_pairs:
+                                    # Cache decision for all norm pairs (for future runs)
+                                    for (
+                                        norm_parent,
+                                        norm_child,
+                                    ) in canonical_to_norm_pairs[canonical_pair]:
+                                        cache_key = (norm_parent, norm_child, kind)
+                                        ctx.state.merge_decision_cache[cache_key] = (
+                                            decision.should_merge
+                                        )
+
+                                    # Create merge rule using canonical names (consistent with Phase 1)
+                                    if decision.should_merge:
+                                        merge_rules[
+                                            (decision_child_canonical, kind)
+                                        ] = decision_parent_canonical
 
                     except (TimeoutError, ConnectionError, ValueError) as e:
                         ctx.deps.logger.error(

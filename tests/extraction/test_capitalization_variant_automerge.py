@@ -92,7 +92,7 @@ def test_two_capitalization_variants_automerge_without_llm(mock_deps):
     assert canonical_set == {"Pulmonary Hypertension", "Pulmonary hypertension"}
 
     # Find merge candidates
-    exact_rules, substring_pairs = node._find_merge_candidates(unique_entities)
+    exact_rules, substring_pairs, _ = node._find_merge_candidates(unique_entities)
 
     # BUG REVEALED: exact_rules should contain a rule to merge the variants
     # but currently it creates a useless self-referential rule
@@ -176,7 +176,7 @@ def test_three_capitalization_variants_all_automerge(mock_deps):
     ctx = GraphRunContext(state=state, deps=mock_deps)
 
     unique_entities = node._collect_unique_entities(ctx)
-    exact_rules, substring_pairs = node._find_merge_candidates(unique_entities)
+    exact_rules, substring_pairs, _ = node._find_merge_candidates(unique_entities)
 
     # Should have 2 merge rules (3 variants - 1 canonical = 2 children)
     assert len(exact_rules) == 2, (
@@ -252,7 +252,7 @@ def test_capitalization_variants_with_real_substring(mock_deps):
     ctx = GraphRunContext(state=state, deps=mock_deps)
 
     unique_entities = node._collect_unique_entities(ctx)
-    exact_rules, substring_pairs = node._find_merge_candidates(unique_entities)
+    exact_rules, substring_pairs, _ = node._find_merge_candidates(unique_entities)
 
     # Should have exactly 1 exact match rule (2 BRCA variants merge)
     assert len(exact_rules) == 1, (
@@ -313,7 +313,7 @@ def test_exact_match_rules_use_canonical_names_not_normalized(mock_deps):
     ctx = GraphRunContext(state=state, deps=mock_deps)
 
     unique_entities = node._collect_unique_entities(ctx)
-    exact_rules, _ = node._find_merge_candidates(unique_entities)
+    exact_rules, _, _ = node._find_merge_candidates(unique_entities)
 
     # Get the rule
     assert len(exact_rules) == 1, f"Should have 1 rule, got {len(exact_rules)}"

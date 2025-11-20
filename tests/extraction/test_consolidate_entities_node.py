@@ -352,10 +352,11 @@ class TestGetGlobalMergeDecisions:
             # Should have called LLM
             assert mock_agent.run.called
             assert len(merge_rules) == 1
-            assert ("brca1", "gene") in merge_rules
-            assert merge_rules[("brca1", "gene")] == "brca"
+            # Merge rules use canonical names as keys (consistent with Phase 1)
+            assert ("BRCA1", "gene") in merge_rules
+            assert merge_rules[("BRCA1", "gene")] == "BRCA"
 
-            # Cache should be populated
+            # Cache should be populated (using normalized forms as keys)
             assert ctx.state.merge_decision_cache[("brca", "brca1", "gene")] is True
             assert ctx.state.merge_cache_misses == 1
             assert ctx.state.merge_cache_hits == 0
@@ -1074,12 +1075,23 @@ class TestIntegration:
 
             assert isinstance(result, ConsolidateRelationshipsNode)
 
-            # Both documents should have merges
+            # Phase 1 merges capitalization variants, Phase 3 merges substring pairs
+            # Expected final state: Only "BRCA" remains (best capitalization)
+            # - Phase 1: "brca" -> "BRCA", "brca1" -> "BRCA1" (2 merges)
+            # - Phase 3: "BRCA1" -> "BRCA" (2 more merges, one per document)
+
+            # Both documents should have only "BRCA"
             assert "BRCA" in ctx.state.validated_entities_by_resource[resource1]
             assert "BRCA1" not in ctx.state.validated_entities_by_resource[resource1]
-            assert "brca" in ctx.state.validated_entities_by_resource[resource2]
+
+            # Resource2 also has only "BRCA" (lowercase variants merged)
+            assert "BRCA" in ctx.state.validated_entities_by_resource[resource2]
+            assert "brca" not in ctx.state.validated_entities_by_resource[resource2]
             assert "brca1" not in ctx.state.validated_entities_by_resource[resource2]
 
+            # Total merges: 2 from Phase 1 (cross-document renames) + 2 from Phase 3
+            # But entities_merged only counts actual merges (when both exist in same doc)
+            # Phase 1 does renames (not counted), Phase 3 does 2 merges (1 per doc)
             assert ctx.state.entities_merged == 2
 
         finally:

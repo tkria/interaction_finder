@@ -110,7 +110,7 @@ class TestAliasBasedMatching:
             }
         }
 
-        exact_matches, llm_pairs = node._find_merge_candidates(unique_entities)
+        exact_matches, llm_pairs, _ = node._find_merge_candidates(unique_entities)
 
         # Should create exact match rules for each normalized form with multiple variants
         # "hht" has 2 variants → 1 rule
@@ -133,7 +133,7 @@ class TestAliasBasedMatching:
             }
         }
 
-        exact_matches, llm_pairs = node._find_merge_candidates(unique_entities)
+        exact_matches, llm_pairs, _ = node._find_merge_candidates(unique_entities)
 
         # Should create exact match rule and consolidate
         assert len(exact_matches) == 1, "Should create 1 exact match rule"
@@ -162,7 +162,7 @@ class TestParentheticalExpansion:
             }
         }
 
-        exact_matches, llm_pairs = node._find_merge_candidates(unique_entities)
+        exact_matches, llm_pairs, _ = node._find_merge_candidates(unique_entities)
 
         # "pah" normalized form has multiple entities
         assert len(unique_entities["phenotype"]["pah"]) >= 1
@@ -183,7 +183,7 @@ class TestParentheticalExpansion:
             }
         }
 
-        exact_matches, llm_pairs = node._find_merge_candidates(unique_entities)
+        exact_matches, llm_pairs, _ = node._find_merge_candidates(unique_entities)
 
         # Should create exact match rule and consolidate
         assert len(exact_matches) == 1, "Should create 1 exact match rule"
@@ -262,7 +262,7 @@ class TestOSAAutoMerge:
             }
         }
 
-        exact_matches, llm_pairs = node._find_merge_candidates(unique_entities)
+        exact_matches, llm_pairs, _ = node._find_merge_candidates(unique_entities)
 
         # Should be in exact_matches (auto-merge), not llm_pairs
         # Note: This will actually be caught by substring first
@@ -305,7 +305,7 @@ class TestOSAAutoMerge:
             }
         }
 
-        exact_matches, llm_pairs = node._find_merge_candidates(unique_entities)
+        exact_matches, llm_pairs, _ = node._find_merge_candidates(unique_entities)
 
         # Should be in llm_pairs (substring match), not exact_matches
         assert "gene" in llm_pairs

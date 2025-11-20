@@ -92,7 +92,7 @@ def test_identical_canonical_names_auto_merged(mock_deps):
     assert unique_entities["gene"]["bmpr2 gene"] == {"BMPR2"}  # Same canonical name!
 
     # Find merge candidates
-    exact_rules, substring_pairs = node._find_merge_candidates(unique_entities)
+    exact_rules, substring_pairs, _ = node._find_merge_candidates(unique_entities)
 
     # Should find substring relationship
     assert "gene" in substring_pairs
@@ -109,20 +109,25 @@ def test_identical_canonical_names_auto_merged(mock_deps):
 
         # Run merge decisions
         import asyncio
+        from tests.extraction.test_consolidate_entities_node import (
+            build_canonical_lookup_from_unique_entities,
+        )
 
+        canonical_lookup = build_canonical_lookup_from_unique_entities(unique_entities)
         ctx = GraphRunContext(state=state, deps=mock_deps)
         merge_rules = asyncio.run(
-            node._get_global_merge_decisions(substring_pairs, unique_entities, ctx)
+            node._get_global_merge_decisions(substring_pairs, canonical_lookup, ctx)
         )
 
         # Agent should NOT have been called (batch was empty after filtering)
         mock_agent.return_value.run.assert_not_called()
 
-        # Should have auto-created merge rule
-        assert ("bmpr2 gene", "gene") in merge_rules
-        assert merge_rules[("bmpr2 gene", "gene")] == "bmpr2"
+        # Should have auto-created merge rule using canonical names
+        # Since both "bmpr2" and "bmpr2 gene" normalize to "BMPR2", no merge rule is needed
+        # (they're already the same entity)
+        assert len(merge_rules) == 0
 
-        # Should have cached the decision
+        # Should have cached the decision (using normalized forms)
         cache_key = ("bmpr2", "bmpr2 gene", "gene")
         assert cache_key in state.merge_decision_cache
         assert state.merge_decision_cache[cache_key] is True
@@ -171,7 +176,7 @@ def test_different_canonical_names_sent_to_llm(mock_deps):
     assert unique_entities["gene"]["bmpr2 gene"] == {"BMPR2 gene"}  # Different!
 
     # Find merge candidates
-    exact_rules, substring_pairs = node._find_merge_candidates(unique_entities)
+    exact_rules, substring_pairs, _ = node._find_merge_candidates(unique_entities)
 
     # Should find substring relationship
     assert ("bmpr2", "bmpr2 gene") in substring_pairs["gene"]
@@ -187,10 +192,14 @@ def test_different_canonical_names_sent_to_llm(mock_deps):
 
         # Run merge decisions
         import asyncio
+        from tests.extraction.test_consolidate_entities_node import (
+            build_canonical_lookup_from_unique_entities,
+        )
 
+        canonical_lookup = build_canonical_lookup_from_unique_entities(unique_entities)
         ctx = GraphRunContext(state=state, deps=mock_deps)
         merge_rules = asyncio.run(
-            node._get_global_merge_decisions(substring_pairs, unique_entities, ctx)
+            node._get_global_merge_decisions(substring_pairs, canonical_lookup, ctx)
         )
 
         # Agent SHOULD have been called
@@ -256,10 +265,14 @@ def test_mixed_identical_and_different_pairs(mock_deps):
         mock_agent.return_value.run = AsyncMock(return_value=mock_result)
 
         import asyncio
+        from tests.extraction.test_consolidate_entities_node import (
+            build_canonical_lookup_from_unique_entities,
+        )
 
+        canonical_lookup = build_canonical_lookup_from_unique_entities(unique_entities)
         ctx = GraphRunContext(state=state, deps=mock_deps)
         merge_rules = asyncio.run(
-            node._get_global_merge_decisions(substring_pairs, unique_entities, ctx)
+            node._get_global_merge_decisions(substring_pairs, canonical_lookup, ctx)
         )
 
         # Agent SHOULD be called (for the BMP9/BMPR2 pair)
@@ -272,7 +285,8 @@ def test_mixed_identical_and_different_pairs(mock_deps):
         # Should NOT contain the identical pair
         assert prompt.count("BMPR2") == 1  # Only appears once (in the BMP9/BMPR2 pair)
 
-        # Should have auto-merged the identical pair
-        assert ("bmpr2 gene", "gene") in merge_rules
+        # Should have auto-merged the identical pair (no merge rule since same canonical)
+        # But should have cached the decision
         cache_key = ("bmpr2", "bmpr2 gene", "gene")
+        assert cache_key in state.merge_decision_cache
         assert state.merge_decision_cache[cache_key] is True
