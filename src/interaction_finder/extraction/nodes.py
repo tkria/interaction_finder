@@ -295,13 +295,13 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
             unique_entities = self._collect_unique_entities(ctx)
 
             # Step 2: Find merge candidates (exact matches + substring pairs)
-            exact_match_rules, substring_pairs = self._find_merge_candidates(
-                unique_entities
+            exact_match_rules, substring_pairs, canonical_lookup = (
+                self._find_merge_candidates(unique_entities)
             )
 
             # Step 3: Get LLM decisions for substring pairs (with caching)
             llm_merge_rules = await self._get_global_merge_decisions(
-                substring_pairs, unique_entities, ctx
+                substring_pairs, canonical_lookup, ctx
             )
 
             # Step 4: Combine rules and resolve transitive chains
@@ -312,10 +312,30 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
             self._apply_merge_rules_globally(resolved_rules, ctx)
             self._update_pair_entity_references(resolved_rules, ctx)
 
+            # Build structured logging data
+            collection_stats = {}
+            for kind, norm_dict in unique_entities.items():
+                collection_stats[kind] = {
+                    "normalized_forms": len(norm_dict),
+                    "multi_canonical": sum(1 for v in norm_dict.values() if len(v) > 1),
+                }
+
+            substring_pair_counts = {k: len(v) for k, v in substring_pairs.items()}
+
             ctx.deps.logger.info(
                 f"Global consolidation: {len(resolved_rules)} rules applied "
                 f"({len(exact_match_rules)} exact matches, {len(llm_merge_rules)} LLM decisions), "
-                f"{ctx.state.entities_merged} entities consolidated"
+                f"{ctx.state.entities_merged} entities consolidated",
+                extra={
+                    "consolidation": {
+                        "collection_stats": collection_stats,
+                        "phase1_exact_matches": len(exact_match_rules),
+                        "phase3_substring_pairs": substring_pair_counts,
+                        "llm_merge_decisions": len(llm_merge_rules),
+                        "total_rules_applied": len(resolved_rules),
+                        "entities_merged": ctx.state.entities_merged,
+                    }
+                },
             )
 
             return ConsolidateRelationshipsNode()
@@ -394,22 +414,27 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
 
     def _find_merge_candidates(
         self, unique_entities: dict[str, dict[str, set[str]]]
-    ) -> tuple[dict[tuple[str, str], str], dict[str, list[tuple[str, str]]]]:
+    ) -> tuple[
+        dict[tuple[str, str], str],
+        dict[str, list[tuple[str, str]]],
+        dict[tuple[str, str], str],
+    ]:
         """Find merge candidates: exact matches, fuzzy matches, and substring pairs.
 
         Three-phase approach:
         1. Auto-merge exact normalized matches (capitalization variants)
-        2. Consolidate unique_entities to reflect merges (1:1 norm→canonical mapping)
-        3. Find substring/fuzzy pairs for LLM review on consolidated entities
+        2. Auto-merge fuzzy Tier 1 matches (OSA distance=1 + obvious patterns)
+        3. Find substring/fuzzy Tier 2 pairs for LLM review
 
-        The key insight: exact matches must be resolved BEFORE substring matching,
-        otherwise capitalization variants of "pulmonary hypertension" both match
-        against "pulmonary arterial hypertension", creating redundant LLM prompts.
+        After Phases 1 & 2, builds a canonical lookup mapping every normalized
+        form to its final canonical name (after applying all merge rules). This
+        ensures Phase 3 lookups are consistent.
 
         Returns:
             Tuple of:
             - {(canonical_child, kind): canonical_parent} for auto-merge rules
             - {kind: [(norm_parent, norm_child), ...]} for LLM review pairs
+            - {(normalized_form, kind): canonical_name} for Phase 3 lookups
         """
         auto_merge_rules: dict[tuple[str, str], str] = {}
 
@@ -429,6 +454,24 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
                     # CONSOLIDATE: Update unique_entities to have single canonical
                     # This ensures phase 2 works with consolidated 1:1 mappings
                     normalized_entities[norm_form] = {canonical}
+
+        # PHASE 1.5: Propagate merge rules to ALL normalized forms
+        # If "BRCA1" was merged into "Brca1", update all normalized forms
+        # that reference "BRCA1" to point to "Brca1" instead
+        for kind, normalized_entities in unique_entities.items():
+            for norm_form, canonical_names in list(normalized_entities.items()):
+                updated_canonicals = set()
+                for canonical in canonical_names:
+                    # Follow redirect chain to find final canonical
+                    current = canonical
+                    visited = {current}
+                    while (current, kind) in auto_merge_rules:
+                        current = auto_merge_rules[(current, kind)]
+                        if current in visited:
+                            break  # Cycle detection
+                        visited.add(current)
+                    updated_canonicals.add(current)
+                normalized_entities[norm_form] = updated_canonicals
 
         # PHASE 2: Handle fuzzy matches (spelling variants, pluralization)
         # Now that capitalization variants are consolidated, check for OSA patterns
@@ -460,6 +503,34 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
                                 del normalized_entities[norm1]
                             # Skip to next pair (one norm_form is now gone)
                             break
+
+        # PHASE 2.5: Propagate Phase 2 merge rules to ALL normalized forms
+        # Same logic as Phase 1.5 - update all references to merged canonicals
+        for kind, normalized_entities in unique_entities.items():
+            for norm_form, canonical_names in list(normalized_entities.items()):
+                updated_canonicals = set()
+                for canonical in canonical_names:
+                    # Follow redirect chain to find final canonical
+                    current = canonical
+                    visited = {current}
+                    while (current, kind) in auto_merge_rules:
+                        current = auto_merge_rules[(current, kind)]
+                        if current in visited:
+                            break  # Cycle detection
+                        visited.add(current)
+                    updated_canonicals.add(current)
+                normalized_entities[norm_form] = updated_canonicals
+
+        # Build canonical lookup: (normalized_form, kind) → canonical_name
+        # This is the single source of truth for Phase 3 lookups
+        canonical_lookup: dict[tuple[str, str], str] = {}
+        for kind, normalized_entities in unique_entities.items():
+            for norm_form, canonical_names in normalized_entities.items():
+                # After Phase 1 & 2 propagation, should be exactly one canonical
+                assert len(canonical_names) == 1, (
+                    f"Expected 1 canonical after consolidation, got {len(canonical_names)}: {canonical_names}"
+                )
+                canonical_lookup[(norm_form, kind)] = next(iter(canonical_names))
 
         # PHASE 3: Find substring and fuzzy Tier 2 pairs for LLM review
         # These work on fully consolidated entities (no capitalization variants)
@@ -493,19 +564,19 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
             if pairs:
                 candidate_pairs[kind] = pairs
 
-        return auto_merge_rules, candidate_pairs
+        return auto_merge_rules, candidate_pairs, canonical_lookup
 
     async def _get_global_merge_decisions(
         self,
         substring_pairs_by_kind: dict[str, list[tuple[str, str]]],
-        unique_entities: dict[str, dict[str, set[str]]],
+        canonical_lookup: dict[tuple[str, str], str],
         ctx: GraphRunContext[State, Deps],
     ) -> dict[tuple[str, str], str]:
         """Query LLM for all unique normalized pairs using canonical names.
 
         Args:
             substring_pairs_by_kind: Pairs of normalized forms to evaluate
-            unique_entities: Mapping from normalized forms to canonical names
+            canonical_lookup: Mapping from (normalized_form, kind) to canonical_name
             ctx: Graph execution context
 
         Returns:
@@ -515,6 +586,23 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
         merge_rules: dict[tuple[str, str], str] = {}
 
         for kind, pairs in substring_pairs_by_kind.items():
+            # Log all pairs before caching/filtering (to detect duplicates)
+            pair_list = [(p, c) for p, c in pairs]
+            unique_pairs = set(pair_list)
+            ctx.deps.logger.debug(
+                f"Processing merge candidates [{kind}]: {len(pair_list)} total, "
+                f"{len(unique_pairs)} unique",
+                extra={
+                    "merge_candidates": {
+                        "kind": kind,
+                        "total_pairs": len(pair_list),
+                        "unique_pairs": len(unique_pairs),
+                        "duplicates": len(pair_list) - len(unique_pairs),
+                        "pairs": [{"parent": p, "child": c} for p, c in unique_pairs],
+                    }
+                },
+            )
+
             # Separate cached and uncached pairs
             uncached_pairs = []
 
@@ -542,15 +630,23 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
                     # This presents the LLM with the actual entity names as they appear
                     pairs_description = []
                     identical_canonical_pairs = []  # Track pairs to auto-merge
+                    # Track details for logging
+                    batch_details = []
 
                     for norm_parent, norm_child in batch:
-                        # Get canonical names for this normalized form
-                        # Pick the most complex (mixed-case) version as representative
-                        parent_canonical = self._select_best_canonical_name(
-                            unique_entities[kind].get(norm_parent, {norm_parent})
-                        )
-                        child_canonical = self._select_best_canonical_name(
-                            unique_entities[kind].get(norm_child, {norm_child})
+                        # Get canonical names from lookup (guaranteed to exist)
+                        parent_canonical = canonical_lookup[(norm_parent, kind)]
+                        child_canonical = canonical_lookup[(norm_child, kind)]
+
+                        # Track for logging
+                        batch_details.append(
+                            {
+                                "norm_parent": norm_parent,
+                                "norm_child": norm_child,
+                                "canonical_parent": parent_canonical,
+                                "canonical_child": child_canonical,
+                                "identical": parent_canonical == child_canonical,
+                            }
                         )
 
                         # Skip pairs where canonical names are identical after lookup
@@ -571,6 +667,23 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
                         ctx.state.merge_decision_cache[cache_key] = True
                         # Create merge rule
                         merge_rules[(norm_child, kind)] = norm_parent
+
+                    # Log batch details
+                    ctx.deps.logger.debug(
+                        f"Merge batch [{kind}] {i // batch_size + 1}: "
+                        f"{len(batch)} pairs, {len(identical_canonical_pairs)} auto-merged, "
+                        f"{len(pairs_description)} sent to LLM",
+                        extra={
+                            "merge_batch": {
+                                "kind": kind,
+                                "batch_num": i // batch_size + 1,
+                                "total_pairs": len(batch),
+                                "auto_merged": len(identical_canonical_pairs),
+                                "llm_pairs": len(pairs_description),
+                                "pairs": batch_details,
+                            }
+                        },
+                    )
 
                     # Skip LLM call if no pairs remain after filtering
                     if not pairs_description:

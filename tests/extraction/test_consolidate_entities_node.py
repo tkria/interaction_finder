@@ -24,6 +24,15 @@ from interaction_finder.extraction.utils import build_permitted_pairs
 from interaction_finder.resources import ResourceId, ResourcePool
 
 
+def build_canonical_lookup_from_unique_entities(unique_entities):
+    """Helper to build canonical_lookup from unique_entities dict."""
+    canonical_lookup = {}
+    for kind, norm_dict in unique_entities.items():
+        for norm, canonicals in norm_dict.items():
+            canonical_lookup[(norm, kind)] = next(iter(canonicals))
+    return canonical_lookup
+
+
 def create_mock_agent_with_override(run_return_value):
     """Create a mock agent with working rename_agent() support."""
     mock_agent = MagicMock()
@@ -227,7 +236,7 @@ class TestFindGlobalSubstringPairs:
 
         unique_entities = {"gene": {"brca": {"BRCA"}, "brca1": {"BRCA1"}}}
 
-        exact_matches, pairs = node._find_merge_candidates(unique_entities)
+        exact_matches, pairs, _ = node._find_merge_candidates(unique_entities)
 
         assert "gene" in pairs
         assert len(pairs["gene"]) == 1
@@ -246,7 +255,7 @@ class TestFindGlobalSubstringPairs:
             }
         }
 
-        exact_matches, pairs = node._find_merge_candidates(unique_entities)
+        exact_matches, pairs, _ = node._find_merge_candidates(unique_entities)
 
         assert "gene" in pairs
         assert len(pairs["gene"]) == 2
@@ -260,7 +269,7 @@ class TestFindGlobalSubstringPairs:
 
         unique_entities = {"gene": {"brca1": {"BRCA1"}, "tp53": {"TP53"}}}
 
-        exact_matches, pairs = node._find_merge_candidates(unique_entities)
+        exact_matches, pairs, _ = node._find_merge_candidates(unique_entities)
 
         assert pairs == {}
 
@@ -270,7 +279,7 @@ class TestFindGlobalSubstringPairs:
 
         unique_entities = {"gene": {"brca1": {"BRCA1", "brca1", "Brca1"}}}
 
-        exact_matches, pairs = node._find_merge_candidates(unique_entities)
+        exact_matches, pairs, _ = node._find_merge_candidates(unique_entities)
 
         # Should have exact match rules but no substring pairs
         assert pairs == {}
@@ -288,7 +297,7 @@ class TestFindGlobalSubstringPairs:
             }
         }
 
-        exact_matches, pairs = node._find_merge_candidates(unique_entities)
+        exact_matches, pairs, _ = node._find_merge_candidates(unique_entities)
 
         assert "gene" in pairs
         pair_set = set(pairs["gene"])
@@ -314,6 +323,7 @@ class TestGetGlobalMergeDecisions:
 
         substring_pairs = {"gene": [("brca", "brca1")]}
         unique_entities = {"gene": {"brca": {"BRCA"}, "brca1": {"BRCA1"}}}
+        canonical_lookup = build_canonical_lookup_from_unique_entities(unique_entities)
 
         # Mock LLM response
         mock_result = MagicMock()
@@ -336,7 +346,7 @@ class TestGetGlobalMergeDecisions:
 
         try:
             merge_rules = await node._get_global_merge_decisions(
-                substring_pairs, unique_entities, ctx
+                substring_pairs, canonical_lookup, ctx
             )
 
             # Should have called LLM
@@ -369,6 +379,7 @@ class TestGetGlobalMergeDecisions:
 
         substring_pairs = {"gene": [("brca", "brca1")]}
         unique_entities = {"gene": {"brca": {"BRCA"}, "brca1": {"BRCA1"}}}
+        canonical_lookup = build_canonical_lookup_from_unique_entities(unique_entities)
 
         # Mock LLM (should not be called)
         mock_agent = create_mock_agent_with_override(None)
@@ -380,7 +391,7 @@ class TestGetGlobalMergeDecisions:
 
         try:
             merge_rules = await node._get_global_merge_decisions(
-                substring_pairs, unique_entities, ctx
+                substring_pairs, canonical_lookup, ctx
             )
 
             # Should NOT have called LLM
@@ -413,9 +424,10 @@ class TestGetGlobalMergeDecisions:
 
         substring_pairs = {"gene": [("tp", "tp53")]}
         unique_entities = {"gene": {"tp": {"TP"}, "tp53": {"TP53"}}}
+        canonical_lookup = build_canonical_lookup_from_unique_entities(unique_entities)
 
         merge_rules = await node._get_global_merge_decisions(
-            substring_pairs, unique_entities, ctx
+            substring_pairs, canonical_lookup, ctx
         )
 
         # No merge rules created
@@ -445,6 +457,7 @@ class TestGetGlobalMergeDecisions:
                 "tp53": {"TP53"},
             }
         }
+        canonical_lookup = build_canonical_lookup_from_unique_entities(unique_entities)
 
         # Mock LLM for uncached pair only
         mock_result = MagicMock()
@@ -467,7 +480,7 @@ class TestGetGlobalMergeDecisions:
 
         try:
             merge_rules = await node._get_global_merge_decisions(
-                substring_pairs, unique_entities, ctx
+                substring_pairs, canonical_lookup, ctx
             )
 
             # Should call LLM only for uncached pair
@@ -497,6 +510,7 @@ class TestGetGlobalMergeDecisions:
 
         substring_pairs = {"gene": [("brca", "brca1")]}
         unique_entities = {"gene": {"brca": {"BRCA"}, "brca1": {"BRCA1"}}}
+        canonical_lookup = build_canonical_lookup_from_unique_entities(unique_entities)
 
         # Mock LLM to raise error
         mock_agent = MagicMock()
@@ -510,7 +524,7 @@ class TestGetGlobalMergeDecisions:
 
         try:
             merge_rules = await node._get_global_merge_decisions(
-                substring_pairs, unique_entities, ctx
+                substring_pairs, canonical_lookup, ctx
             )
 
             # Should return empty (no merge rules)
