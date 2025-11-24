@@ -321,22 +321,22 @@ header {
     margin-bottom: 0.25rem;
 }
 
-.entity-name {
+.pair-entities > span {
     font-weight: 600;
     font-size: 0.95rem;
     cursor: pointer;
 }
 
-.entity-name:hover {
+.pair-entities > span:hover {
     color: var(--pico-primary);
     text-decoration: underline;
 }
 
-.entity-name.left {
+.pair-entities > span:first-child {
     text-align: left;
 }
 
-.entity-name.right {
+.pair-entities > span:last-child {
     text-align: right;
 }
 
@@ -349,11 +349,11 @@ header {
     margin-bottom: var(--spacing-compact);
 }
 
-.entity-kind.left {
+.pair-kinds > span:first-child {
     text-align: left;
 }
 
-.entity-kind.right {
+.pair-kinds > span:last-child {
     text-align: right;
 }
 
@@ -375,7 +375,10 @@ header {
     flex-wrap: wrap;
 }
 
-.polarity-chip {
+.polarity-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.2rem;
     padding: 0.1rem 0.45rem;
     border-radius: 999px;
     font-size: 0.65rem;
@@ -384,17 +387,17 @@ header {
     text-transform: uppercase;
 }
 
-.polarity-chip.supporting {
+.polarity-badge.polarity-supporting {
     background: var(--polarity-supporting-bg);
     color: var(--polarity-supporting-text);
 }
 
-.polarity-chip.refuting {
+.polarity-badge.polarity-refuting {
     background: var(--polarity-refuting-bg);
     color: var(--polarity-refuting-text);
 }
 
-.polarity-chip.neutral {
+.polarity-badge.polarity-neutral {
     background: var(--polarity-neutral-bg);
     color: var(--polarity-neutral-text);
 }
@@ -410,7 +413,7 @@ header {
     letter-spacing: 0.05em;
 }
 
-.pc-chip .pc-part {
+.pc-chip > span {
     padding: 0.1rem 0.45rem;
     display: inline-flex;
     align-items: center;
@@ -419,38 +422,45 @@ header {
     border-radius: 1.2em;
 }
 
+.pc-chip > span:last-child {
+    padding-left: 0;
+}
+
 .pc-chip .pc-count {
     font-size: 0.6rem;
     opacity: 0.8;
 }
 
-.pc-chip.polarity-supporting .pc-part:first-child {
+.pc-chip.polarity-supporting > span:first-child {
     background: var(--polarity-supporting-bg);
     color: var(--polarity-supporting-text);
+    margin-left: -1px;
 }
 
-.pc-chip.polarity-refuting .pc-part:first-child {
+.pc-chip.polarity-refuting > span:first-child {
     background: var(--polarity-refuting-bg);
     color: var(--polarity-refuting-text);
+    margin-left: -1px;
 }
 
-.pc-chip.polarity-neutral .pc-part:first-child,
-.pc-chip.polarity-irrelevant .pc-part:first-child {
+.pc-chip.polarity-neutral > span:first-child,
+.pc-chip.polarity-irrelevant > span:first-child {
     background: var(--polarity-neutral-bg);
     color: var(--polarity-neutral-text);
+    margin-left: -1px;
 }
 
-.pc-chip.confidence-high .pc-part:last-child {
+.pc-chip.confidence-high > span:last-child {
     background: var(--confidence-high-bg);
     color: white;
 }
 
-.pc-chip.confidence-medium .pc-part:last-child {
+.pc-chip.confidence-medium > span:last-child {
     background: var(--confidence-medium-bg);
     color: white;
 }
 
-.pc-chip.confidence-low .pc-part:last-child {
+.pc-chip.confidence-low > span:last-child {
     background: var(--confidence-low-bg);
     color: white;
 }
@@ -466,7 +476,7 @@ header {
     color: var(--pico-muted-color);
 }
 
-.confidence-badge {
+[class^="confidence-"] {
     padding: 0.15rem 0.5rem;
     border-radius: var(--pico-border-radius);
     font-weight: 600;
@@ -673,6 +683,7 @@ header {
 
 /* Entities in reasoning panel - use color instead of background, lighter weight */
 .reasoning-content .entity-highlight {
+    padding: 0;
     background: none;
     font-weight: 500;
 }
@@ -1196,14 +1207,14 @@ function renderContent() {
         let chipMarkup = '';
         if (polarity && confidence) {
             chipMarkup = `
-                <span class="pc-chip">
-                    <span class="pc-part polarity ${escapeHtml(polarity)}">${escapeHtml(polarityAbbrev || polarity)}</span>
-                    <span class="pc-part confidence confidence-${escapeHtml(confidence)}">${escapeHtml(confidence)}</span>
+                <span class="pc-chip polarity-${escapeHtml(polarity)} confidence-${escapeHtml(confidence)}">
+                    <span>${escapeHtml(polarityAbbrev || polarity)}</span>
+                    <span>${escapeHtml(confidence)}</span>
                 </span>`;
         } else if (confidence) {
-            chipMarkup = `<span class="confidence-badge confidence-${escapeHtml(confidence)}">${escapeHtml(confidence)}</span>`;
+            chipMarkup = `<span class="confidence-${escapeHtml(confidence)}">${escapeHtml(confidence)}</span>`;
         } else if (polarity) {
-            chipMarkup = `<span class="polarity-chip ${escapeHtml(polarity)}">${escapeHtml(polarityAbbrev || polarity)}</span>`;
+            chipMarkup = `<span class="polarity-badge polarity-${escapeHtml(polarity)}">${escapeHtml(polarityAbbrev || polarity)}</span>`;
         }
 
         return `

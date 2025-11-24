@@ -467,7 +467,8 @@ def test_display_content_matches_data_attributes():
     relationship = pair_0.get("data-rel")
 
     # Get data from display
-    entity_names = pair_0.find_all("span", class_="entity-name")
+    pair_entities = pair_0.find("div", class_="pair-entities")
+    entity_names = pair_entities.find_all("span", recursive=False)
     assert len(entity_names) == 2
     displayed_entity1 = entity_names[0].get_text().strip()
     displayed_entity2 = entity_names[1].get_text().strip()

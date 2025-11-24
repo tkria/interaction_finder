@@ -68,9 +68,9 @@ def _render_pair_cards(pairs: list[dict[str, Any]]) -> str:
         if show_kinds:
             kinds_html = f"""
             <div class="pair-kinds">
-                <span class="entity-kind left">{_escape_html(pair["entity1"]["kind"])}</span>
+                <span>{_escape_html(pair["entity1"]["kind"])}</span>
                 <span class="relationship-label">{_escape_html(pair["relationship"])}</span>
-                <span class="entity-kind right">{_escape_html(pair["entity2"]["kind"])}</span>
+                <span>{_escape_html(pair["entity2"]["kind"])}</span>
             </div>"""
         else:
             kinds_html = f"""
@@ -82,25 +82,26 @@ def _render_pair_cards(pairs: list[dict[str, Any]]) -> str:
         evidence_html = ""
         polarity_summary = pair.get("polarity_summary", {})
         if polarity_summary:
-            chips = []
+            # Build polarity count badges (no confidence)
+            polarity_badges = []
             for polarity in ("supporting", "refuting", "neutral"):
                 info = polarity_summary.get(polarity)
                 if not info or not info.get("count"):
                     continue
                 label = polarity_label[polarity]
-                best_conf = info.get("confidence")
-                conf_key = best_conf if best_conf in {"high", "medium", "low"} else "low"
-                conf_text = best_conf.upper() if best_conf else "N/A"
-                chip = (
-                    f'<span class="pc-chip polarity-{polarity} confidence-{_escape_html(conf_key)}">'
-                    f'<span class="pc-part">{label}<span class="pc-count">×{info["count"]}</span></span>'
-                    f'<span class="pc-part">{_escape_html(conf_text)}</span>'
-                    "</span>"
-                )
-                chips.append(chip)
+                badge = f'<span class="polarity-badge polarity-{polarity}">{label}<span class="pc-count">×{info["count"]}</span></span>'
+                polarity_badges.append(badge)
+
+            # Get overall pair confidence
+            pair_conf = pair.get("confidence", "low")
+            conf_key = pair_conf if pair_conf in {"high", "medium", "low"} else "low"
+            conf_text = pair_conf.upper() if pair_conf else "N/A"
+            conf_badge = f'<span class="confidence-{_escape_html(conf_key)}">{_escape_html(conf_text)}</span>'
+
             evidence_html = f"""
                 <div class="pair-evidence">
-                    {"".join(chips)}
+                    {"".join(polarity_badges)}
+                    {conf_badge}
                 </div>"""
 
         # Build complete card with minimal data-attributes
@@ -116,18 +117,15 @@ def _render_pair_cards(pairs: list[dict[str, Any]]) -> str:
              data-contentious="{str(bool(pair.get("contentious"))).lower()}"
              data-assessments='{assessments_data}'>
             <div class="pair-entities">
-                <span class="entity-name left"
-                      title="{_escape_html(entity1_aliases_display)}">
+                <span title="{_escape_html(entity1_aliases_display)}">
                     {_escape_html(pair["entity1"]["name"])}
                 </span>
-                <span class="entity-name right"
-                      title="{_escape_html(entity2_aliases_display)}">
+                <span title="{_escape_html(entity2_aliases_display)}">
                     {_escape_html(pair["entity2"]["name"])}
                 </span>
             </div>{kinds_html}
             <div class="pair-meta">
                 <span class="pair-counts">{pair["doc_count"]} docs, {pair["quote_count"]} quotes</span>
-                <span class="confidence-badge confidence-{_escape_html(pair["confidence"])}">{_escape_html(pair["confidence"])}</span>
             </div>{evidence_html}
         </div>"""
 

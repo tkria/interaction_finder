@@ -219,7 +219,7 @@ class ReasoningTemplateRenderer:
         </div>
         <div class="reasoning-title">Overall Assessment</div>
         <div class="reasoning-content">
-            <strong>Confidence:</strong> <span class="confidence-badge confidence-{_escape_html(pair["confidence"])}">{_escape_html(pair["confidence"])}</span>
+            <strong>Confidence:</strong> <span class="confidence-{_escape_html(pair["confidence"])}">{_escape_html(pair["confidence"])}</span>
             <p>{highlighted_reasoning}</p>
         </div>
         <div class="entity-details-section">
@@ -279,7 +279,7 @@ class ReasoningTemplateRenderer:
         <div class="reasoning-content">
             <strong>Document:</strong> {_escape_html(assess["title"])}
             <br><strong>Relationship:</strong> {_escape_html(assess["relationship"])}
-            <br><strong>Confidence:</strong> <span class="confidence-badge confidence-{_escape_html(assess["confidence"])}">{_escape_html(assess["confidence"])}</span>
+            <br><strong>Confidence:</strong> <span class="confidence-{_escape_html(assess["confidence"])}">{_escape_html(assess["confidence"])}</span>
             <p>{highlighted_reasoning}</p>
         </div>
         {quote_nav_html}
