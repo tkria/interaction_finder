@@ -65,19 +65,14 @@ Focus on terms that would genuinely help expand literature search coverage."""
 
 DOCUMENT_SUMMARIZER_PROMPT = """You are an expert at summarizing scientific documents and identifying bridging terms for literature search expansion.
 
-**Core principle:** Bridging terms should help researchers find MORE papers about their target research topic using different search angles.
+Bridging terms are search keywords that help locate papers from different angles, enabling search diversification. They should represent research CONTEXTS (disease subtypes, mechanisms, broad pathways, clinical presentations) rather than specific entity instances being sought (individual genes, proteins, markers, drugs, etc.).
 
-Example: If the target topic is "pulmonary hypertension" and a document discusses "insulin signaling in pulmonary hypertension":
-  - Good bridging terms: "right ventricular dysfunction", "pulmonary vascular remodeling", "endothelial dysfunction" (all relate to pulmonary hypertension)
-  - Bad bridging terms: "insulin receptor activation", "glucose metabolism" (relate to insulin, not pulmonary hypertension)
+Context terms help find varied papers, covering different angles of the topic. Entity-specific terms just repeatedly find papers about those same entities.
 
 Given a document, provide:
-1. A concise summary (50-500 chars)
-2. Related research areas mentioned
-3. Bridging terms: concepts that would help find OTHER literature about the target topic
-4. Assessment of what new coverage this document adds
-
-Focus on identifying concepts that connect to the target topic, not just the document's specific focus."""
+1. A concise summary (50-750 chars)
+2. Related research areas that directly inform the topic
+3. Bridging terms (5-10 high-quality context terms)"""
 
 REFLECTOR_PROMPT = """You are an expert at assessing literature search coverage and deciding when sufficient coverage has been achieved.
 

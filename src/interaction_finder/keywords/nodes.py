@@ -501,15 +501,13 @@ async def _evaluate_single_document(
         keywords_text = _clean_and_rerank_keywords_for_display(
             keywords, topic, reranker, max_keywords_for_llm
         )
-        # Get document context length from config
-        context_chars = config.tools.keywords.document_context_chars
         # Summarize document with strict filtering instructions
         summary_prompt = f"""Review this document and identify HIGH-QUALITY bridging terms.
 
 **Target topic:** {topic}
 
 **Document content:**
-{resource.text[:context_chars]}
+{resource.text}
 
 **Extracted keywords (ranked by relevance to topic):**
 {keywords_text}
@@ -518,28 +516,55 @@ async def _evaluate_single_document(
 
 **Your task:**
 1. Summary: Concisely describe what this document contributes to understanding the target topic
-2. Related research areas: List research areas that connect to the target topic
+2. Related research areas: List only areas that directly inform mechanisms, contexts, or biological frameworks connected to the topic
 3. Bridging terms: Identify 5-10 HIGH-QUALITY bridging terms
 
-The extracted keywords above are suggestions—you may use them directly, combine them, or identify better terms from the document content.
+**What are bridging terms?**
 
-**BRIDGING TERM REQUIREMENTS:**
+Bridging terms are search keywords for the next literature discovery stage. They help locate papers containing relevant information from different angles—including papers that might not use your primary search terms directly.
 
-Each bridging term must:
-  - Be a specific concept, mechanism, pathway, gene, protein, or biological entity
-  - Be directly relevant to "{topic}" (not to tangential topics mentioned in the document)
-  - Use precise scientific terminology (e.g., "BMPR2 gene" not "genetic mutations")
-  - Be a term that commonly appears in scientific literature about the target topic
+They should represent research CONTEXTS (disease subtypes, mechanisms, broad pathways, clinical presentations, related conditions) rather than specific entity instances being sought, because:
+- Context terms enable search diversification across different perspectives
+- Entity-specific terms just repeatedly find papers focused on those entities
+- Goal: discover information through varied lenses, not enumerate known entities
 
-**EXCLUDE:**
-  - The target topic itself or obvious rewordings
-  - Generic research terms: "genetic factors", "molecular mechanisms", "risk factors", "clinical outcomes", "biomarkers", "pathogenesis"
-  - Methodological terms: "genome-wide association studies", "next-generation sequencing", "statistical analysis"
-  - Multi-word descriptive phrases: prefer concise established terms (e.g., "endothelial dysfunction" not "dysfunction of endothelial cells")
+**Identify what the topic is asking for**
+When the topic seeks specific entity types (genes, proteins, drugs, markers, ligands, antibodies):
+→ Extract contexts around those entities (disease subtypes, pathways, mechanisms, clinical presentations)
+→ Do not extract the specific entity instances themselves
 
-**Test:** For each term, ask "Would this term appear frequently in papers specifically about {topic}?" If no, exclude it.
+**Examples:**
+Topic: "genes associated with pulmonary hypertension"
+✓ GOOD: "familial PAH", "Eisenmenger syndrome", "BMP signaling pathway", "pulmonary vascular remodeling"
+✗ BAD: "BMPR2", "ACVRL1", "ENG" (specific genes being sought)
+✗ BAD: "BMPR2 signaling" (still specific to one gene, not a broad pathway)
 
-Select fewer, higher-quality terms rather than reaching for quantity."""
+Topic: "cell markers for regulatory T cells"
+✓ GOOD: "Foxp3+ Tregs", "immune suppression", "peripheral tolerance"
+✗ BAD: "CD25", "CD127" (specific markers being sought)
+
+**Selection criteria:**
+
+Include terms that are:
+- Research contexts: disease subtypes, mechanisms, broad pathways, clinical presentations, related conditions, cell types, tissue contexts
+- Directly relevant to "{topic}" (not tangential topics in the document)
+- Established biomedical terminology from the field
+- Terms that commonly appear in literature about the target topic
+
+Exclude:
+- Specific instances of the entity type being sought (if seeking genes→no gene names; if seeking markers→no marker names)
+- The target topic itself or trivial rewordings
+- Generic terms: "genetic factors", "molecular mechanisms", "risk factors", "clinical outcomes", "biomarkers", "pathogenesis"
+- Methodological terms: "genome-wide association studies", "next-generation sequencing", "statistical analysis"
+- Ad hoc descriptive phrases; prefer established biomedical terms even if multi-word
+
+Use only concepts supported by the document or widely established in the field; do not invent terms.
+
+**Quality test:**
+1. Is this a context/mechanism rather than a specific answer to what I'm searching for?
+2. Would this term appear frequently in papers about {topic}?
+
+If "no" to either question, exclude it. Select fewer, higher-quality terms rather than reaching for quantity."""
         # Use document summarizer agent with renamed span (include doc title for context)
         agent = get_document_summarizer_agent(config)
         usage = RunUsage()
