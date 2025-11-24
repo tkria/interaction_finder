@@ -694,31 +694,31 @@ header {
 }
 
 /* Entities in reasoning panel - use color instead of background, lighter weight */
-.reasoning-content .entity-highlight {
+.reasoning-panel .entity-highlight {
     padding: 0;
     background: none;
     font-weight: 500;
 }
 
-.reasoning-content .entity-highlight.entity1 {
+.reasoning-panel .entity-highlight.entity1 {
     color: var(--entity1-text);
 }
 
-.reasoning-content .entity-highlight.entity2 {
+.reasoning-panel .entity-highlight.entity2 {
     color: var(--entity2-text);
 }
 
 /* Disable hover effects on entities in reasoning panel */
-.reasoning-content .entity-highlight:hover {
+.reasoning-panel .entity-highlight:hover {
     background: none;
 }
 
-.reasoning-content .entity-highlight.entity1:hover {
+.reasoning-panel .entity-highlight.entity1:hover {
     background: none;
     color: var(--entity1-text);
 }
 
-.reasoning-content .entity-highlight.entity2:hover {
+.reasoning-panel .entity-highlight.entity2:hover {
     background: none;
     color: var(--entity2-text);
 }

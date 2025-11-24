@@ -376,11 +376,30 @@ def test_render_all_reasoning_templates():
             "assessments": [
                 {
                     "resource_id": "doc1",
+                    "doc_idx": 0,
                     "title": "Study 1",
                     "relationship": "causes",
                     "confidence": "high",
                     "reasoning": "Evidence from study",
                     "quotes": [],
+                }
+            ],
+            "document_groups": [
+                {
+                    "doc_idx": 0,
+                    "assessments": [
+                        {
+                            "resource_id": "doc1",
+                            "doc_idx": 0,
+                            "title": "Study 1",
+                            "relationship": "causes",
+                            "confidence": "high",
+                            "reasoning": "Evidence from study",
+                            "quotes": [],
+                        }
+                    ],
+                    "total_quotes": 0,
+                    "relationships": ["causes"],
                 }
             ],
         },
@@ -391,6 +410,7 @@ def test_render_all_reasoning_templates():
             "confidence": "high",
             "reasoning": "TP53 prevents Cancer",
             "assessments": [],
+            "document_groups": [],
         },
     ]
 

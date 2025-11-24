@@ -278,11 +278,24 @@ class ReasoningTemplateRenderer:
             </div>
         </div>"""
 
+        def render_single_assessment(assess: dict[str, Any]) -> str:
+            """Render single assessment without the boxed section wrapper."""
+            return f"""
+        <div class="reasoning-content">
+            <strong>Relationship:</strong> {_escape_html(assess["relationship"])}
+            <p>{self.highlighter.highlight(assess["reasoning"])}</p>
+        </div>"""
+
         # Collect all quotes and render assessments
         all_quotes = [q for assess in assessments for q in assess["quotes"]]
-        assessments_html = "".join(
-            render_assessment(i, a) for i, a in enumerate(assessments)
-        )
+        if len(assessments) == 1:
+            # Single assessment: render without box wrapper
+            assessments_html = render_single_assessment(assessments[0])
+        else:
+            # Multiple assessments: render each in a section box
+            assessments_html = "".join(
+                render_assessment(i, a) for i, a in enumerate(assessments)
+            )
 
         # Get title from first assessment
         title = assessments[0].get("title", "Untitled")
