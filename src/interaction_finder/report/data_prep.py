@@ -25,6 +25,22 @@ POLARITY_ORDER = ("supporting", "refuting", "neutral", "irrelevant")
 CONFIDENCE_ORDER = {"high": 3, "medium": 2, "low": 1}
 
 
+def _quote_key(quote: dict[str, Any]) -> tuple:
+    """Generate unique deduplication key for a quote dict.
+
+    Args:
+        quote: Quote dictionary with 'spans', 'text', and optional 'fuzzy_corrected'
+
+    Returns:
+        Hashable tuple of (spans, text, fuzzy_corrected) for deduplication
+    """
+    return (
+        tuple(tuple(span) for span in quote["spans"]),
+        quote["text"],
+        quote.get("fuzzy_corrected", False),
+    )
+
+
 def _pair_key(name_a: str, name_b: str) -> tuple[str, str]:
     """Create deterministic key for unordered entity names."""
 
@@ -168,8 +184,6 @@ def _group_assessments_by_document(
     Returns:
         List of document groups, each with: doc_idx, assessments list, and aggregate metadata
     """
-    from itertools import groupby
-
     # Group consecutive assessments by doc_idx (already sorted by date, so groups are together)
     # Use dict to handle non-consecutive same doc_idx (though shouldn't happen after sorting)
     groups_dict: dict[int, list[dict[str, Any]]] = {}
@@ -187,11 +201,17 @@ def _group_assessments_by_document(
         seen.add(doc_idx)
 
         doc_assessments = groups_dict[doc_idx]
+        # Deduplicate quotes across assessments
+        unique_quotes = {
+            _quote_key(q)
+            for assess in doc_assessments
+            for q in assess.get("quotes", [])
+        }
         groups.append(
             {
                 "doc_idx": doc_idx,
                 "assessments": doc_assessments,
-                "total_quotes": sum(len(a.get("quotes", [])) for a in doc_assessments),
+                "total_quotes": len(unique_quotes),
                 "relationships": list(
                     dict.fromkeys(  # Preserve order, remove duplicates
                         a["relationship"]

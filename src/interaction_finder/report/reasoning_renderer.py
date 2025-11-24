@@ -8,6 +8,15 @@ import re
 from typing import Any
 
 
+def _quote_key(quote: dict[str, Any]) -> tuple:
+    """Generate unique deduplication key for a quote dict."""
+    return (
+        tuple(tuple(span) for span in quote["spans"]),
+        quote["text"],
+        quote.get("fuzzy_corrected", False),
+    )
+
+
 class EntityHighlighter:
     """Highlights entity mentions in plain text with HTML spans.
 
@@ -286,8 +295,15 @@ class ReasoningTemplateRenderer:
             <p>{self.highlighter.highlight(assess["reasoning"])}</p>
         </div>"""
 
-        # Collect all quotes and render assessments
-        all_quotes = [q for assess in assessments for q in assess["quotes"]]
+        # Collect and deduplicate quotes across assessments
+        seen_keys = set()
+        all_quotes = []
+        for assess in assessments:
+            for quote in assess["quotes"]:
+                key = _quote_key(quote)
+                if key not in seen_keys:
+                    seen_keys.add(key)
+                    all_quotes.append(quote)
         if len(assessments) == 1:
             # Single assessment: render without box wrapper
             assessments_html = render_single_assessment(assessments[0])
