@@ -567,6 +567,18 @@ header {
     font-size: 0.85rem;
 }
 
+.relationship-count {
+    font-size: 0.8rem;
+    color: var(--pico-muted-color);
+    font-weight: 500;
+}
+
+.relationship-label-small {
+    font-size: 0.8rem;
+    color: var(--pico-muted-color);
+    font-style: italic;
+}
+
 .document-content {
     display: none;
     padding: var(--spacing-card);
@@ -798,6 +810,39 @@ header {
     font-weight: 600;
     margin-bottom: var(--spacing-compact);
     color: var(--pico-primary);
+}
+
+.reasoning-subtitle {
+    font-size: 0.85rem;
+    color: var(--pico-muted-color);
+    margin-bottom: var(--spacing-card);
+    font-style: italic;
+}
+
+.assessment-section {
+    margin-bottom: var(--spacing-card);
+    padding: var(--spacing-compact);
+    border: 1px solid var(--pico-muted-border-color);
+    border-radius: var(--pico-border-radius);
+    background: var(--pico-card-sectioning-background-color);
+}
+
+.assessment-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: var(--spacing-compact);
+    padding-bottom: var(--spacing-compact);
+    border-bottom: 1px solid var(--pico-muted-border-color);
+}
+
+.assessment-label {
+    font-weight: 600;
+    font-size: 0.9rem;
+}
+
+.assessment-content {
+    line-height: 1.6;
 }
 
 .reasoning-content {
@@ -1168,73 +1213,60 @@ function renderContent() {
 
     const pairCard = match.card;
     const pairIdx = getPairIdFromCard(pairCard);
-    const docIndices = pairCard.dataset.docs.trim().split(' ').map(n => parseInt(n));
+    const docGroups = JSON.parse(pairCard.dataset.docGroups || '[]');
 
-    // Render document accordions
-    content.innerHTML = docIndices.map((docIdx, idx) => {
-        const docTemplate = document.getElementById(`doc-template-${docIdx}`);
-        if (!docTemplate) return '';
+    // Render one accordion per document (groups may consolidate multiple assessments)
+    content.innerHTML = docGroups.map((group, idx) => {
+        const {doc_idx: docIdx, total_quotes: quotes, assessment_count: count,
+               relationships, polarity, confidence} = group;
 
-        // Extract metadata from template (title and date are now in template)
-        const tempDiv = document.createElement('div');
-        tempDiv.appendChild(docTemplate.content.cloneNode(true));
-        const titleEl = tempDiv.querySelector('.document-title');
-        const dateEl = tempDiv.querySelector('.document-date');
+        const template = document.getElementById(`doc-template-${docIdx}`);
+        if (!template) return '';
 
-        // Extract title text (everything except the date span)
-        let title = 'Untitled';
-        if (titleEl) {
-            // Clone and remove date span to get just the title text
-            const titleClone = titleEl.cloneNode(true);
-            const dateInTitle = titleClone.querySelector('.document-date');
-            if (dateInTitle) dateInTitle.remove();
-            title = titleClone.textContent.trim();
-        }
-        const date = dateEl ? dateEl.textContent : '';
+        // Extract title and date from template
+        const temp = document.createElement('div');
+        temp.appendChild(template.content.cloneNode(true));
+        const titleEl = temp.querySelector('.document-title');
+        const titleClone = titleEl?.cloneNode(true);
+        titleClone?.querySelector('.document-date')?.remove();
+        const title = titleClone?.textContent?.trim() || 'Untitled';
+        const date = temp.querySelector('.document-date')?.textContent || '';
 
-        // Find assessment for this document to get confidence and quote count
-        const assessments = JSON.parse(pairCard.dataset.assessments || '[]');
-        const assessment = assessments.find(a => a.doc_idx === docIdx);
-        const confidence = assessment ? assessment.confidence : '';
-        const polarity = assessment ? assessment.polarity : '';
-        const quoteCount = assessment ? assessment.quote_count : 0;
-        const polarityAbbrev = {
-            supporting: 'S',
-            refuting: 'R',
-            neutral: 'N',
-            irrelevant: 'I',
-        }[polarity] || '';
-        let chipMarkup = '';
-        if (polarity && confidence) {
-            chipMarkup = `
-                <span class="pc-chip polarity-${escapeHtml(polarity)} confidence-${escapeHtml(confidence)}">
-                    <span>${escapeHtml(polarityAbbrev || polarity)}</span>
-                    <span>${escapeHtml(confidence)}</span>
-                </span>`;
-        } else if (confidence) {
-            chipMarkup = `<span class="confidence-${escapeHtml(confidence)}">${escapeHtml(confidence)}</span>`;
-        } else if (polarity) {
-            chipMarkup = `<span class="polarity-badge polarity-${escapeHtml(polarity)}">${escapeHtml(polarityAbbrev || polarity)}</span>`;
-        }
+        // Build relationship/assessment display
+        const relDisplay = count > 1
+            ? `<span class="relationship-count">${count} assessments</span>`
+            : relationships?.length > 0
+                ? `<span class="relationship-label-small">${escapeHtml(relationships[0])}</span>`
+                : '';
 
+        // Build polarity/confidence badge
+        const polarityMap = {supporting: 'S', refuting: 'R', neutral: 'N', irrelevant: 'I'};
+        const badge = polarity && confidence
+            ? `<span class="pc-chip polarity-${escapeHtml(polarity)} confidence-${escapeHtml(confidence)}">
+                   <span>${escapeHtml(polarityMap[polarity] || polarity)}</span>
+                   <span>${escapeHtml(confidence)}</span>
+               </span>`
+            : confidence ? `<span class="confidence-${escapeHtml(confidence)}">${escapeHtml(confidence)}</span>`
+            : polarity ? `<span class="polarity-badge polarity-${escapeHtml(polarity)}">${escapeHtml(polarityMap[polarity] || polarity)}</span>`
+            : '';
+
+        const isOpen = state.openDocumentIdx === idx;
         return `
         <div class="document-accordion">
-            <div class="document-header ${state.openDocumentIdx === idx ? 'open' : ''}"
-                 onclick="toggleDocument(${idx})">
+            <div class="document-header ${isOpen ? 'open' : ''}" onclick="toggleDocument(${idx})">
                 <div class="document-title">
                     <span>${escapeHtml(title)}</span>${date ? `<span class="document-date">${escapeHtml(date)}</span>` : ''}
                 </div>
                 <div class="document-stats">
-                    <span>${quoteCount} quote${quoteCount !== 1 ? 's' : ''}</span>
-                    ${chipMarkup}
+                    <span>${quotes} quote${quotes !== 1 ? 's' : ''}</span>
+                    ${relDisplay}
+                    ${badge}
                 </div>
             </div>
-            <div class="document-content ${state.openDocumentIdx === idx ? 'open' : ''}"
-                 id="doc-content-${idx}">
-                ${state.openDocumentIdx === idx ? renderDocument(docIdx, pairIdx) : ''}
+            <div class="document-content ${isOpen ? 'open' : ''}" id="doc-content-${idx}">
+                ${isOpen ? renderDocument(docIdx, pairIdx) : ''}
             </div>
-        </div>
-    `;
+        </div>`;
     }).join('');
 }
 
@@ -1388,10 +1420,14 @@ function renderReasoning() {
     if (state.openDocumentIdx === null) {
         templateId = `reasoning-pair-${pairIdx}-overall`;
     } else {
-        // Get doc index for this assessment
-        const docIndices = pairCard.dataset.docs.trim().split(' ').map(n => parseInt(n));
-        const docIdx = docIndices[state.openDocumentIdx];
-        templateId = `reasoning-pair-${pairIdx}-doc-${docIdx}`;
+        // Get doc index from document groups
+        const docGroups = JSON.parse(pairCard.dataset.docGroups || '[]');
+        if (state.openDocumentIdx < docGroups.length) {
+            const docIdx = docGroups[state.openDocumentIdx].doc_idx;
+            templateId = `reasoning-pair-${pairIdx}-doc-${docIdx}`;
+        } else {
+            templateId = `reasoning-pair-${pairIdx}-overall`;
+        }
     }
 
     const template = document.getElementById(templateId);

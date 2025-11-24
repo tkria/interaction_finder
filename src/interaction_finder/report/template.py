@@ -39,23 +39,25 @@ def _render_pair_cards(pairs: list[dict[str, Any]]) -> str:
         entity1_aliases_display = ", ".join(pair["entity1"]["aliases"])
         entity2_aliases_display = ", ".join(pair["entity2"]["aliases"])
 
-        # Build doc indices list (space-separated)
-        doc_indices = " ".join(str(assess["doc_idx"]) for assess in pair["assessments"])
-
-        # Build assessments data (minimal: doc_idx, confidence, and quote_count for accordion display)
+        # Build document groups data - simplified structure for client-side rendering
         import json
 
-        assessments_data = json.dumps(
+        doc_groups_data = json.dumps(
             [
                 {
-                    "doc_idx": assess["doc_idx"],
-                    "confidence": assess["confidence"],
-                    "quote_count": len(assess["quotes"]),
-                    "polarity": assess.get("polarity"),
+                    "doc_idx": g["doc_idx"],
+                    "total_quotes": g["total_quotes"],
+                    "relationships": g["relationships"],
+                    "assessment_count": len(g["assessments"]),
+                    # First assessment's polarity/confidence for badge display
+                    "polarity": g["assessments"][0].get("polarity"),
+                    "confidence": g["assessments"][0].get("confidence"),
                 }
-                for assess in pair["assessments"]
+                for g in pair["document_groups"]
             ]
         )
+
+        doc_indices = " ".join(str(g["doc_idx"]) for g in pair["document_groups"])
 
         # Build card classes
         card_classes = ["pair-card"]
@@ -115,7 +117,7 @@ def _render_pair_cards(pairs: list[dict[str, Any]]) -> str:
              data-accepted="{str(pair["accepted"]).lower()}"
              data-docs="{doc_indices}"
              data-contentious="{str(bool(pair.get("contentious"))).lower()}"
-             data-assessments='{assessments_data}'>
+             data-doc-groups='{doc_groups_data}'>
             <div class="pair-entities">
                 <span title="{_escape_html(entity1_aliases_display)}">
                     {_escape_html(pair["entity1"]["name"])}

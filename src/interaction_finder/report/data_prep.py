@@ -153,6 +153,58 @@ def _sort_assessments_by_date(
     return sorted(assessments, key=sort_key, reverse=True)
 
 
+def _group_assessments_by_document(
+    assessments: list[dict[str, Any]],
+    doc_idx_map: dict[str, int],
+    indexed_docs: list[tuple[int, Any]],
+) -> list[dict[str, Any]]:
+    """Group assessments by document, consolidating multiple extractions from same source.
+
+    Args:
+        assessments: Sorted list of assessment dictionaries (with doc_idx already set)
+        doc_idx_map: Unused (kept for API compatibility)
+        indexed_docs: Unused (kept for API compatibility)
+
+    Returns:
+        List of document groups, each with: doc_idx, assessments list, and aggregate metadata
+    """
+    from itertools import groupby
+
+    # Group consecutive assessments by doc_idx (already sorted by date, so groups are together)
+    # Use dict to handle non-consecutive same doc_idx (though shouldn't happen after sorting)
+    groups_dict: dict[int, list[dict[str, Any]]] = {}
+    for assess in assessments:
+        doc_idx = assess["doc_idx"]
+        groups_dict.setdefault(doc_idx, []).append(assess)
+
+    # Build document groups in original order (order of first occurrence)
+    groups = []
+    seen = set()
+    for assess in assessments:
+        doc_idx = assess["doc_idx"]
+        if doc_idx in seen:
+            continue
+        seen.add(doc_idx)
+
+        doc_assessments = groups_dict[doc_idx]
+        groups.append(
+            {
+                "doc_idx": doc_idx,
+                "assessments": doc_assessments,
+                "total_quotes": sum(len(a.get("quotes", [])) for a in doc_assessments),
+                "relationships": list(
+                    dict.fromkeys(  # Preserve order, remove duplicates
+                        a["relationship"]
+                        for a in doc_assessments
+                        if a.get("relationship")
+                    )
+                ),
+            }
+        )
+
+    return groups
+
+
 def prepare_report_data(
     checkpoint: PipelineCheckpoint,
     show_progress: bool = True,
@@ -217,9 +269,7 @@ def prepare_report_data(
         _pair_key(pair["entity1"]["name"], pair["entity2"]["name"]): idx
         for idx, pair in enumerate(pairs)
     }
-    judgment_refs = [
-        (pair_idx_map[key], judgment) for key, judgment, _ in pair_entries
-    ]
+    judgment_refs = [(pair_idx_map[key], judgment) for key, judgment, _ in pair_entries]
 
     # Sort assessments within each pair (do this before document rendering
     # since documents dict is needed for sorting)
@@ -250,6 +300,13 @@ def prepare_report_data(
     # Sort assessments within each pair by publication date
     for pair in pairs:
         pair["assessments"] = _sort_assessments_by_date(
+            pair["assessments"], doc_idx_map, indexed_docs
+        )
+
+    # Group assessments by document for each pair
+    # This consolidates multiple assessments from the same document
+    for pair in pairs:
+        pair["document_groups"] = _group_assessments_by_document(
             pair["assessments"], doc_idx_map, indexed_docs
         )
 

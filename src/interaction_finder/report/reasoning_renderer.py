@@ -235,55 +235,73 @@ class ReasoningTemplateRenderer:
         </div>
     </div>"""
 
-    def render_assessment_template(
+    def render_document_group_template(
         self,
-        assess: dict[str, Any],
-        assess_idx: int,
+        doc_group: dict[str, Any],
         all_pairs: list[dict[str, Any]],
     ) -> str:
-        """Render per-document assessment reasoning template.
+        """Render reasoning template for document group (consolidates multiple assessments).
 
         Args:
-            assess: Assessment data dictionary
-            assess_idx: Index of this assessment in sorted assessments list
-            all_pairs: Full list of pairs (for finding other pairs using same doc)
+            doc_group: Document group with assessments list
+            all_pairs: Full list of pairs (for cross-document navigation)
 
         Returns:
-            Complete HTML for reasoning panel (document assessment)
+            HTML for reasoning panel showing all assessments from this document
         """
-        pair = self.pair
+        assessments = doc_group["assessments"]
+        doc_idx = doc_group["doc_idx"]
 
-        # Get doc_idx (should already be in assessment dict)
-        doc_idx = assess.get("doc_idx")
-        if doc_idx is None:
-            # Fallback: look up via resource_id
-            doc_idx = self.doc_idx_map.get(assess["resource_id"], 0)
+        # Helper to format polarity badge
+        polarity_map = {
+            "supporting": "S",
+            "refuting": "R",
+            "neutral": "N",
+            "irrelevant": "I",
+        }
 
-        # Highlight entities in assessment reasoning
-        highlighted_reasoning = self.highlighter.highlight(assess["reasoning"])
+        def render_assessment(idx: int, assess: dict[str, Any]) -> str:
+            polarity = assess.get("polarity", "")
+            confidence = assess.get("confidence", "low")
+            return f"""
+        <div class="assessment-section">
+            <div class="assessment-header">
+                <span class="assessment-label">Assessment {idx + 1}</span>
+                <span class="pc-chip polarity-{_escape_html(polarity)} confidence-{_escape_html(confidence)}">
+                    <span>{_escape_html(polarity_map.get(polarity, polarity))}</span>
+                    <span>{_escape_html(confidence)}</span>
+                </span>
+            </div>
+            <div class="assessment-content">
+                <strong>Relationship:</strong> {_escape_html(assess["relationship"])}
+                <p>{self.highlighter.highlight(assess["reasoning"])}</p>
+            </div>
+        </div>"""
 
-        # Render quote navigation with doc_idx for quote IDs
-        quote_nav_html = self._render_quote_navigation(assess["quotes"], doc_idx)
+        # Collect all quotes and render assessments
+        all_quotes = [q for assess in assessments for q in assess["quotes"]]
+        assessments_html = "".join(
+            render_assessment(i, a) for i, a in enumerate(assessments)
+        )
 
-        # Render other pairs navigation
-        other_pairs_html = self._render_other_pairs_navigation(doc_idx, all_pairs)
+        # Get title from first assessment
+        title = assessments[0].get("title", "Untitled")
+        count_text = (
+            f"{len(assessments)} assessment{'s' if len(assessments) > 1 else ''}"
+        )
 
         return f"""
     <div class="reasoning-panel">
         <div class="pair-header">
-            <span class="pair-entity">{_escape_html(pair["entity1"]["name"])}</span>
-            <span class="pair-entity">{_escape_html(pair["entity2"]["name"])}</span>
-            <span class="pair-relation">{_escape_html(pair["relationship"])}</span>
+            <span class="pair-entity">{_escape_html(self.pair["entity1"]["name"])}</span>
+            <span class="pair-entity">{_escape_html(self.pair["entity2"]["name"])}</span>
+            <span class="pair-relation">{_escape_html(self.pair["relationship"])}</span>
         </div>
-        <div class="reasoning-title">Document Assessment</div>
-        <div class="reasoning-content">
-            <strong>Document:</strong> {_escape_html(assess["title"])}
-            <br><strong>Relationship:</strong> {_escape_html(assess["relationship"])}
-            <br><strong>Confidence:</strong> <span class="confidence-{_escape_html(assess["confidence"])}">{_escape_html(assess["confidence"])}</span>
-            <p>{highlighted_reasoning}</p>
-        </div>
-        {quote_nav_html}
-        {other_pairs_html}
+        <div class="reasoning-title">Document: {_escape_html(title)}</div>
+        <div class="reasoning-subtitle">{count_text} from this document</div>
+        {assessments_html}
+        {self._render_quote_navigation(all_quotes, doc_idx)}
+        {self._render_other_pairs_navigation(doc_idx, all_pairs)}
     </div>"""
 
     def _render_quote_navigation(
@@ -379,7 +397,7 @@ def render_all_reasoning_templates(
     """Render all reasoning templates for all pairs.
 
     Args:
-        pairs: List of pair dictionaries (with pre-sorted assessments)
+        pairs: List of pair dictionaries (with document_groups)
         doc_idx_map: Mapping of resource_id -> doc_idx for template ID generation
 
     Returns:
@@ -396,13 +414,13 @@ def render_all_reasoning_templates(
         # Render overall assessment template
         pair_templates["overall"] = renderer.render_overall_template()
 
-        # Render per-assessment templates using doc_idx as key
-        for assess_idx, assess in enumerate(pair["assessments"]):
-            doc_idx = doc_idx_map.get(assess["resource_id"])
-            if doc_idx is not None:
-                pair_templates[f"doc-{doc_idx}"] = renderer.render_assessment_template(
-                    assess, assess_idx, pairs
-                )
+        # Render per-document-group templates using doc_idx as key
+        # Each template may now contain multiple assessments from the same document
+        for doc_group in pair["document_groups"]:
+            doc_idx = doc_group["doc_idx"]
+            pair_templates[f"doc-{doc_idx}"] = renderer.render_document_group_template(
+                doc_group, pairs
+            )
 
         templates[str(pair_idx)] = pair_templates
 
