@@ -312,9 +312,15 @@ class FetchDocumentsNode(BaseNode[State, Deps, BridgingTermsOut]):
                 logger.info(
                     f"All {len(ctx.state.selected_results)} documents cached, proceeding to extraction"
                 )
-                # Update progress for cached documents
+                # Update progress for cached documents (all complete immediately)
                 if ctx.deps.progress:
-                    ctx.deps.progress.add_documents(len(ctx.state.selected_results))
+                    ctx.deps.progress.set_documents_total(
+                        len(ctx.state.selected_results)
+                    )
+                    ctx.deps.progress.documents_processed = len(
+                        ctx.state.selected_results
+                    )
+                    ctx.deps.progress.update()
                 return ExtractKeywordsNode()
             # Fetch only new URLs
             urls = [url for url, _ in urls_to_fetch]
@@ -352,8 +358,10 @@ class FetchDocumentsNode(BaseNode[State, Deps, BridgingTermsOut]):
                     failed_count += 1
             # Update progress with total documents (newly fetched + cached)
             if ctx.deps.progress:
-                total_processed = len(ctx.state.selected_results)
-                ctx.deps.progress.add_documents(total_processed)
+                total_count = len(ctx.state.selected_results)
+                ctx.deps.progress.set_documents_total(total_count)
+                ctx.deps.progress.documents_processed = total_count
+                ctx.deps.progress.update()
             cached_count = len(ctx.state.selected_results) - len(urls_to_fetch)
             logger.info(
                 f"Fetched {fetched_count}/{len(urls_to_fetch)} new documents ({cached_count} from cache, {failed_count} failed)"
@@ -600,6 +608,10 @@ class EvaluateKeywordsNode(BaseNode[State, Deps, BridgingTermsOut]):
         # Update progress to show evaluation
         if ctx.deps.progress:
             ctx.deps.progress.set_phase_evaluating()
+            # Mark all extracted keywords as evaluating
+            ctx.deps.progress.start_keyword_evaluation(
+                ctx.deps.progress.keywords_extracted
+            )
         if not ctx.state.extracted_keywords:
             logger.info("No extracted keywords, skipping to reflection")
             return ReflectNode()
@@ -619,12 +631,17 @@ class EvaluateKeywordsNode(BaseNode[State, Deps, BridgingTermsOut]):
         results = await asyncio.gather(*tasks)
         # Filter out failures (None) and extract summaries
         successful_results = [r for r in results if r is not None]
-        # Add summaries to state and update progress
-        for summary, bridging_count in successful_results:
-            ctx.state.document_summaries.append(summary)
-            if ctx.deps.progress:
-                ctx.deps.progress.add_keywords_accepted(bridging_count)
         total_bridging = sum(count for _, count in successful_results)
+        # Add summaries to state and update progress
+        for summary, _ in successful_results:
+            ctx.state.document_summaries.append(summary)
+        # Update progress: mark all keywords done, with total_bridging accepted
+        if ctx.deps.progress:
+            total_extracted = ctx.deps.progress.keywords_extracted
+            rejected_count = total_extracted - total_bridging
+            ctx.deps.progress.finish_keyword_evaluation(
+                accepted=total_bridging, rejected=rejected_count
+            )
         failed_count = len(results) - len(successful_results)
         logger.info(
             f"Generated {len(successful_results)} summaries with {total_bridging} bridging terms total ({failed_count} failed)"

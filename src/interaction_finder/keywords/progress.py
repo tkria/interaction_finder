@@ -22,11 +22,21 @@ class KeywordsProgress(LiveProgressCounter):
 
     searches_run: int = 0
     results_found: int = 0
+    # Document processing (three-part: processed/in_progress/total)
     documents_processed: int = 0
+    documents_in_progress: int = 0
+    documents_total: int = 0
+    # Keyword evaluation (three-part: accepted/evaluating/total_extracted)
     keywords_extracted: int = 0
+    keywords_evaluating: int = 0
     keywords_accepted: int = 0
     current_round: int = 0
     max_rounds: int = 0
+
+    def start(self) -> None:
+        """Start the live display with initial warming up status."""
+        self._status_msg = "Warming up"
+        super().start()
 
     def _render(self) -> RenderableType:
         """Render progress table with keywords-specific layout."""
@@ -40,17 +50,30 @@ class KeywordsProgress(LiveProgressCounter):
         bright = "bold bright_yellow" if self._highlight == "search" else "bold yellow"
         table.add_row("Searches run", f"[{bright}]{self.searches_run}[/]")
         table.add_row("Results found", f"[{bright}]{self.results_found}[/]")
-        # Document processing metrics
-        bright = "bold bright_yellow" if self._highlight == "fetch" else "bold yellow"
-        table.add_row("Documents processed", f"[{bright}]{self.documents_processed}[/]")
-        # Keyword extraction metrics
-        bright = "bold bright_yellow" if self._highlight == "extract" else "bold yellow"
-        table.add_row("Keywords extracted", f"[{bright}]{self.keywords_extracted}[/]")
-        # Keyword evaluation metrics
-        bright = (
-            "bold bright_yellow" if self._highlight == "evaluate" else "bold yellow"
+        # Document processing (three-part: processed/in_progress/total)
+        docs_total_is_final = self.documents_total > 0
+        docs_display = self._format_three_part(
+            complete=self.documents_processed,
+            in_progress=self.documents_in_progress,
+            total=self.documents_total if self.documents_total > 0 else None,
+            is_highlighted=(self._highlight == "fetch"),
+            total_is_final=docs_total_is_final,
         )
-        table.add_row("Keywords accepted", f"[{bright}]{self.keywords_accepted}[/]")
+        table.add_row("Documents", docs_display)
+        # Keyword evaluation (three-part: accepted/evaluating/extracted)
+        keywords_total_is_final = (
+            self.documents_in_progress == 0
+            and self.documents_processed == self.documents_total
+            and self.documents_total > 0
+        )
+        keywords_display = self._format_three_part(
+            complete=self.keywords_accepted,
+            in_progress=self.keywords_evaluating,
+            total=self.keywords_extracted if self.keywords_extracted > 0 else None,
+            is_highlighted=(self._highlight == "evaluate"),
+            total_is_final=keywords_total_is_final,
+        )
+        table.add_row("Keywords", keywords_display)
         return self._render_with_header(table)
 
     def set_phase_searching(self, backend: str = "") -> None:
@@ -92,9 +115,20 @@ class KeywordsProgress(LiveProgressCounter):
         self.results_found += count
         self.update()
 
-    def add_documents(self, count: int) -> None:
-        """Add to the documents processed counter."""
-        self.documents_processed += count
+    def set_documents_total(self, count: int) -> None:
+        """Set the total number of documents to process."""
+        self.documents_total = count
+        self.update()
+
+    def start_document(self) -> None:
+        """Mark a document as starting processing."""
+        self.documents_in_progress += 1
+        self.update()
+
+    def finish_document(self) -> None:
+        """Mark a document as finished processing."""
+        self.documents_in_progress -= 1
+        self.documents_processed += 1
         self.update()
 
     def add_keywords_extracted(self, count: int) -> None:
@@ -102,9 +136,15 @@ class KeywordsProgress(LiveProgressCounter):
         self.keywords_extracted += count
         self.update()
 
-    def add_keywords_accepted(self, count: int) -> None:
-        """Add to the keywords accepted counter."""
-        self.keywords_accepted += count
+    def start_keyword_evaluation(self, count: int = 1) -> None:
+        """Mark keywords as starting evaluation."""
+        self.keywords_evaluating += count
+        self.update()
+
+    def finish_keyword_evaluation(self, accepted: int, rejected: int = 0) -> None:
+        """Mark keywords as finished evaluation with accept/reject counts."""
+        self.keywords_evaluating -= accepted + rejected
+        self.keywords_accepted += accepted
         self.update()
 
     def set_round(self, current: int, max_rounds: int) -> None:
