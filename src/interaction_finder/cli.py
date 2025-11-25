@@ -857,7 +857,12 @@ def widesearch(
                 "Use -o/--output to specify where to save results."
             )
             raise typer.Exit(1)
-
+        # Check if search results already exist
+        if checkpoint.search is not None and not force:
+            console.print(
+                "[yellow]⚠ Search results already exist. Use --force to replace.[/yellow]"
+            )
+            raise typer.Exit(1)
         # Apply CLI overrides
         if max_rounds is not None:
             cfg.tools.widesearch.max_rounds = max_rounds
@@ -1005,7 +1010,12 @@ def extract(
                 "Use -o/--output to specify where to save results."
             )
             raise typer.Exit(1)
-
+        # Check if extraction results already exist
+        if checkpoint.extraction is not None and not force:
+            console.print(
+                "[yellow]⚠ Extraction results already exist. Use --force to replace.[/yellow]"
+            )
+            raise typer.Exit(1)
         # Create search backend (needed if search stage must run)
         backend_name = backend if backend else cfg.tools.widesearch.search_backend
         search_backend = create_search_backend(backend_name, cfg)

@@ -67,15 +67,10 @@ async def ensure_keywords(
     Returns:
         Checkpoint with at least keywords stage
     """
-    # Check if keywords already exist and force not specified
+    # Already complete and not forcing - silently return (idempotent)
     if checkpoint.keywords is not None and not force:
-        if console:
-            console.print(
-                "[yellow]⚠ Keywords results already exist. Use --force to replace.[/yellow]"
-            )
         return checkpoint
-
-    # Run keywords stage if not already complete or force specified
+    # Run keywords stage
     if checkpoint.keywords is None or force:
         # Print stage start message
         if console:
@@ -130,15 +125,10 @@ async def ensure_search(
     Returns:
         Checkpoint with at least search stage
     """
-    # Check if search already exists and force not specified
+    # Already complete and not forcing - silently return (idempotent)
     if checkpoint.search is not None and not force:
-        if console:
-            console.print(
-                "[yellow]⚠ Search results already exist. Use --force to replace.[/yellow]"
-            )
         return checkpoint
-
-    # Run search stage if not already complete or force specified
+    # Run search stage
     if checkpoint.search is None or force:
         # Ensure keywords first (use keywords_backend or fall back to search_backend)
         # NOTE: force is NOT propagated - we only replace search results, not keywords
@@ -215,15 +205,10 @@ async def ensure_extraction(
     Returns:
         Checkpoint with extraction stage
     """
-    # Check if extraction already exists and force not specified
+    # Already complete and not forcing - silently return (idempotent)
     if checkpoint.extraction is not None and not force:
-        if console:
-            console.print(
-                "[yellow]⚠ Extraction results already exist. Use --force to replace.[/yellow]"
-            )
         return checkpoint
-
-    # Run extraction stage if not already complete or force specified
+    # Run extraction stage
     if checkpoint.extraction is None or force:
         # Ensure search first (which ensures keywords)
         # NOTE: force is NOT propagated - we only replace extraction results, not search/keywords
