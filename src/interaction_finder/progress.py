@@ -47,10 +47,14 @@ class LiveProgressCounter(ABC):
         self._live = Live(self._render(), console=self._console, refresh_per_second=4)
         self._live.start()
 
-    def stop(self) -> None:
-        """Stop the live display, showing completion status."""
+    def stop(self, failed: bool = False) -> None:
+        """Stop the live display, showing completion status.
+
+        Parameters:
+            failed: bool — if True, show failure message instead of success
+        """
         if self._live:
-            self.set_completed()
+            self.set_completed(failed=failed)
             self._live.stop()
             self._live = None
 
@@ -70,12 +74,19 @@ class LiveProgressCounter(ABC):
         self._highlight = highlight
         self.update()
 
-    def set_completed(self) -> None:
-        """Show completion message with elapsed time."""
+    def set_completed(self, failed: bool = False) -> None:
+        """Show completion message with elapsed time.
+
+        Parameters:
+            failed: bool — if True, show failure message instead of success
+        """
         elapsed = int(time() - self._start_time)
         mins, secs = divmod(elapsed, 60)
         time_str = f"{mins}m {secs}s" if mins else f"{secs}s"
-        self.set_status(f"✓ Completed in {time_str}")
+        if failed:
+            self.set_status(f"✗ Failed after {time_str}")
+        else:
+            self.set_status(f"✓ Completed in {time_str}")
 
     def set_phase_idle(self) -> None:
         """Clear status and highlighting."""
@@ -128,9 +139,11 @@ class LiveProgressCounter(ABC):
         """
         if not self._status_msg:
             return table
-        # Create header (spinner or completion)
+        # Create header (spinner, success, or failure)
         if self._status_msg.startswith("✓"):
             header = Text(self._status_msg, style="bold green")
+        elif self._status_msg.startswith("✗"):
+            header = Text(self._status_msg, style="bold red")
         else:
             header = Spinner("dots", text=self._status_msg, style="cyan")
         # Calculate separator width
@@ -154,9 +167,9 @@ class LiveProgressCounter(ABC):
         self.start()
         return self
 
-    def __exit__(self, *args):
-        """Context manager exit."""
-        self.stop()
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit, showing failure status if an exception occurred."""
+        self.stop(failed=exc_type is not None)
 
 
 class DummyProgress:

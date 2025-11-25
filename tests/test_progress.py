@@ -49,6 +49,14 @@ def test_set_completed():
     assert "s" in progress._status_msg  # Has time unit
 
 
+def test_set_completed_failed():
+    """set_completed with failed=True shows failure message."""
+    progress = TestProgressCounter()
+    progress.set_completed(failed=True)
+    assert progress._status_msg.startswith("✗ Failed after")
+    assert "s" in progress._status_msg  # Has time unit
+
+
 def test_set_phase_idle():
     """set_phase_idle clears status and highlight."""
     progress = TestProgressCounter()
@@ -124,6 +132,20 @@ def test_context_manager():
         assert progress.test_counter == 42
 
 
+def test_context_manager_with_exception():
+    """LiveProgressCounter shows failure message when exception occurs."""
+    import pytest
+
+    progress = TestProgressCounter()
+    # Force enabled to test the stop behavior (normally disabled without TTY)
+    progress._enabled = True
+    progress.start()
+    with pytest.raises(ValueError):
+        with progress:
+            raise ValueError("test error")
+    assert progress._status_msg.startswith("✗ Failed after")
+
+
 def test_dummy_progress_no_op():
     """DummyProgress accepts all operations without error."""
     progress = DummyProgress()
@@ -175,6 +197,19 @@ def test_render_with_header_completion_status():
     table.add_row("test")
     result = progress._render_with_header(table)
     # Should create a Group with completion header
+    from rich.console import Group
+
+    assert isinstance(result, Group)
+
+
+def test_render_with_header_failure_status():
+    """_render_with_header renders failure with red X."""
+    progress = TestProgressCounter()
+    progress._status_msg = "✗ Failed after 5s"
+    table = Table.grid()
+    table.add_row("test")
+    result = progress._render_with_header(table)
+    # Should create a Group with failure header
     from rich.console import Group
 
     assert isinstance(result, Group)
