@@ -82,30 +82,29 @@ class ExtractionProgress(LiveProgressCounter):
             total_is_final=pairs_total_is_final,
         )
         table.add_row("  Pairs assessed", pairs_display, "")
-        # Co-mention sweep section (only show if sweep has been run)
-        if self.sweep_co_mentions_found > 0 or self._highlight == "sweep":
-            table.add_row("", "", "")
-            table.add_row("[bold cyan]Co-mention Sweep[/]", "", "")
-            sweep_bright = (
-                "bold bright_yellow" if self._highlight == "sweep" else "bold yellow"
-            )
-            sweep_annotation = (
-                f"({self.sweep_no_existing} new, {self.sweep_uncovered} uncovered)"
-                if self.sweep_co_mentions_found > 0
-                else ""
-            )
-            table.add_row(
-                "  Found",
-                f"[{sweep_bright}]{self.sweep_co_mentions_found}[/]",
-                sweep_annotation,
-            )
-            table.add_row(
-                "  Assessed",
-                f"[{sweep_bright}]{self.sweep_assessed}[/]",
-                f"({self.sweep_relationships} with relationships)"
-                if self.sweep_assessed > 0
-                else "",
-            )
+        # Co-mention sweep section
+        table.add_row("", "", "")
+        table.add_row("[bold cyan]Co-mention Sweep[/]", "", "")
+        sweep_bright = (
+            "bold bright_yellow" if self._highlight == "sweep" else "bold yellow"
+        )
+        sweep_annotation = (
+            f"({self.sweep_no_existing} new, {self.sweep_uncovered} uncovered)"
+            if self.sweep_co_mentions_found > 0
+            else ""
+        )
+        table.add_row(
+            "  Found",
+            f"[{sweep_bright}]{self.sweep_co_mentions_found}[/]",
+            sweep_annotation,
+        )
+        table.add_row(
+            "  Assessed",
+            f"[{sweep_bright}]{self.sweep_assessed}[/]",
+            f"({self.sweep_relationships} with relationships)"
+            if self.sweep_assessed > 0
+            else "",
+        )
         # Combined judgment section
         table.add_row("", "", "")
         table.add_row("[bold cyan]Combined Judgment[/]", "", "")
