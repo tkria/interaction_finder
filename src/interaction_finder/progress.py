@@ -102,27 +102,36 @@ class LiveProgressCounter(ABC):
     ) -> str:
         """Format counter as {complete}/{in_progress}/{total} with colored parts.
 
+        Display modes:
+        - Before work starts (total=0 or None): single yellow "0"
+        - Work in progress: "{complete}/{in_progress}/{total}"
+        - Work complete (total_is_final and in_progress=0): "{complete}/{total}"
+
         Parameters:
             complete: int — count of finished items
             in_progress: int — count of currently processing items
-            total: int | None — total count (None if unknown)
+            total: int | None — total count (None or 0 if unknown/not started)
             is_highlighted: bool — whether to brighten the in-progress count
-            total_is_final: bool — whether total is static (True) or still updating (False)
+            total_is_final: bool — whether total is final (used to hide in_progress when done)
 
         Returns:
-            str — Rich markup string like "[bold green]5[/]/[bright_yellow]3[/]/[dim]10[/]"
+            str — Rich markup string like "[bold green]5[/]/[dim]3[/]/[bold yellow]10[/]"
         """
+        # Before work starts: show single zero
+        if total is None or total == 0:
+            return "[bold yellow]0[/]"
+        # Style definitions
         complete_style = "bold green"
-        in_progress_style = "bold bright_yellow" if is_highlighted else "bold yellow"
-        total_style = "bold bright_blue" if total_is_final else "dim"
-        total_str = str(total) if total is not None else "?"
-        # Append ? to total when not final and total exists
-        if not total_is_final and total is not None:
-            total_str = f"{total}?"
+        in_progress_style = "bold bright_yellow" if is_highlighted else "dim"
+        total_style = "bold yellow"
+        # Work complete: hide in-progress count
+        if total_is_final and in_progress == 0:
+            return f"[{complete_style}]{complete}[/]/[{total_style}]{total}[/]"
+        # Work in progress: show all three parts
         return (
             f"[{complete_style}]{complete}[/]/"
             f"[{in_progress_style}]{in_progress}[/]/"
-            f"[{total_style}]{total_str}[/]"
+            f"[{total_style}]{total}[/]"
         )
 
     def _render_with_header(self, table) -> RenderableType:

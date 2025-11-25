@@ -67,39 +67,52 @@ def test_set_phase_idle():
 
 
 def test_format_three_part_all_values():
-    """_format_three_part with all values specified."""
-    progress = TestProgressCounter()
-    result = progress._format_three_part(
-        complete=5, in_progress=3, total=10, is_highlighted=False, total_is_final=True
-    )
-    assert "5" in result
-    assert "3" in result
-    assert "10" in result
-    assert "bold yellow" in result  # complete style
-    assert "bold bright_blue" in result  # final total style
-
-
-def test_format_three_part_highlighted():
-    """_format_three_part with highlighting enabled."""
-    progress = TestProgressCounter()
-    result = progress._format_three_part(
-        complete=5, in_progress=3, total=10, is_highlighted=True, total_is_final=True
-    )
-    assert "bold bright_yellow" in result  # highlighted in-progress style
-
-
-def test_format_three_part_total_not_final():
-    """_format_three_part with non-final total shows dim style and ?."""
+    """_format_three_part with work in progress shows all three parts."""
     progress = TestProgressCounter()
     result = progress._format_three_part(
         complete=5, in_progress=3, total=10, is_highlighted=False, total_is_final=False
     )
-    assert "10?" in result  # Question mark appended
-    assert "dim" in result  # Non-final total uses dim style
+    assert "5" in result
+    assert "3" in result
+    assert "10" in result
+    assert "bold green" in result  # complete style
+    assert "dim" in result  # in-progress style (not highlighted)
+    assert "bold yellow" in result  # total style
+
+
+def test_format_three_part_highlighted():
+    """_format_three_part with highlighting brightens in-progress."""
+    progress = TestProgressCounter()
+    result = progress._format_three_part(
+        complete=5, in_progress=3, total=10, is_highlighted=True, total_is_final=False
+    )
+    assert "bold bright_yellow" in result  # highlighted in-progress style
+
+
+def test_format_three_part_complete_hides_in_progress():
+    """_format_three_part hides in-progress when final and in_progress=0."""
+    progress = TestProgressCounter()
+    result = progress._format_three_part(
+        complete=10, in_progress=0, total=10, is_highlighted=False, total_is_final=True
+    )
+    # Should only show complete/total (two parts, one separator)
+    # Format: [bold green]10[/]/[bold yellow]10[/]
+    assert result == "[bold green]10[/]/[bold yellow]10[/]"
+
+
+def test_format_three_part_not_final_shows_in_progress():
+    """_format_three_part shows in-progress even when 0 if not final."""
+    progress = TestProgressCounter()
+    result = progress._format_three_part(
+        complete=5, in_progress=0, total=10, is_highlighted=False, total_is_final=False
+    )
+    # Should show all three parts (waiting for more work)
+    # Format: [bold green]5[/]/[dim]0[/]/[bold yellow]10[/]
+    assert result == "[bold green]5[/]/[dim]0[/]/[bold yellow]10[/]"
 
 
 def test_format_three_part_total_none():
-    """_format_three_part with None total shows ?."""
+    """_format_three_part with None total shows single zero."""
     progress = TestProgressCounter()
     result = progress._format_three_part(
         complete=5,
@@ -108,19 +121,16 @@ def test_format_three_part_total_none():
         is_highlighted=False,
         total_is_final=False,
     )
-    assert "?" in result
-    assert "dim" in result
+    assert result == "[bold yellow]0[/]"
 
 
-def test_format_three_part_zero_values():
-    """_format_three_part handles zero values correctly."""
+def test_format_three_part_zero_total():
+    """_format_three_part with zero total shows single zero."""
     progress = TestProgressCounter()
     result = progress._format_three_part(
         complete=0, in_progress=0, total=0, is_highlighted=False, total_is_final=True
     )
-    assert "0" in result
-    # Should have three zeros separated by slashes
-    assert result.count("0") >= 3
+    assert result == "[bold yellow]0[/]"
 
 
 def test_context_manager():
