@@ -30,6 +30,13 @@ class ExtractionProgress(LiveProgressCounter):
     pairs_total: int = 0
     quotes_validated: int = 0
     quotes_failed: int = 0
+    # Co-mention sweep counters
+    sweep_co_mentions_found: int = 0
+    sweep_no_existing: int = 0
+    sweep_uncovered: int = 0
+    sweep_assessed: int = 0
+    sweep_relationships: int = 0
+    # Judgment counters
     unique_pairs: int = 0
     judgments_in_progress: int = 0
     accepted: int = 0
@@ -75,6 +82,30 @@ class ExtractionProgress(LiveProgressCounter):
             total_is_final=pairs_total_is_final,
         )
         table.add_row("  Pairs assessed", pairs_display, "")
+        # Co-mention sweep section (only show if sweep has been run)
+        if self.sweep_co_mentions_found > 0 or self._highlight == "sweep":
+            table.add_row("", "", "")
+            table.add_row("[bold cyan]Co-mention Sweep[/]", "", "")
+            sweep_bright = (
+                "bold bright_yellow" if self._highlight == "sweep" else "bold yellow"
+            )
+            sweep_annotation = (
+                f"({self.sweep_no_existing} new, {self.sweep_uncovered} uncovered)"
+                if self.sweep_co_mentions_found > 0
+                else ""
+            )
+            table.add_row(
+                "  Found",
+                f"[{sweep_bright}]{self.sweep_co_mentions_found}[/]",
+                sweep_annotation,
+            )
+            table.add_row(
+                "  Assessed",
+                f"[{sweep_bright}]{self.sweep_assessed}[/]",
+                f"({self.sweep_relationships} with relationships)"
+                if self.sweep_assessed > 0
+                else "",
+            )
         # Combined judgment section
         table.add_row("", "", "")
         table.add_row("[bold cyan]Combined Judgment[/]", "", "")
@@ -114,6 +145,10 @@ class ExtractionProgress(LiveProgressCounter):
     def set_phase_assessing(self) -> None:
         """Show pair assessment status."""
         self.set_status("Assessing pairs", highlight="assessment")
+
+    def set_phase_sweeping(self) -> None:
+        """Show co-mention sweep status."""
+        self.set_status("Sweeping for missed co-mentions", highlight="sweep")
 
     def set_phase_judging(self) -> None:
         """Show cross-document judgment status."""

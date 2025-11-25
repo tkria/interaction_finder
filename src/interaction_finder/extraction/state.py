@@ -10,11 +10,18 @@ Pipeline flow:
    - Identify proximal sets → proximal_sets_by_resource
    - Extract & assess pairs → pair_assessments_by_resource
 2. ConsolidateEntitiesNode → entities_merged, canonical_name_variants (global merging + pair reference updates)
-3. JudgeCrossDocumentNode → pair_judgments
-4. FinalizeNode → ExtractionResult
+3. ConsolidateRelationshipsNode → relationship_mappings, relationship_polarities
+4. SweepCoMentionsNode → co_mention_sweep_stats (additional assessments added to pair_assessments_by_resource)
+5. ConsolidateNewRelationshipsNode → extends relationship_polarities for new labels
+6. JudgeCrossDocumentNode → pair_judgments
+7. FinalizeNode → ExtractionResult
 """
 
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from interaction_finder.extraction.sweep_co_mentions import CoMentionSweepStats
 
 from interaction_finder.extraction.models import (
     EntityMention,
@@ -101,6 +108,10 @@ class State:
     relationship_polarities: dict[str, str] = field(default_factory=dict)
     # Count of assessments with updated relationship labels
     relationships_merged: int = 0
+
+    # === Stage 5b: Co-mention Sweep ===
+    # Statistics from the co-mention sweep (None if sweep disabled or not yet run)
+    co_mention_sweep_stats: "CoMentionSweepStats | None" = None
 
     # === Stage 6: Cross-Document Judgment ===
     # Final judgments for each unique entity pair across all documents

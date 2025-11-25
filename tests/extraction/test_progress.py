@@ -73,6 +73,21 @@ def test_extraction_progress_quotes_tracking():
     assert progress.quotes_failed == 5
 
 
+def test_extraction_progress_sweep_tracking():
+    """Sweep counters track correctly."""
+    progress = ExtractionProgress()
+    progress.sweep_co_mentions_found = 15
+    progress.sweep_no_existing = 10
+    progress.sweep_uncovered = 5
+    progress.sweep_assessed = 12
+    progress.sweep_relationships = 4
+    assert progress.sweep_co_mentions_found == 15
+    assert progress.sweep_no_existing == 10
+    assert progress.sweep_uncovered == 5
+    assert progress.sweep_assessed == 12
+    assert progress.sweep_relationships == 4
+
+
 def test_context_manager():
     """Progress counter works as context manager."""
     progress = ExtractionProgress()
@@ -120,6 +135,14 @@ def test_phase_assessing():
     progress.set_phase_assessing()
     assert progress._status_msg == "Assessing pairs"
     assert progress._highlight == "assessment"
+
+
+def test_phase_sweeping():
+    """set_phase_sweeping sets correct status."""
+    progress = ExtractionProgress()
+    progress.set_phase_sweeping()
+    assert progress._status_msg == "Sweeping for missed co-mentions"
+    assert progress._highlight == "sweep"
 
 
 def test_phase_judging():

@@ -297,6 +297,10 @@ class IfetcherConfig(BaseModel):
                 le=100,
                 description="Maximum concurrent LLM agent calls to prevent rate limiting",
             )
+            sweep_co_mentions: bool = Field(
+                True,
+                description="Enable co-mention sweep to find missed entity pair evidence",
+            )
 
         extraction: Extraction = Field(
             default_factory=Extraction, description="Extraction configuration"

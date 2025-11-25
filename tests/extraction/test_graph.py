@@ -21,6 +21,9 @@ class TestGraphAssembly:
         expected_nodes = [
             "ProcessDocumentsNode",
             "ConsolidateEntitiesNode",
+            "ConsolidateRelationshipsNode",
+            "SweepCoMentionsNode",
+            "ConsolidateNewRelationshipsNode",
             "JudgeCrossDocumentNode",
             "FinalizeNode",
         ]

@@ -7,9 +7,11 @@ agents only produce typed data.
 Pipeline stages:
 1. ProcessDocumentsNode - Process all documents concurrently (entities → pairs → assessments)
 2. ConsolidateEntitiesNode - Consolidate entities globally + update pair references
-3. ConsolidateRelationshipsNode - Consolidate relationship labels + filter irrelevant types
-4. JudgeCrossDocumentNode - Make final accept/reject decisions
-5. FinalizeNode - Build final output
+3. ConsolidateRelationshipsNode - Consolidate relationship labels + classify polarities
+4. SweepCoMentionsNode - Find missed co-mentions of assessed pairs
+5. ConsolidateNewRelationshipsNode - Classify polarities for new relationship labels
+6. JudgeCrossDocumentNode - Make final accept/reject decisions
+7. FinalizeNode - Build final output
 """
 
 import asyncio
@@ -1015,7 +1017,7 @@ class ConsolidateRelationshipsNode(BaseNode[State, Deps, ExtractionResult]):
     - Consistency (same canonical label and polarity across all documents)
     """
 
-    async def run(self, ctx: GraphRunContext[State, Deps]) -> "JudgeCrossDocumentNode":
+    async def run(self, ctx: GraphRunContext[State, Deps]) -> "SweepCoMentionsNode":
         """Consolidate relationship labels, classify polarities, and filter irrelevant."""
         with logfire.span("ConsolidateRelationshipsNode"):
             # Step 1: Collect unique relationship labels
@@ -1023,7 +1025,7 @@ class ConsolidateRelationshipsNode(BaseNode[State, Deps, ExtractionResult]):
 
             if not unique_relationships:
                 ctx.deps.logger.info("No relationships to consolidate")
-                return JudgeCrossDocumentNode()
+                return SweepCoMentionsNode()
 
             # Step 2: Get consolidation + polarity from LLM (unified)
             consolidations = await self._consolidate_and_classify(
@@ -1036,7 +1038,7 @@ class ConsolidateRelationshipsNode(BaseNode[State, Deps, ExtractionResult]):
                     "defaulting all relationship polarities to neutral"
                 )
                 self._ensure_polarities_for_all_relationships(unique_relationships, ctx)
-                return JudgeCrossDocumentNode()
+                return SweepCoMentionsNode()
 
             # Step 3: Apply consolidations to assessments
             self._apply_consolidations(consolidations, ctx)
@@ -1056,7 +1058,7 @@ class ConsolidateRelationshipsNode(BaseNode[State, Deps, ExtractionResult]):
             if ctx.deps.config.tools.extraction.filter_irrelevant_relationships:
                 self._filter_irrelevant_assessments(ctx)
 
-            return JudgeCrossDocumentNode()
+            return SweepCoMentionsNode()
 
     def _collect_unique_relationships(
         self, ctx: GraphRunContext[State, Deps]
@@ -1597,6 +1599,354 @@ Decide: accepted (true/false), relationship (selected label), confidence (high/m
                     0, ctx.deps.progress.judgments_in_progress - 1
                 )
                 ctx.deps.progress.update()
+
+
+@dataclass
+class SweepCoMentionsNode(BaseNode[State, Deps, ExtractionResult]):
+    """Sweep documents for missed co-mentions of assessed entity pairs.
+
+    Searches normalized text for entity co-occurrences that weren't captured
+    by the initial proximal set extraction, assesses them for relationship
+    claims, and adds any new assessments to the state.
+    """
+
+    async def run(
+        self, ctx: GraphRunContext[State, Deps]
+    ) -> "ConsolidateNewRelationshipsNode":
+        """Scan for missed co-mentions and assess them."""
+        from interaction_finder.extraction.sweep_co_mentions import (
+            CoMentionSweepStats,
+            assess_co_mention,
+            build_entity_search_pattern,
+            collect_assessed_pairs,
+            collect_global_aliases,
+            find_novel_co_mentions_in_resource,
+            get_entity_kind,
+            select_co_mentions_to_assess,
+        )
+
+        with logfire.span("SweepCoMentionsNode"):
+            ctx.deps.progress.set_phase_sweeping()
+            ctx.deps.progress.update()
+
+            # Check if sweep is enabled
+            if not ctx.deps.config.tools.extraction.sweep_co_mentions:
+                ctx.deps.logger.info("Co-mention sweep disabled")
+                return ConsolidateNewRelationshipsNode()
+
+            stats = CoMentionSweepStats()
+
+            # Step 1: Build global alias map
+            global_aliases = collect_global_aliases(
+                ctx.state.validated_entities_by_resource
+            )
+
+            # Step 2: Collect all assessed pairs
+            assessed_pairs = collect_assessed_pairs(
+                ctx.state.pair_assessments_by_resource
+            )
+
+            if not assessed_pairs:
+                ctx.deps.logger.info("No assessed pairs to sweep for co-mentions")
+                ctx.state.co_mention_sweep_stats = stats
+                return ConsolidateNewRelationshipsNode()
+
+            # Step 3: Build search patterns for all entities in assessed pairs
+            entity_patterns: dict[str, "re.Pattern"] = {}
+            for pair_key in assessed_pairs:
+                for name in (pair_key.entity1_name, pair_key.entity2_name):
+                    if name not in entity_patterns:
+                        aliases = global_aliases.get(name, set())
+                        entity_patterns[name] = build_entity_search_pattern(
+                            name, aliases
+                        )
+
+            # Step 4: Find novel co-mentions in all resources
+            chunk_distance = ctx.deps.config.tools.extraction.proximal_window_chunks
+            all_co_mentions = []
+
+            for resource in ctx.deps.resource_pool.iter_resources():
+                resource_co_mentions = find_novel_co_mentions_in_resource(
+                    resource,
+                    resource.id,
+                    assessed_pairs,
+                    entity_patterns,
+                    ctx.state.pair_assessments_by_resource,
+                    chunk_distance,
+                )
+                all_co_mentions.extend(resource_co_mentions)
+
+            # Update discovery stats
+            stats.total_co_mentions_found = len(all_co_mentions)
+            for cm in all_co_mentions:
+                if cm.priority == "no_existing_assessment":
+                    stats.co_mentions_no_existing_assessment += 1
+                else:
+                    stats.co_mentions_uncovered_region += 1
+
+            # Update progress display
+            ctx.deps.progress.sweep_co_mentions_found = stats.total_co_mentions_found
+            ctx.deps.progress.sweep_no_existing = (
+                stats.co_mentions_no_existing_assessment
+            )
+            ctx.deps.progress.sweep_uncovered = stats.co_mentions_uncovered_region
+            ctx.deps.progress.update()
+
+            ctx.deps.logger.info(
+                f"Found {stats.total_co_mentions_found} novel co-mentions "
+                f"({stats.co_mentions_no_existing_assessment} no existing assessment, "
+                f"{stats.co_mentions_uncovered_region} uncovered region)"
+            )
+
+            if not all_co_mentions:
+                ctx.state.co_mention_sweep_stats = stats
+                return ConsolidateNewRelationshipsNode()
+
+            # Step 5: Select co-mentions to assess (policy hook)
+            selected = select_co_mentions_to_assess(all_co_mentions, ctx.deps.config)
+
+            # Step 6: Assess co-mentions concurrently with document-scoped entities
+            # Build entity kind lookup (needed if entity not in document's validated set)
+            entity_kinds: dict[str, str] = {}
+            for name in entity_patterns:
+                kind = get_entity_kind(name, ctx.state.validated_entities_by_resource)
+                if kind:
+                    entity_kinds[name] = kind
+
+            async def assess_single(cm):
+                """Assess a single co-mention with document-scoped entity lookup."""
+                resource = ctx.deps.resource_pool.get(cm.resource_id)
+                if resource is None:
+                    return None
+                # Get entity kinds (required for assessment)
+                entity1_kind = entity_kinds.get(cm.pair_key.entity1_name)
+                entity2_kind = entity_kinds.get(cm.pair_key.entity2_name)
+                if entity1_kind is None or entity2_kind is None:
+                    return None
+                # Get document-specific validated entities
+                validated_entities = ctx.state.validated_entities_by_resource.get(
+                    cm.resource_id, {}
+                )
+                return await assess_co_mention(
+                    cm,
+                    resource,
+                    entity1_name=cm.pair_key.entity1_name,
+                    entity1_kind=entity1_kind,
+                    entity2_name=cm.pair_key.entity2_name,
+                    entity2_kind=entity2_kind,
+                    topic=ctx.state.topic,
+                    config=ctx.deps.config,
+                    deps=ctx.deps,
+                    validated_entities=validated_entities,
+                )
+
+            # Run assessments with as_completed for live progress updates
+            tasks = {asyncio.create_task(assess_single(cm)): cm for cm in selected}
+            for completed_task in asyncio.as_completed(tasks.keys()):
+                assessment = await completed_task
+                cm = tasks[completed_task]
+                # Update stats and progress as each assessment completes
+                stats.assessed += 1
+                ctx.deps.progress.sweep_assessed = stats.assessed
+                if assessment is not None:
+                    stats.relationships_found += 1
+                    ctx.deps.progress.sweep_relationships = stats.relationships_found
+                    if cm.resource_id not in ctx.state.pair_assessments_by_resource:
+                        ctx.state.pair_assessments_by_resource[cm.resource_id] = []
+                    ctx.state.pair_assessments_by_resource[cm.resource_id].append(
+                        assessment
+                    )
+                else:
+                    stats.no_relationship_claim += 1
+                ctx.deps.progress.update()
+
+            ctx.deps.logger.info(
+                f"Co-mention sweep assessed {stats.assessed} co-mentions, "
+                f"found {stats.relationships_found} relationships"
+            )
+
+            ctx.state.co_mention_sweep_stats = stats
+            return ConsolidateNewRelationshipsNode()
+
+
+@dataclass
+class ConsolidateNewRelationshipsNode(BaseNode[State, Deps, ExtractionResult]):
+    """Consolidate relationship labels from new assessments (incremental).
+
+    After the co-mention sweep, any new relationship labels need polarity
+    classification. This node finds labels not yet in relationship_polarities
+    and classifies them.
+    """
+
+    async def run(self, ctx: GraphRunContext[State, Deps]) -> "JudgeCrossDocumentNode":
+        """Classify polarities for any new relationship labels."""
+        from interaction_finder.extraction.consolidate_relationships import (
+            get_relationship_consolidation_agent,
+        )
+
+        with logfire.span("ConsolidateNewRelationshipsNode"):
+            # Collect all current relationship labels
+            all_labels: set[str] = set()
+            for assessments in ctx.state.pair_assessments_by_resource.values():
+                for assessment in assessments:
+                    all_labels.add(assessment.relationship)
+
+            # Find labels not yet classified
+            new_labels = {
+                label
+                for label in all_labels
+                if label not in ctx.state.relationship_polarities
+            }
+
+            if not new_labels:
+                ctx.deps.logger.info("No new relationship labels to classify")
+                return JudgeCrossDocumentNode()
+
+            ctx.deps.logger.info(
+                f"Classifying {len(new_labels)} new relationship labels"
+            )
+
+            # Query LLM for polarity classification
+            new_labels_list = sorted(new_labels)
+            new_labels_str = "\n".join(f"- {r}" for r in new_labels_list)
+            entity_types_str = ", ".join(ctx.state.target_entity_types)
+            # Include existing labels so agent can consolidate new ones into them
+            existing_labels = sorted(ctx.state.relationship_polarities.keys())
+            if existing_labels:
+                existing_str = "\n".join(
+                    f"- {r} ({ctx.state.relationship_polarities[r]})"
+                    for r in existing_labels
+                )
+                existing_section = f"""
+**Existing canonical relationship labels (for reference):**
+{existing_str}
+"""
+            else:
+                existing_section = ""
+
+            prompt = f"""**Research topic:** {ctx.state.topic}
+
+**Target entity types:** {entity_types_str}
+{existing_section}
+**New relationship labels to classify:**
+{new_labels_str}
+
+For each new relationship, provide:
+1. Consolidated canonical form (use an existing label if appropriate, or the original if distinct)
+2. Polarity classification relative to this research topic"""
+
+            agent = get_relationship_consolidation_agent(ctx.deps.config)
+            usage = RunUsage()
+            try:
+                with rename_agent(agent, name="ConsolidateNewRelationshipsNode"):
+                    async with ctx.deps.agent_semaphore:
+                        result = await agent.run(prompt, deps=ctx.deps, usage=usage)
+
+                # Apply consolidations and store polarities
+                for cons in result.output.consolidations:
+                    ctx.state.relationship_polarities[cons.original] = cons.polarity
+                    ctx.state.relationship_polarities[cons.consolidated] = cons.polarity
+                    # Apply consolidation if label changed
+                    if cons.original != cons.consolidated:
+                        norm_orig = normalize_for_comparison(cons.original)
+                        for (
+                            assessments
+                        ) in ctx.state.pair_assessments_by_resource.values():
+                            for assessment in assessments:
+                                if (
+                                    normalize_for_comparison(assessment.relationship)
+                                    == norm_orig
+                                ):
+                                    assessment.relationship = cons.consolidated
+
+            except (TimeoutError, ConnectionError, ValueError) as e:
+                ctx.deps.logger.warning(
+                    f"New relationship consolidation failed: {type(e).__name__}: {e}; "
+                    f"defaulting new labels to neutral polarity"
+                )
+                # Default new labels to neutral
+                for label in new_labels:
+                    ctx.state.relationship_polarities[label] = "neutral"
+
+            # Filter pairs with only irrelevant relationships (if enabled)
+            if ctx.deps.config.tools.extraction.filter_irrelevant_relationships:
+                self._filter_irrelevant_pairs(ctx)
+
+            return JudgeCrossDocumentNode()
+
+    def _filter_irrelevant_pairs(self, ctx: GraphRunContext[State, Deps]) -> None:
+        """Filter pairs that now have only irrelevant relationships after sweep.
+
+        Similar to ConsolidateRelationshipsNode._filter_irrelevant_assessments,
+        but only processes pairs that had new sweep assessments. Creates
+        pre-rejected judgments for pairs where ALL assessments are irrelevant.
+        """
+        from interaction_finder.extraction.utils import build_pair_spread
+
+        # Group all assessments by pair (including sweep-added ones)
+        grouped: dict[EntityPairKey, list[PairAssessment]] = defaultdict(list)
+        for assessments in ctx.state.pair_assessments_by_resource.values():
+            for assessment in assessments:
+                pair_key = make_entity_pair_key(assessment.entity1, assessment.entity2)
+                grouped[pair_key].append(assessment)
+
+        # Find pairs that are ALL irrelevant and not already judged
+        filtered_pairs: set[EntityPairKey] = set()
+        for pair_key, assessments in grouped.items():
+            # Skip if already has a judgment
+            if pair_key in ctx.state.pair_judgments:
+                continue
+
+            # Check if all assessments are irrelevant
+            all_irrelevant = all(
+                ctx.state.relationship_polarities.get(a.relationship) == "irrelevant"
+                for a in assessments
+            )
+
+            if all_irrelevant:
+                spread = build_pair_spread(
+                    assessments, ctx.state.relationship_polarities
+                )
+                first = assessments[0]
+
+                ctx.state.pair_judgments[pair_key] = PairJudgment(
+                    entity1=SimpleEntity(
+                        name=first.entity1.name,
+                        kind=first.entity1.kind,
+                        aliases=first.entity1.aliases,
+                    ),
+                    entity2=SimpleEntity(
+                        name=first.entity2.name,
+                        kind=first.entity2.kind,
+                        aliases=first.entity2.aliases,
+                    ),
+                    relationship=first.relationship,
+                    spread=spread,
+                    accepted=False,
+                    confidence="high",
+                    reasoning=(
+                        "All relationship types for this pair were classified as "
+                        "irrelevant to the research question"
+                    ),
+                )
+                filtered_pairs.add(pair_key)
+
+        if filtered_pairs:
+            # Remove assessments for filtered pairs
+            for resource_id, assessments in list(
+                ctx.state.pair_assessments_by_resource.items()
+            ):
+                filtered = [
+                    a
+                    for a in assessments
+                    if make_entity_pair_key(a.entity1, a.entity2) not in filtered_pairs
+                ]
+                ctx.state.pair_assessments_by_resource[resource_id] = filtered
+
+            ctx.deps.logger.info(
+                f"Filtered {len(filtered_pairs)} pairs with only irrelevant relationships "
+                "(from sweep assessments)"
+            )
 
 
 @dataclass
