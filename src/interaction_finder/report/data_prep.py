@@ -25,20 +25,15 @@ POLARITY_ORDER = ("supporting", "refuting", "neutral", "irrelevant")
 CONFIDENCE_ORDER = {"high": 3, "medium": 2, "low": 1}
 
 
-def _quote_key(quote: dict[str, Any]) -> tuple:
-    """Generate unique deduplication key for a quote dict.
+def _quote_key_for_id(
+    spans: list[tuple[int, int]], text: str, fuzzy_corrected: bool
+) -> tuple:
+    """Generate lookup key for quote ID mapping.
 
-    Args:
-        quote: Quote dictionary with 'spans', 'text', and optional 'fuzzy_corrected'
-
-    Returns:
-        Hashable tuple of (spans, text, fuzzy_corrected) for deduplication
+    This key format is shared between data_prep and reasoning_renderer
+    to ensure consistent quote ID lookups.
     """
-    return (
-        tuple(tuple(span) for span in quote["spans"]),
-        quote["text"],
-        quote.get("fuzzy_corrected", False),
-    )
+    return (tuple(tuple(span) for span in spans), text, fuzzy_corrected)
 
 
 def _pair_key(name_a: str, name_b: str) -> tuple[str, str]:
@@ -203,7 +198,7 @@ def _group_assessments_by_document(
         doc_assessments = groups_dict[doc_idx]
         # Deduplicate quotes across assessments
         unique_quotes = {
-            _quote_key(q)
+            _quote_key_for_id(q["spans"], q["text"], q.get("fuzzy_corrected", False))
             for assess in doc_assessments
             for q in assess.get("quotes", [])
         }
@@ -337,17 +332,17 @@ def prepare_report_data(
     doc_quote_lookup: dict[int, dict[tuple, DocumentQuoteEntry]] = defaultdict(dict)
     # doc_idx -> {pair_idx: {entity1, entity2}}
     doc_to_entities: dict[int, dict[int, dict[str, Any]]] = defaultdict(dict)
+    # (doc_idx, quote_key) -> quote_id for reasoning renderer lookup
+    quote_id_map: dict[tuple[int, tuple], str] = {}
 
     for pair_idx, judgment in judgment_refs:
         for assessment, _ in _iter_assessments_with_polarity(judgment):
             doc_id = assessment.resource_id.id
             doc_idx = doc_idx_map.get(doc_id)
-
             if doc_idx is None:
                 continue
-
             for quote in assessment.quotes:
-                quote_key = (
+                dedup_key = (
                     tuple((start, end) for start, end in quote.spans),
                     quote.query_text,
                     quote.is_disjoint,
@@ -355,14 +350,19 @@ def prepare_report_data(
                     quote.original_query,
                 )
                 quote_lookup = doc_quote_lookup[doc_idx]
-                entry = quote_lookup.get(quote_key)
+                entry = quote_lookup.get(dedup_key)
                 if entry is None:
+                    quote_idx = len(doc_to_quotes[doc_idx])
                     entry = DocumentQuoteEntry(quote=quote, pair_indices={pair_idx})
                     doc_to_quotes[doc_idx].append(entry)
-                    quote_lookup[quote_key] = entry
+                    quote_lookup[dedup_key] = entry
+                    # Map quote key to assigned ID for reasoning renderer
+                    id_key = _quote_key_for_id(
+                        quote.spans, quote.query_text, bool(quote.fuzzy_corrected)
+                    )
+                    quote_id_map[(doc_idx, id_key)] = f"doc-{doc_idx}-quote-{quote_idx}"
                 else:
                     entry.pair_indices.add(pair_idx)
-
             if pair_idx not in doc_to_entities[doc_idx]:
                 pair_entities = pairs[pair_idx]
                 doc_to_entities[doc_idx][pair_idx] = {
@@ -402,6 +402,6 @@ def prepare_report_data(
         )
 
     # Generate reasoning templates for all pairs
-    reasoning_templates = render_all_reasoning_templates(pairs, doc_idx_map)
+    reasoning_templates = render_all_reasoning_templates(pairs, quote_id_map)
 
     return pairs, document_html, reasoning_templates, indexed_docs

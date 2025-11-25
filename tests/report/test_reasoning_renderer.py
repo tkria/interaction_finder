@@ -1,5 +1,8 @@
 """Tests for reasoning sidebar template rendering."""
 
+import re
+
+from interaction_finder.report.data_prep import _quote_key_for_id
 from interaction_finder.report.reasoning_renderer import (
     EntityHighlighter,
     ReasoningTemplateRenderer,
@@ -501,3 +504,94 @@ def test_quote_deduplication_in_document_groups():
     # which receives all_quotes. We can't directly test the quote count here
     # without calling that method, but we verified the deduplication logic
     # exists and is correctly applied in the implementation
+
+
+def test_quote_navigation_uses_correct_ids():
+    """Quote navigation should use IDs from quote_id_map, not sequential indices.
+
+    This test verifies the fix for a bug where clicking "Jump to Quote" in the
+    reasoning panel would scroll to the wrong quote because IDs were generated
+    independently using different enumeration schemes.
+    """
+    # Simulate quotes from two different pairs in the same document
+    # Pair 0 has quotes at spans 100 and 300
+    # Pair 1 has quote at span 200
+    # Document order: quote at 100, 200, 300 -> IDs: doc-0-quote-0, -1, -2
+    quote_pair0_first = {
+        "text": "First quote from pair 0",
+        "spans": [[100, 123]],
+        "fuzzy_corrected": False,
+    }
+    quote_pair1 = {
+        "text": "Quote from pair 1",
+        "spans": [[200, 217]],
+        "fuzzy_corrected": False,
+    }
+    quote_pair0_second = {
+        "text": "Second quote from pair 0",
+        "spans": [[300, 324]],
+        "fuzzy_corrected": False,
+    }
+    # Build quote_id_map as data_prep would - ordered by when quotes are added
+    # In real code, quotes are added per-pair-per-assessment, so order depends
+    # on pair processing order. Here we simulate: pair0 quotes first, then pair1.
+    doc_idx = 0
+    quote_id_map = {}
+    # Pair 0's quotes added first (indices 0 and 1)
+    key0_first = _quote_key_for_id(
+        quote_pair0_first["spans"],
+        quote_pair0_first["text"],
+        quote_pair0_first["fuzzy_corrected"],
+    )
+    quote_id_map[(doc_idx, key0_first)] = "doc-0-quote-0"
+    key0_second = _quote_key_for_id(
+        quote_pair0_second["spans"],
+        quote_pair0_second["text"],
+        quote_pair0_second["fuzzy_corrected"],
+    )
+    quote_id_map[(doc_idx, key0_second)] = "doc-0-quote-1"
+    # Pair 1's quote added second (index 2)
+    key1 = _quote_key_for_id(
+        quote_pair1["spans"], quote_pair1["text"], quote_pair1["fuzzy_corrected"]
+    )
+    quote_id_map[(doc_idx, key1)] = "doc-0-quote-2"
+    # Create pair 1's data structure (only has the middle quote)
+    pair1 = {
+        "entity1": {"name": "GeneX", "kind": "gene", "aliases": []},
+        "entity2": {"name": "DiseaseY", "kind": "disease", "aliases": []},
+        "relationship": "associated_with",
+        "confidence": "high",
+        "reasoning": "Evidence text",
+        "assessments": [],
+        "document_groups": [
+            {
+                "doc_idx": 0,
+                "assessments": [
+                    {
+                        "resource_id": "doc1",
+                        "doc_idx": 0,
+                        "title": "Study",
+                        "relationship": "associated_with",
+                        "confidence": "high",
+                        "reasoning": "Reasoning",
+                        "polarity": "supporting",
+                        "quotes": [quote_pair1],
+                    }
+                ],
+                "total_quotes": 1,
+                "relationships": ["associated_with"],
+            }
+        ],
+    }
+    # Render with quote_id_map
+    renderer = ReasoningTemplateRenderer(pair1, 1, quote_id_map)
+    result = renderer.render_document_group_template(pair1["document_groups"][0], [])
+    # Extract the quote ID used in scrollToQuote call
+    match = re.search(r"scrollToQuote\('([^']+)'\)", result)
+    assert match, "Expected scrollToQuote call in quote navigation"
+    used_quote_id = match.group(1)
+    # The quote ID should be doc-0-quote-2 (from map), NOT doc-0-quote-0 (sequential)
+    assert used_quote_id == "doc-0-quote-2", (
+        f"Quote navigation used wrong ID: {used_quote_id}. "
+        "Expected doc-0-quote-2 from quote_id_map, not sequential index."
+    )
