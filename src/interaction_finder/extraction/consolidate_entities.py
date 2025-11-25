@@ -50,7 +50,9 @@ in biological specificity.
 **Output requirements:**
 For each pair, decide whether the child entity should be merged into the parent entity
 (where parent is typically the shorter/more general name and child is the longer/more
-specific name). Provide reasoning for your decision in context of the research topic.
+specific name). Reference each pair by its numeric ID and confirmation token from the
+prompt (e.g., for "[3:xK7m]", use pair_id=3 and pair_token="xK7m").
+Provide reasoning for your decision in context of the research topic.
 
 Bias toward merging when entities are clearly related and merging serves the research goal.""",
     default_model_settings=ModelSettings(parallel_tool_calls=False),

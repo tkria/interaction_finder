@@ -80,15 +80,16 @@ class TestCanonicalNamesInPrompts:
         async def mock_run(prompt, deps, usage):
             nonlocal captured_prompt
             captured_prompt = prompt
-            # Return a decision to merge
+            # Return a decision to merge (pair_id=1 for first pair)
+            # Token "test" won't match the real token, but ID-based lookup will be used
             return MagicMock(
                 output=EntityMergeDecisions(
                     decisions=[
                         EntityMergeDecision(
-                            parent_entity="BMPR2",
-                            child_entity="BMPR2 gene",
+                            pair_id=1,
+                            pair_token="test",
                             should_merge=True,
-                            reasoning="Same gene",
+                            reasoning="Same gene, different naming conventions",
                         )
                     ]
                 )
@@ -113,13 +114,9 @@ class TestCanonicalNamesInPrompts:
         assert "BMPR2 gene" in captured_prompt, "Should show canonical 'BMPR2 gene'"
 
         # Verify entity lines show proper case, not all lowercase
+        # New format: "[ID] Parent: 'name' | Child: 'name'"
         lines = captured_prompt.split("\n")
-        entity_lines = [
-            l
-            for l in lines
-            if l.strip().startswith("- Parent:") or l.strip().startswith("Child:")
-        ]
-
+        entity_lines = [l for l in lines if "Parent:" in l and "Child:" in l]
         # At least one entity line should exist
         assert len(entity_lines) > 0, "Should have entity pair lines in prompt"
 
@@ -178,14 +175,15 @@ class TestCanonicalNamesInPrompts:
         async def mock_run(prompt, deps, usage):
             nonlocal captured_prompt
             captured_prompt = prompt
+            # Token "test" won't match the real token, but ID-based lookup will be used
             return MagicMock(
                 output=EntityMergeDecisions(
                     decisions=[
                         EntityMergeDecision(
-                            parent_entity="PAH",
-                            child_entity="PAH Disease",
+                            pair_id=1,
+                            pair_token="test",
                             should_merge=True,
-                            reasoning="Same entity",
+                            reasoning="Same entity, different naming",
                         )
                     ]
                 )

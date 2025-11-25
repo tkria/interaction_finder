@@ -116,10 +116,17 @@ class EntityMergeDecision(BaseModel):
     """LLM decision on whether to merge two entities.
 
     Used when one entity name is a substring of another (e.g., "BRCA" vs "BRCA1").
+    The pair_id and pair_token reference a numbered pair from the prompt, avoiding
+    the need to echo back exact entity names (which can introduce subtle variations).
+    The token provides verification that the correct pair was referenced.
     """
 
-    parent_entity: str = Field(description="Entity to keep (canonical name)")
-    child_entity: str = Field(description="Entity to merge into parent")
+    pair_id: int = Field(description="ID of the entity pair (from the prompt)")
+    pair_token: str = Field(
+        min_length=4,
+        max_length=4,
+        description="Confirmation token from the prompt (e.g., 'xK7m')",
+    )
     should_merge: bool = Field(description="Whether these entities should be merged")
     reasoning: str = Field(min_length=20, description="Explanation of merge decision")
 

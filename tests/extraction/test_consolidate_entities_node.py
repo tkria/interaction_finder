@@ -325,13 +325,14 @@ class TestGetGlobalMergeDecisions:
         unique_entities = {"gene": {"brca": {"BRCA"}, "brca1": {"BRCA1"}}}
         canonical_lookup = build_canonical_lookup_from_unique_entities(unique_entities)
 
-        # Mock LLM response
+        # Mock LLM response (pair_id=1 corresponds to BRCA/BRCA1 pair)
+        # Token "test" won't match the real token, but ID-based lookup will be used
         mock_result = MagicMock()
         mock_result.output = EntityMergeDecisions(
             decisions=[
                 EntityMergeDecision(
-                    parent_entity="brca",
-                    child_entity="brca1",
+                    pair_id=1,
+                    pair_token="test",
                     should_merge=True,
                     reasoning="BRCA1 is specific gene, BRCA is shorthand",
                 )
@@ -397,11 +398,10 @@ class TestGetGlobalMergeDecisions:
 
             # Should NOT have called LLM
             assert not mock_agent.run.called
-
-            # Should return merge rule from cache
+            # Should return merge rule from cache (using canonical names)
             assert len(merge_rules) == 1
-            assert ("brca1", "gene") in merge_rules
-
+            assert ("BRCA1", "gene") in merge_rules
+            assert merge_rules[("BRCA1", "gene")] == "BRCA"
             # Metrics
             assert ctx.state.merge_cache_hits == 1
             assert ctx.state.merge_cache_misses == 0
@@ -460,13 +460,14 @@ class TestGetGlobalMergeDecisions:
         }
         canonical_lookup = build_canonical_lookup_from_unique_entities(unique_entities)
 
-        # Mock LLM for uncached pair only
+        # Mock LLM for uncached pair only (pair_id=1 is tp/tp53)
+        # Token "test" won't match the real token, but ID-based lookup will be used
         mock_result = MagicMock()
         mock_result.output = EntityMergeDecisions(
             decisions=[
                 EntityMergeDecision(
-                    parent_entity="tp",
-                    child_entity="tp53",
+                    pair_id=1,
+                    pair_token="test",
                     should_merge=False,
                     reasoning="TP and TP53 are different proteins with distinct functions",
                 )
@@ -486,11 +487,10 @@ class TestGetGlobalMergeDecisions:
 
             # Should call LLM only for uncached pair
             assert mock_agent.run.called
-
-            # Should have merge rule only for cached pair
+            # Should have merge rule only for cached pair (using canonical names)
             assert len(merge_rules) == 1
-            assert ("brca1", "gene") in merge_rules
-
+            assert ("BRCA1", "gene") in merge_rules
+            assert merge_rules[("BRCA1", "gene")] == "BRCA"
             # Metrics
             assert ctx.state.merge_cache_hits == 1
             assert ctx.state.merge_cache_misses == 1
@@ -1048,13 +1048,14 @@ class TestIntegration:
             },
         }
 
-        # Mock LLM to approve merge
+        # Mock LLM to approve merge (pair_id=1 for brca/brca1)
+        # Token "test" won't match the real token, but ID-based lookup will be used
         mock_result = MagicMock()
         mock_result.output = EntityMergeDecisions(
             decisions=[
                 EntityMergeDecision(
-                    parent_entity="brca",
-                    child_entity="brca1",
+                    pair_id=1,
+                    pair_token="test",
                     should_merge=True,
                     reasoning="BRCA1 is specific gene",
                 )

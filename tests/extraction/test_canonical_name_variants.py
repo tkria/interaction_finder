@@ -228,10 +228,15 @@ class TestCrossDocumentCanonicalMerging:
         assert ctx.state.entities_merged == 3
 
     @pytest.mark.asyncio
-    @pytest.mark.integration
-    async def test_handles_abbreviation_stripping_in_merges(self, mock_deps):
-        """Integration test requiring proper LLM mocking."""
-        """Should handle merges when abbreviations are stripped from names."""
+    async def test_handles_abbreviation_expansion_in_merges(self, mock_deps):
+        """Should match cache via parenthetical expansion.
+
+        When entity names have parentheticals like "PAH (Pulmonary arterial hypertension)",
+        the extract_all_forms function expands them to extract both base and abbreviation.
+        This means "PAH (XYZ)" matches cache entries for "PAH" or "XYZ" individually.
+        """
+        from unittest.mock import AsyncMock, MagicMock, patch
+
         node = ConsolidateEntitiesNode()
         state = State(
             topic="PAH genetics",
@@ -239,9 +244,8 @@ class TestCrossDocumentCanonicalMerging:
             permitted_pairs=build_permitted_pairs(["disease"]),
         )
         ctx = GraphRunContext(state=state, deps=mock_deps)
-
-        # Simulate a cached decision where names were stripped during comparison
-        # The LLM saw "Pulmonary arterial hypertension" and "Idiopathic pulmonary arterial hypertension"
+        # Cache decision for the BASE forms (without abbreviation suffixes)
+        # extract_all_forms will expand "Name (Abbrev)" to get "Name", matching cache
         ctx.state.merge_decision_cache[
             (
                 "pulmonary arterial hypertension",
@@ -249,10 +253,8 @@ class TestCrossDocumentCanonicalMerging:
                 "disease",
             )
         ] = True
-
         resource1 = ResourceId(url="https://example.com/doc1", counter=0)
-
-        # Document has names WITH (PAH) suffix, which should be stripped before comparison
+        # Document has names WITH (PAH) suffix
         ctx.state.validated_entities_by_resource = {
             resource1: {
                 "Pulmonary arterial hypertension (PAH)": EntityMention(
@@ -271,21 +273,25 @@ class TestCrossDocumentCanonicalMerging:
                 ),
             },
         }
-
-        # These should NOT be normalized together yet because stripping happens
-        # earlier in the pipeline (during extraction). Post-hoc only uses
-        # already-stripped canonical names.
-
-        # Apply global merging
-        await node.run(ctx)
-
-        # Since names still have (PAH) suffix, they won't match the cache
-        # (cache has stripped versions). This test documents current behavior.
+        # Mock LLM for any additional pairs (pah/ipah forms create extra pairs)
+        mock_result = MagicMock()
+        mock_result.output = EntityMergeDecisions(decisions=[])
+        mock_agent = MagicMock()
+        mock_agent.run = AsyncMock(return_value=mock_result)
+        mock_agent._name = "test_agent"
+        with patch(
+            "interaction_finder.extraction.nodes.get_entity_merge_agent",
+            return_value=mock_agent,
+        ):
+            # Apply global merging - should hit the cache via expanded forms
+            await node.run(ctx)
         entities = ctx.state.validated_entities_by_resource[resource1]
-        assert len(entities) == 2  # No merge happens
-
-        # This is actually a limitation: abbreviation stripping should happen
-        # during entity extraction, not during name comparison
+        # The merge SHOULD happen because extract_all_forms expands:
+        # "Pulmonary arterial hypertension (PAH)" -> "Pulmonary arterial hypertension"
+        # "Idiopathic pulmonary arterial hypertension (IPAH)" -> "Idiopathic pulmonary arterial hypertension"
+        # And "pulmonary arterial hypertension" IS a substring of "idiopathic pulmonary arterial hypertension"
+        assert len(entities) == 1  # Merge happens via expanded forms
+        assert ctx.state.merge_cache_hits >= 1  # Cache was used
 
 
 class TestMergeWithMissingParent:

@@ -15,6 +15,8 @@ Pipeline stages:
 """
 
 import asyncio
+import secrets
+import string
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Union
@@ -57,6 +59,61 @@ from interaction_finder.extraction.utils import (
 )
 from interaction_finder.logging import logfire
 from interaction_finder.resources import Resource
+
+# Characters for generating verification tokens (alphanumeric, mixed case)
+_TOKEN_CHARS = string.ascii_letters + string.digits
+
+
+def _generate_token(length: int = 4) -> str:
+    """Generate a random alphanumeric token for pair verification."""
+    return "".join(secrets.choice(_TOKEN_CHARS) for _ in range(length))
+
+
+def _resolve_pair_from_decision(
+    decision_id: int,
+    decision_token: str,
+    id_to_pair_info: dict[int, tuple[tuple[str, str], str]],
+    token_to_id: dict[str, int],
+    logger,
+) -> tuple[str, str] | None:
+    """Resolve canonical pair from LLM decision, using token as verification/fallback.
+
+    Returns the canonical pair (parent, child) or None if unresolvable.
+    Logs warnings for any mismatches.
+    """
+    pair_info = id_to_pair_info.get(decision_id)
+    token_id = token_to_id.get(decision_token)
+    # Both ID and token invalid
+    if pair_info is None and token_id is None:
+        logger.warning(
+            f"LLM decision unresolvable: pair_id={decision_id}, "
+            f"token='{decision_token}' - neither found"
+        )
+        return None
+    # ID invalid but token valid - use token
+    if pair_info is None:
+        logger.warning(
+            f"LLM decision ID mismatch: pair_id={decision_id} not found, "
+            f"but token '{decision_token}' maps to id={token_id}. Using token."
+        )
+        return id_to_pair_info[token_id][0]
+    # ID valid - check token
+    canonical_pair, expected_token = pair_info
+    if decision_token == expected_token:
+        return canonical_pair  # Perfect match
+    # Token mismatch - prefer token if it points to a different valid pair
+    if token_id is not None and token_id != decision_id:
+        logger.warning(
+            f"LLM decision conflict: pair_id={decision_id} (token '{expected_token}') "
+            f"but got token '{decision_token}' (id={token_id}). Using token."
+        )
+        return id_to_pair_info[token_id][0]
+    # Token invalid/same-id but ID valid - trust ID
+    logger.warning(
+        f"LLM decision token mismatch: pair_id={decision_id} expected "
+        f"'{expected_token}' but got '{decision_token}'. Using ID."
+    )
+    return canonical_pair
 
 
 @dataclass
@@ -582,7 +639,7 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
             ctx: Graph execution context
 
         Returns:
-            {(norm_child, kind): norm_parent} for pairs that should merge
+            {(child_canonical, kind): parent_canonical} for pairs that should merge
         """
 
         merge_rules: dict[tuple[str, str], str] = {}
@@ -610,11 +667,12 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
 
             for norm_parent, norm_child in pairs:
                 cache_key = (norm_parent, norm_child, kind)
-
                 if cache_key in ctx.state.merge_decision_cache:
-                    # Cache hit
+                    # Cache hit - use canonical names for merge rules
                     if ctx.state.merge_decision_cache[cache_key]:
-                        merge_rules[(norm_child, kind)] = norm_parent
+                        parent_canonical = canonical_lookup[(norm_parent, kind)]
+                        child_canonical = canonical_lookup[(norm_child, kind)]
+                        merge_rules[(child_canonical, kind)] = parent_canonical
                     ctx.state.merge_cache_hits += 1
                 else:
                     # Cache miss
@@ -627,7 +685,6 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
 
                 for i in range(0, len(uncached_pairs), batch_size):
                     batch = uncached_pairs[i : i + batch_size]
-
                     # Build prompt using canonical names (not normalized forms)
                     # This presents the LLM with the actual entity names as they appear
                     pairs_description = []
@@ -639,14 +696,18 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
                     canonical_to_norm_pairs: dict[
                         tuple[str, str], list[tuple[str, str]]
                     ] = {}
+                    # Map pair_id to (canonical_pair, token) for result processing
+                    id_to_pair_info: dict[int, tuple[tuple[str, str], str]] = {}
+                    # Map token to pair_id for token-based lookup
+                    token_to_id: dict[str, int] = {}
                     # Track details for logging
                     batch_details = []
-
+                    # Running pair ID counter for this batch
+                    pair_id = 0
                     for norm_parent, norm_child in batch:
                         # Get canonical names from lookup (guaranteed to exist)
                         parent_canonical = canonical_lookup[(norm_parent, kind)]
                         child_canonical = canonical_lookup[(norm_child, kind)]
-
                         # Track for logging
                         batch_details.append(
                             {
@@ -657,13 +718,11 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
                                 "identical": parent_canonical == child_canonical,
                             }
                         )
-
                         # Skip pairs where canonical names are identical after lookup
                         # This happens when aliases expand the same entity under multiple normalized forms
                         if parent_canonical == child_canonical:
                             identical_canonical_pairs.append((norm_parent, norm_child))
                             continue
-
                         # Track mapping from canonical pair to all norm pairs
                         canonical_pair = (parent_canonical, child_canonical)
                         if canonical_pair not in canonical_to_norm_pairs:
@@ -671,15 +730,18 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
                         canonical_to_norm_pairs[canonical_pair].append(
                             (norm_parent, norm_child)
                         )
-
                         # Skip duplicate canonical pairs in prompt (show each pair once)
                         if canonical_pair in seen_canonical_pairs:
                             continue
                         seen_canonical_pairs.add(canonical_pair)
-
+                        # Assign pair ID, generate token, and build prompt entry
+                        pair_id += 1
+                        token = _generate_token()
+                        id_to_pair_info[pair_id] = (canonical_pair, token)
+                        token_to_id[token] = pair_id
                         pairs_description.append(
-                            f"- Parent: '{parent_canonical}' (type: {kind})\n"
-                            f"  Child: '{child_canonical}' (type: {kind})"
+                            f"[{pair_id}:{token}] Parent: '{parent_canonical}' | "
+                            f"Child: '{child_canonical}'"
                         )
 
                     # Auto-merge pairs with identical canonical names
@@ -714,7 +776,6 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
                         continue
 
                     entity_types_str = ", ".join(ctx.state.target_entity_types)
-
                     prompt = f"""**Research topic:** {ctx.state.topic}
 
 **Target entity types for this research:** {entity_types_str}
@@ -730,7 +791,8 @@ merge gene variants into the gene name).
 **Entity pairs to evaluate:**
 {chr(10).join(pairs_description)}
 
-For each pair, decide if they should be merged (child absorbed into parent) or kept separate."""
+For each pair, decide if it should be merged (child absorbed into parent) or kept separate.
+Reference each pair by its ID and token (e.g., for "[3:xK7m]", use pair_id=3 and pair_token="xK7m")."""
 
                     # Call LLM
                     agent = get_entity_merge_agent(ctx.deps.config)
@@ -749,65 +811,28 @@ For each pair, decide if they should be merged (child absorbed into parent) or k
                         # Store decisions in cache for all normalized pairs
                         if result is not None:
                             for decision in result.output.decisions:
-                                # Normalize decision entities to find matching canonical pairs
-                                # (LLM returns canonical names, but may vary in capitalization)
-                                norm_decision_parent = normalize_for_comparison(
-                                    decision.parent_entity
+                                canonical_pair = _resolve_pair_from_decision(
+                                    decision.pair_id,
+                                    decision.pair_token,
+                                    id_to_pair_info,
+                                    token_to_id,
+                                    ctx.deps.logger,
                                 )
-                                norm_decision_child = normalize_for_comparison(
-                                    decision.child_entity
-                                )
-
-                                # Look up canonical names directly (O(1) instead of O(M))
-                                decision_parent_canonical = canonical_lookup.get(
-                                    (norm_decision_parent, kind)
-                                )
-                                decision_child_canonical = canonical_lookup.get(
-                                    (norm_decision_child, kind)
-                                )
-
-                                # Skip if we can't find matching canonical names
-                                # This can happen if LLM hallucinates entity names
-                                if (
-                                    decision_parent_canonical is None
-                                    or decision_child_canonical is None
-                                ):
-                                    ctx.deps.logger.warning(
-                                        f"LLM decision for unknown entities: "
-                                        f"parent='{decision.parent_entity}' -> {decision_parent_canonical}, "
-                                        f"child='{decision.child_entity}' -> {decision_child_canonical}"
-                                    )
+                                if canonical_pair is None:
                                     continue
-
-                                canonical_pair = (
-                                    decision_parent_canonical,
-                                    decision_child_canonical,
-                                )
-
-                                # Apply decision to ALL normalized pairs that map to this canonical pair
-                                if canonical_pair not in canonical_to_norm_pairs:
-                                    # This shouldn't happen - every pair sent to LLM should be in the mapping
-                                    ctx.deps.logger.warning(
-                                        f"LLM decision for unmapped canonical pair: "
-                                        f"({decision_parent_canonical}, {decision_child_canonical}). "
-                                        f"This may indicate an LLM hallucination or encoding issue."
-                                    )
-                                    continue
-
+                                parent_canonical, child_canonical = canonical_pair
                                 # Cache decision for all norm pairs (for future runs)
-                                for (
-                                    norm_parent,
-                                    norm_child,
-                                ) in canonical_to_norm_pairs[canonical_pair]:
+                                for norm_parent, norm_child in canonical_to_norm_pairs[
+                                    canonical_pair
+                                ]:
                                     cache_key = (norm_parent, norm_child, kind)
                                     ctx.state.merge_decision_cache[cache_key] = (
                                         decision.should_merge
                                     )
-
-                                # Create merge rule using canonical names (consistent with Phase 1)
+                                # Create merge rule if merging
                                 if decision.should_merge:
-                                    merge_rules[(decision_child_canonical, kind)] = (
-                                        decision_parent_canonical
+                                    merge_rules[(child_canonical, kind)] = (
+                                        parent_canonical
                                     )
 
                     except (TimeoutError, ConnectionError, ValueError) as e:

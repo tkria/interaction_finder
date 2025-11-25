@@ -156,23 +156,40 @@ class TestEntityMergeDecision:
     def test_valid_merge_decision(self):
         """Test creating valid merge decision."""
         decision = EntityMergeDecision(
-            parent_entity="BRCA1",
-            child_entity="BRCA",
+            pair_id=1,
+            pair_token="xK7m",
             should_merge=True,
             reasoning="BRCA is commonly used shorthand for BRCA1 in this context.",
         )
-        assert decision.parent_entity == "BRCA1"
-        assert decision.child_entity == "BRCA"
+        assert decision.pair_id == 1
+        assert decision.pair_token == "xK7m"
         assert decision.should_merge is True
 
     def test_requires_reasoning_min_length(self):
         """Test that reasoning must be at least 20 characters."""
         with pytest.raises(ValidationError):
             EntityMergeDecision(
-                parent_entity="BRCA1",
-                child_entity="BRCA",
+                pair_id=1,
+                pair_token="xK7m",
                 should_merge=True,
                 reasoning="Too short",
+            )
+
+    def test_requires_token_exact_length(self):
+        """Test that token must be exactly 4 characters."""
+        with pytest.raises(ValidationError):
+            EntityMergeDecision(
+                pair_id=1,
+                pair_token="abc",  # Too short
+                should_merge=True,
+                reasoning="BRCA is commonly used shorthand for BRCA1.",
+            )
+        with pytest.raises(ValidationError):
+            EntityMergeDecision(
+                pair_id=1,
+                pair_token="abcde",  # Too long
+                should_merge=True,
+                reasoning="BRCA is commonly used shorthand for BRCA1.",
             )
 
 
@@ -331,9 +348,7 @@ class TestPairJudgment:
         spread = PairSpread(supporting=[supporting], refuting=[refuting])
         judgment = PairJudgment(
             entity1=SimpleEntity(name="BRCA1", kind="gene", aliases=["BRCA1"]),
-            entity2=SimpleEntity(
-                name="Cancer", kind="disease", aliases=["Cancer"]
-            ),
+            entity2=SimpleEntity(name="Cancer", kind="disease", aliases=["Cancer"]),
             relationship="increases_risk_of",
             spread=spread,
             accepted=True,
