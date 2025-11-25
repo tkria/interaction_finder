@@ -22,7 +22,7 @@ class QueryExpansionOut(BaseModel):
     )
     reasoning: str = Field(
         min_length=20,
-        description="Why these queries target review articles and bridging terms",
+        description="Explanation of why these queries target review articles and bridging terms",
     )
 
 

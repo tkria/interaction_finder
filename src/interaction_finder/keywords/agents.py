@@ -28,7 +28,11 @@ Guidelines:
 - Keep queries concise but specific enough to find quality reviews
 - Generate 1-5 queries, prioritizing quality over quantity
 
-Focus on finding articles that will help identify bridging terms: related concepts, alternative approaches, and connected research areas that don't appear in the original topic name."""
+Focus on finding articles that will help identify bridging terms: related concepts, alternative approaches, and connected research areas that don't appear in the original topic name.
+
+You must provide both:
+- queries: Your list of 1-5 search queries
+- reasoning: A brief explanation of your query strategy and why these queries will find useful review articles"""
 
 RESULT_SELECTOR_PROMPT = """You are an expert at identifying review articles and comprehensive summaries from search results.
 
