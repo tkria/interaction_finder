@@ -1665,7 +1665,7 @@ class SweepCoMentionsNode(BaseNode[State, Deps, ExtractionResult]):
             chunk_distance = ctx.deps.config.tools.extraction.proximal_window_chunks
             all_co_mentions = []
 
-            for resource in ctx.deps.resource_pool.iter_resources():
+            for resource in ctx.deps.resource_pool.resources:
                 resource_co_mentions = find_novel_co_mentions_in_resource(
                     resource,
                     resource.id,
