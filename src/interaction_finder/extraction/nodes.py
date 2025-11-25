@@ -15,6 +15,7 @@ Pipeline stages:
 """
 
 import asyncio
+import re
 import secrets
 import string
 from collections import defaultdict
@@ -37,7 +38,6 @@ from interaction_finder.extraction.judge_cross_document import (
 )
 from interaction_finder.extraction.consolidate_entities import get_entity_merge_agent
 from interaction_finder.extraction.models import (
-    EntityMention,
     EntityPairKey,
     ExtractionMetadata,
     ExtractionResult,
@@ -1641,12 +1641,13 @@ class SweepCoMentionsNode(BaseNode[State, Deps, ExtractionResult]):
         """Scan for missed co-mentions and assess them."""
         from interaction_finder.extraction.sweep_co_mentions import (
             CoMentionSweepStats,
-            assess_co_mention,
+            assess_co_mention_region,
             build_entity_search_pattern,
             collect_assessed_pairs,
             collect_global_aliases,
             find_novel_co_mentions_in_resource,
             get_entity_kind,
+            merge_co_mentions_into_regions,
             select_co_mentions_to_assess,
         )
 
@@ -1730,63 +1731,66 @@ class SweepCoMentionsNode(BaseNode[State, Deps, ExtractionResult]):
             # Step 5: Select co-mentions to assess (policy hook)
             selected = select_co_mentions_to_assess(all_co_mentions, ctx.deps.config)
 
-            # Step 6: Assess co-mentions concurrently with document-scoped entities
-            # Build entity kind lookup (needed if entity not in document's validated set)
+            # Step 6: Build entity kind lookup and merge into regions
             entity_kinds: dict[str, str] = {}
             for name in entity_patterns:
                 kind = get_entity_kind(name, ctx.state.validated_entities_by_resource)
                 if kind:
                     entity_kinds[name] = kind
 
-            async def assess_single(cm):
-                """Assess a single co-mention with document-scoped entity lookup."""
-                resource = ctx.deps.resource_pool.get(cm.resource_id)
+            regions = merge_co_mentions_into_regions(selected, entity_kinds)
+            stats.regions_created = len(regions)
+
+            ctx.deps.logger.info(
+                f"Merged {len(selected)} co-mentions into {len(regions)} regions"
+            )
+
+            # Collect known relationship types for prompt context
+            known_relationships = sorted(ctx.state.relationship_polarities.keys())
+
+            # Step 7: Assess regions concurrently
+            async def assess_region(region):
+                """Assess all pairs in a region with a single LLM call."""
+                resource = ctx.deps.resource_pool.get(region.resource_id)
                 if resource is None:
-                    return None
-                # Get entity kinds (required for assessment)
-                entity1_kind = entity_kinds.get(cm.pair_key.entity1_name)
-                entity2_kind = entity_kinds.get(cm.pair_key.entity2_name)
-                if entity1_kind is None or entity2_kind is None:
-                    return None
-                # Get document-specific validated entities
+                    return (region, [])
                 validated_entities = ctx.state.validated_entities_by_resource.get(
-                    cm.resource_id, {}
+                    region.resource_id, {}
                 )
-                return await assess_co_mention(
-                    cm,
+                assessments = await assess_co_mention_region(
+                    region,
                     resource,
-                    entity1_name=cm.pair_key.entity1_name,
-                    entity1_kind=entity1_kind,
-                    entity2_name=cm.pair_key.entity2_name,
-                    entity2_kind=entity2_kind,
                     topic=ctx.state.topic,
+                    known_relationships=known_relationships,
                     config=ctx.deps.config,
                     deps=ctx.deps,
                     validated_entities=validated_entities,
                 )
+                return (region, assessments)
 
-            # Run assessments with as_completed for live progress updates
-            tasks = {asyncio.create_task(assess_single(cm)): cm for cm in selected}
-            for completed_task in asyncio.as_completed(tasks.keys()):
-                assessment = await completed_task
-                cm = tasks[completed_task]
-                # Update stats and progress as each assessment completes
-                stats.assessed += 1
+            # Run region assessments with as_completed for live progress
+            tasks = [asyncio.create_task(assess_region(r)) for r in regions]
+            for coro in asyncio.as_completed(tasks):
+                region, assessments = await coro
+                # Update stats: count pairs assessed, not regions
+                stats.assessed += len(region.candidate_pairs)
+                stats.relationships_found += len(assessments)
+                stats.no_relationship_claim += len(region.candidate_pairs) - len(
+                    assessments
+                )
                 ctx.deps.progress.sweep_assessed = stats.assessed
-                if assessment is not None:
-                    stats.relationships_found += 1
-                    ctx.deps.progress.sweep_relationships = stats.relationships_found
-                    if cm.resource_id not in ctx.state.pair_assessments_by_resource:
-                        ctx.state.pair_assessments_by_resource[cm.resource_id] = []
-                    ctx.state.pair_assessments_by_resource[cm.resource_id].append(
+                ctx.deps.progress.sweep_relationships = stats.relationships_found
+                # Add assessments to state
+                for assessment in assessments:
+                    if region.resource_id not in ctx.state.pair_assessments_by_resource:
+                        ctx.state.pair_assessments_by_resource[region.resource_id] = []
+                    ctx.state.pair_assessments_by_resource[region.resource_id].append(
                         assessment
                     )
-                else:
-                    stats.no_relationship_claim += 1
                 ctx.deps.progress.update()
 
             ctx.deps.logger.info(
-                f"Co-mention sweep assessed {stats.assessed} co-mentions, "
+                f"Co-mention sweep assessed {stats.assessed} pairs in {stats.regions_created} regions, "
                 f"found {stats.relationships_found} relationships"
             )
 

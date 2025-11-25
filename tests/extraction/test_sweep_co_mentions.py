@@ -6,6 +6,8 @@ import pytest
 
 from interaction_finder.extraction.models import EntityMention, PairAssessment
 from interaction_finder.extraction.sweep_co_mentions import (
+    CandidatePair,
+    CoMentionRegion,
     CoMentionSweepStats,
     NovelCoMention,
     build_entity_search_pattern,
@@ -15,6 +17,7 @@ from interaction_finder.extraction.sweep_co_mentions import (
     find_entity_mentions,
     find_novel_co_mentions_in_resource,
     is_co_mention_covered,
+    merge_co_mentions_into_regions,
     select_co_mentions_to_assess,
 )
 from interaction_finder.extraction.utils import make_entity_pair_key
@@ -616,6 +619,7 @@ class TestCoMentionSweepStats:
         assert stats.total_co_mentions_found == 0
         assert stats.co_mentions_no_existing_assessment == 0
         assert stats.co_mentions_uncovered_region == 0
+        assert stats.regions_created == 0
         assert stats.assessed == 0
         assert stats.relationships_found == 0
         assert stats.no_relationship_claim == 0
@@ -624,8 +628,252 @@ class TestCoMentionSweepStats:
         """Values can be updated."""
         stats = CoMentionSweepStats()
         stats.total_co_mentions_found = 10
+        stats.regions_created = 3
         stats.assessed = 8
         stats.relationships_found = 5
         assert stats.total_co_mentions_found == 10
+        assert stats.regions_created == 3
         assert stats.assessed == 8
         assert stats.relationships_found == 5
+
+
+# =============================================================================
+# Test merge_co_mentions_into_regions
+# =============================================================================
+
+
+class TestMergeCoMentionsIntoRegions:
+    """Tests for merge_co_mentions_into_regions function."""
+
+    def test_empty_input(self):
+        """Empty input returns empty list."""
+        result = merge_co_mentions_into_regions([], {})
+        assert result == []
+
+    def test_single_co_mention(self, sample_resource, entity_brca1, entity_tp53):
+        """Single co-mention creates single region."""
+        pair_key = make_entity_pair_key(entity_brca1, entity_tp53)
+        co_mentions = [
+            NovelCoMention(
+                resource_id=sample_resource.id,
+                pair_key=pair_key,
+                chunk_range=(2, 3),
+                priority="no_existing_assessment",
+                entity1_pos=100,
+                entity2_pos=150,
+                entity1_matched_form="brca1",
+                entity2_matched_form="tp53",
+            )
+        ]
+        entity_kinds = {"BRCA1": "gene", "TP53": "gene"}
+        result = merge_co_mentions_into_regions(co_mentions, entity_kinds)
+        assert len(result) == 1
+        assert result[0].resource_id == sample_resource.id
+        assert result[0].chunk_range == (2, 3)
+        assert len(result[0].candidate_pairs) == 1
+
+    def test_adjacent_ranges_merged(self, sample_resource, entity_brca1, entity_tp53):
+        """Adjacent chunk ranges (gap=1) are merged into single region."""
+        pair_key = make_entity_pair_key(entity_brca1, entity_tp53)
+        co_mentions = [
+            NovelCoMention(
+                resource_id=sample_resource.id,
+                pair_key=pair_key,
+                chunk_range=(0, 1),
+                priority="no_existing_assessment",
+                entity1_pos=10,
+                entity2_pos=50,
+                entity1_matched_form="brca1",
+                entity2_matched_form="tp53",
+            ),
+            NovelCoMention(
+                resource_id=sample_resource.id,
+                pair_key=pair_key,
+                chunk_range=(2, 3),  # Adjacent to (0, 1)
+                priority="no_existing_assessment",
+                entity1_pos=100,
+                entity2_pos=150,
+                entity1_matched_form="brca1",
+                entity2_matched_form="tp53",
+            ),
+        ]
+        entity_kinds = {"BRCA1": "gene", "TP53": "gene"}
+        result = merge_co_mentions_into_regions(co_mentions, entity_kinds)
+        assert len(result) == 1
+        assert result[0].chunk_range == (0, 3)
+
+    def test_non_adjacent_ranges_separate(
+        self, sample_resource, entity_brca1, entity_tp53
+    ):
+        """Non-adjacent chunk ranges create separate regions."""
+        pair_key = make_entity_pair_key(entity_brca1, entity_tp53)
+        co_mentions = [
+            NovelCoMention(
+                resource_id=sample_resource.id,
+                pair_key=pair_key,
+                chunk_range=(0, 1),
+                priority="no_existing_assessment",
+                entity1_pos=10,
+                entity2_pos=50,
+                entity1_matched_form="brca1",
+                entity2_matched_form="tp53",
+            ),
+            NovelCoMention(
+                resource_id=sample_resource.id,
+                pair_key=pair_key,
+                chunk_range=(5, 6),  # Gap > 1 from (0, 1)
+                priority="no_existing_assessment",
+                entity1_pos=300,
+                entity2_pos=350,
+                entity1_matched_form="brca1",
+                entity2_matched_form="tp53",
+            ),
+        ]
+        entity_kinds = {"BRCA1": "gene", "TP53": "gene"}
+        result = merge_co_mentions_into_regions(co_mentions, entity_kinds)
+        assert len(result) == 2
+
+    def test_multiple_pairs_in_same_region(
+        self, sample_resource, entity_brca1, entity_tp53, entity_breast_cancer
+    ):
+        """Multiple pairs in overlapping ranges collected in same region."""
+        pair_key1 = make_entity_pair_key(entity_brca1, entity_tp53)
+        pair_key2 = make_entity_pair_key(entity_brca1, entity_breast_cancer)
+        co_mentions = [
+            NovelCoMention(
+                resource_id=sample_resource.id,
+                pair_key=pair_key1,
+                chunk_range=(0, 1),
+                priority="no_existing_assessment",
+                entity1_pos=10,
+                entity2_pos=50,
+                entity1_matched_form="brca1",
+                entity2_matched_form="tp53",
+            ),
+            NovelCoMention(
+                resource_id=sample_resource.id,
+                pair_key=pair_key2,
+                chunk_range=(0, 2),  # Overlaps with (0, 1)
+                priority="no_existing_assessment",
+                entity1_pos=10,
+                entity2_pos=60,
+                entity1_matched_form="brca1",
+                entity2_matched_form="breast cancer",
+            ),
+        ]
+        entity_kinds = {"BRCA1": "gene", "TP53": "gene", "breast cancer": "disease"}
+        result = merge_co_mentions_into_regions(co_mentions, entity_kinds)
+        assert len(result) == 1
+        assert len(result[0].candidate_pairs) == 2
+        assert result[0].chunk_range == (0, 2)
+
+    def test_different_resources_separate(
+        self, sample_resource, entity_brca1, entity_tp53
+    ):
+        """Co-mentions in different resources create separate regions."""
+        resource_id2 = ResourceId(url="https://example.com/2", counter=2)
+        pair_key = make_entity_pair_key(entity_brca1, entity_tp53)
+        co_mentions = [
+            NovelCoMention(
+                resource_id=sample_resource.id,
+                pair_key=pair_key,
+                chunk_range=(0, 1),
+                priority="no_existing_assessment",
+                entity1_pos=10,
+                entity2_pos=50,
+                entity1_matched_form="brca1",
+                entity2_matched_form="tp53",
+            ),
+            NovelCoMention(
+                resource_id=resource_id2,
+                pair_key=pair_key,
+                chunk_range=(0, 1),
+                priority="no_existing_assessment",
+                entity1_pos=10,
+                entity2_pos=50,
+                entity1_matched_form="brca1",
+                entity2_matched_form="tp53",
+            ),
+        ]
+        entity_kinds = {"BRCA1": "gene", "TP53": "gene"}
+        result = merge_co_mentions_into_regions(co_mentions, entity_kinds)
+        assert len(result) == 2
+        resource_ids = {r.resource_id for r in result}
+        assert sample_resource.id in resource_ids
+        assert resource_id2 in resource_ids
+
+    def test_deduplicates_pairs_in_region(
+        self, sample_resource, entity_brca1, entity_tp53
+    ):
+        """Same pair appearing multiple times in merged region is deduplicated."""
+        pair_key = make_entity_pair_key(entity_brca1, entity_tp53)
+        co_mentions = [
+            NovelCoMention(
+                resource_id=sample_resource.id,
+                pair_key=pair_key,
+                chunk_range=(0, 1),
+                priority="no_existing_assessment",
+                entity1_pos=10,
+                entity2_pos=50,
+                entity1_matched_form="brca1",
+                entity2_matched_form="tp53",
+            ),
+            NovelCoMention(
+                resource_id=sample_resource.id,
+                pair_key=pair_key,  # Same pair
+                chunk_range=(1, 2),  # Adjacent, will be merged
+                priority="no_existing_assessment",
+                entity1_pos=80,
+                entity2_pos=100,
+                entity1_matched_form="brca1",
+                entity2_matched_form="tp53",
+            ),
+        ]
+        entity_kinds = {"BRCA1": "gene", "TP53": "gene"}
+        result = merge_co_mentions_into_regions(co_mentions, entity_kinds)
+        assert len(result) == 1
+        # Same pair should only appear once in candidate_pairs
+        assert len(result[0].candidate_pairs) == 1
+
+    def test_entity_kinds_assigned(self, sample_resource, entity_brca1, entity_tp53):
+        """Entity kinds are correctly assigned to candidate pairs."""
+        pair_key = make_entity_pair_key(entity_brca1, entity_tp53)
+        co_mentions = [
+            NovelCoMention(
+                resource_id=sample_resource.id,
+                pair_key=pair_key,
+                chunk_range=(0, 1),
+                priority="no_existing_assessment",
+                entity1_pos=10,
+                entity2_pos=50,
+                entity1_matched_form="brca1",
+                entity2_matched_form="tp53",
+            ),
+        ]
+        entity_kinds = {"BRCA1": "gene", "TP53": "gene"}
+        result = merge_co_mentions_into_regions(co_mentions, entity_kinds)
+        candidate = result[0].candidate_pairs[0]
+        assert candidate.entity1_kind == "gene"
+        assert candidate.entity2_kind == "gene"
+
+    def test_missing_entity_kind_defaults(
+        self, sample_resource, entity_brca1, entity_tp53
+    ):
+        """Missing entity kinds default to 'entity'."""
+        pair_key = make_entity_pair_key(entity_brca1, entity_tp53)
+        co_mentions = [
+            NovelCoMention(
+                resource_id=sample_resource.id,
+                pair_key=pair_key,
+                chunk_range=(0, 1),
+                priority="no_existing_assessment",
+                entity1_pos=10,
+                entity2_pos=50,
+                entity1_matched_form="brca1",
+                entity2_matched_form="tp53",
+            ),
+        ]
+        result = merge_co_mentions_into_regions(co_mentions, {})  # No entity kinds
+        candidate = result[0].candidate_pairs[0]
+        assert candidate.entity1_kind == "entity"
+        assert candidate.entity2_kind == "entity"

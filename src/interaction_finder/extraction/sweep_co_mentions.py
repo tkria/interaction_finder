@@ -80,10 +80,46 @@ class CoMentionSweepStats:
     total_co_mentions_found: int = 0
     co_mentions_no_existing_assessment: int = 0
     co_mentions_uncovered_region: int = 0
+    # Batching counts
+    regions_created: int = 0
     # Assessment outcomes
     assessed: int = 0
     relationships_found: int = 0
     no_relationship_claim: int = 0
+
+
+@dataclass
+class CandidatePair:
+    """Single entity pair candidate within a merged region.
+
+    Attributes:
+        pair_key: Canonical entity pair identifier
+        entity1_kind: Kind of first entity (gene, disease, etc.)
+        entity2_kind: Kind of second entity
+    """
+
+    pair_key: EntityPairKey
+    entity1_kind: str
+    entity2_kind: str
+
+
+@dataclass
+class CoMentionRegion:
+    """Merged region containing multiple candidate pairs for batch assessment.
+
+    Created by merging overlapping/adjacent chunk ranges from NovelCoMention
+    objects within the same document. Enables assessing multiple pairs with
+    a single LLM call.
+
+    Attributes:
+        resource_id: Document containing the region
+        chunk_range: (start_chunk, end_chunk) covering all merged co-mentions
+        candidate_pairs: Unique pairs to assess in this region
+    """
+
+    resource_id: ResourceId
+    chunk_range: tuple[int, int]
+    candidate_pairs: list[CandidatePair]
 
 
 # =============================================================================
@@ -338,78 +374,147 @@ def select_co_mentions_to_assess(
     return co_mentions
 
 
+def merge_co_mentions_into_regions(
+    co_mentions: list[NovelCoMention],
+    entity_kinds: dict[str, str],
+) -> list[CoMentionRegion]:
+    """Merge adjacent co-mentions into batched regions for efficient assessment.
+
+    Groups co-mentions by document and merges overlapping/adjacent chunk ranges,
+    then collects unique entity pairs for each merged region. This enables
+    assessing multiple pairs with a single LLM call per region.
+
+    Parameters:
+        co_mentions: All novel co-mentions discovered
+        entity_kinds: Mapping from entity canonical name to kind
+
+    Returns:
+        List of CoMentionRegion with merged ranges and deduplicated pairs
+    """
+    if not co_mentions:
+        return []
+    # Group by resource_id
+    by_resource: dict[ResourceId, list[NovelCoMention]] = defaultdict(list)
+    for cm in co_mentions:
+        by_resource[cm.resource_id].append(cm)
+    regions: list[CoMentionRegion] = []
+    for resource_id, resource_cms in by_resource.items():
+        # Sort by chunk_range start
+        sorted_cms = sorted(resource_cms, key=lambda cm: cm.chunk_range[0])
+        # Merge adjacent ranges (gap <= 1)
+        current_start, current_end = sorted_cms[0].chunk_range
+        current_pair_keys: set[EntityPairKey] = {sorted_cms[0].pair_key}
+        for cm in sorted_cms[1:]:
+            cm_start, cm_end = cm.chunk_range
+            if cm_start <= current_end + 1:
+                # Adjacent or overlapping - extend current region
+                current_end = max(current_end, cm_end)
+                current_pair_keys.add(cm.pair_key)
+            else:
+                # Gap too large - finalize current region and start new one
+                candidate_pairs = [
+                    CandidatePair(
+                        pair_key=pk,
+                        entity1_kind=entity_kinds.get(pk.entity1_name, "entity"),
+                        entity2_kind=entity_kinds.get(pk.entity2_name, "entity"),
+                    )
+                    for pk in current_pair_keys
+                ]
+                regions.append(
+                    CoMentionRegion(
+                        resource_id=resource_id,
+                        chunk_range=(current_start, current_end),
+                        candidate_pairs=candidate_pairs,
+                    )
+                )
+                current_start, current_end = cm_start, cm_end
+                current_pair_keys = {cm.pair_key}
+        # Finalize last region
+        candidate_pairs = [
+            CandidatePair(
+                pair_key=pk,
+                entity1_kind=entity_kinds.get(pk.entity1_name, "entity"),
+                entity2_kind=entity_kinds.get(pk.entity2_name, "entity"),
+            )
+            for pk in current_pair_keys
+        ]
+        regions.append(
+            CoMentionRegion(
+                resource_id=resource_id,
+                chunk_range=(current_start, current_end),
+                candidate_pairs=candidate_pairs,
+            )
+        )
+    return regions
+
+
 # =============================================================================
-# LLM Agent
+# LLM Agent (Batch Assessment)
 # =============================================================================
 
 
-class CoMentionAssessmentOut(BaseModel):
-    """LLM output for co-mention relationship assessment."""
+class ConfirmedPair(BaseModel):
+    """A confirmed relationship between an entity pair."""
 
-    # Entity validation
-    entities_valid: bool = Field(
-        description="True if both mentions refer to the specified canonical entities and are relevant to the topic"
-    )
-    entity1_reasoning: str = Field(
-        description="Why this mention is/isn't the canonical entity and its relevance to topic"
-    )
-    entity2_reasoning: str = Field(
-        description="Why this mention is/isn't the canonical entity and its relevance to topic"
-    )
-    # Relationship (only meaningful if entities_valid)
-    has_relationship_claim: bool = Field(
-        description="True if text makes any claim about their relationship"
-    )
+    entity1_name: str = Field(description="Canonical name of first entity")
+    entity2_name: str = Field(description="Canonical name of second entity")
     relationship: str = Field(
-        default="",
-        description="Relationship type if claim found (e.g., 'activates', 'inhibits')",
+        description="Relationship type (e.g., 'activates', 'inhibits', 'associated_with')"
     )
     confidence: Literal["high", "medium", "low"] = Field(
-        default="low", description="Confidence in the relationship claim"
+        description="Confidence in the relationship claim"
     )
     supporting_quotes: list[str] = Field(
-        default_factory=list, description="Exact quotes supporting the relationship"
+        description="Exact verbatim quotes from text supporting this relationship"
     )
     reasoning: str = Field(
-        default="", description="Explanation of relationship assessment"
+        description="Brief explanation of why this relationship exists"
     )
 
 
-get_co_mention_assessment_agent = agent_getter(
+class RegionAssessmentOut(BaseModel):
+    """LLM output for batch co-mention region assessment."""
+
+    confirmed_pairs: list[ConfirmedPair] = Field(
+        default_factory=list,
+        description="Only pairs where a relationship was found. "
+        "Pairs not listed are implicitly rejected (no relationship or invalid entities).",
+    )
+
+
+get_region_assessment_agent = agent_getter(
     "extraction",
-    "co_mention",
-    CoMentionAssessmentOut,
+    "co_mention_region",
+    RegionAssessmentOut,
     Deps,
-    """Analyze co-occurring entity mentions and assess their relationship.
+    """Analyze co-occurring entity mentions and assess their relationships.
 
 **Task:**
-1. First, verify that both entity mentions in the text actually refer to the specified canonical entities (not similarly-named entities or false matches).
-2. If both entities are valid and relevant to the research topic, determine if the text makes any claim about their relationship.
+You will be given a text region and a list of candidate entity pairs to evaluate.
+For each pair:
+1. Verify that both entity mentions in the text actually refer to the specified canonical entities (not similarly-named entities or false matches)
+2. If both entities are valid and relevant to the research topic, determine if the text makes any claim about their relationship
 
-**Entity Validation:**
-For each entity, provide reasoning about:
-- Whether this mention refers to the specified canonical entity (e.g., "BRCA1" vs "BRCA1-like protein")
-- Whether the entity is relevant to the research topic in this context
+Only include a pair in confirmed_pairs if BOTH conditions are met:
+- Both entity mentions are valid (refer to the specified entities and are topic-relevant)
+- The text states or strongly implies a relationship between them
 
-Set entities_valid to true only if BOTH entities are correctly identified and topic-relevant.
+**Entity validation:**
+Check whether each mention refers to the specified canonical entity:
+- "BRCA1" vs "BRCA1-like protein" are different entities
+- An entity mentioned in an unrelated context should not be included
+- If either entity in a pair fails validation, do not include the pair
 
-**Relationship Assessment (only if entities_valid is true):**
-If a relationship is claimed:
-- Set has_relationship_claim to true
-- Describe the relationship type (e.g., "activates", "inhibits", "associated_with", "causes", "prevents")
-- Provide exact verbatim supporting quotes from the text
-- Rate your confidence (high/medium/low)
-- Explain the relationship reasoning
+**Relationship types:**
+Use one of the known relationship types listed in the prompt when possible.
+If none fit, use a concise descriptive label (e.g., "activates", "inhibits", "associated_with").
 
-If the entities merely co-occur without any stated or implied relationship:
-- Set has_relationship_claim to false
-- Explain why no relationship was found
-
-**Guidelines:**
+**Quality standards:**
 - Be conservative: only report relationships that are clearly stated or strongly implied
-- Co-occurrence alone is not sufficient - there must be a stated connection
+- Co-occurrence alone is NOT sufficient - there must be a stated connection
 - The relationship must be about these specific entities, not general statements
-- Provide verbatim quotes, not paraphrases""",
+- Provide exact verbatim quotes from the text, not paraphrases
+- If no pairs meet the criteria, return an empty confirmed_pairs list""",
 )
 
 
@@ -468,41 +573,35 @@ def get_entity_kind(
     return None
 
 
-async def assess_co_mention(
-    co_mention: NovelCoMention,
+async def assess_co_mention_region(
+    region: CoMentionRegion,
     resource: Resource,
-    entity1_name: str,
-    entity1_kind: str,
-    entity2_name: str,
-    entity2_kind: str,
     topic: str,
+    known_relationships: list[str],
     config: IfetcherConfig,
     deps: Deps,
     validated_entities: dict[str, EntityMention] | None = None,
-) -> PairAssessment | None:
-    """Assess a single co-mention for relationship claims.
+) -> list[PairAssessment]:
+    """Assess all candidate pairs in a merged region with a single LLM call.
 
     Parameters:
-        co_mention: The co-mention to assess
+        region: Merged region with multiple candidate pairs
         resource: Source document
-        entity1_name: Canonical name of first entity
-        entity1_kind: Kind of first entity
-        entity2_name: Canonical name of second entity
-        entity2_kind: Kind of second entity
         topic: Research topic for context
+        known_relationships: Relationship types already seen in this extraction
         config: Configuration for LLM agent
         deps: Pipeline dependencies
         validated_entities: Document's validated entities (for reuse if available)
 
     Returns:
-        PairAssessment if relationship found with valid quotes, None otherwise
+        List of PairAssessment for confirmed relationships (may be empty)
     """
-    usage = RunUsage()
+    if not region.candidate_pairs:
+        return []
     # Build text region from chunk range with padding
     padding = config.tools.extraction.region_padding_chunks
-    start_chunk = max(0, co_mention.chunk_range[0] - padding)
-    end_chunk = min(len(resource.chunks) - 1, co_mention.chunk_range[1] + padding)
-    # Extract text from chunks
+    start_chunk = max(0, region.chunk_range[0] - padding)
+    end_chunk = min(len(resource.chunks) - 1, region.chunk_range[1] + padding)
     text_parts = []
     for chunk_idx in range(start_chunk, end_chunk + 1):
         chunk_text = resource.get_chunk_text(chunk_idx)
@@ -510,81 +609,102 @@ async def assess_co_mention(
             text_parts.append(chunk_text)
     text_region = "\n".join(text_parts)
     if not text_region.strip():
-        return None
+        return []
+    # Build candidate pairs list for prompt
+    pairs_list = []
+    pair_lookup: dict[tuple[str, str], CandidatePair] = {}
+    for candidate in region.candidate_pairs:
+        pk = candidate.pair_key
+        pairs_list.append(
+            f"- {pk.entity1_name} ({candidate.entity1_kind}) <-> {pk.entity2_name} ({candidate.entity2_kind})"
+        )
+        pair_lookup[(pk.entity1_name, pk.entity2_name)] = candidate
+        pair_lookup[(pk.entity2_name, pk.entity1_name)] = candidate
+    # Build relationships section
+    if known_relationships:
+        relationships_section = (
+            f"\n**Known relationship types:**\n{', '.join(known_relationships)}\n"
+        )
+    else:
+        relationships_section = ""
     # Build prompt
     prompt = f"""**Topic:** {topic}
 
-**Entity 1:** {entity1_name} ({entity1_kind})
-**Entity 2:** {entity2_name} ({entity2_kind})
-
+**Candidate pairs to evaluate:**
+{chr(10).join(pairs_list)}
+{relationships_section}
 **Text:**
 {text_region}"""
     # Call LLM
-    agent = get_co_mention_assessment_agent(config)
+    usage = RunUsage()
+    agent = get_region_assessment_agent(config)
     try:
         with rename_agent(
-            agent, name=f"AssessCoMention: {entity1_name} ⇌ {entity2_name}"
+            agent, name=f"AssessRegion: {len(region.candidate_pairs)} pairs"
         ):
             async with deps.agent_semaphore:
                 result = await agent.run(prompt, deps=deps, usage=usage)
     except (TimeoutError, ConnectionError, ValueError) as e:
         deps.logger.error(
-            f"Co-mention assessment failed for {entity1_name}-{entity2_name}: "
-            f"{type(e).__name__}: {e}"
+            f"Co-mention region assessment failed: {type(e).__name__}: {e}"
         )
-        return None
-    # Check if entities are valid (not false positive matches)
-    if not result.output.entities_valid:
-        return None
-    # Check if relationship found
-    if not result.output.has_relationship_claim:
-        return None
-    # Validate quotes
-    validated_quotes = []
-    for quote_str in result.output.supporting_quotes:
-        try:
-            quote = resource.quote(quote_str)
-            validated_quotes.append(quote)
-        except QuoteValidationError:
-            pass  # Skip invalid quotes
-    # Reject assessments with no valid quotes
-    if not validated_quotes:
-        deps.logger.debug(
-            f"Co-mention assessment for {entity1_name}-{entity2_name} rejected: "
-            f"relationship found but no valid quotes"
+        return []
+    # Process confirmed pairs
+    assessments: list[PairAssessment] = []
+    for confirmed in result.output.confirmed_pairs:
+        # Look up candidate by entity names (either order)
+        candidate = pair_lookup.get((confirmed.entity1_name, confirmed.entity2_name))
+        if candidate is None:
+            deps.logger.warning(
+                f"LLM returned unknown pair: {confirmed.entity1_name} <-> {confirmed.entity2_name}"
+            )
+            continue
+        # Validate quotes
+        validated_quotes = []
+        for quote_str in confirmed.supporting_quotes:
+            try:
+                validated_quotes.append(resource.quote(quote_str))
+            except QuoteValidationError:
+                pass
+        if not validated_quotes:
+            deps.logger.debug(
+                f"Co-mention assessment for {confirmed.entity1_name}-{confirmed.entity2_name} "
+                "rejected: no valid quotes"
+            )
+            continue
+        # Get or create EntityMention objects
+        if validated_entities and confirmed.entity1_name in validated_entities:
+            entity1 = validated_entities[confirmed.entity1_name]
+        else:
+            entity1 = create_minimal_entity_mention(
+                canonical_name=confirmed.entity1_name,
+                kind=candidate.entity1_kind,
+                matched_form=confirmed.entity1_name.lower(),
+                quotes=validated_quotes,
+                reasoning=confirmed.reasoning,
+            )
+        if validated_entities and confirmed.entity2_name in validated_entities:
+            entity2 = validated_entities[confirmed.entity2_name]
+        else:
+            entity2 = create_minimal_entity_mention(
+                canonical_name=confirmed.entity2_name,
+                kind=candidate.entity2_kind,
+                matched_form=confirmed.entity2_name.lower(),
+                quotes=validated_quotes,
+                reasoning=confirmed.reasoning,
+            )
+        assessments.append(
+            PairAssessment(
+                resource_id=region.resource_id,
+                entity1=entity1,
+                entity2=entity2,
+                relationship=confirmed.relationship,
+                quotes=validated_quotes,
+                confidence=confirmed.confidence,
+                reasoning=f"[Co-mention sweep] {confirmed.reasoning}",
+            )
         )
-        return None
-    # Get or create EntityMention objects
-    if validated_entities and entity1_name in validated_entities:
-        entity1 = validated_entities[entity1_name]
-    else:
-        entity1 = create_minimal_entity_mention(
-            canonical_name=entity1_name,
-            kind=entity1_kind,
-            matched_form=co_mention.entity1_matched_form,
-            quotes=validated_quotes,
-            reasoning=result.output.entity1_reasoning,
-        )
-    if validated_entities and entity2_name in validated_entities:
-        entity2 = validated_entities[entity2_name]
-    else:
-        entity2 = create_minimal_entity_mention(
-            canonical_name=entity2_name,
-            kind=entity2_kind,
-            matched_form=co_mention.entity2_matched_form,
-            quotes=validated_quotes,
-            reasoning=result.output.entity2_reasoning,
-        )
-    # Create assessment
-    return PairAssessment(
-        resource_id=co_mention.resource_id,
-        entity1=entity1,
-        entity2=entity2,
-        relationship=result.output.relationship,
-        quotes=validated_quotes,
-        confidence=result.output.confidence,
-        reasoning=f"[Co-mention sweep] {result.output.reasoning}",
-    )
+    return assessments
 
 
 # =============================================================================
