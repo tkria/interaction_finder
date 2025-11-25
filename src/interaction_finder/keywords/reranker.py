@@ -54,11 +54,11 @@ class Reranker:
             if self.device == "cpu":
                 with torch.device("cpu"):
                     self._model = CrossEncoder(
-                        self.model_name, max_length=512, device=self.device
+                        self.model_name, max_length=512, device=self.device, trust_remote_code=True
                     )
             else:
                 self._model = CrossEncoder(
-                    self.model_name, max_length=512, device=self.device
+                    self.model_name, max_length=512, device=self.device, trust_remote_code=True
                 )
         return self._model
 
@@ -96,7 +96,7 @@ class Reranker:
             pairs.append([query, doc_text])
         # Compute scores
         # Use batch_size=1 to avoid padding token issues with some models
-        scores = model.predict(pairs, batch_size=1)
+        scores = model.predict(pairs, show_progress_bar=False)
         # Create new results with updated relevance scores
         # Scores are logits, we'll normalize to [0, 1] using sigmoid
         import math
@@ -175,7 +175,7 @@ class Reranker:
             # Create query-term pairs
             pairs = [[query, term] for term in terms]
             # Compute scores
-            scores = model.predict(pairs, batch_size=1)
+            scores = model.predict(pairs, show_progress_bar=False)
             # Normalize scores using sigmoid
             import math
 

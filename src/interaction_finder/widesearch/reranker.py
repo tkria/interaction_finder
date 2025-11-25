@@ -123,7 +123,7 @@ class Reranker:
                 pairs.append([query, doc_text])
 
             # Compute scores (use batch_size=1 to avoid padding token issues)
-            scores = model.predict(pairs, batch_size=self.batch_size)
+            scores = model.predict(pairs, batch_size=self.batch_size, show_progress_bar=False)
 
             # Create new results with updated relevance scores
             # Scores are logits, normalize to [0, 1] using sigmoid
