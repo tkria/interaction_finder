@@ -44,7 +44,7 @@ async def run_keyword_research(
         config: IfetcherConfig — configuration object
         search_backend: SearchBackend | None — search backend to use (creates PubMedBackend if None)
         verbose: bool — enable verbose logging (default: False)
-        progress: KeywordsProgress | None — progress tracking object
+        progress: StatusTable | None — progress tracking object
 
     Returns:
         PipelineCheckpoint — checkpoint with keywords stage data

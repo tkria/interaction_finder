@@ -143,8 +143,9 @@ class ProcessDocumentsNode(BaseNode[State, Deps, ExtractionResult]):
 
             # Set up progress tracking
             if ctx.deps.progress:
-                ctx.deps.progress.documents_total = len(resources)
-                ctx.deps.progress.set_phase_extracting()
+                ctx.deps.progress["Processed"].total = len(resources)
+                ctx.deps.progress["Processed"].activate()
+                ctx.deps.progress.set_status("Extracting entities")
 
             # Process all documents in parallel, tracking progress as they complete
             # Note: counter updates happen inside _process_document for tight scoping
@@ -190,7 +191,7 @@ class ProcessDocumentsNode(BaseNode[State, Deps, ExtractionResult]):
         """Process a single document through the full per-document pipeline."""
         # Increment in-progress counter when work starts (tight scoping)
         if ctx.deps.progress:
-            ctx.deps.progress.documents_in_progress += 1
+            ctx.deps.progress["Processed"].work()
             ctx.deps.progress.update()
 
         with logfire.span(
@@ -223,7 +224,7 @@ class ProcessDocumentsNode(BaseNode[State, Deps, ExtractionResult]):
 
                 # Stage 2: Validate entity kinds
                 if ctx.deps.progress:
-                    ctx.deps.progress.set_phase_validating()
+                    ctx.deps.progress.set_status("Validating entities")
 
                 validated = validate_entity_kinds(
                     entities, ctx.state.target_entity_types
@@ -236,16 +237,20 @@ class ProcessDocumentsNode(BaseNode[State, Deps, ExtractionResult]):
 
                 # Update progress (documents_processed incremented in main loop for atomicity)
                 if ctx.deps.progress:
-                    ctx.deps.progress.entities_found = sum(
+                    ctx.deps.progress["Entities"].completed = sum(
                         len(e) for e in ctx.state.entities_by_resource.values()
                     )
-                    ctx.deps.progress.quotes_validated = ctx.state.quotes_validated
-                    ctx.deps.progress.quotes_failed = ctx.state.quotes_failed
+                    ctx.deps.progress["Quotes"].completed = ctx.state.quotes_validated
+                    # Set note for failed quotes
+                    if ctx.state.quotes_failed > 0:
+                        ctx.deps.progress[
+                            "Quotes"
+                        ].note = f"({ctx.state.quotes_failed} invalid)"
                     ctx.deps.progress.update()
 
                 # Stage 3: Identify proximal entity sets
                 if ctx.deps.progress:
-                    ctx.deps.progress.set_phase_proximal()
+                    ctx.deps.progress.set_status("Finding proximal pairs")
 
                 proximal_sets = identify_proximal_sets(
                     validated,
@@ -260,7 +265,7 @@ class ProcessDocumentsNode(BaseNode[State, Deps, ExtractionResult]):
 
                 # Stage 4: Extract pairs from proximal sets
                 if ctx.deps.progress:
-                    ctx.deps.progress.set_phase_extracting_pairs()
+                    ctx.deps.progress.set_status("Extracting relationships")
 
                 pairs, pairs_validated, pairs_failed = await extract_document_pairs(
                     proximal_sets,
@@ -282,10 +287,10 @@ class ProcessDocumentsNode(BaseNode[State, Deps, ExtractionResult]):
 
                 # Stage 5: Deduplicate and assess pairs
                 if ctx.deps.progress:
-                    ctx.deps.progress.set_phase_assessing()
-                    ctx.deps.progress.pairs_found += len(pairs)
-                    ctx.deps.progress.pairs_in_progress += len(pairs)
-                    ctx.deps.progress.update()
+                    ctx.deps.progress["Pairs assessed"].total += len(pairs)
+                    ctx.deps.progress["Pairs assessed"].in_progress += len(pairs)
+                    ctx.deps.progress["Pairs assessed"].activate()
+                    ctx.deps.progress.set_status("Assessing pairs")
 
                 try:
                     assessments = await assess_document_pairs(
@@ -304,12 +309,16 @@ class ProcessDocumentsNode(BaseNode[State, Deps, ExtractionResult]):
                         )
                         # Update progress: increment assessed
                         if ctx.deps.progress:
-                            ctx.deps.progress.pairs_assessed += len(assessments)
+                            ctx.deps.progress["Pairs assessed"].completed += len(
+                                assessments
+                            )
                 finally:
                     # Always decrement in-progress by pairs count (tight scoping)
                     if ctx.deps.progress:
-                        ctx.deps.progress.pairs_in_progress = max(
-                            0, ctx.deps.progress.pairs_in_progress - len(pairs)
+                        ctx.deps.progress["Pairs assessed"].in_progress = max(
+                            0,
+                            ctx.deps.progress["Pairs assessed"].in_progress
+                            - len(pairs),
                         )
                         ctx.deps.progress.update()
 
@@ -322,10 +331,7 @@ class ProcessDocumentsNode(BaseNode[State, Deps, ExtractionResult]):
             finally:
                 # Update counters when work completes (tight scoping, even on error)
                 if ctx.deps.progress:
-                    ctx.deps.progress.documents_processed += 1
-                    ctx.deps.progress.documents_in_progress = max(
-                        0, ctx.deps.progress.documents_in_progress - 1
-                    )
+                    ctx.deps.progress["Processed"].done()
                     ctx.deps.progress.update()
 
 
@@ -1316,7 +1322,8 @@ class JudgeCrossDocumentNode(BaseNode[State, Deps, ExtractionResult]):
         with logfire.span("JudgeCrossDocumentNode"):
             # Set phase
             if ctx.deps.progress:
-                ctx.deps.progress.set_phase_judging()
+                ctx.deps.progress["Unique pairs"].activate()
+                ctx.deps.progress.set_status("Cross-document validation")
 
             # Group assessments by entity pair
             assessments_by_pair: dict[EntityPairKey, list[PairAssessment]] = (
@@ -1334,7 +1341,7 @@ class JudgeCrossDocumentNode(BaseNode[State, Deps, ExtractionResult]):
 
             # Update unique pairs count
             if ctx.deps.progress:
-                ctx.deps.progress.unique_pairs = len(assessments_by_pair)
+                ctx.deps.progress["Unique pairs"].total = len(assessments_by_pair)
                 ctx.deps.progress.update()
 
             # Judge each pair (counter updates happen inside _judge_pair for tight scoping)
@@ -1511,7 +1518,7 @@ Decide: accepted (true/false), relationship (selected label), confidence (high/m
         """Make final judgment on a single pair."""
         # Increment in-progress counter when work starts (tight scoping)
         if ctx.deps.progress:
-            ctx.deps.progress.judgments_in_progress += 1
+            ctx.deps.progress["Unique pairs"].work()
             ctx.deps.progress.update()
 
         try:
@@ -1617,12 +1624,10 @@ Decide: accepted (true/false), relationship (selected label), confidence (high/m
                 # judgment is in locals() if we got to the return statement
                 if "judgment" in locals():
                     if judgment.accepted:
-                        ctx.deps.progress.accepted += 1
+                        ctx.deps.progress["Accepted"].add()
                     else:
-                        ctx.deps.progress.rejected += 1
-                ctx.deps.progress.judgments_in_progress = max(
-                    0, ctx.deps.progress.judgments_in_progress - 1
-                )
+                        ctx.deps.progress["Rejected"].add()
+                ctx.deps.progress["Unique pairs"].done()
                 ctx.deps.progress.update()
 
 
@@ -1652,8 +1657,8 @@ class SweepCoMentionsNode(BaseNode[State, Deps, ExtractionResult]):
         )
 
         with logfire.span("SweepCoMentionsNode"):
-            ctx.deps.progress.set_phase_sweeping()
-            ctx.deps.progress.update()
+            ctx.deps.progress["Found"].activate()
+            ctx.deps.progress.set_status("Sweeping for missed co-mentions")
 
             # Check if sweep is enabled
             if not ctx.deps.config.tools.extraction.sweep_co_mentions:
@@ -1711,11 +1716,13 @@ class SweepCoMentionsNode(BaseNode[State, Deps, ExtractionResult]):
                     stats.co_mentions_uncovered_region += 1
 
             # Update progress display
-            ctx.deps.progress.sweep_co_mentions_found = stats.total_co_mentions_found
-            ctx.deps.progress.sweep_no_existing = (
-                stats.co_mentions_no_existing_assessment
-            )
-            ctx.deps.progress.sweep_uncovered = stats.co_mentions_uncovered_region
+            ctx.deps.progress["Found"].completed = stats.total_co_mentions_found
+            # Set note with breakdown
+            if stats.total_co_mentions_found > 0:
+                ctx.deps.progress["Found"].note = (
+                    f"({stats.co_mentions_no_existing_assessment} new, "
+                    f"{stats.co_mentions_uncovered_region} uncovered)"
+                )
             ctx.deps.progress.update()
 
             ctx.deps.logger.info(
@@ -1740,7 +1747,8 @@ class SweepCoMentionsNode(BaseNode[State, Deps, ExtractionResult]):
 
             regions = merge_co_mentions_into_regions(selected, entity_kinds)
             stats.regions_created = len(regions)
-            ctx.deps.progress.sweep_regions = len(regions)
+            ctx.deps.progress["Regions"].total = len(regions)
+            ctx.deps.progress["Regions"].activate()
             ctx.deps.progress.update()
 
             ctx.deps.logger.info(
@@ -1782,9 +1790,9 @@ class SweepCoMentionsNode(BaseNode[State, Deps, ExtractionResult]):
                 stats.no_relationship_claim += len(region.candidate_pairs) - len(
                     assessments
                 )
-                ctx.deps.progress.sweep_regions_assessed = regions_assessed
-                ctx.deps.progress.sweep_assessed = stats.assessed
-                ctx.deps.progress.sweep_relationships = stats.relationships_found
+                ctx.deps.progress["Regions"].completed = regions_assessed
+                ctx.deps.progress["Pairs added"].completed = stats.relationships_found
+                ctx.deps.progress["Pairs added"].total = stats.assessed
                 # Add assessments to state
                 for assessment in assessments:
                     if region.resource_id not in ctx.state.pair_assessments_by_resource:

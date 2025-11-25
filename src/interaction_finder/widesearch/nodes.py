@@ -73,10 +73,13 @@ class GenerateQueriesNode(BaseNode[State, Deps, list[SearchResult]]):
         ctx.state.current_round += 1
         # Reset per-round counters and update progress display
         if ctx.deps.progress:
-            ctx.deps.progress.searches_run_this_round = 0
-            ctx.deps.progress.searches_in_progress = 0
-            ctx.deps.progress.searches_total_this_round = 0
-            ctx.deps.progress.set_round(ctx.state.current_round, ctx.state.max_rounds)
+            ctx.deps.progress["Searches run"].completed = 0
+            ctx.deps.progress["Searches run"].in_progress = 0
+            ctx.deps.progress["Searches run"].total = 0
+            ctx.deps.progress["Round"].total = ctx.state.max_rounds
+            ctx.deps.progress["Round"].completed = ctx.state.current_round
+            ctx.deps.progress["Round"].activate()
+            ctx.deps.progress.update()
         logger.info(f"Starting round {ctx.state.current_round}/{ctx.state.max_rounds}")
         # Prepare context for agent
         unsatisfied = [
@@ -135,11 +138,12 @@ class SearchNode(BaseNode[State, Deps, list[SearchResult]]):
             # Set phase to searching with backend name and initialize progress
             if ctx.deps.progress:
                 backend_name = ctx.deps.search_backend.name
-                ctx.deps.progress.searches_total_this_round = len(
+                ctx.deps.progress["Searches run"].total = len(ctx.state.current_queries)
+                ctx.deps.progress["Searches run"].in_progress = len(
                     ctx.state.current_queries
                 )
-                ctx.deps.progress.searches_in_progress = len(ctx.state.current_queries)
-                ctx.deps.progress.set_phase_searching(backend=backend_name)
+                ctx.deps.progress["Searches run"].activate()
+                ctx.deps.progress.set_status(f"Searching {backend_name}")
 
             # Execute all searches concurrently, tracking progress as they complete
             async def execute_search(query_text: str):
@@ -157,12 +161,9 @@ class SearchNode(BaseNode[State, Deps, list[SearchResult]]):
 
                 # Update progress display
                 if ctx.deps.progress:
-                    ctx.deps.progress.increment_searches()
-                    ctx.deps.progress.searches_run_this_round += 1
-                    ctx.deps.progress.searches_in_progress = max(
-                        0, ctx.deps.progress.searches_in_progress - 1
-                    )
-                    ctx.deps.progress.add_results(len(results))
+                    ctx.deps.progress["Searches run"].done()
+                    ctx.deps.progress["Results found"].add(len(results))
+                    ctx.deps.progress.update()
 
             # Store in state
             ctx.state.current_results = all_results
@@ -217,7 +218,7 @@ class RerankNode(BaseNode[State, Deps, list[SearchResult]]):
                 return SelectResultsNode()
             # Set phase to reranking
             if ctx.deps.progress:
-                ctx.deps.progress.set_phase_reranking()
+                ctx.deps.progress.set_status("Reranking results")
             # Rerank using topic as query
             reranked = ctx.deps.reranker.rerank(
                 ctx.state.topic, ctx.state.current_results, top_k=top_k
@@ -297,7 +298,8 @@ class SelectResultsNode(BaseNode[State, Deps, list[SearchResult]]):
         """
         # Set phase to selecting
         if ctx.deps.progress:
-            ctx.deps.progress.set_phase_selecting()
+            ctx.deps.progress["Results selected"].activate()
+            ctx.deps.progress.set_status("Selecting results")
         # Prepare context for agent
         results_context = "\n\n".join(
             [
@@ -339,7 +341,10 @@ Select the most relevant results and summarize what subject areas they cover."""
                     pass
         # Update progress display with selected count
         if ctx.deps.progress:
-            ctx.deps.progress.add_selected(len(result.output.selected_indices))
+            ctx.deps.progress["Results selected"].add(
+                len(result.output.selected_indices)
+            )
+            ctx.deps.progress.update()
         # Track selected URLs per query
         for query in ctx.state.current_queries:
             if query not in ctx.state.selected_results:

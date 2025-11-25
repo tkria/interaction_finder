@@ -79,9 +79,9 @@ async def ensure_keywords(
             )
 
         from interaction_finder.keywords import run_keyword_research
-        from interaction_finder.keywords.progress import KeywordsProgress
+        from interaction_finder.keywords.progress import create_keywords_progress
 
-        keywords_progress = KeywordsProgress()
+        keywords_progress = create_keywords_progress()
         with keywords_progress:
             checkpoint = await run_keyword_research(
                 topic=checkpoint.topic,
@@ -152,17 +152,10 @@ async def ensure_search(
 
         # Run search with dedicated widesearch progress counter
         from interaction_finder.widesearch import run_widesearch_with_checkpoint
-        from interaction_finder.widesearch.progress import WidesearchProgress
+        from interaction_finder.widesearch.progress import create_widesearch_progress
 
-        # Pre-calculate max_rounds to initialize progress counter properly
-        ws_config = config.tools.widesearch
-        effective_max_rounds = ws_config.max_rounds
-        # Initialize progress counter with max_rounds and initial round
-        # current_round=1 because GenerateQueriesNode will increment state.current_round to 1 before first update
-        widesearch_progress = WidesearchProgress(
-            max_rounds=effective_max_rounds, current_round=1
-        )
-        widesearch_progress.set_status("Planning goals", highlight="search")
+        widesearch_progress = create_widesearch_progress()
+        widesearch_progress.set_status("Planning goals")
         with widesearch_progress:
             checkpoint = await run_widesearch_with_checkpoint(
                 input_checkpoint=checkpoint,
@@ -230,12 +223,12 @@ async def ensure_extraction(
 
         # Fetch content and run extraction with dedicated extraction progress counter
         from interaction_finder.extraction import run_extraction
-        from interaction_finder.extraction.progress import ExtractionProgress
+        from interaction_finder.extraction.progress import create_extraction_progress
         from interaction_finder.widesearch import fetch_and_populate_results
 
         await fetch_and_populate_results(checkpoint, config)
 
-        extraction_progress = ExtractionProgress()
+        extraction_progress = create_extraction_progress()
         with extraction_progress:
             checkpoint = await run_extraction(
                 input_checkpoint=checkpoint,

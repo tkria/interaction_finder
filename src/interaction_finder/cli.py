@@ -746,11 +746,11 @@ def keywords(
 
         # Import keywords pipeline
         from interaction_finder.keywords import run_keyword_research
-        from interaction_finder.keywords.progress import KeywordsProgress
+        from interaction_finder.keywords.progress import create_keywords_progress
 
         # Run keywords stage with progress display
         console.print(f"[bold]Extracting bridging terms for:[/bold] {topic}\n")
-        progress_counter = KeywordsProgress()
+        progress_counter = create_keywords_progress()
         with progress_counter:
             result_checkpoint = asyncio.run(
                 run_keyword_research(

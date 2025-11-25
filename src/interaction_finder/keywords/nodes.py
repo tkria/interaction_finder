@@ -108,7 +108,10 @@ class ExpandQueryNode(BaseNode[State, Deps, BridgingTermsOut]):
         ctx.state.current_round += 1
         # Update progress (round counter)
         if ctx.deps.progress:
-            ctx.deps.progress.set_round(ctx.state.current_round, ctx.state.max_rounds)
+            ctx.deps.progress["Round"].total = ctx.state.max_rounds
+            ctx.deps.progress["Round"].completed = ctx.state.current_round
+            ctx.deps.progress["Round"].activate()
+            ctx.deps.progress.update()
         # Use query expander agent with renamed span
         agent = get_query_expander_agent(ctx.deps.config)
         usage = RunUsage()
@@ -140,7 +143,9 @@ class SearchNode(BaseNode[State, Deps, BridgingTermsOut]):
         # Update progress to show searching status
         if ctx.deps.progress:
             backend_name = type(ctx.deps.search_backend).__name__.replace("Backend", "")
-            ctx.deps.progress.set_phase_searching(backend_name)
+            ctx.deps.progress["Searches run"].activate()
+            ctx.deps.progress["Results found"].activate()
+            ctx.deps.progress.set_status(f"Searching {backend_name}")
         with logfire.span(
             f"Keyword search: {ctx.state.topic}",
             topic=ctx.state.topic,
@@ -157,8 +162,9 @@ class SearchNode(BaseNode[State, Deps, BridgingTermsOut]):
                 all_results.extend(results)
                 # Update progress counters
                 if ctx.deps.progress:
-                    ctx.deps.progress.increment_searches()
-                    ctx.deps.progress.add_results(len(results))
+                    ctx.deps.progress["Searches run"].add()
+                    ctx.deps.progress["Results found"].add(len(results))
+                    ctx.deps.progress.update()
             # Store in state
             ctx.state.all_search_results = all_results
 
@@ -209,7 +215,7 @@ class RerankNode(BaseNode[State, Deps, BridgingTermsOut]):
                 return SelectResultsNode()
             # Update progress to show reranking
             if ctx.deps.progress:
-                ctx.deps.progress.set_phase_reranking()
+                ctx.deps.progress.set_status("Reranking results")
             # Rerank using topic as query
             reranked = ctx.deps.reranker.rerank(
                 ctx.state.topic, ctx.state.all_search_results, top_k=top_k
@@ -241,7 +247,7 @@ class SelectResultsNode(BaseNode[State, Deps, BridgingTermsOut]):
             return FinalizeNode()
         # Update progress to show selection
         if ctx.deps.progress:
-            ctx.deps.progress.set_phase_selecting()
+            ctx.deps.progress.set_status("Selecting results")
         # Prepare context for agent
         results_context = "\n\n".join(
             [
@@ -290,7 +296,8 @@ class FetchDocumentsNode(BaseNode[State, Deps, BridgingTermsOut]):
         """Fetch documents and add to resource pool."""
         # Update progress to show fetching
         if ctx.deps.progress:
-            ctx.deps.progress.set_phase_fetching()
+            ctx.deps.progress["Documents"].activate()
+            ctx.deps.progress.set_status("Fetching documents")
         with logfire.span(
             f"Fetch {len(ctx.state.selected_results)} documents",
             num_selected=len(ctx.state.selected_results),
@@ -314,12 +321,13 @@ class FetchDocumentsNode(BaseNode[State, Deps, BridgingTermsOut]):
                 )
                 # Update progress for cached documents (all complete immediately)
                 if ctx.deps.progress:
-                    ctx.deps.progress.set_documents_total(
-                        len(ctx.state.selected_results)
-                    )
-                    ctx.deps.progress.documents_processed = len(
+                    ctx.deps.progress["Documents"].total = len(
                         ctx.state.selected_results
                     )
+                    ctx.deps.progress["Documents"].completed = len(
+                        ctx.state.selected_results
+                    )
+                    ctx.deps.progress["Documents"].complete()
                     ctx.deps.progress.update()
                 return ExtractKeywordsNode()
             # Fetch only new URLs
@@ -359,8 +367,9 @@ class FetchDocumentsNode(BaseNode[State, Deps, BridgingTermsOut]):
             # Update progress with total documents (newly fetched + cached)
             if ctx.deps.progress:
                 total_count = len(ctx.state.selected_results)
-                ctx.deps.progress.set_documents_total(total_count)
-                ctx.deps.progress.documents_processed = total_count
+                ctx.deps.progress["Documents"].total = total_count
+                ctx.deps.progress["Documents"].completed = total_count
+                ctx.deps.progress["Documents"].complete()
                 ctx.deps.progress.update()
             cached_count = len(ctx.state.selected_results) - len(urls_to_fetch)
             logger.info(
@@ -431,7 +440,7 @@ class ExtractKeywordsNode(BaseNode[State, Deps, BridgingTermsOut]):
         """Extract keywords from all documents in resource pool (parallel)."""
         # Update progress to show extraction
         if ctx.deps.progress:
-            ctx.deps.progress.set_phase_extracting()
+            ctx.deps.progress.set_status("Extracting keywords")
         resources = ctx.deps.resource_pool.resources
         with logfire.span("ExtractKeywordsNode", num_resources=len(resources)):
             if not resources:
@@ -467,9 +476,11 @@ class ExtractKeywordsNode(BaseNode[State, Deps, BridgingTermsOut]):
             total_keywords = sum(
                 len(kws) for kws in ctx.state.extracted_keywords.values()
             )
-            # Update progress with keyword extraction count
+            # Update progress with keyword extraction count (set total)
             if ctx.deps.progress:
-                ctx.deps.progress.add_keywords_extracted(total_keywords)
+                ctx.deps.progress["Keywords"].total = total_keywords
+                ctx.deps.progress["Keywords"].activate()
+                ctx.deps.progress.update()
             logger.info(
                 f"Extracted {total_keywords} keywords from {len(new_resources)} new documents ({len(already_processed)} previously processed)"
             )
@@ -607,11 +618,7 @@ class EvaluateKeywordsNode(BaseNode[State, Deps, BridgingTermsOut]):
         """Evaluate keywords and summarize documents (parallel processing)."""
         # Update progress to show evaluation
         if ctx.deps.progress:
-            ctx.deps.progress.set_phase_evaluating()
-            # Mark all extracted keywords as evaluating
-            ctx.deps.progress.start_keyword_evaluation(
-                ctx.deps.progress.keywords_extracted
-            )
+            ctx.deps.progress.set_status("Evaluating keywords")
         if not ctx.state.extracted_keywords:
             logger.info("No extracted keywords, skipping to reflection")
             return ReflectNode()
@@ -635,13 +642,11 @@ class EvaluateKeywordsNode(BaseNode[State, Deps, BridgingTermsOut]):
         # Add summaries to state and update progress
         for summary, _ in successful_results:
             ctx.state.document_summaries.append(summary)
-        # Update progress: mark all keywords done, with total_bridging accepted
+        # Update progress: mark keywords complete with accepted count
         if ctx.deps.progress:
-            total_extracted = ctx.deps.progress.keywords_extracted
-            rejected_count = total_extracted - total_bridging
-            ctx.deps.progress.finish_keyword_evaluation(
-                accepted=total_bridging, rejected=rejected_count
-            )
+            ctx.deps.progress["Keywords"].completed = total_bridging
+            ctx.deps.progress["Keywords"].complete()
+            ctx.deps.progress.update()
         failed_count = len(results) - len(successful_results)
         logger.info(
             f"Generated {len(successful_results)} summaries with {total_bridging} bridging terms total ({failed_count} failed)"
@@ -663,7 +668,7 @@ class ReflectNode(BaseNode[State, Deps, BridgingTermsOut]):
         """Reflect on coverage and decide whether to continue."""
         # Update progress to show reflection
         if ctx.deps.progress:
-            ctx.deps.progress.set_phase_reflecting()
+            ctx.deps.progress.set_status("Reflecting on coverage")
         # Check iteration limit
         if ctx.state.current_round >= ctx.state.max_rounds:
             logger.info(f"Max rounds reached ({ctx.state.max_rounds}), finalizing")

@@ -1,175 +1,181 @@
 """Shared progress display infrastructure for pipeline operations.
 
-Provides base classes and protocols for live-updating Rich displays with
-status messages, phase highlighting, and TTY detection.
+Provides Counter and StatusTable for live-updating Rich displays with
+status messages, category grouping, and TTY detection.
 """
 
-from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from time import time
-from typing import Optional
+from typing import Literal
 
 from rich.console import Console, Group, RenderableType
 from rich.live import Live
 from rich.spinner import Spinner
+from rich.table import Table
 from rich.text import Text
 
 
-@dataclass
-class LiveProgressCounter(ABC):
-    """Base class for live progress displays with status and phase management.
+@dataclass(init=False)
+class Counter:
+    """Progress counter with 1, 2, or 3 parts.
 
-    Handles Rich display lifecycle (start/stop/update), elapsed time tracking,
-    status messages with spinners, and TTY detection. Subclasses implement
-    _render() to define table structure and counter layout.
+    Parts determined by state:
+    - total == 0 → 1-part (just completed)
+    - total > 0, in_progress is None → 2-part (completed/total)
+    - total > 0, in_progress is int → 3-part (completed/in_progress/total)
     """
 
-    _status_msg: str = field(default="", init=False)
-    _highlight: str = field(default="", init=False)
-    _start_time: float = field(default_factory=time, init=False)
-    _live: Optional[Live] = field(default=None, init=False, repr=False)
-    _console: Console = field(default_factory=Console, init=False, repr=False)
-    _enabled: bool = field(default=True, init=False)
+    name: str
+    category: str
+    note: str
+    total: int
+    in_progress: int | None
+    completed: int
+    status: Literal["unstarted", "active", "complete"]
 
-    def __post_init__(self):
-        """Check if display should be enabled based on TTY status."""
-        if not self._console.is_terminal:
-            self._enabled = False
-        # Configure logging to integrate with this console
+    def __init__(
+        self,
+        name: str,
+        *,
+        track_in_progress: bool = False,
+        category: str = "",
+        note: str = "",
+    ):
+        self.name = name
+        self.category = category
+        self.note = note
+        self.total = 0
+        self.in_progress = 0 if track_in_progress else None
+        self.completed = 0
+        self.status = "unstarted"
+
+    def activate(self) -> None:
+        """Mark counter as active."""
+        self.status = "active"
+
+    def complete(self) -> None:
+        """Mark counter as complete."""
+        self.status = "complete"
+
+    def add(self, n: int = 1) -> None:
+        """Increment completed (1-part counters only)."""
+        if self.total != 0:
+            raise ValueError(f"Counter {self.name!r} has a total; use work/done")
+        self.completed += n
+
+    def work(self, n: int = 1) -> None:
+        """Move n items into in_progress (3-part counters only)."""
+        if self.in_progress is None:
+            raise ValueError(f"Counter {self.name!r} doesn't track in_progress")
+        self.in_progress += n
+
+    def done(self, n: int = 1) -> None:
+        """Move n items from in_progress to completed (3-part counters only)."""
+        if self.in_progress is None:
+            raise ValueError(f"Counter {self.name!r} doesn't track in_progress")
+        self.in_progress -= n
+        self.completed += n
+
+    def rich(self) -> str:
+        """Render counter value with Rich markup."""
+        if self.total == 0:
+            return f"[bold yellow]{self.completed}[/]"
+        if self.status == "unstarted":
+            return "[bold yellow]0[/]"
+        if self.status == "complete" or self.in_progress is None:
+            return f"[bold green]{self.completed}[/]/[bold yellow]{self.total}[/]"
+        in_prog_style = (
+            "bold bright_yellow" if self.status == "active" else "dim yellow"
+        )
+        return (
+            f"[bold green]{self.completed}[/]/"
+            f"[{in_prog_style}]{self.in_progress}[/]/"
+            f"[bold yellow]{self.total}[/]"
+        )
+
+
+@dataclass(init=False)
+class StatusTable:
+    """Live status display with counters.
+
+    Manages a status line (with spinner) and a list of counters,
+    rendered as a Rich table with category grouping.
+    """
+
+    status: str
+    counters: list[Counter]
+    _start_time: float | None
+    _result: Literal["pending", "running", "success", "failure"]
+    _console: Console
+    _live: Live | None
+    _enabled: bool
+
+    def __init__(self, *counters: Counter):
+        self.status = ""
+        self.counters = list(counters)
+        self._start_time = None
+        self._result = "pending"
+        self._console = Console()
+        self._live = None
+        self._enabled = self._console.is_terminal
+        # Configure logging integration
         from interaction_finder.logging import configure_logging
 
         configure_logging(console=self._console, verbose=False)
 
+    def __getitem__(self, name: str) -> Counter:
+        """Access counter by name."""
+        for counter in self.counters:
+            if counter.name == name:
+                return counter
+        raise KeyError(name)
+
     def start(self) -> None:
-        """Start the live display."""
+        """Start the operation timer and live display."""
+        self._start_time = time()
+        self._result = "running"
         if not self._enabled:
             return
         self._live = Live(self._render(), console=self._console, refresh_per_second=4)
         self._live.start()
 
-    def stop(self, failed: bool = False) -> None:
-        """Stop the live display, showing completion status.
-
-        Parameters:
-            failed: bool — if True, show failure message instead of success
-        """
+    def stop(self) -> None:
+        """Stop the live display."""
         if self._live:
-            self.set_completed(failed=failed)
             self._live.stop()
             self._live = None
 
     def update(self) -> None:
-        """Update the live display with current values."""
+        """Refresh the display with current values."""
         if self._live is not None:
             self._live.update(self._render())
 
-    def set_status(self, message: str, highlight: str = "") -> None:
-        """Set status message and which metrics to highlight.
-
-        Parameters:
-            message: str — status text (empty for idle, "✓ ..." for completed)
-            highlight: str — domain-specific highlight key
-        """
-        self._status_msg = message
-        self._highlight = highlight
+    def set_status(self, message: str) -> None:
+        """Set status message and refresh display."""
+        self.status = message
         self.update()
 
-    def set_completed(self, failed: bool = False) -> None:
-        """Show completion message with elapsed time.
+    def succeed(self) -> None:
+        """Mark operation as successful and stop display."""
+        self._result = "success"
+        self.status = f"✓ Completed in {self._elapsed()}"
+        self.update()
+        self.stop()
 
-        Parameters:
-            failed: bool — if True, show failure message instead of success
-        """
+    def fail(self) -> None:
+        """Mark operation as failed and stop display."""
+        self._result = "failure"
+        self.status = f"✗ Failed after {self._elapsed()}"
+        self.update()
+        self.stop()
+
+    def _elapsed(self) -> str:
+        """Format elapsed time since start."""
+        if self._start_time is None:
+            return "0s"
         elapsed = int(time() - self._start_time)
         mins, secs = divmod(elapsed, 60)
-        time_str = f"{mins}m {secs}s" if mins else f"{secs}s"
-        if failed:
-            self.set_status(f"✗ Failed after {time_str}")
-        else:
-            self.set_status(f"✓ Completed in {time_str}")
-
-    def set_phase_idle(self) -> None:
-        """Clear status and highlighting."""
-        self.set_status("")
-
-    def _format_three_part(
-        self,
-        complete: int,
-        in_progress: int,
-        total: int | None,
-        is_highlighted: bool = False,
-        total_is_final: bool = False,
-    ) -> str:
-        """Format counter as {complete}/{in_progress}/{total} with colored parts.
-
-        Display modes:
-        - Before work starts (total=0 or None): single yellow "0"
-        - Work in progress: "{complete}/{in_progress}/{total}"
-        - Work complete (total_is_final and in_progress=0): "{complete}/{total}"
-
-        Parameters:
-            complete: int — count of finished items
-            in_progress: int — count of currently processing items
-            total: int | None — total count (None or 0 if unknown/not started)
-            is_highlighted: bool — whether to brighten the in-progress count
-            total_is_final: bool — whether total is final (used to hide in_progress when done)
-
-        Returns:
-            str — Rich markup string like "[bold green]5[/]/[dim]3[/]/[bold yellow]10[/]"
-        """
-        # Before work starts: show single zero
-        if total is None or total == 0:
-            return "[bold yellow]0[/]"
-        # Style definitions
-        complete_style = "bold green"
-        in_progress_style = "bold bright_yellow" if is_highlighted else "dim"
-        total_style = "bold yellow"
-        # Work complete: hide in-progress count
-        if total_is_final and in_progress == 0:
-            return f"[{complete_style}]{complete}[/]/[{total_style}]{total}[/]"
-        # Work in progress: show all three parts
-        return (
-            f"[{complete_style}]{complete}[/]/"
-            f"[{in_progress_style}]{in_progress}[/]/"
-            f"[{total_style}]{total}[/]"
-        )
-
-    def _render_with_header(self, table) -> RenderableType:
-        """Render table with optional status header.
-
-        Common rendering logic: adds spinner/completion header if status is set,
-        calculates separator width, and returns Group or bare table.
-
-        Parameters:
-            table: Rich Table object to render
-
-        Returns:
-            RenderableType — Group(header, separator, table) or bare table
-        """
-        if not self._status_msg:
-            return table
-        # Create header (spinner, success, or failure)
-        if self._status_msg.startswith("✓"):
-            header = Text(self._status_msg, style="bold green")
-        elif self._status_msg.startswith("✗"):
-            header = Text(self._status_msg, style="bold red")
-        else:
-            header = Spinner("dots", text=self._status_msg, style="cyan")
-        # Calculate separator width
-        header_width = self._console.measure(header).maximum
-        table_width = self._console.measure(table).maximum
-        separator_width = max(header_width, table_width)
-        separator = Text("─" * separator_width, style="bold cyan")
-        return Group(header, separator, table)
-
-    @abstractmethod
-    def _render(self) -> RenderableType:
-        """Render the progress table.
-
-        Subclasses implement this to define table structure, columns,
-        and highlighting logic based on self._highlight.
-        """
-        ...
+        return f"{mins}m {secs}s" if mins else f"{secs}s"
 
     def __enter__(self):
         """Context manager entry."""
@@ -178,7 +184,68 @@ class LiveProgressCounter(ABC):
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Context manager exit, showing failure status if an exception occurred."""
-        self.stop(failed=exc_type is not None)
+        if exc_type is not None:
+            self.fail()
+        else:
+            self.succeed()
+
+    def _render(self) -> RenderableType:
+        """Render status header and counter table."""
+        # Group counters by category, preserving order
+        categories: dict[str, list[Counter]] = {}
+        for counter in self.counters:
+            categories.setdefault(counter.category, []).append(counter)
+        # Build rows: (label, value, annotation)
+        rows: list[tuple[str, str, str]] = []
+        first_category = True
+        for category, cat_counters in categories.items():
+            # Category activation: any counter not unstarted
+            cat_active = any(c.status != "unstarted" for c in cat_counters)
+            label_style = "bold cyan" if cat_active else "cyan"
+            # Blank line between categories (except first)
+            if not first_category and category:
+                rows.append(("", "", ""))
+            first_category = False
+            # Category header (if named)
+            if category:
+                rows.append((f"[{label_style}]{category}[/]", "", ""))
+            # Counter rows
+            for counter in cat_counters:
+                indent = "  " if category else ""
+                label = f"[{label_style}]{indent}{counter.name}[/]"
+                rows.append((label, counter.rich(), counter.note))
+        # Build two-column table for width measurement (excludes annotations)
+        width_table = Table.grid(padding=(0, 2))
+        width_table.add_column()
+        width_table.add_column(justify="right")
+        for label, value, _ in rows:
+            width_table.add_row(label, value)
+        content_width = self._console.measure(width_table).maximum
+        # Build three-column table for display
+        table = Table.grid(padding=(0, 2))
+        table.add_column()
+        table.add_column(justify="right")
+        table.add_column(style="dim", justify="left")
+        for label, value, annotation in rows:
+            table.add_row(label, value, annotation)
+        return self._render_with_header(table, content_width)
+
+    def _render_with_header(self, table, content_width: int) -> RenderableType:
+        """Add status header with spinner/checkmark above table."""
+        if not self.status:
+            return table
+        # Create header
+        if self.status.startswith("✓"):
+            header = Text(self.status, style="bold green")
+        elif self.status.startswith("✗"):
+            header = Text(self.status, style="bold red")
+        else:
+            header = Spinner("dots", text=self.status, style="cyan")
+        # Separator
+        header_width = self._console.measure(header).maximum
+        separator_width = max(header_width, content_width)
+        separator = Text("─" * separator_width, style="bold cyan")
+        return Group(header, separator, table)
 
 
 class DummyProgress:
@@ -187,6 +254,10 @@ class DummyProgress:
     def __getattr__(self, name):
         """Return no-op function for any method call."""
         return lambda *args, **kwargs: None
+
+    def __getitem__(self, key):
+        """Return self for item access, allowing chained no-op calls."""
+        return self
 
     def __enter__(self):
         return self
