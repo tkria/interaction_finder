@@ -34,6 +34,8 @@ class ExtractionProgress(LiveProgressCounter):
     sweep_co_mentions_found: int = 0
     sweep_no_existing: int = 0
     sweep_uncovered: int = 0
+    sweep_regions: int = 0
+    sweep_regions_assessed: int = 0
     sweep_assessed: int = 0
     sweep_relationships: int = 0
     # Judgment counters
@@ -98,13 +100,23 @@ class ExtractionProgress(LiveProgressCounter):
             f"[{sweep_bright}]{self.sweep_co_mentions_found}[/]",
             sweep_annotation,
         )
-        table.add_row(
-            "  Assessed",
-            f"[{sweep_bright}]{self.sweep_assessed}[/]",
-            f"({self.sweep_relationships} with relationships)"
-            if self.sweep_assessed > 0
-            else "",
+        # Regions (three-part: assessed/in-progress/total)
+        regions_in_progress = max(0, self.sweep_regions - self.sweep_regions_assessed)
+        regions_is_final = self.sweep_regions > 0 and regions_in_progress == 0
+        regions_display = self._format_three_part(
+            complete=self.sweep_regions_assessed,
+            in_progress=regions_in_progress,
+            total=self.sweep_regions,
+            is_highlighted=(self._highlight == "sweep"),
+            total_is_final=regions_is_final,
         )
+        table.add_row("  Regions", regions_display, "")
+        # Pairs added (two-part: accepted/considered)
+        if self.sweep_assessed > 0:
+            pairs_added_display = f"[bold green]{self.sweep_relationships}[/]/[{sweep_bright}]{self.sweep_assessed}[/]"
+        else:
+            pairs_added_display = f"[{sweep_bright}]0[/]"
+        table.add_row("  Pairs added", pairs_added_display, "")
         # Combined judgment section
         table.add_row("", "", "")
         table.add_row("[bold cyan]Combined Judgment[/]", "", "")

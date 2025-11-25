@@ -1740,6 +1740,8 @@ class SweepCoMentionsNode(BaseNode[State, Deps, ExtractionResult]):
 
             regions = merge_co_mentions_into_regions(selected, entity_kinds)
             stats.regions_created = len(regions)
+            ctx.deps.progress.sweep_regions = len(regions)
+            ctx.deps.progress.update()
 
             ctx.deps.logger.info(
                 f"Merged {len(selected)} co-mentions into {len(regions)} regions"
@@ -1770,14 +1772,17 @@ class SweepCoMentionsNode(BaseNode[State, Deps, ExtractionResult]):
 
             # Run region assessments with as_completed for live progress
             tasks = [asyncio.create_task(assess_region(r)) for r in regions]
+            regions_assessed = 0
             for coro in asyncio.as_completed(tasks):
                 region, assessments = await coro
+                regions_assessed += 1
                 # Update stats: count pairs assessed, not regions
                 stats.assessed += len(region.candidate_pairs)
                 stats.relationships_found += len(assessments)
                 stats.no_relationship_claim += len(region.candidate_pairs) - len(
                     assessments
                 )
+                ctx.deps.progress.sweep_regions_assessed = regions_assessed
                 ctx.deps.progress.sweep_assessed = stats.assessed
                 ctx.deps.progress.sweep_relationships = stats.relationships_found
                 # Add assessments to state
