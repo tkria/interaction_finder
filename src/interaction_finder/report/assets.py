@@ -631,6 +631,7 @@ header {
     background: var(--quote-bg);
     padding: 0.25rem 0;
     border-left: 4px solid var(--quote-border);
+    transition: background 0.5s ease-out, border-color 0.5s ease-out;
 }
 
 .quote-highlight + .quote-highlight {
@@ -644,7 +645,7 @@ header {
 
 .quote-blink {
     background: var(--quote-emphasis-bg);
-    transition: background 0.5s ease-out;
+    border-color: var(--pico-color-amber-400);
 }
 
 .quote-highlight:not(.quote-span + .quote-highlight),
