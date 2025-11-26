@@ -137,10 +137,9 @@ class SearchNode(BaseNode[State, Deps, list[SearchResult]]):
             # Set phase to searching with backend name and initialize progress
             if ctx.deps.progress:
                 backend_name = ctx.deps.search_backend.name
-                ctx.deps.progress["Searches run"].total = len(ctx.state.current_queries)
-                ctx.deps.progress["Searches run"].in_progress = len(
-                    ctx.state.current_queries
-                )
+                num_queries = len(ctx.state.current_queries)
+                ctx.deps.progress["Searches run"].total = num_queries
+                ctx.deps.progress["Searches run"].work(num_queries)
                 ctx.deps.progress["Searches run"].activate()
                 ctx.deps.progress.set_status(f"Searching {backend_name}")
 
