@@ -292,7 +292,7 @@ class ProcessDocumentsNode(BaseNode[State, Deps, ExtractionResult]):
                 # Stage 5: Deduplicate and assess pairs
                 if ctx.deps.progress:
                     ctx.deps.progress["Pairs assessed"].total += len(pairs)
-                    ctx.deps.progress["Pairs assessed"].in_progress += len(pairs)
+                    ctx.deps.progress["Pairs assessed"].work(len(pairs))
                     ctx.deps.progress["Pairs assessed"].activate()
                     ctx.deps.progress.set_status("Assessing pairs")
 
@@ -311,19 +311,10 @@ class ProcessDocumentsNode(BaseNode[State, Deps, ExtractionResult]):
                         ctx.state.pair_assessments_by_resource[resource.id] = (
                             assessments
                         )
-                        # Update progress: increment assessed
-                        if ctx.deps.progress:
-                            ctx.deps.progress["Pairs assessed"].completed += len(
-                                assessments
-                            )
                 finally:
-                    # Always decrement in-progress by pairs count (tight scoping)
+                    # Mark pairs as done (moves from in_progress to completed)
                     if ctx.deps.progress:
-                        ctx.deps.progress["Pairs assessed"].in_progress = max(
-                            0,
-                            ctx.deps.progress["Pairs assessed"].in_progress
-                            - len(pairs),
-                        )
+                        ctx.deps.progress["Pairs assessed"].done(len(pairs))
 
             except Exception as e:
                 # Log error but don't fail entire pipeline
