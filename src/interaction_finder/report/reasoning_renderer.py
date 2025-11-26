@@ -272,10 +272,23 @@ class ReasoningTemplateRenderer:
             "neutral": "N",
             "irrelevant": "I",
         }
+        # Source descriptors for non-direct assessments
+        source_descriptors = {"sweep": "co-mention sweep"}
+
+        def render_source_line(assess: dict[str, Any]) -> str:
+            """Render source indicator for non-direct assessments."""
+            source = assess.get("source", "direct")
+            if source == "direct":
+                return ""
+            descriptor = source_descriptors.get(source, source)
+            return (
+                f'<div class="assessment-source">From {_escape_html(descriptor)}</div>'
+            )
 
         def render_assessment(idx: int, assess: dict[str, Any]) -> str:
             polarity = assess.get("polarity", "")
             confidence = assess.get("confidence", "low")
+            source_line = render_source_line(assess)
             return f"""
         <div class="assessment-section open">
             <div class="assessment-header" onclick="this.parentElement.classList.toggle('open')">
@@ -286,19 +299,20 @@ class ReasoningTemplateRenderer:
                 </span>
             </div>
             <div class="assessment-content">
-                <p>{self.highlighter.highlight(assess["reasoning"])}</p>
+                {source_line}<p>{self.highlighter.highlight(assess["reasoning"])}</p>
             </div>
         </div>"""
 
         def render_single_assessment(assess: dict[str, Any]) -> str:
             """Render single assessment in a box without polarity/confidence badge."""
+            source_line = render_source_line(assess)
             return f"""
         <div class="assessment-section open">
             <div class="assessment-header" onclick="this.parentElement.classList.toggle('open')">
                 <span class="assessment-label">{_escape_html(assess["relationship"])}</span>
             </div>
             <div class="assessment-content">
-                <p>{self.highlighter.highlight(assess["reasoning"])}</p>
+                {source_line}<p>{self.highlighter.highlight(assess["reasoning"])}</p>
             </div>
         </div>"""
 

@@ -739,6 +739,13 @@ header {
 .assessment-section:not(.open) .assessment-content {
     display: none;
 }
+.assessment-source {
+    text-align: center;
+    font-style: italic;
+    font-size: 0.7rem;
+    color: var(--pico-muted-color);
+    margin-bottom: var(--spacing-compact);
+}
 
 .reasoning-content {
     line-height: 1.6;

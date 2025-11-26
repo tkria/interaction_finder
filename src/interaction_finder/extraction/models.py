@@ -264,6 +264,8 @@ class PairAssessment(BaseModel):
         quotes: Supporting quotes from this document
         confidence: Qualitative confidence in this association
         reasoning: Explanation of confidence level
+        source: How this assessment was discovered ("direct" from initial
+            document extraction, "sweep" from co-mention sweep pass)
     """
 
     resource_id: ResourceId
@@ -273,6 +275,7 @@ class PairAssessment(BaseModel):
     quotes: list[ResourceQuote]
     confidence: Literal["high", "medium", "low"]
     reasoning: str
+    source: Literal["direct", "sweep"] = "direct"
 
 
 class PairSpread(BaseModel):

@@ -496,9 +496,11 @@ def test_quote_deduplication_in_document_groups():
     assert '<div class="reasoning-panel">' in result
     assert "Study 1" in result
 
-    # Verify both assessment sections are present
-    assert "Assessment 1" in result
-    assert "Assessment 2" in result
+    # Verify both assessment sections are present (numbered badges + relationships)
+    assert 'assess-num-badge">1</span>' in result
+    assert 'assess-num-badge">2</span>' in result
+    assert "increases_risk_of" in result
+    assert "causes" in result
 
     # The deduplication happens in the _render_quote_navigation method
     # which receives all_quotes. We can't directly test the quote count here

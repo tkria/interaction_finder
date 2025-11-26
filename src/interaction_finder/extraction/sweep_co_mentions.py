@@ -553,7 +553,7 @@ def create_minimal_entity_mention(
         name=canonical_name,
         aliases=[matched_form] if matched_form != canonical_name.lower() else [],
         quotes=quotes,
-        reasoning=f"[Co-mention sweep] {reasoning}",
+        reasoning=reasoning,
     )
 
 
@@ -717,7 +717,8 @@ async def assess_co_mention_region(
                 relationship=confirmed.relationship,
                 quotes=validated_quotes,
                 confidence=confirmed.confidence,
-                reasoning=f"[Co-mention sweep] {confirmed.reasoning}",
+                reasoning=confirmed.reasoning,
+                source="sweep",
             )
         )
     return assessments
