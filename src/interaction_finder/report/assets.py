@@ -294,7 +294,6 @@ header {
 
 .pair-entities > span:hover {
     color: var(--pico-primary);
-    text-decoration: underline;
 }
 
 .pair-entities > span:first-child {
@@ -944,6 +943,17 @@ function initReport() {
     sidebar.querySelectorAll('.pair-card').forEach((card) => {
         const pairId = getPairIdFromCard(card);
         card.addEventListener('click', () => selectPair(pairId));
+        // Add click handlers to entity names for search filtering
+        const entitySpans = card.querySelectorAll('.pair-entities > span');
+        entitySpans.forEach((span) => {
+            span.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const entityName = span.textContent.trim();
+                const searchInput = document.getElementById('search-input');
+                searchInput.value = entityName;
+                handleSearch({ target: searchInput });
+            });
+        });
     });
 
     // Initial render
@@ -1253,9 +1263,18 @@ function updateDocumentHighlights(docIdx, currentPairIdx) {
             span.classList.add('entity2');
         } else if (entityPairs.length > 0) {
             // Other entity with pair references - make clickable
+            // Navigate to pair while keeping same document open
             span.onclick = () => {
                 const targetPairIdx = parseInt(entityPairs[0]);
-                selectPair(targetPairIdx);
+                const spanId = span.id;
+                selectPairAndDocument(targetPairIdx, docIdx);
+                // Scroll to the clicked entity after render
+                if (spanId) {
+                    setTimeout(() => {
+                        const el = document.getElementById(spanId);
+                        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    }, 0);
+                }
             };
         }
     });
