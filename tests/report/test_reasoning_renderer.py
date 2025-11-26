@@ -6,6 +6,7 @@ from interaction_finder.report.data_prep import _quote_key_for_id
 from interaction_finder.report.reasoning_renderer import (
     EntityHighlighter,
     ReasoningTemplateRenderer,
+    _index_to_alpha_label,
     _linkify_citations,
     render_all_reasoning_templates,
 )
@@ -601,27 +602,64 @@ def test_quote_navigation_uses_correct_ids():
     )
 
 
+class TestIndexToAlphaLabel:
+    """Tests for _index_to_alpha_label function."""
+
+    def test_single_letters(self):
+        """First 26 indices should be A-Z."""
+        assert _index_to_alpha_label(0) == "A"
+        assert _index_to_alpha_label(1) == "B"
+        assert _index_to_alpha_label(25) == "Z"
+
+    def test_double_letters(self):
+        """Indices 26-701 should be AA-ZZ."""
+        assert _index_to_alpha_label(26) == "AA"
+        assert _index_to_alpha_label(27) == "AB"
+        assert _index_to_alpha_label(51) == "AZ"
+        assert _index_to_alpha_label(52) == "BA"
+        assert _index_to_alpha_label(701) == "ZZ"
+
+    def test_triple_letters(self):
+        """Indices 702+ should be AAA, AAB, etc."""
+        assert _index_to_alpha_label(702) == "AAA"
+        assert _index_to_alpha_label(703) == "AAB"
+
+
 class TestLinkifyCitations:
-    """Tests for _linkify_citations function."""
+    """Tests for _linkify_citations function.
+
+    Labels are assigned A, B, C... based on order of first appearance,
+    not the original citation counter.
+    """
 
     def test_converts_citation_to_span(self):
-        """Valid citation should become clickable span."""
+        """Valid citation should become clickable span with label A."""
         html = "See [1_abc12345] for details."
         doc_idx_map = {"1_abc12345": 5}
         result = _linkify_citations(html, doc_idx_map)
         assert '<span class="doc-link"' in result
         assert 'data-doc="5"' in result
         assert 'onclick="openDocument(5)"' in result
-        assert ">Document&nbsp;1</span>" in result
+        assert ">Document&nbsp;A</span>" in result
 
     def test_multiple_citations(self):
-        """Multiple citations should all be converted."""
+        """Multiple citations get sequential labels A, B."""
         html = "Found in [1_aaaaaaaa] and [2_bbbbbbbb]."
         doc_idx_map = {"1_aaaaaaaa": 0, "2_bbbbbbbb": 3}
         result = _linkify_citations(html, doc_idx_map)
         assert result.count('<span class="doc-link"') == 2
-        assert ">Document&nbsp;1</span>" in result
-        assert ">Document&nbsp;2</span>" in result
+        assert ">Document&nbsp;A</span>" in result
+        assert ">Document&nbsp;B</span>" in result
+
+    def test_repeated_citation_same_label(self):
+        """Same citation appearing twice gets same label."""
+        html = "First [1_aaaaaaaa], then [2_bbbbbbbb], then [1_aaaaaaaa] again."
+        doc_idx_map = {"1_aaaaaaaa": 0, "2_bbbbbbbb": 1}
+        result = _linkify_citations(html, doc_idx_map)
+        assert result.count('<span class="doc-link"') == 3
+        # First appearance of 1_aaaaaaaa -> A, first of 2_bbbbbbbb -> B
+        assert result.count(">Document&nbsp;A</span>") == 2
+        assert result.count(">Document&nbsp;B</span>") == 1
 
     def test_invalid_citation_not_linked(self):
         """Citation not in doc_idx_map should not become a link."""
@@ -637,7 +675,7 @@ class TestLinkifyCitations:
         doc_idx_map = {"1_aaaaaaaa": 0}
         result = _linkify_citations(html, doc_idx_map)
         assert result.count('<span class="doc-link"') == 1
-        assert ">Document&nbsp;1</span>" in result
+        assert ">Document&nbsp;A</span>" in result
         assert "[2_notfound]" in result
 
     def test_no_citations(self):
@@ -646,13 +684,12 @@ class TestLinkifyCitations:
         result = _linkify_citations(html, {})
         assert result == "No citations here."
 
-    def test_without_doc_idx_map(self):
-        """Without mapping, use counter as doc reference."""
+    def test_without_doc_idx_map_no_links(self):
+        """Without mapping, citations are not linked (preserved as-is)."""
         html = "See [3_abc12345] for details."
         result = _linkify_citations(html, None)
-        assert 'data-doc="3"' in result
-        assert 'onclick="openDocument(3)"' in result
-        assert ">Document&nbsp;3</span>" in result
+        assert '<span class="doc-link"' not in result
+        assert "[3_abc12345]" in result
 
     def test_preserves_surrounding_html(self):
         """Existing HTML should not be corrupted."""
@@ -671,8 +708,8 @@ class TestLinkifyCitations:
         doc_idx_map = {"1_aaaaaaaa": 0, "2_bbbbbbbb": 1}
         result = _linkify_citations(html, doc_idx_map)
         assert result.count('<span class="doc-link"') == 2
-        assert ">Document&nbsp;1</span>" in result
-        assert ">Document&nbsp;2</span>" in result
+        assert ">Document&nbsp;A</span>" in result
+        assert ">Document&nbsp;B</span>" in result
         # Brackets should be removed, links joined with space
         assert "[" not in result and "]" not in result
 
@@ -682,8 +719,8 @@ class TestLinkifyCitations:
         doc_idx_map = {"1_aaaaaaaa": 0, "2_bbbbbbbb": 1}
         result = _linkify_citations(html, doc_idx_map)
         assert result.count('<span class="doc-link"') == 2
-        assert ">Document&nbsp;1</span>" in result
-        assert ">Document&nbsp;2</span>" in result
+        assert ">Document&nbsp;A</span>" in result
+        assert ">Document&nbsp;B</span>" in result
 
     def test_multi_citation_with_invalid_id(self):
         """Multi-citation with one invalid ID (not in map) should only link valid ones."""
@@ -692,7 +729,7 @@ class TestLinkifyCitations:
         result = _linkify_citations(html, doc_idx_map)
         # Only one valid link (99_zzzzzzzz not in map)
         assert result.count('<span class="doc-link"') == 1
-        assert ">Document&nbsp;1</span>" in result
+        assert ">Document&nbsp;A</span>" in result
 
     def test_multi_citation_all_invalid(self):
         """Multi-citation where all IDs are invalid (not in map) should preserve original."""
@@ -709,22 +746,21 @@ class TestLinkifyCitations:
         result = _linkify_citations(html, doc_idx_map)
         # Only one valid link (2_short has wrong hash length)
         assert result.count('<span class="doc-link"') == 1
-        assert ">Document&nbsp;1</span>" in result
+        assert ">Document&nbsp;A</span>" in result
 
-    def test_multi_citation_without_map(self):
-        """Multi-citations without doc_idx_map should use counters."""
+    def test_multi_citation_without_map_no_links(self):
+        """Multi-citations without doc_idx_map are not linked."""
         html = "See [1_aaaaaaaa, 2_bbbbbbbb] for details."
         result = _linkify_citations(html, None)
-        assert result.count('<span class="doc-link"') == 2
-        assert 'onclick="openDocument(1)"' in result
-        assert 'onclick="openDocument(2)"' in result
+        assert '<span class="doc-link"' not in result
+        assert "[1_aaaaaaaa, 2_bbbbbbbb]" in result
 
 
 class TestReasoningTemplateWithCitations:
     """Tests for citation linkification in reasoning templates."""
 
     def test_citations_linkified_in_overall_template(self):
-        """Citations in reasoning should become clickable links."""
+        """Citations in reasoning should become clickable links with local labels."""
         pair = {
             "entity1": {"name": "BRCA1", "kind": "gene", "aliases": []},
             "entity2": {"name": "Cancer", "kind": "disease", "aliases": []},
@@ -738,7 +774,7 @@ class TestReasoningTemplateWithCitations:
         result = renderer.render_overall_template()
         assert '<span class="doc-link"' in result
         assert 'onclick="openDocument(3)"' in result
-        assert ">Document&nbsp;1</span>" in result
+        assert ">Document&nbsp;A</span>" in result  # First doc gets label A
 
     def test_citations_after_entity_highlighting(self):
         """Citations should be linkified after entity highlighting (no conflicts)."""

@@ -583,11 +583,33 @@ def _render_aliases(aliases: list[str]) -> str:
                 <div class="alias-tooltip">Aliases: {_escape_html(aliases_text)}</div>"""
 
 
+def _index_to_alpha_label(idx: int) -> str:
+    """Convert zero-based index to alphabetic label (A, B, ... Z, AA, AB, ... AZ, BA, ...).
+
+    Args:
+        idx: Zero-based index (0 -> A, 25 -> Z, 26 -> AA, etc.)
+
+    Returns:
+        Alphabetic label string
+    """
+    result = []
+    n = idx
+    while True:
+        result.append(chr(ord("A") + (n % 26)))
+        n = n // 26 - 1
+        if n < 0:
+            break
+    return "".join(reversed(result))
+
+
 def _linkify_citations(html: str, doc_idx_map: dict[str, int] | None = None) -> str:
-    """Convert document citations to clickable spans.
+    """Convert document citations to clickable spans with local A-Z labels.
 
     Handles single citations [1_abc12345] and multi-citations like
     [1_abc12345, 2_def67890] or [1_abc12345; 2_def67890].
+
+    Documents are assigned sequential labels (A, B, C, ...) based on first
+    appearance in the text, providing consistent local references.
 
     Args:
         html: HTML text potentially containing citations
@@ -597,29 +619,35 @@ def _linkify_citations(html: str, doc_idx_map: dict[str, int] | None = None) -> 
     Returns:
         HTML with citations converted to clickable spans (space-separated, no brackets)
     """
+    # Track doc_idx -> label mapping, assigned in order of first appearance
+    doc_labels: dict[int, str] = {}
 
-    def make_link(counter: str, resource_id: str) -> str | None:
+    def get_label(doc_idx: int) -> str:
+        if doc_idx not in doc_labels:
+            doc_labels[doc_idx] = _index_to_alpha_label(len(doc_labels))
+        return doc_labels[doc_idx]
+
+    # Create link spans
+    def make_link(resource_id: str) -> str | None:
         """Create a doc-link span, or None if resource_id not in map."""
         if doc_idx_map is not None:
             doc_idx = doc_idx_map.get(resource_id)
             if doc_idx is None:
                 return None
+            label = get_label(doc_idx)
             return (
                 f'<span class="doc-link" data-doc="{doc_idx}" '
-                f'onclick="openDocument({doc_idx})">Document&nbsp;{counter}</span>'
+                f'onclick="openDocument({doc_idx})">Document&nbsp;{label}</span>'
             )
-        # No mapping - use counter as doc reference
-        return (
-            f'<span class="doc-link" data-doc="{counter}" '
-            f'onclick="openDocument({counter})">Document&nbsp;{counter}</span>'
-        )
+        # No mapping - can't assign local labels without doc_idx
+        return None
 
     def replace_bracket(match: re.Match) -> str:
         bracket_text = match.group(0)
         links = []
         for counter, hash_part in parse_citation_ids(bracket_text):
             resource_id = f"{counter}_{hash_part}"
-            link = make_link(counter, resource_id)
+            link = make_link(resource_id)
             if link:
                 links.append(link)
         if not links:
