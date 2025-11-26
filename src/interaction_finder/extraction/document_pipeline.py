@@ -64,17 +64,22 @@ async def extract_document_entities(
     usage = RunUsage()
     # Build extraction prompt
     entity_types_str = ", ".join(target_entity_types)
-    prompt = f"""Extract entities from this document relevant to: {topic}
+    prompt = f"""# Context
+Extract entities relevant to: {topic}
 
 **Target entity types:** {entity_types_str}
 
-**Document title:** {resource.title}
+# Document Extract
+**Title:** {resource.title}
 
-**Document text:**
 {resource.text[:15000]}
 
-Extract all entities of the specified types that are relevant to the topic.
-For each entity, provide: canonical name, all verbatim names from text, supporting quotes, and reasoning."""
+# Output
+For each entity of the specified types relevant to the topic, provide:
+- Canonical name
+- All verbatim name variants from text
+- Supporting quotes
+- Reasoning for inclusion"""
 
     # Call entity extractor LLM agent
     agent = get_entity_extractor_agent(config)
@@ -231,17 +236,21 @@ async def extract_pairs_from_proximal_set(
     if len(proximal_set.entities) > 3:
         entities_str += f" (+{len(proximal_set.entities) - 3} more)"
 
-    prompt = f"""Topic: {topic}
+    prompt = f"""# Context
+Extract entity associations from this text region.
+
+**Topic:** {topic}
 
 **Entities in this region:**
 {chr(10).join(entity_list)}
 
-**Text region:**
+# Document Extract
 {text_region}
 
-Extract all binary associations between these entities that are clearly stated or implied in the text.
-Use the canonical entity names as shown in bold (kind and aliases are metadata only).
-Provide exact supporting quotes."""
+# Output
+For each binary association between these entities that is clearly stated or implied:
+- Use the canonical entity names as shown in bold (kind and aliases are metadata only)
+- Provide exact supporting quotes"""
 
     # Call proximal pair extractor LLM agent
     agent = get_proximal_pair_agent(config)
@@ -400,21 +409,25 @@ async def assess_single_pair(
     candidates = list(relationship_candidates)
     candidates_str = ", ".join(f'"{c}"' for c in candidates)
 
-    prompt = f"""Topic: {topic}
+    prompt = f"""# Context
+Assess evidence for an entity association.
+
+**Topic:** {topic}
 
 **Pair:** {entity1.name} ({entity1.kind}) <-> {entity2.name} ({entity2.kind})
 
 **Relationship type candidates:** {candidates_str}
 
-**Relevant text from document:**
-{text_region}
-
 **Supporting quotes:**
 {quotes_str}
 
-Assess the strength of evidence for this association in this document.
-Select the most appropriate relationship type (from candidates or propose a more specific one).
-Assign a confidence level (high/medium/low) and explain your reasoning."""
+# Document Extract
+{text_region}
+
+# Output
+- Select the most appropriate relationship type (from candidates or propose a more specific one)
+- Assign a confidence level (high/medium/low)
+- Explain your reasoning"""
 
     # Call pair judge LLM agent
     agent = get_pair_judge_agent(config)

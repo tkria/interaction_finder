@@ -1408,7 +1408,7 @@ class JudgeCrossDocumentNode(BaseNode[State, Deps, ExtractionResult]):
             """Format a list of assessments with document evidence."""
             if not assessments:
                 return ""
-            sections = [f"**{label.upper()} EVIDENCE:**\n"]
+            sections = [f"## {label.title()} Evidence\n"]
             for i, assessment in enumerate(assessments, 1):
                 resource = ctx.deps.resource_pool.get(assessment.resource_id)
                 if not resource:
@@ -1416,11 +1416,10 @@ class JudgeCrossDocumentNode(BaseNode[State, Deps, ExtractionResult]):
                 text = collect_relevant_text_for_quotes(
                     resource, assessment.quotes, padding
                 )
-                section = f"""[Document {i}] {resource.title}
-Relationship: {assessment.relationship} | Confidence: {assessment.confidence}
-Reasoning: {assessment.reasoning}
+                section = f"""### Document {i}: {resource.title}
+**Relationship:** {assessment.relationship} | **Confidence:** {assessment.confidence}
+**Reasoning:** {assessment.reasoning}
 
-Evidence:
 {text}"""
                 sections.append(section)
             return "\n\n".join(sections)
@@ -1435,32 +1434,32 @@ Evidence:
         }
         relationships_str = ", ".join(f'"{r}"' for r in sorted(all_rels))
 
-        return f"""Topic: {ctx.state.topic}
+        return f"""# Context
+Synthesize contradictory evidence for an entity association.
+
+**Topic:** {ctx.state.topic}
 
 **Pair:** {pair_key.entity1_name} <-> {pair_key.entity2_name}
 
 **Relationship types found:** {relationships_str}
 
-**IMPORTANT:** This is a CONTENTIOUS pair with contradictory evidence. Some documents support the association while others refute it.
+**Note:** This is a CONTENTIOUS pair with contradictory evidence. Some documents support the association while others refute it.
+
+# Document Extracts
 
 {supporting_text}
 
----
-
 {refuting_text}
 
-{f"---{chr(10)}{chr(10)}{neutral_text}" if neutral_text else ""}
+{neutral_text if neutral_text else ""}
 
----
-
-**Task:**
-Synthesize the contradictory evidence. Consider:
+# Task
+Synthesize the contradictory evidence, considering:
 1. Is there genuine disagreement in the literature, or do studies examine different contexts?
 2. What is the weight of evidence on each side?
 3. Should we accept this pair despite contradictions?
 
-Select the most accurate relationship overall (from the ones found above).
-Provide: accepted (true/false), relationship (selected label), confidence (high/medium/low), and detailed reasoning explaining how you weighed the contradictions."""
+Provide: accepted (true/false), relationship (selected from above), confidence (high/medium/low), and detailed reasoning explaining how you weighed the contradictions."""
 
     def _build_unidirectional_prompt(
         self,
@@ -1481,33 +1480,34 @@ Provide: accepted (true/false), relationship (selected label), confidence (high/
             text = collect_relevant_text_for_quotes(
                 resource, assessment.quotes, padding
             )
-            section = f"""**Document {i}:** {resource.title}
-
+            section = f"""## Document {i}: {resource.title}
 **Assessment:** {assessment.confidence} confidence - {assessment.relationship}
 **Reasoning:** {assessment.reasoning}
 
-**Evidence from document:**
 {text}"""
             document_sections.append(section)
 
         relationships = {a.relationship for a in all_assessments}
         relationships_str = ", ".join(f'"{r}"' for r in sorted(relationships))
 
-        return f"""Topic: {ctx.state.topic}
+        return f"""# Context
+Make a final judgment on an entity association.
+
+**Topic:** {ctx.state.topic}
 
 **Pair:** {pair_key.entity1_name} <-> {pair_key.entity2_name}
 
 **Relationship types found across documents:** {relationships_str}
 
-{chr(10).join(f"{chr(10)}---{chr(10)}{chr(10)}" + section for section in document_sections)}
+# Document Extracts
 
----
+{chr(10).join(document_sections)}
 
-**Task:**
-Make a final judgment on whether to accept this association.
+# Task
 Synthesize the evidence across documents, considering consistency, quality, and contradictions.
 Select the most accurate relationship overall (from the ones found above).
-Decide: accepted (true/false), relationship (selected label), confidence (high/medium/low), and detailed reasoning."""
+
+Provide: accepted (true/false), relationship (selected label), confidence (high/medium/low), and detailed reasoning."""
 
     async def _judge_pair(
         self,

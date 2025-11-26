@@ -635,13 +635,20 @@ async def assess_co_mention_region(
     else:
         relationships_section = ""
     # Build prompt
-    prompt = f"""**Topic:** {topic}
+    prompt = f"""# Context
+Evaluate candidate entity pairs for associations in this text region.
+
+**Topic:** {topic}
 
 **Candidate pairs to evaluate:**
 {chr(10).join(pairs_list)}
 {relationships_section}
-**Text:**
-{text_region}"""
+# Document Extract
+{text_region}
+
+# Task
+For each candidate pair, determine if there is evidence of a relationship in the text.
+Provide supporting quotes for confirmed relationships."""
     # Call LLM
     usage = RunUsage()
     agent = get_region_assessment_agent(config)
