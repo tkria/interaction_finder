@@ -474,7 +474,7 @@ header {
 .document-accordion {
     margin-bottom: var(--spacing-compact);
 }
-.document-accordion.doc-link-highlight .document-header {
+.document-accordion.doc-link-hover .document-header {
     border-color: var(--pico-color-azure-450);
     background: var(--doc-link-hover-bg);
 }
@@ -1149,6 +1149,8 @@ function initReport() {
     document.getElementById('sidebar').addEventListener('scroll', handleScrollForURL);
     document.getElementById('content').addEventListener('scroll', handleScrollForURL);
     document.getElementById('rightbar').addEventListener('scroll', handleScrollForURL);
+    // Set up delegated doc-link hover handlers (once, not per-render)
+    initDocLinkHover();
 
     // Restore state from URL before initial render
     restoreStateFromURL();
@@ -1560,24 +1562,38 @@ function renderReasoning(resetScroll = true) {
     if (resetScroll) {
         rightbar.scrollTop = 0;
     }
-    // Set up hover highlighting for document links
-    setupDocLinkHover();
 }
 
-// Set up hover handlers on .doc-link elements to highlight corresponding accordion
-function setupDocLinkHover() {
+// Scroll timer for doc-link hover (scroll accordion into view after 1s)
+let docLinkScrollTimer = null;
+// Set up delegated hover handlers for .doc-link elements (called once at init)
+function initDocLinkHover() {
     const rightbar = document.getElementById('rightbar');
-    rightbar.querySelectorAll('.doc-link').forEach(link => {
-        const docIdx = link.dataset.doc;
-        if (!docIdx) return;
-        link.addEventListener('mouseenter', () => {
-            const accordion = document.querySelector(`.document-accordion[data-doc="${docIdx}"]`);
-            if (accordion) accordion.classList.add('doc-link-highlight');
-        });
-        link.addEventListener('mouseleave', () => {
-            const accordion = document.querySelector(`.document-accordion[data-doc="${docIdx}"]`);
-            if (accordion) accordion.classList.remove('doc-link-highlight');
-        });
+    const content = document.getElementById('content');
+    if (!rightbar || !content) return;
+    const getAccordion = (e) => {
+        const link = e.target.closest('.doc-link');
+        const docIdx = link?.dataset.doc;
+        return docIdx ? document.querySelector(`.document-accordion[data-doc="${docIdx}"]`) : null;
+    };
+    rightbar.addEventListener('mouseover', (e) => {
+        const accordion = getAccordion(e);
+        if (!accordion) return;
+        accordion.classList.add('doc-link-hover');
+        clearTimeout(docLinkScrollTimer);
+        docLinkScrollTimer = setTimeout(() => {
+            const rect = accordion.getBoundingClientRect();
+            const contentRect = content.getBoundingClientRect();
+            if (rect.top < contentRect.top || rect.bottom > contentRect.bottom) {
+                accordion.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            }
+        }, 1000);
+    });
+    rightbar.addEventListener('mouseout', (e) => {
+        const accordion = getAccordion(e);
+        if (!accordion) return;
+        accordion.classList.remove('doc-link-hover');
+        clearTimeout(docLinkScrollTimer);
     });
 }
 
