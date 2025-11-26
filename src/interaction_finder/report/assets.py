@@ -470,7 +470,7 @@ header {
     flex: 1;
     margin-right: 1rem;
     display: flex;
-    align-items: baseline;
+    align-items: center;
     gap: 0.5rem;
 }
 
