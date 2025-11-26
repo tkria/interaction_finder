@@ -225,7 +225,7 @@ def _extract_query_variants(query: str) -> list[str]:
     """Extract matching variants from query string in priority order.
 
     Handles parentheticals (base (content) → base, content) and slash patterns.
-    Returns deduplicated list with base forms before parenthetical content.
+    Returns deduplicated list: original first, then base forms, then parenthetical content.
     """
     result: list[str] = []
     seen: set[str] = set()
@@ -236,13 +236,15 @@ def _extract_query_variants(query: str) -> list[str]:
             seen.add(text)
             result.append(text)
 
+    query = query.strip()
+    # Always include original query first (handles exact match with parentheses)
+    add(query)
     # Split on parenthetical if present
-    paren_match = re.match(r"^(.+?)\s*\(([^)]+)\)\s*$", query.strip())
-    parts = (
-        [paren_match.group(1).strip(), paren_match.group(2).strip()]
-        if paren_match
-        else [query.strip()]
-    )
+    paren_match = re.match(r"^(.+?)\s*\(([^)]+)\)\s*$", query)
+    if paren_match:
+        parts = [paren_match.group(1).strip(), paren_match.group(2).strip()]
+    else:
+        parts = [query]
     # Add each part with slash expansion
     for part in parts:
         for expanded in _expand_slash(part):
@@ -261,9 +263,9 @@ def find_best_entity_match(
     3. Fuzzy match with OSA distance, requiring specificity (gap to second-best)
 
     Query variants are extracted from parentheticals and slash patterns:
-    - "BRCA1 (gene)" → ["BRCA1", "gene"]
+    - "BRCA1 (gene)" → ["BRCA1 (gene)", "BRCA1", "gene"]
     - "GDF1/2" → ["GDF1/2", "GDF1", "GDF2"]
-    - "PAH (Pulmonary arterial hypertension)" → ["PAH", "Pulmonary arterial hypertension"]
+    - "PAH (Pulmonary arterial hypertension)" → ["PAH (Pulmonary arterial hypertension)", "PAH", "Pulmonary arterial hypertension"]
 
     Fuzzy matching uses similarity scores (1 - distance/length) so that high-quality
     matches on long strings beat low-quality matches on short strings. Max distance

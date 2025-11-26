@@ -1160,6 +1160,14 @@ class TestFindBestEntityMatch:
         assert result is None
 
     # Parenthetical content matching (acronym in full form)
+    def test_parenthetical_exact_match_with_parens(self):
+        """Test exact match when candidate includes parentheses."""
+        result = find_best_entity_match(
+            "a (b)",
+            ["a (b)", "a", "b"],
+        )
+        assert result == "a (b)"
+
     def test_parenthetical_acronym_matches(self):
         """Test matching acronym inside parentheses to candidate."""
         result = find_best_entity_match(
