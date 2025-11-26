@@ -58,6 +58,7 @@ from interaction_finder.extraction.utils import (
     osa_distance,
 )
 from interaction_finder.logging import logfire
+from interaction_finder.markdown import adjust_heading_levels
 from interaction_finder.resources import Resource
 
 # Characters for generating verification tokens (alphanumeric, mixed case)
@@ -1416,11 +1417,12 @@ class JudgeCrossDocumentNode(BaseNode[State, Deps, ExtractionResult]):
                 text = collect_relevant_text_for_quotes(
                     resource, assessment.quotes, padding
                 )
+                adjusted_text = adjust_heading_levels(text, target_min_level=4)
                 section = f"""### Document {i}: {resource.title}
 **Relationship:** {assessment.relationship} | **Confidence:** {assessment.confidence}
 **Reasoning:** {assessment.reasoning}
 
-{text}"""
+{adjusted_text}"""
                 sections.append(section)
             return "\n\n".join(sections)
 
@@ -1480,11 +1482,12 @@ Provide: accepted (true/false), relationship (selected from above), confidence (
             text = collect_relevant_text_for_quotes(
                 resource, assessment.quotes, padding
             )
+            adjusted_text = adjust_heading_levels(text, target_min_level=3)
             section = f"""## Document {i}: {resource.title}
 **Assessment:** {assessment.confidence} confidence - {assessment.relationship}
 **Reasoning:** {assessment.reasoning}
 
-{text}"""
+{adjusted_text}"""
             document_sections.append(section)
 
         relationships = {a.relationship for a in all_assessments}

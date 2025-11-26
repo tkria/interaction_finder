@@ -30,6 +30,7 @@ from interaction_finder.extraction.utils import (
     find_best_entity_match,
     make_entity_pair_key,
 )
+from interaction_finder.markdown import adjust_heading_levels
 from interaction_finder.resources import (
     QuoteValidationError,
     Resource,
@@ -635,6 +636,7 @@ async def assess_co_mention_region(
     else:
         relationships_section = ""
     # Build prompt
+    adjusted_text_region = adjust_heading_levels(text_region, target_min_level=2)
     prompt = f"""# Context
 Evaluate candidate entity pairs for associations in this text region.
 
@@ -644,7 +646,7 @@ Evaluate candidate entity pairs for associations in this text region.
 {chr(10).join(pairs_list)}
 {relationships_section}
 # Document Extract
-{text_region}
+{adjusted_text_region}
 
 # Task
 For each candidate pair, determine if there is evidence of a relationship in the text.

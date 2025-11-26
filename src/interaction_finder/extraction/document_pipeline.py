@@ -32,6 +32,7 @@ from interaction_finder.extraction.utils import (
     normalize_for_comparison,
     strip_kind_annotation,
 )
+from interaction_finder.markdown import adjust_heading_levels
 from interaction_finder.resources import QuoteValidationError, Resource
 from interaction_finder.settings import IfetcherConfig
 
@@ -64,6 +65,7 @@ async def extract_document_entities(
     usage = RunUsage()
     # Build extraction prompt
     entity_types_str = ", ".join(target_entity_types)
+    document_text = adjust_heading_levels(resource.text[:15000], target_min_level=2)
     prompt = f"""# Context
 Extract entities relevant to: {topic}
 
@@ -72,7 +74,7 @@ Extract entities relevant to: {topic}
 # Document Extract
 **Title:** {resource.title}
 
-{resource.text[:15000]}
+{document_text}
 
 # Output
 For each entity of the specified types relevant to the topic, provide:
@@ -236,6 +238,7 @@ async def extract_pairs_from_proximal_set(
     if len(proximal_set.entities) > 3:
         entities_str += f" (+{len(proximal_set.entities) - 3} more)"
 
+    adjusted_text_region = adjust_heading_levels(text_region, target_min_level=2)
     prompt = f"""# Context
 Extract entity associations from this text region.
 
@@ -245,7 +248,7 @@ Extract entity associations from this text region.
 {chr(10).join(entity_list)}
 
 # Document Extract
-{text_region}
+{adjusted_text_region}
 
 # Output
 For each binary association between these entities that is clearly stated or implied:
@@ -409,6 +412,7 @@ async def assess_single_pair(
     candidates = list(relationship_candidates)
     candidates_str = ", ".join(f'"{c}"' for c in candidates)
 
+    adjusted_text_region = adjust_heading_levels(text_region, target_min_level=2)
     prompt = f"""# Context
 Assess evidence for an entity association.
 
@@ -422,7 +426,7 @@ Assess evidence for an entity association.
 {quotes_str}
 
 # Document Extract
-{text_region}
+{adjusted_text_region}
 
 # Output
 - Select the most appropriate relationship type (from candidates or propose a more specific one)
