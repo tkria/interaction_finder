@@ -301,9 +301,9 @@ class ReasoningTemplateRenderer:
         <div class="assessment-section open">
             <div class="assessment-header" onclick="this.parentElement.classList.toggle('open')">
                 <span class="assessment-label"><span class="assess-num-badge">{idx + 1}</span>&nbsp;{_escape_html(assess["relationship"])}</span>
-                <span class="pc-chip polarity-{_escape_html(polarity)} confidence-{_escape_html(confidence)}">
-                    <span>{_escape_html(polarity_map.get(polarity, polarity))}</span>
-                    <span>{_escape_html(confidence)}</span>
+                <span class="pc-pill">
+                    <span class="{_escape_html(polarity)}">{_escape_html(polarity_map.get(polarity, polarity))}</span>
+                    <span class="confidence-{_escape_html(confidence)}">{_escape_html(confidence)}</span>
                 </span>
             </div>
             <div class="assessment-content">

@@ -57,7 +57,7 @@ REPORT_CSS = """
     --doc-badge-bg: var(--pico-color-azure-600);
     --doc-badge-hover-bg: var(--pico-color-azure-500);
     --doc-badge-text: var(--pico-color-slate-50);
-    --polarity-supporting-bg: var(--pico-color-green-100);
+    --polarity-supporting-bg: var(--pico-color-green-50);
     --polarity-supporting-text: var(--pico-color-green-700);
     --polarity-refuting-bg: var(--pico-color-red-100);
     --polarity-refuting-text: var(--pico-color-red-700);
@@ -342,7 +342,7 @@ header {
 
 .polarity-badge {
     padding: 0.1rem 0.35rem;
-    border-radius: 3px;
+    border-radius: 0.6em;
     font-weight: 600;
 }
 .polarity-badge.polarity-supporting {
@@ -369,59 +369,52 @@ header {
 .confidence-badge.confidence-medium { background: var(--confidence-medium-bg); }
 .confidence-badge.confidence-low { background: var(--confidence-low-bg); }
 
-.pc-chip {
+.pc-pill {
     display: inline-flex;
-    border-radius: 1.2em;
+    border-radius: 1em;
     gap: 0.2em;
+    overflow: hidden;
     text-transform: uppercase;
     font-size: 0.65rem;
     font-weight: 600;
     letter-spacing: 0.05em;
 }
-.pc-chip > span {
+.pc-pill > span {
     padding: 0.1rem 0.45rem;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: 0.2rem;
-    border-radius: 1.2em;
 }
-.pc-chip > span:last-child {
-    padding-left: 0;
+.pc-pill > span:first-child {
+    border: 2px solid;
+    border-radius: 1.5em 0 0 1.5em;
 }
-.pc-chip .pc-count {
-    font-size: 0.6rem;
-    opacity: 0.8;
+/* Polarity styling */
+.pc-pill > .supporting {
+    background: var(--polarity-supporting-bg);
+    color: var(--polarity-supporting-text);
 }
-/* Confidence background on the chip itself */
-.pc-chip.confidence-high {
+.pc-pill > .refuting {
+    background: var(--polarity-refuting-bg);
+    color: var(--polarity-refuting-text);
+}
+.pc-pill > .neutral,
+.pc-pill > .irrelevant {
+    background: var(--polarity-neutral-bg);
+    color: var(--polarity-neutral-text);
+}
+/* Confidence styling */
+.pc-pill > .confidence-high {
     background: var(--confidence-high-bg);
     color: white;
 }
-.pc-chip.confidence-medium {
+.pc-pill > .confidence-medium {
     background: var(--confidence-medium-bg);
     color: white;
 }
-.pc-chip.confidence-low {
+.pc-pill > .confidence-low {
     background: var(--confidence-low-bg);
     color: white;
-}
-/* Polarity styling on the first span */
-.pc-chip.polarity-supporting > span:first-child {
-    background: var(--polarity-supporting-bg);
-    color: var(--polarity-supporting-text);
-    margin-left: -1px;
-}
-.pc-chip.polarity-refuting > span:first-child {
-    background: var(--polarity-refuting-bg);
-    color: var(--polarity-refuting-text);
-    margin-left: -1px;
-}
-.pc-chip.polarity-neutral > span:first-child,
-.pc-chip.polarity-irrelevant > span:first-child {
-    background: var(--polarity-neutral-bg);
-    color: var(--polarity-neutral-text);
-    margin-left: -1px;
 }
 
 .pair-counts {
@@ -735,7 +728,7 @@ header {
     cursor: pointer;
     user-select: none;
 }
-.assessment-header > .pc-chip {
+.assessment-header > .pc-pill {
     margin-left: auto;
 }
 .assessment-section.open .assessment-header {
@@ -1147,9 +1140,9 @@ function renderContent() {
         // Build polarity/confidence badge
         const polarityMap = {supporting: 'S', refuting: 'R', neutral: 'N', irrelevant: 'I'};
         const badge = polarity && confidence
-            ? `<span class="pc-chip polarity-${escapeHtml(polarity)} confidence-${escapeHtml(confidence)}">
-                   <span>${escapeHtml(polarityMap[polarity] || polarity)}</span>
-                   <span>${escapeHtml(confidence)}</span>
+            ? `<span class="pc-pill">
+                   <span class="${escapeHtml(polarity)}">${escapeHtml(polarityMap[polarity] || polarity)}</span>
+                   <span class="confidence-${escapeHtml(confidence)}">${escapeHtml(confidence)}</span>
                </span>`
             : confidence ? `<span class="confidence-${escapeHtml(confidence)}">${escapeHtml(confidence)}</span>`
             : polarity ? `<span class="polarity-badge polarity-${escapeHtml(polarity)}">${escapeHtml(polarityMap[polarity] || polarity)}</span>`
