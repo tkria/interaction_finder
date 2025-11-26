@@ -255,13 +255,18 @@ class LiveStatusTable(StatusTable):
         """Add status header with spinner/checkmark above table."""
         if not self.status:
             return table
-        # Create header
-        if self.status.startswith("✓"):
-            header = Text(self.status, style="bold green")
-        elif self.status.startswith("✗"):
-            header = Text(self.status, style="bold red")
+        # Create header with elapsed time
+        elapsed = self._elapsed()
+        if self.status.startswith("✓") or self.status.startswith("✗"):
+            # Complete/failed status already includes timing
+            style = "bold green" if self.status.startswith("✓") else "bold red"
+            header = Text(self.status, style=style)
         else:
-            header = Spinner("dots", text=self.status, style="cyan")
+            # Running status: show spinner, message, and elapsed time in grey
+            header_text = Text()
+            header_text.append(f"{self.status} ", style="cyan")
+            header_text.append(elapsed, style="dim")
+            header = Spinner("dots", text=header_text, style="cyan")
         # Separator
         header_width = self._console.measure(header).maximum
         separator_width = max(header_width, content_width)
