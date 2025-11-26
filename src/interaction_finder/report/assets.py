@@ -327,39 +327,41 @@ header {
     margin-bottom: var(--spacing-compact);
 }
 
-.pair-evidence {
-    margin-top: 0.35rem;
+.pair-summary {
     display: flex;
+    align-items: center;
     gap: 0.35rem;
-    flex-wrap: wrap;
+    font-size: 0.75rem;
 }
 
 .polarity-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.2rem;
-    padding: 0.1rem 0.45rem;
-    border-radius: 999px;
-    font-size: 0.65rem;
+    padding: 0.1rem 0.35rem;
+    border-radius: 3px;
     font-weight: 600;
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
 }
-
 .polarity-badge.polarity-supporting {
     background: var(--polarity-supporting-bg);
     color: var(--polarity-supporting-text);
 }
-
 .polarity-badge.polarity-refuting {
     background: var(--polarity-refuting-bg);
     color: var(--polarity-refuting-text);
 }
-
 .polarity-badge.polarity-neutral {
     background: var(--polarity-neutral-bg);
     color: var(--polarity-neutral-text);
 }
+
+.confidence-badge {
+    padding: 0.1rem 0.35rem;
+    border-radius: 3px;
+    font-weight: 600;
+    color: white;
+    margin-left: auto;
+}
+.confidence-badge.confidence-high { background: var(--confidence-high-bg); }
+.confidence-badge.confidence-medium { background: var(--confidence-medium-bg); }
+.confidence-badge.confidence-low { background: var(--confidence-low-bg); }
 
 .pc-chip {
     display: inline-flex;
@@ -424,38 +426,8 @@ header {
     color: white;
 }
 
-.pair-meta {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    font-size: 0.8rem;
-}
-
 .pair-counts {
     color: var(--pico-muted-color);
-}
-
-[class^="confidence-"] {
-    padding: 0.15rem 0.5rem;
-    border-radius: var(--pico-border-radius);
-    font-weight: 600;
-    font-size: 0.75rem;
-    text-transform: uppercase;
-}
-
-.confidence-high {
-    background: var(--confidence-high-bg);
-    color: white;
-}
-
-.confidence-medium {
-    background: var(--confidence-medium-bg);
-    color: white;
-}
-
-.confidence-low {
-    background: var(--confidence-low-bg);
-    color: white;
 }
 
 /* Content area */

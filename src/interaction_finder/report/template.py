@@ -80,31 +80,27 @@ def _render_pair_cards(pairs: list[dict[str, Any]]) -> str:
                 <span class="relationship-label">{_escape_html(pair["relationship"])}</span>
             </div>"""
 
-        # Evidence breakdown (supporting / refuting / neutral)
-        evidence_html = ""
+        # Build summary line: doc count, polarity badges, quote count, confidence
+        doc_count = pair["doc_count"]
+        quote_count = pair["quote_count"]
+        pair_conf = pair.get("confidence", "low")
+        conf_key = pair_conf if pair_conf in {"high", "medium", "low"} else "low"
+
+        # Build polarity badges
+        polarity_badges = []
         polarity_summary = pair.get("polarity_summary", {})
-        if polarity_summary:
-            # Build polarity count badges (no confidence)
-            polarity_badges = []
-            for polarity in ("supporting", "refuting", "neutral"):
-                info = polarity_summary.get(polarity)
-                if not info or not info.get("count"):
-                    continue
+        for polarity in ("supporting", "refuting", "neutral"):
+            info = polarity_summary.get(polarity)
+            if info and info.get("count"):
                 label = polarity_label[polarity]
-                badge = f'<span class="polarity-badge polarity-{polarity}">{label}<span class="pc-count">×{info["count"]}</span></span>'
+                badge = f'<span class="polarity-badge polarity-{polarity}">{label}×{info["count"]}</span>'
                 polarity_badges.append(badge)
+        polarity_html = "".join(polarity_badges) if polarity_badges else ""
 
-            # Get overall pair confidence
-            pair_conf = pair.get("confidence", "low")
-            conf_key = pair_conf if pair_conf in {"high", "medium", "low"} else "low"
-            conf_text = pair_conf.upper() if pair_conf else "N/A"
-            conf_badge = f'<span class="confidence-{_escape_html(conf_key)}">{_escape_html(conf_text)}</span>'
-
-            evidence_html = f"""
-                <div class="pair-evidence">
-                    {"".join(polarity_badges)}
-                    {conf_badge}
-                </div>"""
+        summary_html = f"""
+            <div class="pair-summary">
+                <span class="pair-counts">{doc_count}d {quote_count}q</span>{polarity_html}<span class="confidence-badge confidence-{_escape_html(conf_key)}">{_escape_html(pair_conf.upper())}</span>
+            </div>"""
 
         # Build complete card with minimal data-attributes
         card_html = f"""
@@ -125,10 +121,7 @@ def _render_pair_cards(pairs: list[dict[str, Any]]) -> str:
                 <span title="{_escape_html(entity2_aliases_display)}">
                     {_escape_html(pair["entity2"]["name"])}
                 </span>
-            </div>{kinds_html}
-            <div class="pair-meta">
-                <span class="pair-counts">{pair["doc_count"]} docs, {pair["quote_count"]} quotes</span>
-            </div>{evidence_html}
+            </div>{kinds_html}{summary_html}
         </div>"""
 
         cards.append(card_html)
