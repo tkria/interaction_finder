@@ -1742,6 +1742,7 @@ class SweepCoMentionsNode(BaseNode[State, Deps, ExtractionResult]):
             ctx.deps.progress["Candidates"].completed = pairs_to_assess
             ctx.deps.progress["Regions"].total = len(regions)
             ctx.deps.progress["Regions"].activate()
+            ctx.deps.progress["Pairs added"].activate()
             ctx.deps.progress.update()
             ctx.deps.logger.info(
                 f"Merged {len(selected)} co-mentions into {len(regions)} regions "
