@@ -1,14 +1,14 @@
 """Live progress display for keyword extraction operations.
 
-Provides a factory function for creating a StatusTable configured for
+Provides a factory function for creating a LiveStatusTable configured for
 keyword extraction with searches, documents, and keywords counters.
 """
 
-from interaction_finder.progress import Counter, DummyProgress, StatusTable
+from interaction_finder.progress import Counter, DummyProgress, LiveStatusTable
 
 
-def create_keywords_progress() -> StatusTable:
-    """Create a StatusTable configured for keyword extraction.
+def create_keywords_progress() -> LiveStatusTable:
+    """Create a LiveStatusTable configured for keyword extraction.
 
     Counters:
     - Round: current/max round indicator (category: Search)
@@ -17,7 +17,7 @@ def create_keywords_progress() -> StatusTable:
     - Documents: 3-part counter for document processing (category: Documents)
     - Keywords: 3-part counter for keyword evaluation (category: Keywords)
     """
-    return StatusTable(
+    return LiveStatusTable(
         Counter("Round", category="Search"),
         Counter("Searches run", category="Search"),
         Counter("Results found", category="Search"),

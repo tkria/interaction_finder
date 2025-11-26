@@ -1,14 +1,14 @@
 """Live progress display for extraction operations.
 
-Provides a factory function for creating a StatusTable configured for
+Provides a factory function for creating a LiveStatusTable configured for
 entity extraction with documents, sweep, and judgment counters.
 """
 
-from interaction_finder.progress import Counter, DummyProgress, StatusTable
+from interaction_finder.progress import Counter, DummyProgress, LiveStatusTable
 
 
-def create_extraction_progress() -> StatusTable:
-    """Create a StatusTable configured for entity extraction.
+def create_extraction_progress() -> LiveStatusTable:
+    """Create a LiveStatusTable configured for entity extraction.
 
     Counters:
     - Processed: 3-part counter for document processing (category: Documents)
@@ -22,7 +22,7 @@ def create_extraction_progress() -> StatusTable:
     - Accepted: 1-part counter (category: Combined Judgment)
     - Rejected: 1-part counter (category: Combined Judgment)
     """
-    return StatusTable(
+    return LiveStatusTable(
         Counter("Processed", track_in_progress=True, category="Documents"),
         Counter("Entities", category="Documents"),
         Counter("Quotes", category="Documents"),

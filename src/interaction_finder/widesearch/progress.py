@@ -1,14 +1,14 @@
 """Live progress display for widesearch operations.
 
-Provides a factory function for creating a StatusTable configured for
+Provides a factory function for creating a LiveStatusTable configured for
 widesearch with searches, results, and selection counters.
 """
 
-from interaction_finder.progress import Counter, DummyProgress, StatusTable
+from interaction_finder.progress import Counter, DummyProgress, LiveStatusTable
 
 
-def create_widesearch_progress() -> StatusTable:
-    """Create a StatusTable configured for widesearch.
+def create_widesearch_progress() -> LiveStatusTable:
+    """Create a LiveStatusTable configured for widesearch.
 
     Counters:
     - Round: current/max round indicator (category: Search)
@@ -16,7 +16,7 @@ def create_widesearch_progress() -> StatusTable:
     - Results found: 1-part counter (category: Search)
     - Results selected: 1-part counter (category: Selection)
     """
-    return StatusTable(
+    return LiveStatusTable(
         Counter("Round", category="Search"),
         Counter("Searches run", track_in_progress=True, category="Search"),
         Counter("Results found", category="Search"),

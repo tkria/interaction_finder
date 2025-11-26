@@ -3,7 +3,12 @@
 import pytest
 from rich.console import Group
 
-from interaction_finder.progress import Counter, DummyProgress, StatusTable
+from interaction_finder.progress import (
+    Counter,
+    DummyProgress,
+    LiveStatusTable,
+    StatusTable,
+)
 
 
 class TestCounter:
@@ -141,7 +146,7 @@ class TestCounterRich:
 
 
 class TestStatusTable:
-    """Tests for StatusTable class."""
+    """Tests for StatusTable base class."""
 
     def test_initialization(self):
         """StatusTable initializes with counters."""
@@ -150,7 +155,6 @@ class TestStatusTable:
         table = StatusTable(c1, c2)
         assert len(table.counters) == 2
         assert table.status == ""
-        assert table._result == "pending"
 
     def test_getitem(self):
         """StatusTable supports name-based counter access."""
@@ -172,9 +176,29 @@ class TestStatusTable:
         table.set_status("Processing")
         assert table.status == "Processing"
 
+    def test_context_manager_no_op(self):
+        """StatusTable base class context manager is no-op."""
+        table = StatusTable(Counter("Test"))
+        with table:
+            table["Test"].completed = 42
+        assert table["Test"].completed == 42
+
+
+class TestLiveStatusTable:
+    """Tests for LiveStatusTable class."""
+
+    def test_initialization(self):
+        """LiveStatusTable initializes with counters and live state."""
+        c1 = Counter("A")
+        c2 = Counter("B")
+        table = LiveStatusTable(c1, c2)
+        assert len(table.counters) == 2
+        assert table.status == ""
+        assert table._result == "pending"
+
     def test_succeed(self):
         """succeed() sets completion status."""
-        table = StatusTable()
+        table = LiveStatusTable()
         table.start()
         table.succeed()
         assert table.status.startswith("✓ Completed in")
@@ -182,23 +206,23 @@ class TestStatusTable:
 
     def test_fail(self):
         """fail() sets failure status."""
-        table = StatusTable()
+        table = LiveStatusTable()
         table.start()
         table.fail()
         assert table.status.startswith("✗ Failed after")
         assert table._result == "failure"
 
     def test_context_manager(self):
-        """StatusTable works as context manager."""
-        table = StatusTable(Counter("Test"))
+        """LiveStatusTable works as context manager."""
+        table = LiveStatusTable(Counter("Test"))
         with table:
             table["Test"].completed = 42
         assert table["Test"].completed == 42
         assert table._result == "success"
 
     def test_context_manager_with_exception(self):
-        """StatusTable shows failure on exception."""
-        table = StatusTable(Counter("Test"))
+        """LiveStatusTable shows failure on exception."""
+        table = LiveStatusTable(Counter("Test"))
         with pytest.raises(ValueError):
             with table:
                 raise ValueError("test error")
@@ -206,17 +230,17 @@ class TestStatusTable:
 
     def test_elapsed_formatting(self):
         """_elapsed formats time correctly."""
-        table = StatusTable()
+        table = LiveStatusTable()
         table._start_time = None
         assert table._elapsed() == "0s"
 
 
-class TestStatusTableRender:
-    """Tests for StatusTable rendering."""
+class TestLiveStatusTableRender:
+    """Tests for LiveStatusTable rendering."""
 
     def test_render_groups_by_category(self):
         """_render groups counters by category."""
-        table = StatusTable(
+        table = LiveStatusTable(
             Counter("A", category="First"),
             Counter("B", category="First"),
             Counter("C", category="Second"),
@@ -226,28 +250,28 @@ class TestStatusTableRender:
 
     def test_render_with_status_creates_group(self):
         """_render with status creates Group with header."""
-        table = StatusTable(Counter("Test"))
+        table = LiveStatusTable(Counter("Test"))
         table.status = "Processing"
         result = table._render()
         assert isinstance(result, Group)
 
     def test_render_without_status_returns_table(self):
         """_render without status returns bare table."""
-        table = StatusTable(Counter("Test"))
+        table = LiveStatusTable(Counter("Test"))
         result = table._render()
         # Not a Group when no status
         assert not isinstance(result, Group)
 
     def test_render_completion_status(self):
         """_render with completion status shows green header."""
-        table = StatusTable(Counter("Test"))
+        table = LiveStatusTable(Counter("Test"))
         table.status = "✓ Completed in 5s"
         result = table._render()
         assert isinstance(result, Group)
 
     def test_render_failure_status(self):
         """_render with failure status shows red header."""
-        table = StatusTable(Counter("Test"))
+        table = LiveStatusTable(Counter("Test"))
         table.status = "✗ Failed after 5s"
         result = table._render()
         assert isinstance(result, Group)
@@ -256,7 +280,7 @@ class TestStatusTableRender:
         """Category becomes bold when any counter is not unstarted."""
         c1 = Counter("A", category="Test")
         c2 = Counter("B", category="Test")
-        table = StatusTable(c1, c2)
+        table = LiveStatusTable(c1, c2)
         # Initially unstarted - category not bold
         result = table._render()
         assert result is not None

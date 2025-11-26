@@ -1,7 +1,7 @@
 """Shared progress display infrastructure for pipeline operations.
 
-Provides Counter and StatusTable for live-updating Rich displays with
-status messages, category grouping, and TTY detection.
+Provides Counter and StatusTable for tracking progress, with LiveStatusTable
+for live-updating Rich displays with status messages and category grouping.
 """
 
 from dataclasses import dataclass
@@ -94,34 +94,16 @@ class Counter:
         )
 
 
-@dataclass(init=False)
 class StatusTable:
-    """Live status display with counters.
+    """Progress tracking with named counters and status message.
 
-    Manages a status line (with spinner) and a list of counters,
-    rendered as a Rich table with category grouping.
+    Pure data container for progress state. Use LiveStatusTable for
+    terminal display with Rich Live updates.
     """
 
-    status: str
-    counters: list[Counter]
-    _start_time: float | None
-    _result: Literal["pending", "running", "success", "failure"]
-    _console: Console
-    _live: Live | None
-    _enabled: bool
-
     def __init__(self, *counters: Counter):
-        self.status = ""
-        self.counters = list(counters)
-        self._start_time = None
-        self._result = "pending"
-        self._console = Console()
-        self._live = None
-        self._enabled = self._console.is_terminal
-        # Configure logging integration
-        from interaction_finder.logging import configure_logging
-
-        configure_logging(console=self._console, verbose=False)
+        self.status: str = ""
+        self.counters: list[Counter] = list(counters)
 
     def __getitem__(self, name: str) -> Counter:
         """Access counter by name."""
@@ -129,6 +111,58 @@ class StatusTable:
             if counter.name == name:
                 return counter
         raise KeyError(name)
+
+    def set_status(self, message: str) -> None:
+        """Set status message."""
+        self.status = message
+
+    # No-op methods for compatibility when used without live display
+    def start(self) -> None:
+        """No-op for base class."""
+
+    def stop(self) -> None:
+        """No-op for base class."""
+
+    def update(self) -> None:
+        """No-op for base class."""
+
+    def succeed(self) -> None:
+        """No-op for base class."""
+
+    def fail(self) -> None:
+        """No-op for base class."""
+
+    def __enter__(self):
+        """Context manager entry."""
+        self.start()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit."""
+        if exc_type is not None:
+            self.fail()
+        else:
+            self.succeed()
+
+
+class LiveStatusTable(StatusTable):
+    """Live-updating Rich display for progress tracking.
+
+    Renders counters as a table with category grouping, status header
+    with spinner, and automatic TTY detection.
+    """
+
+    def __init__(self, *counters: Counter):
+        super().__init__(*counters)
+        self._start_time: float | None = None
+        self._result: Literal["pending", "running", "success", "failure"] = "pending"
+        self._console: Console = Console()
+        self._live: Live | None = None
+        self._enabled: bool = self._console.is_terminal
+        # Configure logging integration
+        from interaction_finder.logging import configure_logging
+
+        configure_logging(console=self._console, verbose=False)
 
     def start(self) -> None:
         """Start the operation timer and live display."""
@@ -176,18 +210,6 @@ class StatusTable:
         elapsed = int(time() - self._start_time)
         mins, secs = divmod(elapsed, 60)
         return f"{mins}m {secs}s" if mins else f"{secs}s"
-
-    def __enter__(self):
-        """Context manager entry."""
-        self.start()
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        """Context manager exit, showing failure status if an exception occurred."""
-        if exc_type is not None:
-            self.fail()
-        else:
-            self.succeed()
 
     def _render(self) -> RenderableType:
         """Render status header and counter table."""
