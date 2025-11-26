@@ -842,6 +842,7 @@ header {
     border-radius: 50%;
     font-weight: 600;
     font-size: 0.75rem;
+    margin-bottom: 0.2em;
 }
 .quote-assess-badges {
     display: flex;
