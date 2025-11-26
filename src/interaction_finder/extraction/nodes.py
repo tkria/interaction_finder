@@ -349,6 +349,8 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
     ) -> "ConsolidateRelationshipsNode":
         """Consolidate entities globally and update pair references."""
         with logfire.span("ConsolidateEntitiesNode"):
+            if ctx.deps.progress:
+                ctx.deps.progress.set_status("Consolidating entities")
             # Step 1: Collect normalized entities and generate exact-match merge rules
             unique_entities = self._collect_unique_entities(ctx)
 
@@ -1044,6 +1046,8 @@ class ConsolidateRelationshipsNode(BaseNode[State, Deps, ExtractionResult]):
     async def run(self, ctx: GraphRunContext[State, Deps]) -> "SweepCoMentionsNode":
         """Consolidate relationship labels, classify polarities, and filter irrelevant."""
         with logfire.span("ConsolidateRelationshipsNode"):
+            if ctx.deps.progress:
+                ctx.deps.progress.set_status("Consolidating relationships")
             # Step 1: Collect unique relationship labels
             unique_relationships = self._collect_unique_relationships(ctx)
 
@@ -1829,6 +1833,8 @@ class ConsolidateNewRelationshipsNode(BaseNode[State, Deps, ExtractionResult]):
         )
 
         with logfire.span("ConsolidateNewRelationshipsNode"):
+            if ctx.deps.progress:
+                ctx.deps.progress.set_status("Classifying new relationships")
             # Collect all current relationship labels
             all_labels: set[str] = set()
             for assessments in ctx.state.pair_assessments_by_resource.values():
