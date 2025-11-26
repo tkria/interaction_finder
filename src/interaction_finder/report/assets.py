@@ -33,6 +33,7 @@ REPORT_CSS = """
     --selected-hover-bg: var(--pico-color-azure-50);
     --rejected-bg: var(--pico-color-red-50);
     --rejected-border: var(--pico-color-red-600);
+    --contentious-border: var(--pico-color-amber-100);
 
     /* Confidence badge colors */
     --confidence-high-bg: var(--pico-color-green-600);
@@ -80,6 +81,7 @@ REPORT_CSS = """
     --selected-hover-bg: var(--pico-color-azure-950);
     --rejected-bg: var(--pico-color-red-950);
     --rejected-border: var(--pico-color-red-400);
+    --contentious-border: var(--pico-color-amber-300);
     --confidence-high-bg: var(--pico-color-green-400);
     --confidence-medium-bg: var(--pico-color-pumpkin-600);
     --confidence-low-bg: var(--pico-color-red-400);
@@ -117,6 +119,7 @@ REPORT_CSS = """
     --selected-hover-bg: var(--pico-color-azure-950);
     --rejected-bg: var(--pico-color-red-950);
     --rejected-border: var(--pico-color-red-400);
+    --contentious-border: var(--pico-color-amber-300);
     --confidence-high-bg: var(--pico-color-green-400);
     --confidence-medium-bg: var(--pico-color-pumpkin-600);
     --confidence-low-bg: var(--pico-color-red-400);
@@ -268,8 +271,8 @@ header {
 }
 
 .pair-card.contentious {
-    border-color: var(--pico-color-amber-500);
-    box-shadow: 0 0 0 1px var(--pico-color-amber-200) inset;
+    border-color: var(--contentious-border);
+    box-shadow: 0 0 0 2px var(--pico-color-amber-200) inset;
 }
 
 .pair-entities {
@@ -366,14 +369,12 @@ header {
 .pc-chip {
     display: inline-flex;
     border-radius: 1.2em;
-    background: transparent;
     gap: 0.2em;
     text-transform: uppercase;
     font-size: 0.65rem;
     font-weight: 600;
     letter-spacing: 0.05em;
 }
-
 .pc-chip > span {
     padding: 0.1rem 0.45rem;
     display: inline-flex;
@@ -382,48 +383,42 @@ header {
     gap: 0.2rem;
     border-radius: 1.2em;
 }
-
 .pc-chip > span:last-child {
     padding-left: 0;
 }
-
 .pc-chip .pc-count {
     font-size: 0.6rem;
     opacity: 0.8;
 }
-
+/* Confidence background on the chip itself */
+.pc-chip.confidence-high {
+    background: var(--confidence-high-bg);
+    color: white;
+}
+.pc-chip.confidence-medium {
+    background: var(--confidence-medium-bg);
+    color: white;
+}
+.pc-chip.confidence-low {
+    background: var(--confidence-low-bg);
+    color: white;
+}
+/* Polarity styling on the first span */
 .pc-chip.polarity-supporting > span:first-child {
     background: var(--polarity-supporting-bg);
     color: var(--polarity-supporting-text);
     margin-left: -1px;
 }
-
 .pc-chip.polarity-refuting > span:first-child {
     background: var(--polarity-refuting-bg);
     color: var(--polarity-refuting-text);
     margin-left: -1px;
 }
-
 .pc-chip.polarity-neutral > span:first-child,
 .pc-chip.polarity-irrelevant > span:first-child {
     background: var(--polarity-neutral-bg);
     color: var(--polarity-neutral-text);
     margin-left: -1px;
-}
-
-.pc-chip.confidence-high > span:last-child {
-    background: var(--confidence-high-bg);
-    color: white;
-}
-
-.pc-chip.confidence-medium > span:last-child {
-    background: var(--confidence-medium-bg);
-    color: white;
-}
-
-.pc-chip.confidence-low > span:last-child {
-    background: var(--confidence-low-bg);
-    color: white;
 }
 
 .pair-counts {
@@ -672,11 +667,22 @@ header {
 }
 
 .pair-header {
+    display: flex;
+    align-items: baseline;
+    gap: 0.4em;
+    flex-wrap: wrap;
     padding: var(--spacing-card);
     margin-bottom: var(--spacing-card);
     border: 1px solid var(--pico-muted-border-color);
     border-radius: var(--pico-border-radius);
     background: var(--pico-card-background-color);
+}
+.pair-entity {
+    font-weight: 600;
+}
+.pair-relation {
+    font-style: italic;
+    color: var(--pico-muted-color);
 }
 
 .reasoning-title {
@@ -685,8 +691,15 @@ header {
     color: var(--pico-primary);
 }
 
-.reasoning-subtitle {
+.reasoning-doc-title {
     font-size: 0.85rem;
+    font-weight: 500;
+    color: var(--pico-primary);
+    margin-bottom: 0.25rem;
+}
+
+.reasoning-subtitle {
+    font-size: 0.85em;
     color: var(--pico-muted-color);
     margin-bottom: var(--spacing-card);
     font-style: italic;
@@ -702,8 +715,14 @@ header {
 
 .assessment-header {
     display: flex;
-    justify-content: space-between;
     align-items: center;
+    cursor: pointer;
+    user-select: none;
+}
+.assessment-header > .pc-chip {
+    margin-left: auto;
+}
+.assessment-section.open .assessment-header {
     margin-bottom: var(--spacing-compact);
     padding-bottom: var(--spacing-compact);
     border-bottom: 1px solid var(--pico-muted-border-color);
@@ -716,6 +735,9 @@ header {
 
 .assessment-content {
     line-height: 1.6;
+}
+.assessment-section:not(.open) .assessment-content {
+    display: none;
 }
 
 .reasoning-content {
@@ -787,8 +809,14 @@ header {
     border-color: var(--nav-border);
 }
 
-.quote-number {
+.quote-nav-left {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    align-self: stretch;
     flex-shrink: 0;
+}
+.quote-number {
     width: 1.5rem;
     height: 1.5rem;
     display: flex;
@@ -800,12 +828,34 @@ header {
     font-weight: 600;
     font-size: 0.75rem;
 }
+.quote-assess-badges {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    flex: 1;
+    justify-content: center;
+}
+.assess-num-badge {
+    padding: 0.1rem 0.3rem;
+    border: 1px solid var(--pico-primary);
+    color: var(--pico-primary);
+    border-radius: 3px;
+    font-size: 0.6rem;
+    font-weight: 600;
+}
 
 .quote-preview {
     flex: 1;
     line-height: 1.4;
     color: var(--pico-color);
     font-size: 0.8rem;
+}
+
+.other-pair-faded {
+    color: var(--pico-muted-color);
+}
+.other-pair-highlight {
+    font-weight: 600;
 }
 
 /* Utility classes */

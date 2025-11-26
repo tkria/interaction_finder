@@ -227,8 +227,8 @@ class ReasoningTemplateRenderer:
     <div class="reasoning-panel">
         <div class="pair-header">
             <span class="pair-entity">{_escape_html(pair["entity1"]["name"])}</span>
-            <span class="pair-entity">{_escape_html(pair["entity2"]["name"])}</span>
             <span class="pair-relation">{_escape_html(pair["relationship"])}</span>
+            <span class="pair-entity">{_escape_html(pair["entity2"]["name"])}</span>
         </div>
         <div class="reasoning-title">Overall Assessment</div>
         <div class="reasoning-content">
@@ -277,37 +277,41 @@ class ReasoningTemplateRenderer:
             polarity = assess.get("polarity", "")
             confidence = assess.get("confidence", "low")
             return f"""
-        <div class="assessment-section">
-            <div class="assessment-header">
-                <span class="assessment-label">Assessment {idx + 1}</span>
+        <div class="assessment-section open">
+            <div class="assessment-header" onclick="this.parentElement.classList.toggle('open')">
+                <span class="assessment-label"><span class="assess-num-badge">{idx + 1}</span>&nbsp;{_escape_html(assess["relationship"])}</span>
                 <span class="pc-chip polarity-{_escape_html(polarity)} confidence-{_escape_html(confidence)}">
                     <span>{_escape_html(polarity_map.get(polarity, polarity))}</span>
                     <span>{_escape_html(confidence)}</span>
                 </span>
             </div>
             <div class="assessment-content">
-                <strong>Relationship:</strong> {_escape_html(assess["relationship"])}
                 <p>{self.highlighter.highlight(assess["reasoning"])}</p>
             </div>
         </div>"""
 
         def render_single_assessment(assess: dict[str, Any]) -> str:
-            """Render single assessment without the boxed section wrapper."""
+            """Render single assessment in a box without polarity/confidence badge."""
             return f"""
-        <div class="reasoning-content">
-            <strong>Relationship:</strong> {_escape_html(assess["relationship"])}
-            <p>{self.highlighter.highlight(assess["reasoning"])}</p>
+        <div class="assessment-section open">
+            <div class="assessment-header" onclick="this.parentElement.classList.toggle('open')">
+                <span class="assessment-label">{_escape_html(assess["relationship"])}</span>
+            </div>
+            <div class="assessment-content">
+                <p>{self.highlighter.highlight(assess["reasoning"])}</p>
+            </div>
         </div>"""
 
-        # Collect and deduplicate quotes across assessments
-        seen_keys = set()
-        all_quotes = []
-        for assess in assessments:
+        # Collect and deduplicate quotes, tracking which assessments use each
+        quote_assessments: dict[tuple, list[int]] = {}  # quote_key -> [assess_idx, ...]
+        all_quotes: list[dict[str, Any]] = []
+        for assess_idx, assess in enumerate(assessments):
             for quote in assess["quotes"]:
                 key = _quote_key_for_id(quote)
-                if key not in seen_keys:
-                    seen_keys.add(key)
+                if key not in quote_assessments:
+                    quote_assessments[key] = []
                     all_quotes.append(quote)
+                quote_assessments[key].append(assess_idx + 1)  # 1-indexed for display
         if len(assessments) == 1:
             # Single assessment: render without box wrapper
             assessments_html = render_single_assessment(assessments[0])
@@ -327,24 +331,30 @@ class ReasoningTemplateRenderer:
     <div class="reasoning-panel">
         <div class="pair-header">
             <span class="pair-entity">{_escape_html(self.pair["entity1"]["name"])}</span>
-            <span class="pair-entity">{_escape_html(self.pair["entity2"]["name"])}</span>
             <span class="pair-relation">{_escape_html(self.pair["relationship"])}</span>
+            <span class="pair-entity">{_escape_html(self.pair["entity2"]["name"])}</span>
         </div>
-        <div class="reasoning-title">Document: {_escape_html(title)}</div>
-        <div class="reasoning-subtitle">{count_text} from this document</div>
+        <div class="reasoning-doc-title">{_escape_html(title)}</div>
+        <div class="reasoning-subtitle">{count_text}</div>
         {assessments_html}
-        {self._render_quote_navigation(all_quotes, doc_idx)}
+        {self._render_quote_navigation(all_quotes, doc_idx, quote_assessments, len(assessments) > 1)}
         {self._render_other_pairs_navigation(doc_idx, all_pairs)}
     </div>"""
 
     def _render_quote_navigation(
-        self, quotes: list[dict[str, Any]], doc_idx: int
+        self,
+        quotes: list[dict[str, Any]],
+        doc_idx: int,
+        quote_assessments: dict[tuple, list[int]] | None = None,
+        show_assessment_badges: bool = False,
     ) -> str:
         """Render quote navigation list.
 
         Args:
             quotes: List of quote dictionaries from assessment
             doc_idx: Document index for quote ID lookup
+            quote_assessments: Mapping of quote_key -> list of assessment indices (1-indexed)
+            show_assessment_badges: Whether to show which assessments use each quote
 
         Returns:
             HTML for quote navigation section (empty string if no quotes)
@@ -360,11 +370,23 @@ class ReasoningTemplateRenderer:
             quote_id = self.quote_id_map.get((doc_idx, quote_key), "")
             if not quote_id:
                 continue  # Skip quotes not found in map
+            # Build assessment badges if multiple assessments
+            badges_html = ""
+            if show_assessment_badges and quote_assessments:
+                assess_indices = quote_assessments.get(quote_key, [])
+                if assess_indices:
+                    badges = "".join(
+                        f'<span class="assess-num-badge">{i}</span>'
+                        for i in assess_indices
+                    )
+                    badges_html = f'<div class="quote-assess-badges">{badges}</div>'
             items.append(
                 f"""
                 <li class="quote-nav-item" onclick="scrollToQuote('{quote_id}')" title="{_escape_html(quote_text)}">
-                    <span class="quote-number">{idx + 1}</span>
-                    <span class="quote-preview">{_escape_html(preview)}</span>
+                    <div class="quote-nav-left">
+                        <div class="quote-number">{idx + 1}</div>{badges_html}
+                    </div>
+                    <div class="quote-preview">{_escape_html(preview)}</div>
                 </li>"""
             )
         if not items:
@@ -403,10 +425,48 @@ class ReasoningTemplateRenderer:
         if not other_pairs:
             return ""
 
+        # Check if all other pairs share a common entity with current pair
+        current_e1 = self.pair["entity1"]["name"]
+        current_e2 = self.pair["entity2"]["name"]
+        # Determine which entity (if any) is shared by ALL other pairs
+        all_share_e1 = all(
+            p["entity1"]["name"] == current_e1 or p["entity2"]["name"] == current_e1
+            for _, p in other_pairs
+        )
+        all_share_e2 = all(
+            p["entity1"]["name"] == current_e2 or p["entity2"]["name"] == current_e2
+            for _, p in other_pairs
+        )
+        # Fade the shared entity, highlight the varying one
+        fade_entity = None
+        if all_share_e1 and not all_share_e2:
+            fade_entity = current_e1
+        elif all_share_e2 and not all_share_e1:
+            fade_entity = current_e2
+
         items = []
         for pair_idx, pair in other_pairs:
+            e1_name = pair["entity1"]["name"]
+            e2_name = pair["entity2"]["name"]
+            if fade_entity:
+                e1_class = (
+                    "other-pair-faded"
+                    if e1_name == fade_entity
+                    else "other-pair-highlight"
+                )
+                e2_class = (
+                    "other-pair-faded"
+                    if e2_name == fade_entity
+                    else "other-pair-highlight"
+                )
+                pair_html = (
+                    f'<span class="{e1_class}">{_escape_html(e1_name)}</span> '
+                    f'<span class="{e2_class}">{_escape_html(e2_name)}</span>'
+                )
+            else:
+                pair_html = f"{_escape_html(e1_name)} {_escape_html(e2_name)}"
             items.append(
-                f"""<li class="quote-nav-item" onclick="selectPairAndDocument({pair_idx}, {doc_idx})">{_escape_html(pair["entity1"]["name"])} {_escape_html(pair["entity2"]["name"])}</li>"""
+                f'<li class="quote-nav-item" onclick="selectPairAndDocument({pair_idx}, {doc_idx})">{pair_html}</li>'
             )
 
         items_html = "".join(items)
