@@ -439,6 +439,10 @@ header {
 .document-accordion {
     margin-bottom: var(--spacing-compact);
 }
+.document-accordion.doc-link-highlight .document-header {
+    border-color: var(--pico-color-azure-450);
+    background: var(--doc-link-hover-bg);
+}
 
 .document-header {
     display: flex;
@@ -1307,7 +1311,7 @@ function renderContent() {
 
         const isOpen = state.openDocumentIdx === idx;
         return `
-        <div class="document-accordion">
+        <div class="document-accordion" data-doc="${docIdx}">
             <div class="document-header ${isOpen ? 'open' : ''}" onclick="toggleDocument(${idx})">
                 <div class="document-title">
                     <span>${escapeHtml(title)}</span>${date ? `<span class="document-date">${escapeHtml(date)}</span>` : ''}
@@ -1505,6 +1509,25 @@ function renderReasoning(resetScroll = true) {
     if (resetScroll) {
         rightbar.scrollTop = 0;
     }
+    // Set up hover highlighting for document links
+    setupDocLinkHover();
+}
+
+// Set up hover handlers on .doc-link elements to highlight corresponding accordion
+function setupDocLinkHover() {
+    const rightbar = document.getElementById('rightbar');
+    rightbar.querySelectorAll('.doc-link').forEach(link => {
+        const docIdx = link.dataset.doc;
+        if (!docIdx) return;
+        link.addEventListener('mouseenter', () => {
+            const accordion = document.querySelector(`.document-accordion[data-doc="${docIdx}"]`);
+            if (accordion) accordion.classList.add('doc-link-highlight');
+        });
+        link.addEventListener('mouseleave', () => {
+            const accordion = document.querySelector(`.document-accordion[data-doc="${docIdx}"]`);
+            if (accordion) accordion.classList.remove('doc-link-highlight');
+        });
+    });
 }
 
 // Scroll to quote with emphasis
