@@ -324,10 +324,6 @@ class PairJudgment(BaseModel):
         description="Confidence in final judgment"
     )
     reasoning: str = Field(description="Explanation of final decision")
-    cited_documents: list[str] = Field(
-        default_factory=list,
-        description="Document IDs cited in reasoning (validated against provided documents)",
-    )
 
     def iter_assessments(self) -> Iterable[PairAssessment]:
         """Iterate over all assessments regardless of polarity.

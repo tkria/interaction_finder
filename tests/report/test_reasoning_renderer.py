@@ -6,6 +6,7 @@ from interaction_finder.report.data_prep import _quote_key_for_id
 from interaction_finder.report.reasoning_renderer import (
     EntityHighlighter,
     ReasoningTemplateRenderer,
+    _linkify_citations,
     render_all_reasoning_templates,
 )
 
@@ -597,3 +598,107 @@ def test_quote_navigation_uses_correct_ids():
         f"Quote navigation used wrong ID: {used_quote_id}. "
         "Expected doc-0-quote-2 from quote_id_map, not sequential index."
     )
+
+
+class TestLinkifyCitations:
+    """Tests for _linkify_citations function."""
+
+    def test_converts_citation_to_span(self):
+        """Valid citation should become clickable span."""
+        html = "See [1_abc12345] for details."
+        doc_idx_map = {"1_abc12345": 5}
+        result = _linkify_citations(html, doc_idx_map)
+        assert '<span class="doc-link"' in result
+        assert 'data-doc="5"' in result
+        assert 'onclick="openDocument(5)"' in result
+        assert ">Document 1</span>" in result
+
+    def test_multiple_citations(self):
+        """Multiple citations should all be converted."""
+        html = "Found in [1_aaaaaaaa] and [2_bbbbbbbb]."
+        doc_idx_map = {"1_aaaaaaaa": 0, "2_bbbbbbbb": 3}
+        result = _linkify_citations(html, doc_idx_map)
+        assert result.count('<span class="doc-link"') == 2
+        assert ">Document 1</span>" in result
+        assert ">Document 2</span>" in result
+
+    def test_invalid_citation_not_linked(self):
+        """Citation not in doc_idx_map should not become a link."""
+        html = "See [99_notfound] for details."
+        doc_idx_map = {"1_abc12345": 0}
+        result = _linkify_citations(html, doc_idx_map)
+        assert '<span class="doc-link"' not in result
+        assert "[99_notfound]" in result  # Original text preserved (escaped)
+
+    def test_mixed_valid_invalid(self):
+        """Valid citations linked, invalid ones preserved."""
+        html = "Valid [1_aaaaaaaa] and invalid [2_notfound]."
+        doc_idx_map = {"1_aaaaaaaa": 0}
+        result = _linkify_citations(html, doc_idx_map)
+        assert result.count('<span class="doc-link"') == 1
+        assert ">Document 1</span>" in result
+        assert "[2_notfound]" in result
+
+    def test_no_citations(self):
+        """Text without citations should pass through unchanged."""
+        html = "No citations here."
+        result = _linkify_citations(html, {})
+        assert result == "No citations here."
+
+    def test_without_doc_idx_map(self):
+        """Without mapping, use counter as doc reference."""
+        html = "See [3_abc12345] for details."
+        result = _linkify_citations(html, None)
+        assert 'data-doc="3"' in result
+        assert 'onclick="openDocument(3)"' in result
+        assert ">Document 3</span>" in result
+
+    def test_preserves_surrounding_html(self):
+        """Existing HTML should not be corrupted."""
+        html = "<p>Evidence from <strong>[1_abc12345]</strong> shows...</p>"
+        doc_idx_map = {"1_abc12345": 0}
+        result = _linkify_citations(html, doc_idx_map)
+        assert "<p>" in result
+        assert "<strong>" in result
+        assert "</strong>" in result
+        assert "</p>" in result
+        assert '<span class="doc-link"' in result
+
+
+class TestReasoningTemplateWithCitations:
+    """Tests for citation linkification in reasoning templates."""
+
+    def test_citations_linkified_in_overall_template(self):
+        """Citations in reasoning should become clickable links."""
+        pair = {
+            "entity1": {"name": "BRCA1", "kind": "gene", "aliases": []},
+            "entity2": {"name": "Cancer", "kind": "disease", "aliases": []},
+            "relationship": "associated_with",
+            "confidence": "high",
+            "reasoning": "Evidence from [1_abc12345] supports this association.",
+            "assessments": [],
+        }
+        doc_idx_map = {"1_abc12345": 3}
+        renderer = ReasoningTemplateRenderer(pair, 0, {}, doc_idx_map)
+        result = renderer.render_overall_template()
+        assert '<span class="doc-link"' in result
+        assert 'onclick="openDocument(3)"' in result
+        assert ">Document 1</span>" in result
+
+    def test_citations_after_entity_highlighting(self):
+        """Citations should be linkified after entity highlighting (no conflicts)."""
+        pair = {
+            "entity1": {"name": "BRCA1", "kind": "gene", "aliases": []},
+            "entity2": {"name": "Cancer", "kind": "disease", "aliases": []},
+            "relationship": "associated_with",
+            "confidence": "high",
+            "reasoning": "BRCA1 causes Cancer per [1_abc12345].",
+            "assessments": [],
+        }
+        doc_idx_map = {"1_abc12345": 0}
+        renderer = ReasoningTemplateRenderer(pair, 0, {}, doc_idx_map)
+        result = renderer.render_overall_template()
+        # Both entity highlighting and citation linking should work
+        assert '<span class="entity-highlight entity1"' in result
+        assert '<span class="entity-highlight entity2"' in result
+        assert '<span class="doc-link"' in result

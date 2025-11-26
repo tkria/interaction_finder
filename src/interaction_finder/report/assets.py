@@ -63,6 +63,7 @@ REPORT_CSS = """
     --polarity-refuting-text: var(--pico-color-red-700);
     --polarity-neutral-bg: var(--pico-color-zinc-100);
     --polarity-neutral-text: var(--pico-color-slate-600);
+    --doc-link-hover-bg: var(--pico-color-azure-100);
 }
 
 /* Dark theme colors (explicit or via prefers-color-scheme) */
@@ -103,6 +104,7 @@ REPORT_CSS = """
     --polarity-refuting-text: var(--pico-color-red-300);
     --polarity-neutral-bg: var(--pico-color-slate-900);
     --polarity-neutral-text: var(--pico-color-slate-200);
+    --doc-link-hover-bg: var(--pico-color-azure-750);
 } }
 [data-theme=dark] {
     --entity1-bg: var(--pico-color-violet-800);
@@ -141,6 +143,7 @@ REPORT_CSS = """
     --polarity-refuting-text: var(--pico-color-red-300);
     --polarity-neutral-bg: var(--pico-color-slate-900);
     --polarity-neutral-text: var(--pico-color-slate-200);
+    --doc-link-hover-bg: var(--pico-color-azure-750);
 }
 
 body {
@@ -617,6 +620,19 @@ header {
 }
 .reasoning-panel .entity-highlight.entity2 {
     color: var(--entity2-text);
+}
+
+/* Document citation links in reasoning */
+.doc-link {
+    color: var(--pico-color-azure-450);
+    border: 1px solid;
+    border-radius: 0.4em;
+    font-size: 0.8em;
+    padding: 0 0.2em;
+    cursor: pointer;
+}
+.doc-link:hover {
+    background: var(--doc-link-hover-bg);
 }
 
 .quote-highlight {
@@ -1341,6 +1357,22 @@ function scrollToQuote(quoteId) {
             span.classList.remove('quote-blink');
         }, 2000);
     });
+}
+
+// Open document by doc_idx within currently selected pair
+function openDocument(docIdx) {
+    if (state.selectedPairId === null) return;
+    const pairCard = document.getElementById(`pair-${state.selectedPairId}`);
+    if (!pairCard) return;
+    const docIndices = pairCard.dataset.docs.trim().split(' ').map(n => parseInt(n));
+    const assessIdx = docIndices.indexOf(docIdx);
+    if (assessIdx === -1) {
+        console.warn(`Document ${docIdx} not found in pair ${state.selectedPairId}`);
+        return;
+    }
+    state.openDocumentIdx = assessIdx;
+    renderContent();
+    renderReasoning();
 }
 
 // Select pair and open specific document by doc_idx

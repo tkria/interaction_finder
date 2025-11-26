@@ -1607,11 +1607,9 @@ Provide: accepted (true/false), relationship (selected label), confidence (high/
                     ),
                 )
 
-            # Extract and validate document citations from reasoning
+            # Validate document citations in reasoning (log warnings for invalid ones)
             cited_ids = extract_document_citations(result.output.reasoning)
-            valid_citations, invalid_citations = validate_document_citations(
-                cited_ids, valid_doc_ids
-            )
+            _, invalid_citations = validate_document_citations(cited_ids, valid_doc_ids)
             if invalid_citations:
                 ctx.deps.logger.warning(
                     f"Invalid document citations in reasoning for {pair_key}: {invalid_citations}"
@@ -1634,7 +1632,6 @@ Provide: accepted (true/false), relationship (selected label), confidence (high/
                 accepted=result.output.accepted,
                 confidence=result.output.confidence,
                 reasoning=result.output.reasoning,
-                cited_documents=valid_citations,
             )
             return (pair_key, judgment)
         finally:

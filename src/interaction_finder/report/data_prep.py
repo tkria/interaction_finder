@@ -402,6 +402,8 @@ def prepare_report_data(
         )
 
     # Generate reasoning templates for all pairs
-    reasoning_templates = render_all_reasoning_templates(pairs, quote_id_map)
+    reasoning_templates = render_all_reasoning_templates(
+        pairs, quote_id_map, doc_idx_map
+    )
 
     return pairs, document_html, reasoning_templates, indexed_docs

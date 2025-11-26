@@ -7,6 +7,8 @@ with entity highlighting and navigation elements.
 import re
 from typing import Any
 
+from interaction_finder.extraction.utils import CITATION_PATTERN
+
 
 def _quote_key_for_id(quote: dict[str, Any]) -> tuple:
     """Generate lookup key for quote ID mapping.
@@ -186,6 +188,7 @@ class ReasoningTemplateRenderer:
         pair: dict[str, Any],
         pair_idx: int,
         quote_id_map: dict[tuple[int, tuple], str],
+        doc_idx_map: dict[str, int] | None = None,
     ):
         """Initialize renderer for a specific pair.
 
@@ -193,10 +196,12 @@ class ReasoningTemplateRenderer:
             pair: Pair data dictionary from prepare_report_data
             pair_idx: Index of this pair in the full pairs array
             quote_id_map: Mapping of (doc_idx, quote_key) -> quote_id
+            doc_idx_map: Mapping of resource_id -> doc_idx for citation linking
         """
         self.pair = pair
         self.pair_idx = pair_idx
         self.quote_id_map = quote_id_map
+        self.doc_idx_map = doc_idx_map
         # Build entity search terms
         self.entity1_terms = [pair["entity1"]["name"]] + pair["entity1"]["aliases"]
         self.entity2_terms = [pair["entity2"]["name"]] + pair["entity2"]["aliases"]
@@ -216,8 +221,11 @@ class ReasoningTemplateRenderer:
         """
         pair = self.pair
 
-        # Highlight entities in reasoning text
+        # Highlight entities in reasoning text, then linkify document citations
         highlighted_reasoning = self.highlighter.highlight(pair["reasoning"])
+        highlighted_reasoning = _linkify_citations(
+            highlighted_reasoning, self.doc_idx_map
+        )
 
         # Build entity aliases sections
         entity1_aliases_html = _render_aliases(pair["entity1"]["aliases"])
@@ -497,12 +505,14 @@ class ReasoningTemplateRenderer:
 def render_all_reasoning_templates(
     pairs: list[dict[str, Any]],
     quote_id_map: dict[tuple[int, tuple], str],
+    doc_idx_map: dict[str, int] | None = None,
 ) -> dict[str, dict[str, str]]:
     """Render all reasoning templates for all pairs.
 
     Args:
         pairs: List of pair dictionaries (with document_groups)
         quote_id_map: Mapping of (doc_idx, quote_key) -> quote_id
+        doc_idx_map: Mapping of resource_id -> doc_idx for citation linking
 
     Returns:
         Nested dict mapping pair_idx -> template_type -> HTML
@@ -510,7 +520,7 @@ def render_all_reasoning_templates(
     """
     templates: dict[str, dict[str, str]] = {}
     for pair_idx, pair in enumerate(pairs):
-        renderer = ReasoningTemplateRenderer(pair, pair_idx, quote_id_map)
+        renderer = ReasoningTemplateRenderer(pair, pair_idx, quote_id_map, doc_idx_map)
 
         pair_templates: dict[str, str] = {}
 
@@ -563,3 +573,41 @@ def _render_aliases(aliases: list[str]) -> str:
     aliases_text = ", ".join(aliases)
     return f"""
                 <div class="alias-tooltip">Aliases: {_escape_html(aliases_text)}</div>"""
+
+
+def _linkify_citations(html: str, doc_idx_map: dict[str, int] | None = None) -> str:
+    """Convert document citations [N_hash] to clickable spans.
+
+    Transforms citations like [1_abc12345] into:
+    <span class="doc-link" data-doc="N" onclick="openDocument(N)">Document N</span>
+
+    Args:
+        html: HTML text potentially containing citations
+        doc_idx_map: Optional mapping from resource_id (e.g., "1_abc12345") to doc_idx.
+                     If provided, only valid citations are linked.
+
+    Returns:
+        HTML with citations converted to clickable spans
+    """
+
+    def replace_citation(match: re.Match) -> str:
+        counter = match.group(1)
+        resource_hash = match.group(2)
+        resource_id = f"{counter}_{resource_hash}"
+        # If we have a mapping, look up the actual doc_idx
+        if doc_idx_map is not None:
+            doc_idx = doc_idx_map.get(resource_id)
+            if doc_idx is None:
+                # Invalid citation - return original text escaped
+                return _escape_html(match.group(0))
+            return (
+                f'<span class="doc-link" data-doc="{doc_idx}" '
+                f'onclick="openDocument({doc_idx})">Document {counter}</span>'
+            )
+        # No mapping - use counter as doc reference
+        return (
+            f'<span class="doc-link" data-doc="{counter}" '
+            f'onclick="openDocument({counter})">Document {counter}</span>'
+        )
+
+    return CITATION_PATTERN.sub(replace_citation, html)

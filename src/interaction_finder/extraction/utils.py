@@ -837,7 +837,7 @@ def adjust_heading_levels(text: str, target_min_level: int) -> str:
 
 
 # Pattern for document ID citations: [N_hash] where N is a number and hash is exactly 8 lowercase alphanumeric chars
-_CITATION_PATTERN = re.compile(r"\[(\d+_[a-z0-9]{8})\]")
+CITATION_PATTERN = re.compile(r"\[(\d+)_([a-z0-9]{8})\]")
 
 
 def extract_document_citations(text: str) -> list[str]:
@@ -853,16 +853,16 @@ def extract_document_citations(text: str) -> list[str]:
         List of unique document IDs in order of first appearance
 
     Examples:
-        >>> extract_document_citations("Evidence from [1_abc123] and [2_def456]")
-        ['1_abc123', '2_def456']
+        >>> extract_document_citations("Evidence from [1_abc12345] and [2_def67890]")
+        ['1_abc12345', '2_def67890']
 
-        >>> extract_document_citations("Cited [1_abc123] twice [1_abc123]")
-        ['1_abc123']
+        >>> extract_document_citations("Cited [1_abc12345] twice [1_abc12345]")
+        ['1_abc12345']
     """
     seen = set()
     result = []
-    for match in _CITATION_PATTERN.finditer(text):
-        doc_id = match.group(1)
+    for match in CITATION_PATTERN.finditer(text):
+        doc_id = f"{match.group(1)}_{match.group(2)}"
         if doc_id not in seen:
             seen.add(doc_id)
             result.append(doc_id)
