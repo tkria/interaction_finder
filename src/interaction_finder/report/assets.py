@@ -1068,7 +1068,7 @@ function initReport() {
         updateHeaderCounts();
         updatePairListDisplay();
         renderContent();
-        renderReasoning();
+        renderReasoning(false);  // Don't reset scroll - applyPendingScroll will restore it
         applyPendingScroll();
     });
 
@@ -1079,12 +1079,13 @@ function initReport() {
 
     // Restore state from URL before initial render
     restoreStateFromURL();
+    const hasScrollToRestore = state.pendingScroll && state.pendingScroll.some(v => v > 0);
 
     // Initial render
     updateHeaderCounts();
     updatePairListDisplay();
     renderContent();
-    renderReasoning();
+    renderReasoning(!hasScrollToRestore);  // Don't reset scroll if restoring from URL
 
     // Apply scroll positions after render
     applyPendingScroll();
@@ -1438,7 +1439,7 @@ function renderDocument(docIdx, pairIdx) {
 }
 
 // Render reasoning sidebar
-function renderReasoning() {
+function renderReasoning(resetScroll = true) {
     const rightbar = document.getElementById('rightbar');
 
     if (state.selectedPairId === null) {
@@ -1482,6 +1483,10 @@ function renderReasoning() {
     const clone = template.content.cloneNode(true);
     rightbar.innerHTML = '';
     rightbar.appendChild(clone);
+    // Reset scroll to top when showing new content (unless restoring from history)
+    if (resetScroll) {
+        rightbar.scrollTop = 0;
+    }
 }
 
 // Scroll to quote with emphasis
