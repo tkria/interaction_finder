@@ -155,7 +155,10 @@ class ProcessDocumentsNode(BaseNode[State, Deps, ExtractionResult]):
             tasks = [self._process_document(resource, ctx) for resource in resources]
             for coro in asyncio.as_completed(tasks):
                 await coro
-
+            # Mark document processing phase complete
+            if ctx.deps.progress:
+                ctx.deps.progress["Processed"].complete()
+                ctx.deps.progress["Pairs assessed"].complete()
             # Check if we found any validated entities
             if not ctx.state.validated_entities_by_resource:
                 ctx.deps.logger.warning("No entities extracted from documents")
@@ -195,7 +198,6 @@ class ProcessDocumentsNode(BaseNode[State, Deps, ExtractionResult]):
         # Increment in-progress counter when work starts (tight scoping)
         if ctx.deps.progress:
             ctx.deps.progress["Processed"].work()
-            ctx.deps.progress.update()
 
         with logfire.span(
             f"Document {resource.id.id}: {resource.title[:60]}",
@@ -249,7 +251,6 @@ class ProcessDocumentsNode(BaseNode[State, Deps, ExtractionResult]):
                         ctx.deps.progress[
                             "Quotes"
                         ].note = f"({ctx.state.quotes_failed} invalid)"
-                    ctx.deps.progress.update()
 
                 # Stage 3: Identify proximal entity sets
                 if ctx.deps.progress:
@@ -323,7 +324,6 @@ class ProcessDocumentsNode(BaseNode[State, Deps, ExtractionResult]):
                             ctx.deps.progress["Pairs assessed"].in_progress
                             - len(pairs),
                         )
-                        ctx.deps.progress.update()
 
             except Exception as e:
                 # Log error but don't fail entire pipeline
@@ -335,7 +335,6 @@ class ProcessDocumentsNode(BaseNode[State, Deps, ExtractionResult]):
                 # Update counters when work completes (tight scoping, even on error)
                 if ctx.deps.progress:
                     ctx.deps.progress["Processed"].done()
-                    ctx.deps.progress.update()
 
 
 @dataclass
@@ -1345,7 +1344,6 @@ class JudgeCrossDocumentNode(BaseNode[State, Deps, ExtractionResult]):
             # Update unique pairs count
             if ctx.deps.progress:
                 ctx.deps.progress["Unique pairs"].total = len(assessments_by_pair)
-                ctx.deps.progress.update()
 
             # Judge each pair (counter updates happen inside _judge_pair for tight scoping)
             tasks = []
@@ -1357,7 +1355,9 @@ class JudgeCrossDocumentNode(BaseNode[State, Deps, ExtractionResult]):
                 for coro in asyncio.as_completed(tasks):
                     pair_key, judgment = await coro
                     ctx.state.pair_judgments[pair_key] = judgment
-
+            # Mark judgment phase complete
+            if ctx.deps.progress:
+                ctx.deps.progress["Unique pairs"].complete()
             return FinalizeNode()
 
     def _can_accept_deterministically(
@@ -1526,7 +1526,6 @@ Provide: accepted (true/false), relationship (selected label), confidence (high/
         # Increment in-progress counter when work starts (tight scoping)
         if ctx.deps.progress:
             ctx.deps.progress["Unique pairs"].work()
-            ctx.deps.progress.update()
 
         try:
             from interaction_finder.extraction.utils import build_pair_spread
@@ -1644,7 +1643,6 @@ Provide: accepted (true/false), relationship (selected label), confidence (high/
                     else:
                         ctx.deps.progress["Rejected"].add()
                 ctx.deps.progress["Unique pairs"].done()
-                ctx.deps.progress.update()
 
 
 @dataclass
@@ -1759,7 +1757,6 @@ class SweepCoMentionsNode(BaseNode[State, Deps, ExtractionResult]):
             ctx.deps.progress["Regions"].total = len(regions)
             ctx.deps.progress["Regions"].activate()
             ctx.deps.progress["Pairs added"].activate()
-            ctx.deps.progress.update()
             ctx.deps.logger.info(
                 f"Merged {len(selected)} co-mentions into {len(regions)} regions "
                 f"({pairs_to_assess} candidate pairs)"
@@ -1773,7 +1770,6 @@ class SweepCoMentionsNode(BaseNode[State, Deps, ExtractionResult]):
                 """Assess all pairs in a region with a single LLM call."""
                 # Mark region as in-progress
                 ctx.deps.progress["Regions"].work()
-                ctx.deps.progress.update()
                 try:
                     resource = ctx.deps.resource_pool.get(region.resource_id)
                     if resource is None:
@@ -1794,7 +1790,6 @@ class SweepCoMentionsNode(BaseNode[State, Deps, ExtractionResult]):
                 finally:
                     # Mark region as done (moves from in-progress to completed)
                     ctx.deps.progress["Regions"].done()
-                    ctx.deps.progress.update()
 
             # Run region assessments with as_completed for live progress
             tasks = [asyncio.create_task(assess_region(r)) for r in regions]
@@ -1815,8 +1810,9 @@ class SweepCoMentionsNode(BaseNode[State, Deps, ExtractionResult]):
                     ctx.state.pair_assessments_by_resource[region.resource_id].append(
                         assessment
                     )
-                ctx.deps.progress.update()
-
+            # Mark sweep phase complete
+            ctx.deps.progress["Regions"].complete()
+            ctx.deps.progress["Pairs added"].complete()
             ctx.deps.logger.info(
                 f"Co-mention sweep assessed {stats.assessed} pairs in {stats.regions_created} regions, "
                 f"found {stats.relationships_found} relationships"

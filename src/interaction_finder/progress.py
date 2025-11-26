@@ -124,7 +124,7 @@ class StatusTable:
         """No-op for base class."""
 
     def update(self) -> None:
-        """No-op for base class."""
+        """Trigger immediate display refresh. Usually not needed due to auto-refresh."""
 
     def succeed(self) -> None:
         """No-op for base class."""
@@ -180,7 +180,11 @@ class LiveStatusTable(StatusTable):
             self._live = None
 
     def update(self) -> None:
-        """Refresh the display with current values."""
+        """Trigger immediate display refresh.
+
+        Usually not needed - the display auto-refreshes at 4fps. Only call this
+        if you need sub-250ms feedback for a specific update.
+        """
         if self._live is not None:
             self._live.update(self._render())
 

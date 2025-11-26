@@ -111,7 +111,6 @@ class ExpandQueryNode(BaseNode[State, Deps, BridgingTermsOut]):
             ctx.deps.progress["Round"].total = ctx.state.max_rounds
             ctx.deps.progress["Round"].completed = ctx.state.current_round
             ctx.deps.progress["Round"].activate()
-            ctx.deps.progress.update()
         # Use query expander agent with renamed span
         agent = get_query_expander_agent(ctx.deps.config)
         usage = RunUsage()
@@ -164,7 +163,6 @@ class SearchNode(BaseNode[State, Deps, BridgingTermsOut]):
                 if ctx.deps.progress:
                     ctx.deps.progress["Searches run"].add()
                     ctx.deps.progress["Results found"].add(len(results))
-                    ctx.deps.progress.update()
             # Store in state
             ctx.state.all_search_results = all_results
 
@@ -328,7 +326,6 @@ class FetchDocumentsNode(BaseNode[State, Deps, BridgingTermsOut]):
                         ctx.state.selected_results
                     )
                     ctx.deps.progress["Documents"].complete()
-                    ctx.deps.progress.update()
                 return ExtractKeywordsNode()
             # Fetch only new URLs
             urls = [url for url, _ in urls_to_fetch]
@@ -370,7 +367,6 @@ class FetchDocumentsNode(BaseNode[State, Deps, BridgingTermsOut]):
                 ctx.deps.progress["Documents"].total = total_count
                 ctx.deps.progress["Documents"].completed = total_count
                 ctx.deps.progress["Documents"].complete()
-                ctx.deps.progress.update()
             cached_count = len(ctx.state.selected_results) - len(urls_to_fetch)
             logger.info(
                 f"Fetched {fetched_count}/{len(urls_to_fetch)} new documents ({cached_count} from cache, {failed_count} failed)"
@@ -480,7 +476,6 @@ class ExtractKeywordsNode(BaseNode[State, Deps, BridgingTermsOut]):
             if ctx.deps.progress:
                 ctx.deps.progress["Keywords"].total = total_keywords
                 ctx.deps.progress["Keywords"].activate()
-                ctx.deps.progress.update()
             logger.info(
                 f"Extracted {total_keywords} keywords from {len(new_resources)} new documents ({len(already_processed)} previously processed)"
             )
@@ -646,7 +641,6 @@ class EvaluateKeywordsNode(BaseNode[State, Deps, BridgingTermsOut]):
         if ctx.deps.progress:
             ctx.deps.progress["Keywords"].completed = total_bridging
             ctx.deps.progress["Keywords"].complete()
-            ctx.deps.progress.update()
         failed_count = len(results) - len(successful_results)
         logger.info(
             f"Generated {len(successful_results)} summaries with {total_bridging} bridging terms total ({failed_count} failed)"

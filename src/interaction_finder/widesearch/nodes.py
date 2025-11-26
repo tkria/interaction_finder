@@ -79,7 +79,6 @@ class GenerateQueriesNode(BaseNode[State, Deps, list[SearchResult]]):
             ctx.deps.progress["Round"].total = ctx.state.max_rounds
             ctx.deps.progress["Round"].completed = ctx.state.current_round
             ctx.deps.progress["Round"].activate()
-            ctx.deps.progress.update()
         logger.info(f"Starting round {ctx.state.current_round}/{ctx.state.max_rounds}")
         # Prepare context for agent
         unsatisfied = [
@@ -163,7 +162,6 @@ class SearchNode(BaseNode[State, Deps, list[SearchResult]]):
                 if ctx.deps.progress:
                     ctx.deps.progress["Searches run"].done()
                     ctx.deps.progress["Results found"].add(len(results))
-                    ctx.deps.progress.update()
 
             # Store in state
             ctx.state.current_results = all_results
@@ -344,7 +342,6 @@ Select the most relevant results and summarize what subject areas they cover."""
             ctx.deps.progress["Results selected"].add(
                 len(result.output.selected_indices)
             )
-            ctx.deps.progress.update()
         # Track selected URLs per query
         for query in ctx.state.current_queries:
             if query not in ctx.state.selected_results:
