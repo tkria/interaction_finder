@@ -26,7 +26,10 @@ from interaction_finder.extraction.models import (
     EntityPairKey,
     PairAssessment,
 )
-from interaction_finder.extraction.utils import make_entity_pair_key
+from interaction_finder.extraction.utils import (
+    find_best_entity_match,
+    make_entity_pair_key,
+)
 from interaction_finder.resources import (
     QuoteValidationError,
     Resource,
@@ -610,9 +613,10 @@ async def assess_co_mention_region(
     text_region = "\n".join(text_parts)
     if not text_region.strip():
         return []
-    # Build candidate pairs list for prompt
+    # Build candidate pairs list for prompt and lookup structures
     pairs_list = []
     pair_lookup: dict[tuple[str, str], CandidatePair] = {}
+    all_entity_names: set[str] = set()
     for candidate in region.candidate_pairs:
         pk = candidate.pair_key
         pairs_list.append(
@@ -620,6 +624,9 @@ async def assess_co_mention_region(
         )
         pair_lookup[(pk.entity1_name, pk.entity2_name)] = candidate
         pair_lookup[(pk.entity2_name, pk.entity1_name)] = candidate
+        all_entity_names.add(pk.entity1_name)
+        all_entity_names.add(pk.entity2_name)
+    entity_name_list = list(all_entity_names)
     # Build relationships section
     if known_relationships:
         relationships_section = (
@@ -652,11 +659,20 @@ async def assess_co_mention_region(
     # Process confirmed pairs
     assessments: list[PairAssessment] = []
     for confirmed in result.output.confirmed_pairs:
-        # Look up candidate by entity names (either order)
-        candidate = pair_lookup.get((confirmed.entity1_name, confirmed.entity2_name))
-        if candidate is None:
+        # Match entity names using fuzzy matching (handles spelling variants, annotations)
+        matched_e1 = find_best_entity_match(confirmed.entity1_name, entity_name_list)
+        matched_e2 = find_best_entity_match(confirmed.entity2_name, entity_name_list)
+        if matched_e1 is None or matched_e2 is None:
             deps.logger.warning(
                 f"LLM returned unknown pair: {confirmed.entity1_name} <-> {confirmed.entity2_name}"
+            )
+            continue
+        # Look up candidate using matched names
+        candidate = pair_lookup.get((matched_e1, matched_e2))
+        if candidate is None:
+            # Matched names don't form a valid pair (shouldn't happen often)
+            deps.logger.warning(
+                f"Matched entities don't form a candidate pair: {matched_e1} <-> {matched_e2}"
             )
             continue
         # Validate quotes
@@ -668,26 +684,26 @@ async def assess_co_mention_region(
                 pass
         if not validated_quotes:
             deps.logger.debug(
-                f"Co-mention assessment for {confirmed.entity1_name}-{confirmed.entity2_name} "
+                f"Co-mention assessment for {matched_e1}-{matched_e2} "
                 "rejected: no valid quotes"
             )
             continue
-        # Get or create EntityMention objects
-        if validated_entities and confirmed.entity1_name in validated_entities:
-            entity1 = validated_entities[confirmed.entity1_name]
+        # Get or create EntityMention objects (use matched canonical names)
+        if validated_entities and matched_e1 in validated_entities:
+            entity1 = validated_entities[matched_e1]
         else:
             entity1 = create_minimal_entity_mention(
-                canonical_name=confirmed.entity1_name,
+                canonical_name=matched_e1,
                 kind=candidate.entity1_kind,
                 matched_form=confirmed.entity1_name.lower(),
                 quotes=validated_quotes,
                 reasoning=confirmed.reasoning,
             )
-        if validated_entities and confirmed.entity2_name in validated_entities:
-            entity2 = validated_entities[confirmed.entity2_name]
+        if validated_entities and matched_e2 in validated_entities:
+            entity2 = validated_entities[matched_e2]
         else:
             entity2 = create_minimal_entity_mention(
-                canonical_name=confirmed.entity2_name,
+                canonical_name=matched_e2,
                 kind=candidate.entity2_kind,
                 matched_form=confirmed.entity2_name.lower(),
                 quotes=validated_quotes,

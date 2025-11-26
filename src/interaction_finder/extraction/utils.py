@@ -192,6 +192,131 @@ def osa_distance(a: str, b: str) -> int:
     return current
 
 
+def _expand_slash(text: str) -> list[str]:
+    """Expand slash patterns in biological names.
+
+    Handles suffix patterns (GDF1/2 → GDF1, GDF2) and simple alternation
+    (TGF-β/BMP → TGF-β, BMP). Returns original first, then expansions.
+
+    Suffix pattern detected when right side is short (≤3 chars) or Roman numerals,
+    and left side ends with digits or Roman numerals that form the prefix.
+    """
+    if text.count("/") != 1:
+        return [text]
+    left, right = (s.strip() for s in text.split("/"))
+    if not left or not right:
+        return [text]
+    # Check for suffix pattern: short right side or Roman numerals
+    is_suffix = len(right) <= 3 or re.fullmatch(r"[IVX]+", right)
+    if is_suffix:
+        # Extract prefix from left: "GDF1" → ("GDF", "1")
+        match = re.match(r"^(.+?)(\d+|[IVX]+)$", left)
+        if match:
+            prefix = match.group(1)
+            return [text, left, prefix + right]
+    # Simple alternation
+    return [text, left, right]
+
+
+def _extract_query_variants(query: str) -> list[str]:
+    """Extract matching variants from query string in priority order.
+
+    Handles parentheticals (base (content) → base, content) and slash patterns.
+    Returns deduplicated list with base forms before parenthetical content.
+    """
+    result: list[str] = []
+    seen: set[str] = set()
+
+    def add(text: str) -> None:
+        text = text.strip()
+        if text and text not in seen:
+            seen.add(text)
+            result.append(text)
+
+    # Split on parenthetical if present
+    paren_match = re.match(r"^(.+?)\s*\(([^)]+)\)\s*$", query.strip())
+    parts = (
+        [paren_match.group(1).strip(), paren_match.group(2).strip()]
+        if paren_match
+        else [query.strip()]
+    )
+    # Add each part with slash expansion
+    for part in parts:
+        for expanded in _expand_slash(part):
+            add(expanded)
+    return result
+
+
+def find_best_entity_match(
+    query: str,
+    candidates: list[str],
+) -> str | None:
+    """Find best matching candidate for a query using progressive fallbacks.
+
+    1. Exact match against query variants
+    2. Normalized exact match (case/punctuation insensitive)
+    3. Fuzzy match with OSA distance, requiring specificity (gap to second-best)
+
+    Query variants are extracted from parentheticals and slash patterns:
+    - "BRCA1 (gene)" → ["BRCA1", "gene"]
+    - "GDF1/2" → ["GDF1/2", "GDF1", "GDF2"]
+    - "PAH (Pulmonary arterial hypertension)" → ["PAH", "Pulmonary arterial hypertension"]
+
+    Fuzzy matching uses similarity scores (1 - distance/length) so that high-quality
+    matches on long strings beat low-quality matches on short strings. Max distance
+    scales with length (1 + floor(len/10)). Specificity gap scales inversely with
+    match quality: gap_needed = 2 * (1 - best_similarity).
+    """
+    if not candidates:
+        return None
+    query_variants = _extract_query_variants(query)
+    if not query_variants:
+        return None
+    # Build lookup: normalized candidate → original candidate
+    norm_to_original: dict[str, str] = {}
+    for c in candidates:
+        c_norm = normalize_for_comparison(c)
+        if c_norm not in norm_to_original:
+            norm_to_original[c_norm] = c
+    # Normalize query variants once
+    variant_norms = [normalize_for_comparison(v) for v in query_variants]
+    # Stage 1+2: Exact and normalized match (combined)
+    for v_norm in variant_norms:
+        if v_norm in norm_to_original:
+            return norm_to_original[v_norm]
+    # Stage 3: Fuzzy match using similarity scores
+    # Similarity = 1 - distance/length, so longer matches with small distances score higher
+    # This ensures a 1-edit match on 30 chars (~97% similar) beats a 3-edit match on 4 chars (~25%)
+    scores: list[
+        tuple[float, int, int, str]
+    ] = []  # (similarity, dist, shorter_len, original)
+    for c_norm, c_orig in norm_to_original.items():
+        best_similarity = float("-inf")
+        best_dist = 0
+        best_shorter_len = 0
+        for v_norm in variant_norms:
+            dist = osa_distance(v_norm, c_norm)
+            shorter_len = min(len(v_norm), len(c_norm))
+            similarity = 1 - dist / shorter_len if shorter_len > 0 else 0
+            if similarity > best_similarity:
+                best_similarity = similarity
+                best_dist = dist
+                best_shorter_len = shorter_len
+        scores.append((best_similarity, best_dist, best_shorter_len, c_orig))
+    scores.sort(reverse=True)  # Higher similarity first
+    best_similarity, best_dist, shorter_len, best_candidate = scores[0]
+    # Max distance scales with string length: 1 + floor(len/10)
+    max_distance = 1 + shorter_len // 10
+    if best_dist > max_distance:
+        return None
+    # Require specificity: gap to second-best scales inversely with match quality
+    # Gap needed = 2 * (1 - best_similarity), so strong matches need small gaps
+    min_gap = 2 * (1 - best_similarity)
+    if len(scores) > 1 and best_similarity - scores[1][0] < min_gap:
+        return None
+    return best_candidate
+
+
 def _is_valid_entity_form(form: str) -> bool:
     """Check if a form is valid as a standalone entity name.
 

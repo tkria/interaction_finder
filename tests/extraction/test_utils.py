@@ -14,6 +14,7 @@ from interaction_finder.extraction.utils import (
     build_text_region,
     collect_relevant_text_for_quotes,
     extract_all_forms,
+    find_best_entity_match,
     find_substring_entities,
     get_relationship_polarity,
     identify_proximal_sets,
@@ -1007,3 +1008,265 @@ class TestExtractAllForms:
         """Test that output is sorted."""
         forms = extract_all_forms("Zebra (AAA)", ["MMM"])
         assert forms == sorted(forms)
+
+
+class TestFindBestEntityMatch:
+    """Tests for find_best_entity_match function."""
+
+    # Stage 1: Exact match tests
+    def test_exact_match(self):
+        """Test exact match returns immediately."""
+        assert find_best_entity_match("BRCA1", ["BRCA1", "TP53"]) == "BRCA1"
+
+    def test_exact_match_case_sensitive(self):
+        """Test exact match is case-sensitive (falls through to normalization)."""
+        # "brca1" != "BRCA1" so not exact, but normalized match works
+        assert find_best_entity_match("brca1", ["BRCA1", "TP53"]) == "BRCA1"
+
+    # Stage 2: Strip kind annotation tests
+    def test_strips_gene_annotation(self):
+        """Test matching after stripping (gene) annotation."""
+        assert find_best_entity_match("BRCA1 (gene)", ["BRCA1", "TP53"]) == "BRCA1"
+
+    def test_strips_phenotype_annotation(self):
+        """Test matching after stripping (phenotype) annotation."""
+        result = find_best_entity_match(
+            "Pulmonary arterial hypertension (phenotype)",
+            ["Pulmonary arterial hypertension", "BMPR2"],
+        )
+        assert result == "Pulmonary arterial hypertension"
+
+    def test_strips_abbreviation_annotation(self):
+        """Test matching after stripping abbreviation in parens."""
+        result = find_best_entity_match(
+            "Pulmonary veno-occlusive disease (PVOD)",
+            ["Pulmonary veno-occlusive disease", "PAH"],
+        )
+        assert result == "Pulmonary veno-occlusive disease"
+
+    # Stage 3: Normalization tests
+    def test_normalization_handles_case(self):
+        """Test normalized match handles case differences."""
+        assert find_best_entity_match("bmpr2", ["BMPR2", "ACVRL1"]) == "BMPR2"
+
+    def test_normalization_handles_hyphens(self):
+        """Test normalized match handles hyphen differences."""
+        # Normalize removes hyphens/special chars and lowercases
+        result = find_best_entity_match(
+            "Pulmonary veno-occlusive disease",
+            ["Pulmonary venoocclusive disease"],
+        )
+        assert result == "Pulmonary venoocclusive disease"
+
+    def test_normalization_combined_with_stripping(self):
+        """Test stripping + normalization work together."""
+        result = find_best_entity_match("BMPR2 (gene)", ["bmpr2", "acvrl1"])
+        assert result == "bmpr2"
+
+    # Stage 4: Fuzzy match tests
+    def test_fuzzy_match_small_typo(self):
+        """Test fuzzy match catches small typos."""
+        # "BMPR-2" vs "BMPR2" - just one character difference
+        result = find_best_entity_match("BMPR-2", ["BMPR2", "COMPLETELY_DIFFERENT"])
+        assert result == "BMPR2"
+
+    def test_fuzzy_match_us_uk_spelling(self):
+        """Test fuzzy match handles US/UK spelling variants."""
+        result = find_best_entity_match(
+            "haemorrhagic telangiectasia",
+            ["hemorrhagic telangiectasia", "something else entirely"],
+        )
+        assert result == "hemorrhagic telangiectasia"
+
+    def test_fuzzy_match_respects_max_distance(self):
+        """Test fuzzy match respects max_distance threshold."""
+        # "cat" vs "elephant" - too different
+        assert find_best_entity_match("cat", ["elephant"]) is None
+
+    def test_fuzzy_match_requires_specificity(self):
+        """Test fuzzy match requires specificity (gap to second best)."""
+        # All candidates are similarly distant (distance 1 each)
+        # Gap between best and second-best is 0, needs >= 2
+        result = find_best_entity_match("ABCD", ["ABCE", "ABCF", "ABCG"])
+        assert result is None
+
+    def test_fuzzy_match_single_candidate_no_specificity_check(self):
+        """Test single candidate doesn't need specificity check."""
+        result = find_best_entity_match("BMPR-2", ["BMPR2"])
+        assert result == "BMPR2"
+
+    # Edge cases
+    def test_empty_candidates(self):
+        """Test empty candidates returns None."""
+        assert find_best_entity_match("BRCA1", []) is None
+
+    def test_no_match_found(self):
+        """Test returns None when no match found."""
+        assert find_best_entity_match("BRCA1", ["TP53", "EGFR"]) is None
+
+    def test_returns_original_candidate_form(self):
+        """Test returns the original candidate string, not normalized."""
+        result = find_best_entity_match("brca1", ["BRCA1"])
+        assert result == "BRCA1"  # Original form, not "brca1"
+
+    # Real-world examples from the warning messages
+    def test_real_example_gdf2_bmp9(self):
+        """Test real example: BMP9 (GDF2) matching."""
+        # LLM returned "BMP9 (GDF2)", candidate is "BMP9"
+        result = find_best_entity_match("BMP9 (GDF2)", ["BMP9", "BMPR2", "ACVRL1"])
+        assert result == "BMP9"
+
+    def test_real_example_eif2ak4_pvod(self):
+        """Test real example: PVOD with hyphen difference.
+
+        The high-quality match on the long string (97% similar) should win
+        over the poor match PVOD→PAH (25% similar).
+        """
+        result = find_best_entity_match(
+            "Pulmonary veno-occlusive disease (PVOD)",
+            ["Pulmonary venoocclusive disease", "PAH"],
+        )
+        assert result == "Pulmonary venoocclusive disease"
+
+    def test_real_example_kcnk3_pah(self):
+        """Test real example: entity with (gene) annotation."""
+        result = find_best_entity_match(
+            "KCNK3 (gene)",
+            ["KCNK3", "BMPR2", "EIF2AK4"],
+        )
+        assert result == "KCNK3"
+
+    def test_similarity_prefers_high_quality_long_match(self):
+        """Test that high-quality match on long string beats low-quality match on short string.
+
+        "Pulmonary veno-occlusive disease" vs "Pulmonary venoocclusive disease"
+        is 97% similar (1 edit / 31 chars).
+
+        "PVOD" vs "PAH" is 25% similar (3 edits / 4 chars).
+
+        The long string match should win despite PVOD→PAH having smaller absolute distance.
+        """
+        result = find_best_entity_match(
+            "Pulmonary veno-occlusive disease (PVOD)",
+            ["Pulmonary venoocclusive disease", "PAH"],
+        )
+        assert result == "Pulmonary venoocclusive disease"
+
+    def test_similarity_rejects_ambiguous_short_matches(self):
+        """Test that similarly poor short matches are rejected for lack of specificity."""
+        # "ABC" vs "ABX" is 67% similar, "ABC" vs "ABY" is also 67% similar
+        # No clear winner, should return None
+        result = find_best_entity_match("ABC", ["ABX", "ABY"])
+        assert result is None
+
+    # Parenthetical content matching (acronym in full form)
+    def test_parenthetical_acronym_matches(self):
+        """Test matching acronym inside parentheses to candidate."""
+        result = find_best_entity_match(
+            "Pulmonary arterial hypertension (PAH)",
+            ["PAH", "BMPR2"],
+        )
+        assert result == "PAH"
+
+    def test_parenthetical_full_name_matches(self):
+        """Test matching full name inside parentheses to candidate."""
+        result = find_best_entity_match(
+            "PAH (Pulmonary arterial hypertension)",
+            ["Pulmonary arterial hypertension", "BMPR2"],
+        )
+        assert result == "Pulmonary arterial hypertension"
+
+    def test_parenthetical_base_preferred_over_content(self):
+        """Test that base form is preferred over parenthetical content."""
+        # Both "BRCA1" and "gene" could match, but base has priority
+        result = find_best_entity_match(
+            "BRCA1 (gene)",
+            ["BRCA1", "gene"],
+        )
+        assert result == "BRCA1"
+
+    # Slash alternation tests
+    def test_slash_alternation_whole_matches(self):
+        """Test that whole slash expression matches first."""
+        result = find_best_entity_match(
+            "SMAD1/5",
+            ["SMAD1/5", "SMAD1"],
+        )
+        assert result == "SMAD1/5"
+
+    def test_slash_alternation_part_matches(self):
+        """Test matching individual part of slash expression."""
+        result = find_best_entity_match(
+            "TGF-β/BMP",
+            ["BMP", "ACVRL1"],
+        )
+        assert result == "BMP"
+
+    def test_slash_and_parenthetical_combined(self):
+        """Test combined slash and parenthetical patterns."""
+        result = find_best_entity_match(
+            "receptor I/II (signaling)",
+            ["signaling", "receptor"],
+        )
+        # "receptor I/II" doesn't match, "receptor" is a variant, "signaling" is in parens
+        # Priority: base > base parts > paren content
+        assert result == "signaling"
+
+    # Multiple slashes should not expand (too ambiguous)
+    def test_multiple_slashes_no_expansion(self):
+        """Test that multiple slashes don't expand (ambiguous)."""
+        result = find_best_entity_match(
+            "SMAD1/5/9",
+            ["SMAD1", "SMAD5"],
+        )
+        # Won't match because multiple slashes aren't expanded
+        assert result is None
+
+    # Slash suffix expansion (biological naming convention)
+    def test_slash_suffix_gene_numbers(self):
+        """Test GDF1/2 expands to GDF1 and GDF2."""
+        result = find_best_entity_match(
+            "GDF1/2",
+            ["GDF2", "BMP9"],
+        )
+        assert result == "GDF2"
+
+    def test_slash_suffix_smad(self):
+        """Test SMAD1/5 expands to SMAD1 and SMAD5."""
+        result = find_best_entity_match(
+            "SMAD1/5",
+            ["SMAD5", "SMAD9"],
+        )
+        assert result == "SMAD5"
+
+    def test_slash_suffix_roman_numerals(self):
+        """Test type I/II expands to type I and type II."""
+        result = find_best_entity_match(
+            "type I/II",
+            ["type II", "type III"],
+        )
+        assert result == "type II"
+
+    def test_slash_suffix_receptor(self):
+        """Test receptor 1/2 expands properly."""
+        result = find_best_entity_match(
+            "receptor 1/2",
+            ["receptor 2", "receptor 3"],
+        )
+        assert result == "receptor 2"
+
+    def test_slash_suffix_original_preferred(self):
+        """Test that original form is preferred over expanded."""
+        result = find_best_entity_match(
+            "GDF1/2",
+            ["GDF1/2", "GDF1", "GDF2"],
+        )
+        assert result == "GDF1/2"
+
+    def test_slash_suffix_left_side_matches(self):
+        """Test that left side of suffix pattern also matches."""
+        result = find_best_entity_match(
+            "GDF1/2",
+            ["GDF1", "BMP9"],
+        )
+        assert result == "GDF1"

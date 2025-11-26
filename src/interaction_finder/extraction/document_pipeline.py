@@ -26,6 +26,7 @@ from interaction_finder.extraction.models import (
 from interaction_finder.extraction.utils import (
     build_text_region,
     collect_relevant_text_for_quotes,
+    find_best_entity_match,
     identify_proximal_sets,
     make_entity_pair_key,
     normalize_for_comparison,
@@ -256,16 +257,16 @@ Provide exact supporting quotes."""
     pairs = []
     quotes_validated = 0
     quotes_failed = 0
+    # Build list of valid entity names for fuzzy matching
+    entity_name_list = list(proximal_set.entities)
 
     for pair_info in result.output.pairs:
-        # Strip kind annotations if LLM included them despite instructions
-        entity1 = strip_kind_annotation(pair_info.entity1)
-        entity2 = strip_kind_annotation(pair_info.entity2)
-
-        # Verify entities are actually in the proximal set (catches hallucinations)
-        if entity1 not in proximal_set.entities or entity2 not in proximal_set.entities:
+        # Match LLM-returned entity names to known entities (handles annotations, variants)
+        entity1 = find_best_entity_match(pair_info.entity1, entity_name_list)
+        entity2 = find_best_entity_match(pair_info.entity2, entity_name_list)
+        # Skip if entities not found (hallucinations or no close match)
+        if entity1 is None or entity2 is None:
             continue
-
         # Check if pair kinds are permitted by configuration
         e1_obj = entities.get(entity1)
         e2_obj = entities.get(entity2)
