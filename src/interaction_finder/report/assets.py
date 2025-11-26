@@ -27,8 +27,6 @@ REPORT_CSS = """
     --entity2-text: var(--pico-color-lime-450);
     --entity-other-bg: var(--pico-color-slate-150);
     --entity-other-bg-hover: var(--pico-color-slate-250);
-    --entity-fallback-bg: var(--pico-color-slate-100);
-    --entity-fallback-bg-hover: var(--pico-color-slate-200);
 
     /* State colors */
     --selected-bg: var(--pico-color-azure-100);
@@ -54,9 +52,6 @@ REPORT_CSS = """
     --nav-border: var(--pico-color-cyan-600);
     --nav-badge-bg: var(--pico-color-zinc-400);
 
-    /* Connection/decoration colors */
-    --connection-stroke: var(--pico-color-azure-600);
-
     /* Document badge colors */
     --doc-badge-bg: var(--pico-color-azure-600);
     --doc-badge-hover-bg: var(--pico-color-azure-500);
@@ -69,66 +64,8 @@ REPORT_CSS = """
     --polarity-neutral-text: var(--pico-color-slate-600);
 }
 
-/* Dark theme colors (prefers-color-scheme: dark without explicit theme) */
-@media only screen and (prefers-color-scheme: dark) {
-    :root:not([data-theme]) {
-        /* Entity highlighting colors (flipped shades: 200->800, 300->700, 450->550) */
-        --entity1-bg: var(--pico-color-violet-800);
-        --entity1-bg-faint: var(--pico-color-violet-850);
-        --entity1-bg-hover: var(--pico-color-violet-700);
-        --entity1-text: var(--pico-color-violet-550);
-        --entity2-bg: var(--pico-color-lime-650);
-        --entity2-bg-faint: var(--pico-color-lime-800);
-        --entity2-bg-hover: var(--pico-color-lime-600);
-        --entity2-text: var(--pico-color-lime-550);
-        --entity-other-bg: var(--pico-color-slate-800);
-        --entity-other-bg-hover: var(--pico-color-slate-750);
-        --entity-fallback-bg: var(--pico-color-slate-900);
-        --entity-fallback-bg-hover: var(--pico-color-slate-800);
-
-        /* State colors (flipped: 100->900, 50->950, 600->400) */
-        --selected-bg: var(--pico-color-azure-900);
-        --selected-hover-bg: var(--pico-color-azure-950);
-        --rejected-bg: var(--pico-color-red-950);
-        --rejected-border: var(--pico-color-red-400);
-
-        /* Confidence badge colors (flipped: 600->400, 400->600) */
-        --confidence-high-bg: var(--pico-color-green-400);
-        --confidence-medium-bg: var(--pico-color-pumpkin-600);
-        --confidence-low-bg: var(--pico-color-red-400);
-
-        /* Quote colors (flipped: 100->900, 400->600, 200->800, 600->400) */
-        --quote-bg: var(--pico-color-zinc-750);
-        --quote-border: var(--pico-color-zinc-600);
-        --quote-emphasis-bg: var(--pico-color-amber-800);
-        --quote-emphasis-border: var(--pico-color-amber-400);
-        --quote-dim-bg: var(--pico-color-zinc-850);
-
-        /* Navigation colors (flipped: 50->950, 100->900, 600->400, 400->600) */
-        --nav-hover-bg: var(--pico-color-cyan-950);
-        --nav-active-bg: var(--pico-color-cyan-900);
-        --nav-border: var(--pico-color-cyan-400);
-        --nav-badge-bg: var(--pico-color-zinc-600);
-
-        /* Connection/decoration colors (flipped: 600->400) */
-        --connection-stroke: var(--pico-color-azure-400);
-
-        /* Document badge colors (flipped: 600->400, 500->500, 50->950) */
-        --doc-badge-bg: var(--pico-color-azure-400);
-        --doc-badge-hover-bg: var(--pico-color-azure-500);
-        --doc-badge-text: var(--pico-color-slate-950);
-        --polarity-supporting-bg: var(--pico-color-green-850);
-        --polarity-supporting-text: var(--pico-color-green-300);
-        --polarity-refuting-bg: var(--pico-color-red-900);
-        --polarity-refuting-text: var(--pico-color-red-300);
-        --polarity-neutral-bg: var(--pico-color-slate-900);
-        --polarity-neutral-text: var(--pico-color-slate-200);
-    }
-}
-
-/* Dark theme colors (explicit [data-theme=dark]) */
-[data-theme=dark] {
-    /* Entity highlighting colors (flipped shades) */
+/* Dark theme colors (explicit or via prefers-color-scheme) */
+@media (prefers-color-scheme: dark) { :root:not([data-theme]) {
     --entity1-bg: var(--pico-color-violet-800);
     --entity1-bg-faint: var(--pico-color-violet-850);
     --entity1-bg-hover: var(--pico-color-violet-700);
@@ -139,37 +76,59 @@ REPORT_CSS = """
     --entity2-text: var(--pico-color-lime-550);
     --entity-other-bg: var(--pico-color-slate-800);
     --entity-other-bg-hover: var(--pico-color-slate-750);
-    --entity-fallback-bg: var(--pico-color-slate-900);
-    --entity-fallback-bg-hover: var(--pico-color-slate-800);
-
-    /* State colors */
     --selected-bg: var(--pico-color-azure-900);
     --selected-hover-bg: var(--pico-color-azure-950);
     --rejected-bg: var(--pico-color-red-950);
     --rejected-border: var(--pico-color-red-400);
-
-    /* Confidence badge colors */
     --confidence-high-bg: var(--pico-color-green-400);
     --confidence-medium-bg: var(--pico-color-pumpkin-600);
     --confidence-low-bg: var(--pico-color-red-400);
-
-    /* Quote colors */
     --quote-bg: var(--pico-color-zinc-750);
     --quote-border: var(--pico-color-zinc-600);
     --quote-emphasis-bg: var(--pico-color-amber-800);
     --quote-emphasis-border: var(--pico-color-amber-400);
     --quote-dim-bg: var(--pico-color-zinc-850);
-
-    /* Navigation colors */
     --nav-hover-bg: var(--pico-color-cyan-950);
     --nav-active-bg: var(--pico-color-cyan-900);
     --nav-border: var(--pico-color-cyan-400);
     --nav-badge-bg: var(--pico-color-zinc-600);
-
-    /* Connection/decoration colors */
-    --connection-stroke: var(--pico-color-azure-400);
-
-    /* Document badge colors */
+    --doc-badge-bg: var(--pico-color-azure-400);
+    --doc-badge-hover-bg: var(--pico-color-azure-500);
+    --doc-badge-text: var(--pico-color-slate-950);
+    --polarity-supporting-bg: var(--pico-color-green-850);
+    --polarity-supporting-text: var(--pico-color-green-300);
+    --polarity-refuting-bg: var(--pico-color-red-900);
+    --polarity-refuting-text: var(--pico-color-red-300);
+    --polarity-neutral-bg: var(--pico-color-slate-900);
+    --polarity-neutral-text: var(--pico-color-slate-200);
+} }
+[data-theme=dark] {
+    --entity1-bg: var(--pico-color-violet-800);
+    --entity1-bg-faint: var(--pico-color-violet-850);
+    --entity1-bg-hover: var(--pico-color-violet-700);
+    --entity1-text: var(--pico-color-violet-550);
+    --entity2-bg: var(--pico-color-lime-650);
+    --entity2-bg-faint: var(--pico-color-lime-800);
+    --entity2-bg-hover: var(--pico-color-lime-600);
+    --entity2-text: var(--pico-color-lime-550);
+    --entity-other-bg: var(--pico-color-slate-800);
+    --entity-other-bg-hover: var(--pico-color-slate-750);
+    --selected-bg: var(--pico-color-azure-900);
+    --selected-hover-bg: var(--pico-color-azure-950);
+    --rejected-bg: var(--pico-color-red-950);
+    --rejected-border: var(--pico-color-red-400);
+    --confidence-high-bg: var(--pico-color-green-400);
+    --confidence-medium-bg: var(--pico-color-pumpkin-600);
+    --confidence-low-bg: var(--pico-color-red-400);
+    --quote-bg: var(--pico-color-zinc-750);
+    --quote-border: var(--pico-color-zinc-600);
+    --quote-emphasis-bg: var(--pico-color-amber-800);
+    --quote-emphasis-border: var(--pico-color-amber-400);
+    --quote-dim-bg: var(--pico-color-zinc-850);
+    --nav-hover-bg: var(--pico-color-cyan-950);
+    --nav-active-bg: var(--pico-color-cyan-900);
+    --nav-border: var(--pico-color-cyan-400);
+    --nav-badge-bg: var(--pico-color-zinc-600);
     --doc-badge-bg: var(--pico-color-azure-400);
     --doc-badge-hover-bg: var(--pico-color-azure-500);
     --doc-badge-text: var(--pico-color-slate-950);
@@ -638,100 +597,59 @@ header {
     position: relative;
 }
 
-/* Entity highlights in document */
+/* Entity highlights in document and reasoning panel */
+/* Default styling treats all entities as "other" until classified by JS */
 .entity-highlight,
 .entity-span {
     padding: 2px 4px;
     border-radius: 3px;
-    font-weight: 600;
     cursor: pointer;
     position: relative;
-}
-
-/* Entity position-specific colors (entity1 vs entity2 in current pair) */
-/* Default (outside quotes): fainter backgrounds */
-.entity-highlight.entity1,
-.entity-span[data-entity] {
-    background: var(--entity1-bg-faint);
-}
-
-.entity-highlight.entity1:hover,
-.entity-span[data-entity]:hover {
-    background: var(--entity1-bg-hover);
-}
-
-.entity-highlight.entity2 {
-    background: var(--entity2-bg-faint);
-}
-
-.entity-highlight.entity2:hover {
-    background: var(--entity2-bg-hover);
-}
-
-/* Inside quote highlights: standard backgrounds */
-.quote-span .entity-highlight.entity1,
-.quote-span .entity-span.entity1 {
-    background: var(--entity1-bg);
-}
-
-.quote-span .entity-highlight.entity2,
-.quote-span .entity-span.entity2 {
-    background: var(--entity2-bg);
-}
-
-/* Entities from other pairs */
-.entity-highlight.other {
     background: var(--entity-other-bg);
-    font-weight: normal;
 }
-
-.entity-highlight.other:hover {
+:is(.entity-highlight, .entity-span):hover {
     background: var(--entity-other-bg-hover);
 }
 
-.entity-highlight.clickable {
-    cursor: pointer;
+/* Entity colors by position (entity1 vs entity2 in current pair) */
+/* Outside quotes: fainter backgrounds */
+:is(.entity-highlight, .entity-span).entity1 {
+    background: var(--entity1-bg-faint);
+    font-weight: 600;
+}
+:is(.entity-highlight, .entity-span).entity1:hover {
+    background: var(--entity1-bg-hover);
+}
+:is(.entity-highlight, .entity-span).entity2 {
+    background: var(--entity2-bg-faint);
+    font-weight: 600;
+}
+:is(.entity-highlight, .entity-span).entity2:hover {
+    background: var(--entity2-bg-hover);
 }
 
-/* Entities in reasoning panel - use color instead of background, lighter weight */
+/* Inside quotes: stronger backgrounds */
+.quote-span :is(.entity-highlight, .entity-span).entity1 {
+    background: var(--entity1-bg);
+}
+.quote-span :is(.entity-highlight, .entity-span).entity2 {
+    background: var(--entity2-bg);
+}
+
+/* Reasoning panel: text color instead of background */
 .reasoning-panel .entity-highlight {
     padding: 0;
     background: none;
     font-weight: 500;
 }
-
-.reasoning-panel .entity-highlight.entity1 {
-    color: var(--entity1-text);
-}
-
-.reasoning-panel .entity-highlight.entity2 {
-    color: var(--entity2-text);
-}
-
-/* Disable hover effects on entities in reasoning panel */
 .reasoning-panel .entity-highlight:hover {
     background: none;
 }
-
-.reasoning-panel .entity-highlight.entity1:hover {
-    background: none;
+.reasoning-panel .entity-highlight.entity1 {
     color: var(--entity1-text);
 }
-
-.reasoning-panel .entity-highlight.entity2:hover {
-    background: none;
+.reasoning-panel .entity-highlight.entity2 {
     color: var(--entity2-text);
-}
-
-/* Fallback for other entity kinds */
-.entity-highlight.other-entity {
-    background: var(--entity-fallback-bg);
-    font-weight: normal;
-    cursor: pointer;
-}
-
-.entity-highlight.other-entity:hover {
-    background: var(--entity-fallback-bg-hover);
 }
 
 .quote-highlight {
@@ -787,23 +705,6 @@ header {
     border: 1px solid var(--pico-muted-border-color);
     border-radius: var(--pico-border-radius);
     background: var(--pico-card-background-color);
-}
-
-.pair-header-entities {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0.5rem;
-    font-size: 1rem;
-    font-weight: 600;
-    margin-bottom: 0.25rem;
-}
-
-.pair-header-relation {
-    text-align: center;
-    font-size: 0.85rem;
-    font-style: italic;
-    color: var(--pico-muted-color);
 }
 
 .reasoning-title {
@@ -958,24 +859,6 @@ header {
 ::-webkit-scrollbar-thumb:hover {
     background: var(--pico-muted-color);
 }
-
-/* Connection lines (SVG overlay) */
-.connection-lines {
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    pointer-events: none;
-    z-index: 1;
-}
-
-.connection-line {
-    stroke: var(--connection-stroke);
-    stroke-width: 2;
-    fill: none;
-    opacity: 0.6;
-}
 """
 
 REPORT_JS = """
@@ -987,12 +870,10 @@ REPORT_JS = """
 
 // Global state
 const state = {
-    data: null,
     selectedPairId: null,
     openDocumentIdx: null,
     searchQuery: '',
     showRejected: false,
-    currentScrolledQuote: null,
 };
 
 function getPairIdFromCard(card) {
@@ -1016,8 +897,6 @@ function findFilteredPairById(pairId, filteredPairs) {
 
 // Initialize report
 function initReport() {
-    // No window.REPORT_DATA - everything queryable from DOM
-
     // Set up event listeners
     document.getElementById('search-input').addEventListener('input', handleSearch);
     document.getElementById('show-rejected').addEventListener('change', handleToggleRejected);
@@ -1027,19 +906,9 @@ function initReport() {
     sidebar.querySelectorAll('.pair-card').forEach((card) => {
         const pairId = getPairIdFromCard(card);
         card.addEventListener('click', () => selectPair(pairId));
-
-        // Add click handlers to entity names for filtering
-        const entityNames = card.querySelectorAll('.entity-name');
-        entityNames.forEach((entityEl) => {
-            entityEl.addEventListener('click', (e) => {
-                e.stopPropagation();
-                const entityName = entityEl.textContent.trim();
-                filterByEntity(entityName);
-            });
-        });
     });
 
-    // Initial render with header counts
+    // Initial render
     updateHeaderCounts();
     updatePairListDisplay();
     renderContent();
@@ -1186,15 +1055,6 @@ function selectPair(pairId) {
     renderReasoning();
 }
 
-// Filter by entity name
-function filterByEntity(entityName) {
-    const searchInput = document.getElementById('search-input');
-    searchInput.value = entityName;
-    state.searchQuery = entityName.toLowerCase();
-    updateHeaderCounts();
-    updatePairListDisplay();
-}
-
 // Render content area
 function renderContent() {
     const content = document.getElementById('content');
@@ -1337,36 +1197,31 @@ function updateDocumentHighlights(docIdx, currentPairIdx) {
 
     const entity1Name = pairCard.dataset.e1;
     const entity2Name = pairCard.dataset.e2;
-    const pairIdStr = String(currentPairIdx);
 
     // Update all entity spans
+    // Default styling (no entity1/entity2 class) displays as "other"
     doc.querySelectorAll('.entity-span').forEach(span => {
         const entityName = span.dataset.entity;
         const entityPairs = (span.dataset.pairs || '').split(' ').filter(p => p);
 
-        // Clear existing classes
-        span.className = 'entity-span';
+        // Clear existing classification classes
+        span.classList.remove('entity1', 'entity2');
+        span.onclick = null;
 
-        // Classify entity
+        // Classify entity - only entity1/entity2 need explicit classes
         if (entityName === entity1Name) {
             span.classList.add('entity1');
         } else if (entityName === entity2Name) {
             span.classList.add('entity2');
-        } else {
-            span.classList.add('other');
-            if (entityPairs.length > 0) {
-                span.classList.add('clickable');
-                span.onclick = () => {
-                    const targetPairIdx = parseInt(entityPairs[0]);
-                    selectPair(targetPairIdx);
-                };
-            }
+        } else if (entityPairs.length > 0) {
+            // Other entity with pair references - make clickable
+            span.onclick = () => {
+                const targetPairIdx = parseInt(entityPairs[0]);
+                selectPair(targetPairIdx);
+            };
         }
     });
 }
-
-// Removed: selectPairByEntity and selectPairByEntityAndQuote
-// Entity navigation now handled inline in updateDocumentHighlights()
 
 // Render document with highlights
 function renderDocument(docIdx, pairIdx) {
