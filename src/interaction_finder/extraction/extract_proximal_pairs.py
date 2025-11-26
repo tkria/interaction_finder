@@ -33,18 +33,20 @@ You will be given:
 5. Provide exact quotes supporting each association
 6. May suggest multiple relationship types if text implies different aspects
 
-**Common relationship types:**
-- "associated_with" - general association or correlation
-- "regulates" - regulatory relationship (use "upregulates"/"downregulates" if directional)
+**Relationship type guidelines:**
+Labels must be SHORT (1-2 words) and GENERAL - reusable for any entity pair, not specific to these entities.
+- GOOD: "regulates", "mutated_in", "treats", "binds"
+- BAD: long descriptive phrases, entity names, or context-specific details
+
+**Standard relationship types** (prefer these):
+- "regulates" / "upregulates" / "downregulates" - regulatory relationships
 - "activates" / "inhibits" - directional control
 - "interacts_with" - physical or functional interaction
 - "binds" - physical binding
-- "causes" - causal relationship
-- "prevents" - preventative relationship
+- "causes" / "prevents" - causal relationships
 - "treats" - therapeutic relationship
-- "mutated_in" - genetic mutations associated with condition
-
-**Relationship labels must be concise, high-level types only. No entity-specific details or explanations.**
+- "mutated_in" - genetic mutation associated with condition
+- "associated_with" - general association (use only if no specific type fits)
 
 **Quality standards:**
 - Be conservative: only extract well-supported associations

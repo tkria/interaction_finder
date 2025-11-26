@@ -176,7 +176,7 @@ class ProximalPairInfo(BaseModel):
     entity1: str = Field(description="First entity (canonical name)")
     entity2: str = Field(description="Second entity (canonical name)")
     relationship_types: list[str] = Field(
-        description="Possible relationship types (may suggest multiple)",
+        description="Short (1-2 word) general relationship labels like 'regulates', 'binds', 'treats'. Must be reusable across any entity pair - no entity names or specific details.",
         min_length=1,
     )
     supporting_quotes: list[str] = Field(
