@@ -1274,7 +1274,7 @@ function renderContent() {
         const relDisplay = count > 1
             ? `<span class="relationship-count">${count} assessments</span>`
             : relationships?.length > 0
-                ? `<span class="relationship-label-small">${escapeHtml(relationships[0])}</span>`
+                ? `<span class="relationship-label-small">${escapeHtml(relationships[0].replace(/_/g, ' '))}</span>`
                 : '';
 
         // Build polarity/confidence badge

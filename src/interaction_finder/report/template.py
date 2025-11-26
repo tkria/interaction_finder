@@ -71,13 +71,13 @@ def _render_pair_cards(pairs: list[dict[str, Any]]) -> str:
             kinds_html = f"""
             <div class="pair-kinds">
                 <span>{_escape_html(pair["entity1"]["kind"])}</span>
-                <span class="relationship-label">{_escape_html(pair["relationship"])}</span>
+                <span class="relationship-label">{_format_relationship(pair["relationship"])}</span>
                 <span>{_escape_html(pair["entity2"]["kind"])}</span>
             </div>"""
         else:
             kinds_html = f"""
             <div class="pair-relationship-only">
-                <span class="relationship-label">{_escape_html(pair["relationship"])}</span>
+                <span class="relationship-label">{_format_relationship(pair["relationship"])}</span>
             </div>"""
 
         # Build summary line: doc count, polarity badges, quote count, confidence
@@ -376,3 +376,8 @@ def _escape_html(text: str) -> str:
         .replace('"', "&quot;")
         .replace("'", "&#39;")
     )
+
+
+def _format_relationship(rel: str) -> str:
+    """Format relationship for display (escape HTML and replace underscores)."""
+    return _escape_html(rel.replace("_", " "))

@@ -500,7 +500,8 @@ def test_quote_deduplication_in_document_groups():
     # Verify both assessment sections are present (numbered badges + relationships)
     assert 'assess-num-badge">1</span>' in result
     assert 'assess-num-badge">2</span>' in result
-    assert "increases_risk_of" in result
+    # Template formats relationships by replacing underscores with spaces
+    assert "increases risk of" in result
     assert "causes" in result
 
     # The deduplication happens in the _render_quote_navigation method

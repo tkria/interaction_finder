@@ -235,7 +235,7 @@ class ReasoningTemplateRenderer:
     <div class="reasoning-panel">
         <div class="pair-header">
             <span class="pair-entity">{_escape_html(pair["entity1"]["name"])}</span>
-            <span class="pair-relation">{_escape_html(pair["relationship"])}</span>
+            <span class="pair-relation">{_format_relationship(pair["relationship"])}</span>
             <span class="pair-entity">{_escape_html(pair["entity2"]["name"])}</span>
         </div>
         <div class="reasoning-title">Overall Assessment</div>
@@ -300,7 +300,7 @@ class ReasoningTemplateRenderer:
             return f"""
         <div class="assessment-section open">
             <div class="assessment-header" onclick="this.parentElement.classList.toggle('open')">
-                <span class="assessment-label"><span class="assess-num-badge">{idx + 1}</span>&nbsp;{_escape_html(assess["relationship"])}</span>
+                <span class="assessment-label"><span class="assess-num-badge">{idx + 1}</span>&nbsp;{_format_relationship(assess["relationship"])}</span>
                 <span class="pc-pill">
                     <span class="{_escape_html(polarity)}">{_escape_html(polarity_map.get(polarity, polarity))}</span>
                     <span class="confidence-{_escape_html(confidence)}">{_escape_html(confidence)}</span>
@@ -317,7 +317,7 @@ class ReasoningTemplateRenderer:
             return f"""
         <div class="assessment-section open">
             <div class="assessment-header" onclick="this.parentElement.classList.toggle('open')">
-                <span class="assessment-label">{_escape_html(assess["relationship"])}</span>
+                <span class="assessment-label">{_format_relationship(assess["relationship"])}</span>
             </div>
             <div class="assessment-content">
                 {source_line}<p>{self.highlighter.highlight(assess["reasoning"])}</p>
@@ -353,7 +353,7 @@ class ReasoningTemplateRenderer:
     <div class="reasoning-panel">
         <div class="pair-header">
             <span class="pair-entity">{_escape_html(self.pair["entity1"]["name"])}</span>
-            <span class="pair-relation">{_escape_html(self.pair["relationship"])}</span>
+            <span class="pair-relation">{_format_relationship(self.pair["relationship"])}</span>
             <span class="pair-entity">{_escape_html(self.pair["entity2"]["name"])}</span>
         </div>
         <div class="reasoning-doc-title">{_escape_html(title)}</div>
@@ -556,6 +556,11 @@ def _escape_html(text: str) -> str:
         .replace('"', "&quot;")
         .replace("'", "&#39;")
     )
+
+
+def _format_relationship(rel: str) -> str:
+    """Format relationship for display (escape HTML and replace underscores)."""
+    return _escape_html(rel.replace("_", " "))
 
 
 def _render_aliases(aliases: list[str]) -> str:

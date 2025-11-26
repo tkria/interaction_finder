@@ -477,8 +477,10 @@ def test_display_content_matches_data_attributes():
     assert displayed_entity1 == entity1_name
     assert displayed_entity2 == entity2_name
 
-    # Relationship should be displayed somewhere
+    # Relationship should be displayed somewhere (formatted with spaces, not underscores)
     relationship_labels = pair_0.find_all("span", class_="relationship-label")
     if relationship_labels:
         displayed_rel = relationship_labels[0].get_text().strip()
-        assert displayed_rel == relationship
+        # Template formats relationship by replacing underscores with spaces
+        expected_rel = relationship.replace("_", " ")
+        assert displayed_rel == expected_rel
