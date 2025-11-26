@@ -1514,6 +1514,14 @@ function openDocument(docIdx) {
     state.openDocumentIdx = assessIdx;
     renderContent();
     renderReasoning();
+    // Scroll to the document accordion in the content panel
+    setTimeout(() => {
+        const doc = document.getElementById(`doc-${docIdx}`);
+        const accordion = doc?.closest('.document-accordion');
+        if (accordion) {
+            accordion.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+    }, 0);
 }
 
 // Select pair and open specific document by doc_idx

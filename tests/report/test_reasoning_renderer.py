@@ -612,7 +612,7 @@ class TestLinkifyCitations:
         assert '<span class="doc-link"' in result
         assert 'data-doc="5"' in result
         assert 'onclick="openDocument(5)"' in result
-        assert ">Document 1</span>" in result
+        assert ">Document&nbsp;1</span>" in result
 
     def test_multiple_citations(self):
         """Multiple citations should all be converted."""
@@ -620,8 +620,8 @@ class TestLinkifyCitations:
         doc_idx_map = {"1_aaaaaaaa": 0, "2_bbbbbbbb": 3}
         result = _linkify_citations(html, doc_idx_map)
         assert result.count('<span class="doc-link"') == 2
-        assert ">Document 1</span>" in result
-        assert ">Document 2</span>" in result
+        assert ">Document&nbsp;1</span>" in result
+        assert ">Document&nbsp;2</span>" in result
 
     def test_invalid_citation_not_linked(self):
         """Citation not in doc_idx_map should not become a link."""
@@ -637,7 +637,7 @@ class TestLinkifyCitations:
         doc_idx_map = {"1_aaaaaaaa": 0}
         result = _linkify_citations(html, doc_idx_map)
         assert result.count('<span class="doc-link"') == 1
-        assert ">Document 1</span>" in result
+        assert ">Document&nbsp;1</span>" in result
         assert "[2_notfound]" in result
 
     def test_no_citations(self):
@@ -652,7 +652,7 @@ class TestLinkifyCitations:
         result = _linkify_citations(html, None)
         assert 'data-doc="3"' in result
         assert 'onclick="openDocument(3)"' in result
-        assert ">Document 3</span>" in result
+        assert ">Document&nbsp;3</span>" in result
 
     def test_preserves_surrounding_html(self):
         """Existing HTML should not be corrupted."""
@@ -664,6 +664,60 @@ class TestLinkifyCitations:
         assert "</strong>" in result
         assert "</p>" in result
         assert '<span class="doc-link"' in result
+
+    def test_comma_separated_multi_citation(self):
+        """Multi-citations with commas should produce multiple links."""
+        html = "See [1_aaaaaaaa, 2_bbbbbbbb] for details."
+        doc_idx_map = {"1_aaaaaaaa": 0, "2_bbbbbbbb": 1}
+        result = _linkify_citations(html, doc_idx_map)
+        assert result.count('<span class="doc-link"') == 2
+        assert ">Document&nbsp;1</span>" in result
+        assert ">Document&nbsp;2</span>" in result
+        # Brackets should be removed, links joined with space
+        assert "[" not in result and "]" not in result
+
+    def test_semicolon_separated_multi_citation(self):
+        """Multi-citations with semicolons should produce multiple links."""
+        html = "See [1_aaaaaaaa; 2_bbbbbbbb] for details."
+        doc_idx_map = {"1_aaaaaaaa": 0, "2_bbbbbbbb": 1}
+        result = _linkify_citations(html, doc_idx_map)
+        assert result.count('<span class="doc-link"') == 2
+        assert ">Document&nbsp;1</span>" in result
+        assert ">Document&nbsp;2</span>" in result
+
+    def test_multi_citation_with_invalid_id(self):
+        """Multi-citation with one invalid ID (not in map) should only link valid ones."""
+        html = "See [1_aaaaaaaa, 99_zzzzzzzz] for details."
+        doc_idx_map = {"1_aaaaaaaa": 0}
+        result = _linkify_citations(html, doc_idx_map)
+        # Only one valid link (99_zzzzzzzz not in map)
+        assert result.count('<span class="doc-link"') == 1
+        assert ">Document&nbsp;1</span>" in result
+
+    def test_multi_citation_all_invalid(self):
+        """Multi-citation where all IDs are invalid (not in map) should preserve original."""
+        html = "See [98_xxxxxxxx, 99_yyyyyyyy] for details."
+        doc_idx_map = {"1_aaaaaaaa": 0}
+        result = _linkify_citations(html, doc_idx_map)
+        assert '<span class="doc-link"' not in result
+        assert "[98_xxxxxxxx, 99_yyyyyyyy]" in result
+
+    def test_multi_citation_with_malformed_hash(self):
+        """Multi-citation with malformed hash (wrong length) should skip it."""
+        html = "See [1_aaaaaaaa, 2_short] for details."
+        doc_idx_map = {"1_aaaaaaaa": 0, "2_short": 1}  # Even if in map, wrong length
+        result = _linkify_citations(html, doc_idx_map)
+        # Only one valid link (2_short has wrong hash length)
+        assert result.count('<span class="doc-link"') == 1
+        assert ">Document&nbsp;1</span>" in result
+
+    def test_multi_citation_without_map(self):
+        """Multi-citations without doc_idx_map should use counters."""
+        html = "See [1_aaaaaaaa, 2_bbbbbbbb] for details."
+        result = _linkify_citations(html, None)
+        assert result.count('<span class="doc-link"') == 2
+        assert 'onclick="openDocument(1)"' in result
+        assert 'onclick="openDocument(2)"' in result
 
 
 class TestReasoningTemplateWithCitations:
@@ -684,7 +738,7 @@ class TestReasoningTemplateWithCitations:
         result = renderer.render_overall_template()
         assert '<span class="doc-link"' in result
         assert 'onclick="openDocument(3)"' in result
-        assert ">Document 1</span>" in result
+        assert ">Document&nbsp;1</span>" in result
 
     def test_citations_after_entity_highlighting(self):
         """Citations should be linkified after entity highlighting (no conflicts)."""

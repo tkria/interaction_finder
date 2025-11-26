@@ -4,6 +4,7 @@ Provides utilities for entity validation, proximal set identification,
 text region construction, pair key generation, and markdown processing.
 """
 
+import logging
 import re
 from collections import Counter
 
@@ -866,21 +867,62 @@ def adjust_heading_levels(text: str, target_min_level: int) -> str:
     return _HEADING_PATTERN.sub(adjust_heading, text)
 
 
-# Pattern for document ID citations: [N_hash] where N is a number and hash is exactly 8 lowercase alphanumeric chars
-CITATION_PATTERN = re.compile(r"\[(\d+)_([a-z0-9]{8})\]")
+# Pattern for individual document IDs: N_hash where N is a number and hash is 4-12 lowercase alphanumeric chars
+# (flexible range to catch near-misses; valid hashes are exactly 8 chars, validated separately)
+DOC_ID_PATTERN = re.compile(r"(\d+)_([a-z0-9]{4,12})")
+# Pattern for citation brackets that may contain one or more document IDs separated by , or ;
+# Matches [content] where content contains at least one potential doc ID
+CITATION_BRACKET_PATTERN = re.compile(r"\[([^\]]*\d+_[a-z0-9]{4,12}[^\]]*)\]")
+# Expected hash length for valid document IDs
+DOC_ID_HASH_LENGTH = 8
 
 
-def extract_document_citations(text: str) -> list[str]:
-    """Extract document ID citations from text.
+def parse_citation_ids(
+    text: str, logger: logging.Logger | None = None
+) -> list[tuple[str, str]]:
+    """Parse valid document citation IDs from bracketed text.
 
-    Finds all citations in the format [N_hash] where N is a counter
-    and hash is the alphanumeric resource hash.
+    Returns (counter, hash) tuples for each valid citation found within square brackets.
+    Citations must have exactly 8-character hashes; malformed ones are logged and skipped.
 
     Parameters:
         text: Text potentially containing citations
+        logger: Optional logger for warnings about malformed citations
 
     Returns:
-        List of unique document IDs in order of first appearance
+        List of (counter, hash) tuples for valid citations
+    """
+    result = []
+    for bracket_match in CITATION_BRACKET_PATTERN.finditer(text):
+        bracket_content = bracket_match.group(1)
+        for match in DOC_ID_PATTERN.finditer(bracket_content):
+            counter, hash_part = match.group(1), match.group(2)
+            if len(hash_part) != DOC_ID_HASH_LENGTH:
+                if logger:
+                    logger.warning(
+                        f"Malformed document citation '{counter}_{hash_part}': "
+                        f"hash has {len(hash_part)} chars (expected {DOC_ID_HASH_LENGTH})"
+                    )
+                continue
+            result.append((counter, hash_part))
+    return result
+
+
+def extract_document_citations(
+    text: str, logger: logging.Logger | None = None
+) -> list[str]:
+    """Extract document ID citations from bracketed text.
+
+    Finds all citations in formats like [N_hash], [N_hash, M_hash], or [N_hash; M_hash]
+    where N/M are counters and hash is the alphanumeric resource hash.
+    Only matches IDs that appear within square brackets.
+
+    Parameters:
+        text: Text potentially containing citations
+        logger: Optional logger for warnings about malformed citations
+
+    Returns:
+        List of unique valid document IDs in order of first appearance
 
     Examples:
         >>> extract_document_citations("Evidence from [1_abc12345] and [2_def67890]")
@@ -888,11 +930,20 @@ def extract_document_citations(text: str) -> list[str]:
 
         >>> extract_document_citations("Cited [1_abc12345] twice [1_abc12345]")
         ['1_abc12345']
+
+        >>> extract_document_citations("Multiple [1_abc12345, 2_def67890] in one bracket")
+        ['1_abc12345', '2_def67890']
+
+        >>> extract_document_citations("Semicolons [1_abc12345; 2_def67890] work too")
+        ['1_abc12345', '2_def67890']
+
+        >>> extract_document_citations("Bare 1_abc12345 without brackets is ignored")
+        []
     """
-    seen = set()
-    result = []
-    for match in CITATION_PATTERN.finditer(text):
-        doc_id = f"{match.group(1)}_{match.group(2)}"
+    seen: set[str] = set()
+    result: list[str] = []
+    for counter, hash_part in parse_citation_ids(text, logger):
+        doc_id = f"{counter}_{hash_part}"
         if doc_id not in seen:
             seen.add(doc_id)
             result.append(doc_id)

@@ -1,5 +1,7 @@
 """Tests for document citation extraction and validation."""
 
+import unittest.mock
+
 from interaction_finder.extraction.utils import (
     extract_document_citations,
     validate_document_citations,
@@ -73,12 +75,76 @@ class TestExtractDocumentCitations:
         ]
 
     def test_rejects_wrong_length_hash(self):
-        # 7 chars (too short)
+        # 7 chars (too short) - skipped silently
         assert extract_document_citations("[1_abc1234]") == []
-        # 9 chars (too long)
+        # 9 chars (too long) - skipped silently
         assert extract_document_citations("[1_abc123456]") == []
         # Exactly 8 chars (valid)
         assert extract_document_citations("[1_abc12345]") == ["1_abc12345"]
+        # Truly invalid: uppercase letters (not matched by pattern at all)
+        assert extract_document_citations("[1_ABCDEFGH]") == []
+        # Truly invalid: special characters (not matched by pattern at all)
+        assert extract_document_citations("[1_abc!@#$]") == []
+
+    def test_logs_warning_for_malformed_hash(self):
+        """Malformed citations should trigger a warning if logger provided."""
+        import logging
+
+        logger = logging.getLogger("test")
+        with unittest.mock.patch.object(logger, "warning") as mock_warn:
+            # 7 chars - too short
+            extract_document_citations("[1_abc1234]", logger=logger)
+            assert mock_warn.call_count == 1
+            assert "1_abc1234" in mock_warn.call_args[0][0]
+            assert "7 chars" in mock_warn.call_args[0][0]
+
+    def test_extracts_valid_from_mixed_length_multi_citation(self):
+        """Valid citations extracted even when mixed with malformed ones."""
+        text = "[1_abc12345, 2_short, 3_def67890]"
+        # Only valid 8-char hashes extracted
+        assert extract_document_citations(text) == ["1_abc12345", "3_def67890"]
+
+    def test_ignores_bare_ids_without_brackets(self):
+        """IDs not in brackets should be ignored."""
+        text = "Document 1_abc12345 is mentioned but not cited."
+        assert extract_document_citations(text) == []
+
+    def test_mixed_bracketed_and_bare(self):
+        """Only bracketed citations are extracted."""
+        text = "See [1_abc12345] and also 2_def67890 and [3_ghijklmn]"
+        assert extract_document_citations(text) == ["1_abc12345", "3_ghijklmn"]
+
+    def test_extracts_comma_separated_multi_citation(self):
+        text = "Evidence from [1_abc12345, 2_def67890] supports this."
+        assert extract_document_citations(text) == ["1_abc12345", "2_def67890"]
+
+    def test_extracts_semicolon_separated_multi_citation(self):
+        text = "Evidence from [1_abc12345; 2_def67890] supports this."
+        assert extract_document_citations(text) == ["1_abc12345", "2_def67890"]
+
+    def test_extracts_mixed_separator_multi_citation(self):
+        text = "Evidence from [1_abc12345, 2_def67890; 3_ghijklmn] supports this."
+        assert extract_document_citations(text) == [
+            "1_abc12345",
+            "2_def67890",
+            "3_ghijklmn",
+        ]
+
+    def test_deduplicates_across_multi_citations(self):
+        text = "[1_abc12345, 2_def67890] and later [2_def67890, 3_ghijklmn]"
+        assert extract_document_citations(text) == [
+            "1_abc12345",
+            "2_def67890",
+            "3_ghijklmn",
+        ]
+
+    def test_handles_multi_citation_with_spaces(self):
+        text = "[1_abc12345,  2_def67890]"  # Extra space
+        assert extract_document_citations(text) == ["1_abc12345", "2_def67890"]
+
+    def test_handles_multi_citation_without_spaces(self):
+        text = "[1_abc12345,2_def67890]"  # No spaces
+        assert extract_document_citations(text) == ["1_abc12345", "2_def67890"]
 
 
 class TestValidateDocumentCitations:

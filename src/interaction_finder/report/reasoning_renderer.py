@@ -7,7 +7,10 @@ with entity highlighting and navigation elements.
 import re
 from typing import Any
 
-from interaction_finder.extraction.utils import CITATION_PATTERN
+from interaction_finder.extraction.utils import (
+    CITATION_BRACKET_PATTERN,
+    parse_citation_ids,
+)
 
 
 def _quote_key_for_id(quote: dict[str, Any]) -> tuple:
@@ -581,38 +584,46 @@ def _render_aliases(aliases: list[str]) -> str:
 
 
 def _linkify_citations(html: str, doc_idx_map: dict[str, int] | None = None) -> str:
-    """Convert document citations [N_hash] to clickable spans.
+    """Convert document citations to clickable spans.
 
-    Transforms citations like [1_abc12345] into:
-    <span class="doc-link" data-doc="N" onclick="openDocument(N)">Document N</span>
+    Handles single citations [1_abc12345] and multi-citations like
+    [1_abc12345, 2_def67890] or [1_abc12345; 2_def67890].
 
     Args:
         html: HTML text potentially containing citations
         doc_idx_map: Optional mapping from resource_id (e.g., "1_abc12345") to doc_idx.
-                     If provided, only valid citations are linked.
+                     If provided, only citations present in the map are linked.
 
     Returns:
-        HTML with citations converted to clickable spans
+        HTML with citations converted to clickable spans (space-separated, no brackets)
     """
 
-    def replace_citation(match: re.Match) -> str:
-        counter = match.group(1)
-        resource_hash = match.group(2)
-        resource_id = f"{counter}_{resource_hash}"
-        # If we have a mapping, look up the actual doc_idx
+    def make_link(counter: str, resource_id: str) -> str | None:
+        """Create a doc-link span, or None if resource_id not in map."""
         if doc_idx_map is not None:
             doc_idx = doc_idx_map.get(resource_id)
             if doc_idx is None:
-                # Invalid citation - return original text escaped
-                return _escape_html(match.group(0))
+                return None
             return (
                 f'<span class="doc-link" data-doc="{doc_idx}" '
-                f'onclick="openDocument({doc_idx})">Document {counter}</span>'
+                f'onclick="openDocument({doc_idx})">Document&nbsp;{counter}</span>'
             )
         # No mapping - use counter as doc reference
         return (
             f'<span class="doc-link" data-doc="{counter}" '
-            f'onclick="openDocument({counter})">Document {counter}</span>'
+            f'onclick="openDocument({counter})">Document&nbsp;{counter}</span>'
         )
 
-    return CITATION_PATTERN.sub(replace_citation, html)
+    def replace_bracket(match: re.Match) -> str:
+        bracket_text = match.group(0)
+        links = []
+        for counter, hash_part in parse_citation_ids(bracket_text):
+            resource_id = f"{counter}_{hash_part}"
+            link = make_link(counter, resource_id)
+            if link:
+                links.append(link)
+        if not links:
+            return _escape_html(bracket_text)
+        return " ".join(links)
+
+    return CITATION_BRACKET_PATTERN.sub(replace_bracket, html)
