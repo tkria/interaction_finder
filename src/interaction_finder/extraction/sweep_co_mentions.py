@@ -27,10 +27,10 @@ from interaction_finder.extraction.models import (
     PairAssessment,
 )
 from interaction_finder.extraction.utils import (
+    adjust_heading_levels,
     find_best_entity_match,
     make_entity_pair_key,
 )
-from interaction_finder.markdown import adjust_heading_levels
 from interaction_finder.resources import (
     QuoteValidationError,
     Resource,

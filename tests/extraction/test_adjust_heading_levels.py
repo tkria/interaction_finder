@@ -1,8 +1,8 @@
-"""Tests for markdown utilities."""
+"""Tests for markdown utilities in extraction.utils."""
 
 import pytest
 
-from interaction_finder.markdown import adjust_heading_levels
+from interaction_finder.extraction.utils import adjust_heading_levels
 
 
 class TestAdjustHeadingLevels:

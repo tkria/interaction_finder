@@ -24,6 +24,7 @@ from interaction_finder.extraction.models import (
     ProximalEntitySet,
 )
 from interaction_finder.extraction.utils import (
+    adjust_heading_levels,
     build_text_region,
     collect_relevant_text_for_quotes,
     find_best_entity_match,
@@ -32,7 +33,6 @@ from interaction_finder.extraction.utils import (
     normalize_for_comparison,
     strip_kind_annotation,
 )
-from interaction_finder.markdown import adjust_heading_levels
 from interaction_finder.resources import QuoteValidationError, Resource
 from interaction_finder.settings import IfetcherConfig
 

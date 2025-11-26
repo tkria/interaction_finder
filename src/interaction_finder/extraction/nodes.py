@@ -49,6 +49,7 @@ from interaction_finder.extraction.models import (
 )
 from interaction_finder.extraction.state import State
 from interaction_finder.extraction.utils import (
+    adjust_heading_levels,
     collect_relevant_text_for_quotes,
     extract_all_forms,
     identify_proximal_sets,
@@ -58,7 +59,6 @@ from interaction_finder.extraction.utils import (
     osa_distance,
 )
 from interaction_finder.logging import logfire
-from interaction_finder.markdown import adjust_heading_levels
 from interaction_finder.resources import Resource
 
 # Characters for generating verification tokens (alphanumeric, mixed case)
