@@ -15,7 +15,7 @@ def create_extraction_progress() -> StatusTable:
     - Entities: 1-part counter (category: Documents)
     - Quotes: 1-part counter with note for invalid count (category: Documents)
     - Pairs assessed: 3-part counter (category: Documents)
-    - Found: 1-part counter with note for breakdown (category: Co-mention Sweep)
+    - Candidates: 1-part counter for candidate pairs to assess (category: Co-mention Sweep)
     - Regions: 3-part counter (category: Co-mention Sweep)
     - Pairs added: 2-part counter (category: Co-mention Sweep)
     - Unique pairs: 3-part counter (category: Combined Judgment)
@@ -27,7 +27,7 @@ def create_extraction_progress() -> StatusTable:
         Counter("Entities", category="Documents"),
         Counter("Quotes", category="Documents"),
         Counter("Pairs assessed", track_in_progress=True, category="Documents"),
-        Counter("Found", category="Co-mention Sweep"),
+        Counter("Candidates", category="Co-mention Sweep"),
         Counter("Regions", track_in_progress=True, category="Co-mention Sweep"),
         Counter("Pairs added", category="Co-mention Sweep"),
         Counter("Unique pairs", track_in_progress=True, category="Combined Judgment"),

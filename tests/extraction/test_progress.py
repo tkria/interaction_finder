@@ -14,7 +14,7 @@ def test_create_extraction_progress():
     assert progress["Entities"] is not None
     assert progress["Quotes"] is not None
     assert progress["Pairs assessed"] is not None
-    assert progress["Found"] is not None
+    assert progress["Candidates"] is not None
     assert progress["Regions"] is not None
     assert progress["Pairs added"] is not None
     assert progress["Unique pairs"] is not None
@@ -32,8 +32,8 @@ def test_extraction_progress_counters():
     assert progress["Quotes"].in_progress is None
     # Pairs assessed is 3-part
     assert progress["Pairs assessed"].in_progress == 0
-    # Sweep section: Found is 1-part, Regions is 3-part, Pairs added is 1-part
-    assert progress["Found"].in_progress is None
+    # Sweep section: Candidates is 1-part, Regions is 3-part, Pairs added is 1-part
+    assert progress["Candidates"].in_progress is None
     assert progress["Regions"].in_progress == 0
     assert progress["Pairs added"].in_progress is None
     # Judgment section: Unique pairs is 3-part, Accepted/Rejected are 1-part
@@ -51,7 +51,7 @@ def test_extraction_progress_categories():
     assert progress["Quotes"].category == "Documents"
     assert progress["Pairs assessed"].category == "Documents"
     # Co-mention Sweep section
-    assert progress["Found"].category == "Co-mention Sweep"
+    assert progress["Candidates"].category == "Co-mention Sweep"
     assert progress["Regions"].category == "Co-mention Sweep"
     assert progress["Pairs added"].category == "Co-mention Sweep"
     # Combined Judgment section
@@ -93,8 +93,7 @@ def test_extraction_progress_typical_usage():
     progress["Pairs assessed"].completed = 40
     progress["Pairs assessed"].in_progress = 0
     # Sweep
-    progress["Found"].completed = 15
-    progress["Found"].note = "(10 new, 5 uncovered)"
+    progress["Candidates"].completed = 15
     progress["Regions"].total = 5
     progress["Regions"].activate()
     progress["Regions"].completed = 5
@@ -115,9 +114,6 @@ def test_extraction_progress_notes():
     progress["Quotes"].completed = 100
     progress["Quotes"].note = "(5 invalid)"
     assert progress["Quotes"].note == "(5 invalid)"
-    progress["Found"].completed = 15
-    progress["Found"].note = "(10 new, 5 uncovered)"
-    assert progress["Found"].note == "(10 new, 5 uncovered)"
 
 
 def test_dummy_progress_no_op():

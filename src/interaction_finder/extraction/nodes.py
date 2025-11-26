@@ -1657,7 +1657,7 @@ class SweepCoMentionsNode(BaseNode[State, Deps, ExtractionResult]):
         )
 
         with logfire.span("SweepCoMentionsNode"):
-            ctx.deps.progress["Found"].activate()
+            ctx.deps.progress["Candidates"].activate()
             ctx.deps.progress.set_status("Sweeping for missed co-mentions")
 
             # Check if sweep is enabled
@@ -1707,26 +1707,15 @@ class SweepCoMentionsNode(BaseNode[State, Deps, ExtractionResult]):
                 )
                 all_co_mentions.extend(resource_co_mentions)
 
-            # Update discovery stats
+            # Update discovery stats (raw counts, before deduplication)
             stats.total_co_mentions_found = len(all_co_mentions)
             for cm in all_co_mentions:
                 if cm.priority == "no_existing_assessment":
                     stats.co_mentions_no_existing_assessment += 1
                 else:
                     stats.co_mentions_uncovered_region += 1
-
-            # Update progress display
-            ctx.deps.progress["Found"].completed = stats.total_co_mentions_found
-            # Set note with breakdown
-            if stats.total_co_mentions_found > 0:
-                ctx.deps.progress["Found"].note = (
-                    f"({stats.co_mentions_no_existing_assessment} new, "
-                    f"{stats.co_mentions_uncovered_region} uncovered)"
-                )
-            ctx.deps.progress.update()
-
             ctx.deps.logger.info(
-                f"Found {stats.total_co_mentions_found} novel co-mentions "
+                f"Found {stats.total_co_mentions_found} co-mention occurrences "
                 f"({stats.co_mentions_no_existing_assessment} no existing assessment, "
                 f"{stats.co_mentions_uncovered_region} uncovered region)"
             )
@@ -1747,12 +1736,16 @@ class SweepCoMentionsNode(BaseNode[State, Deps, ExtractionResult]):
 
             regions = merge_co_mentions_into_regions(selected, entity_kinds)
             stats.regions_created = len(regions)
+            # Count deduplicated pairs (unique pairs per region, summed across regions)
+            pairs_to_assess = sum(len(r.candidate_pairs) for r in regions)
+            # Update progress display with deduplicated count
+            ctx.deps.progress["Candidates"].completed = pairs_to_assess
             ctx.deps.progress["Regions"].total = len(regions)
             ctx.deps.progress["Regions"].activate()
             ctx.deps.progress.update()
-
             ctx.deps.logger.info(
-                f"Merged {len(selected)} co-mentions into {len(regions)} regions"
+                f"Merged {len(selected)} co-mentions into {len(regions)} regions "
+                f"({pairs_to_assess} candidate pairs)"
             )
 
             # Collect known relationship types for prompt context
