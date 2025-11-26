@@ -1410,7 +1410,7 @@ class JudgeCrossDocumentNode(BaseNode[State, Deps, ExtractionResult]):
             if not assessments:
                 return ""
             sections = [f"## {label.title()} Evidence\n"]
-            for i, assessment in enumerate(assessments, 1):
+            for assessment in assessments:
                 resource = ctx.deps.resource_pool.get(assessment.resource_id)
                 if not resource:
                     continue
@@ -1418,7 +1418,8 @@ class JudgeCrossDocumentNode(BaseNode[State, Deps, ExtractionResult]):
                     resource, assessment.quotes, padding
                 )
                 adjusted_text = adjust_heading_levels(text, target_min_level=4)
-                section = f"""### Document {i}: {resource.title}
+                doc_id = assessment.resource_id.id
+                section = f"""### Document extract [{doc_id}]: {resource.title}
 **Relationship:** {assessment.relationship} | **Confidence:** {assessment.confidence}
 **Reasoning:** {assessment.reasoning}
 
@@ -1461,7 +1462,7 @@ Synthesize the contradictory evidence, considering:
 2. What is the weight of evidence on each side?
 3. Should we accept this pair despite contradictions?
 
-Provide: accepted (true/false), relationship (selected from above), confidence (high/medium/low), and detailed reasoning explaining how you weighed the contradictions."""
+Provide: accepted (true/false), relationship (selected from above), confidence (high/medium/low), and detailed reasoning explaining how you weighed the contradictions. Cite documents using their IDs in square brackets (e.g., [1_abc12345]) when referencing specific evidence."""
 
     def _build_unidirectional_prompt(
         self,
@@ -1475,7 +1476,7 @@ Provide: accepted (true/false), relationship (selected from above), confidence (
         # Combine all assessments (one polarity category will dominate)
         all_assessments = spread.supporting + spread.refuting + spread.neutral
         document_sections = []
-        for i, assessment in enumerate(all_assessments, 1):
+        for assessment in all_assessments:
             resource = ctx.deps.resource_pool.get(assessment.resource_id)
             if not resource:
                 continue
@@ -1483,7 +1484,8 @@ Provide: accepted (true/false), relationship (selected from above), confidence (
                 resource, assessment.quotes, padding
             )
             adjusted_text = adjust_heading_levels(text, target_min_level=3)
-            section = f"""## Document {i}: {resource.title}
+            doc_id = assessment.resource_id.id
+            section = f"""## Document extract [{doc_id}]: {resource.title}
 **Assessment:** {assessment.confidence} confidence - {assessment.relationship}
 **Reasoning:** {assessment.reasoning}
 
@@ -1510,7 +1512,7 @@ Make a final judgment on an entity association.
 Synthesize the evidence across documents, considering consistency, quality, and contradictions.
 Select the most accurate relationship overall (from the ones found above).
 
-Provide: accepted (true/false), relationship (selected label), confidence (high/medium/low), and detailed reasoning."""
+Provide: accepted (true/false), relationship (selected label), confidence (high/medium/low), and detailed reasoning. Cite documents using their IDs in square brackets (e.g., [1_abc12345]) when referencing specific evidence."""
 
     async def _judge_pair(
         self,
