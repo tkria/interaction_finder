@@ -916,12 +916,33 @@ const state = {
 // URL state management
 function getStateFromURL() {
     const params = new URLSearchParams(window.location.search);
+    // Parse scroll positions (sidebar, content, rightbar)
+    const scrollParam = params.get('scroll');
+    let scroll = [0, 0, 0];
+    if (scrollParam) {
+        const parts = scrollParam.split(',').map(n => parseInt(n, 10));
+        if (parts.length === 3 && parts.every(n => !Number.isNaN(n))) {
+            scroll = parts;
+        }
+    }
     return {
         pair: params.has('pair') ? parseInt(params.get('pair'), 10) : null,
         doc: params.has('doc') ? parseInt(params.get('doc'), 10) : null,
         search: params.get('search') || '',
         rejected: params.get('rejected') === '1',
+        scroll: scroll,
     };
+}
+
+function getScrollPositions() {
+    const sidebar = document.getElementById('sidebar');
+    const content = document.getElementById('content');
+    const rightbar = document.getElementById('rightbar');
+    return [
+        sidebar ? sidebar.scrollTop : 0,
+        content ? content.scrollTop : 0,
+        rightbar ? rightbar.scrollTop : 0,
+    ];
 }
 
 function updateURL(usePushState = false) {
@@ -938,12 +959,27 @@ function updateURL(usePushState = false) {
     if (state.showRejected) {
         params.set('rejected', '1');
     }
+    // Include scroll positions
+    const scroll = getScrollPositions();
+    if (scroll.some(v => v > 0)) {
+        params.set('scroll', scroll.join(','));
+    }
     const newURL = params.toString() ? `?${params.toString()}` : window.location.pathname;
     if (usePushState) {
         history.pushState(null, '', newURL);
     } else {
         history.replaceState(null, '', newURL);
     }
+}
+
+// Debounced scroll handler for URL updates
+let scrollUpdateTimeout = null;
+function handleScrollForURL() {
+    if (scrollUpdateTimeout) return;
+    scrollUpdateTimeout = setTimeout(() => {
+        scrollUpdateTimeout = null;
+        updateURL(false);  // replaceState for scroll
+    }, 500);
 }
 
 function restoreStateFromURL() {
@@ -965,6 +1001,20 @@ function restoreStateFromURL() {
             }
         }
     }
+    // Store scroll positions to restore after render
+    state.pendingScroll = urlState.scroll;
+}
+
+function applyPendingScroll() {
+    if (!state.pendingScroll) return;
+    const [sidebarScroll, contentScroll, rightbarScroll] = state.pendingScroll;
+    const sidebar = document.getElementById('sidebar');
+    const content = document.getElementById('content');
+    const rightbar = document.getElementById('rightbar');
+    if (sidebar) sidebar.scrollTop = sidebarScroll;
+    if (content) content.scrollTop = contentScroll;
+    if (rightbar) rightbar.scrollTop = rightbarScroll;
+    state.pendingScroll = null;
 }
 
 function getPairIdFromCard(card) {
@@ -1017,7 +1067,13 @@ function initReport() {
         updatePairListDisplay();
         renderContent();
         renderReasoning();
+        applyPendingScroll();
     });
+
+    // Add scroll listeners for URL updates (debounced)
+    document.getElementById('sidebar').addEventListener('scroll', handleScrollForURL);
+    document.getElementById('content').addEventListener('scroll', handleScrollForURL);
+    document.getElementById('rightbar').addEventListener('scroll', handleScrollForURL);
 
     // Restore state from URL before initial render
     restoreStateFromURL();
@@ -1027,6 +1083,9 @@ function initReport() {
     updatePairListDisplay();
     renderContent();
     renderReasoning();
+
+    // Apply scroll positions after render
+    applyPendingScroll();
 }
 
 // Search handler
