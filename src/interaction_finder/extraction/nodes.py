@@ -1771,36 +1771,41 @@ class SweepCoMentionsNode(BaseNode[State, Deps, ExtractionResult]):
             # Step 7: Assess regions concurrently
             async def assess_region(region):
                 """Assess all pairs in a region with a single LLM call."""
-                resource = ctx.deps.resource_pool.get(region.resource_id)
-                if resource is None:
-                    return (region, [])
-                validated_entities = ctx.state.validated_entities_by_resource.get(
-                    region.resource_id, {}
-                )
-                assessments = await assess_co_mention_region(
-                    region,
-                    resource,
-                    topic=ctx.state.topic,
-                    known_relationships=known_relationships,
-                    config=ctx.deps.config,
-                    deps=ctx.deps,
-                    validated_entities=validated_entities,
-                )
-                return (region, assessments)
+                # Mark region as in-progress
+                ctx.deps.progress["Regions"].work()
+                ctx.deps.progress.update()
+                try:
+                    resource = ctx.deps.resource_pool.get(region.resource_id)
+                    if resource is None:
+                        return (region, [])
+                    validated_entities = ctx.state.validated_entities_by_resource.get(
+                        region.resource_id, {}
+                    )
+                    assessments = await assess_co_mention_region(
+                        region,
+                        resource,
+                        topic=ctx.state.topic,
+                        known_relationships=known_relationships,
+                        config=ctx.deps.config,
+                        deps=ctx.deps,
+                        validated_entities=validated_entities,
+                    )
+                    return (region, assessments)
+                finally:
+                    # Mark region as done (moves from in-progress to completed)
+                    ctx.deps.progress["Regions"].done()
+                    ctx.deps.progress.update()
 
             # Run region assessments with as_completed for live progress
             tasks = [asyncio.create_task(assess_region(r)) for r in regions]
-            regions_assessed = 0
             for coro in asyncio.as_completed(tasks):
                 region, assessments = await coro
-                regions_assessed += 1
                 # Update stats: count pairs assessed, not regions
                 stats.assessed += len(region.candidate_pairs)
                 stats.relationships_found += len(assessments)
                 stats.no_relationship_claim += len(region.candidate_pairs) - len(
                     assessments
                 )
-                ctx.deps.progress["Regions"].completed = regions_assessed
                 ctx.deps.progress["Pairs added"].completed = stats.relationships_found
                 ctx.deps.progress["Pairs added"].total = stats.assessed
                 # Add assessments to state
