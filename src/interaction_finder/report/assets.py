@@ -211,6 +211,41 @@ header {
     cursor: pointer;
 }
 
+/* Search input with clear button */
+.search-wrapper {
+    position: relative;
+    flex: 1;
+}
+.search-wrapper input {
+    width: 100%;
+    margin: 0;
+    padding-right: 2rem;
+}
+.search-clear-btn {
+    position: absolute;
+    right: 0.4rem;
+    top: 50%;
+    transform: translateY(-50%);
+    background: none;
+    border: none;
+    padding: 0.2rem 0.4rem;
+    margin: 0;
+    font-size: 1.1rem;
+    line-height: 1;
+    color: var(--pico-muted-color);
+    cursor: pointer;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s;
+}
+.search-wrapper input:not(:placeholder-shown) ~ .search-clear-btn {
+    opacity: 1;
+    pointer-events: auto;
+}
+.search-clear-btn:hover {
+    color: var(--pico-color);
+}
+
 /* Horizontal layout for wider screens */
 @media (min-width: 1200px) {
     .header-content {
@@ -1055,10 +1090,26 @@ function findFilteredPairById(pairId, filteredPairs) {
     return null;
 }
 
+// Clear search input and update display
+function clearSearch() {
+    const searchInput = document.getElementById('search-input');
+    if (!searchInput.value) return;
+    searchInput.value = '';
+    handleSearch({ target: searchInput });
+}
+
 // Initialize report
 function initReport() {
     // Set up event listeners
-    document.getElementById('search-input').addEventListener('input', handleSearch);
+    const searchInput = document.getElementById('search-input');
+    searchInput.addEventListener('input', handleSearch);
+    searchInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+            clearSearch();
+            searchInput.blur();
+        }
+    });
+    document.getElementById('search-clear').addEventListener('click', clearSearch);
     document.getElementById('show-rejected').addEventListener('change', handleToggleRejected);
 
     // Add click handlers to pre-rendered pair cards

@@ -175,11 +175,17 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             </div>
             <div class="header-controls-wrapper">
                 <div class="header-controls">
-                    <input type="search"
-                           id="search-input"
-                           placeholder="Search entities or relationships..."
-                           aria-label="Search"
-                           style="margin: 0;">
+                    <div class="search-wrapper">
+                        <input type="text"
+                               id="search-input"
+                               placeholder="Search entities or relationships..."
+                               aria-label="Search">
+                        <button type="button"
+                                id="search-clear"
+                                class="search-clear-btn"
+                                aria-label="Clear search"
+                                tabindex="-1">×</button>
+                    </div>
                     <label>
                         <input type="checkbox" id="show-rejected" role="switch">
                         Show rejected
