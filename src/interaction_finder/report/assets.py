@@ -913,6 +913,60 @@ const state = {
     showRejected: false,
 };
 
+// URL state management
+function getStateFromURL() {
+    const params = new URLSearchParams(window.location.search);
+    return {
+        pair: params.has('pair') ? parseInt(params.get('pair'), 10) : null,
+        doc: params.has('doc') ? parseInt(params.get('doc'), 10) : null,
+        search: params.get('search') || '',
+        rejected: params.get('rejected') === '1',
+    };
+}
+
+function updateURL(usePushState = false) {
+    const params = new URLSearchParams();
+    if (state.selectedPairId !== null) {
+        params.set('pair', state.selectedPairId);
+    }
+    if (state.openDocumentIdx !== null) {
+        params.set('doc', state.openDocumentIdx);
+    }
+    if (state.searchQuery) {
+        params.set('search', state.searchQuery);
+    }
+    if (state.showRejected) {
+        params.set('rejected', '1');
+    }
+    const newURL = params.toString() ? `?${params.toString()}` : window.location.pathname;
+    if (usePushState) {
+        history.pushState(null, '', newURL);
+    } else {
+        history.replaceState(null, '', newURL);
+    }
+}
+
+function restoreStateFromURL() {
+    const urlState = getStateFromURL();
+    // Restore search and rejected filter first (affects pair visibility)
+    state.searchQuery = urlState.search;
+    state.showRejected = urlState.rejected;
+    // Update UI controls to match
+    document.getElementById('search-input').value = urlState.search;
+    document.getElementById('show-rejected').checked = urlState.rejected;
+    // Restore pair selection if valid
+    if (urlState.pair !== null && !Number.isNaN(urlState.pair)) {
+        const filtered = getFilteredPairs();
+        const match = findFilteredPairById(urlState.pair, filtered);
+        if (match) {
+            state.selectedPairId = urlState.pair;
+            if (urlState.doc !== null && !Number.isNaN(urlState.doc)) {
+                state.openDocumentIdx = urlState.doc;
+            }
+        }
+    }
+}
+
 function getPairIdFromCard(card) {
     if (!card || !card.id) return NaN;
     const parts = card.id.split('-');
@@ -956,6 +1010,18 @@ function initReport() {
         });
     });
 
+    // Handle browser back/forward navigation
+    window.addEventListener('popstate', () => {
+        restoreStateFromURL();
+        updateHeaderCounts();
+        updatePairListDisplay();
+        renderContent();
+        renderReasoning();
+    });
+
+    // Restore state from URL before initial render
+    restoreStateFromURL();
+
     // Initial render
     updateHeaderCounts();
     updatePairListDisplay();
@@ -966,6 +1032,7 @@ function initReport() {
 // Search handler
 function handleSearch(e) {
     state.searchQuery = e.target.value.toLowerCase();
+    updateURL(false);  // replaceState for search
     updateHeaderCounts();
     updatePairListDisplay();
     renderContent();
@@ -975,6 +1042,7 @@ function handleSearch(e) {
 // Toggle rejected pairs
 function handleToggleRejected(e) {
     state.showRejected = e.target.checked;
+    updateURL(false);  // replaceState for filter toggle
     updateHeaderCounts();
     updatePairListDisplay();
     renderContent();
@@ -1098,6 +1166,7 @@ function selectPair(pairId) {
     }
     state.selectedPairId = pairId;
     state.openDocumentIdx = null;
+    updateURL(true);  // pushState for pair selection
     updatePairListDisplay();
     renderContent();
     renderReasoning();
@@ -1189,6 +1258,7 @@ function toggleDocument(idx) {
     } else {
         state.openDocumentIdx = idx;
     }
+    updateURL(true);  // pushState for document toggle
     renderContent();
     renderReasoning();
 
@@ -1407,6 +1477,7 @@ function selectPairAndDocument(pairIdx, docIdx) {
     // Open the document (or first if not found)
     state.openDocumentIdx = assessIdx !== -1 ? assessIdx : 0;
 
+    updateURL(true);  // pushState for pair+document selection
     updatePairListDisplay();
     renderContent();
     renderReasoning();
