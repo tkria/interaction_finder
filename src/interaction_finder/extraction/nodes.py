@@ -52,11 +52,13 @@ from interaction_finder.extraction.utils import (
     adjust_heading_levels,
     collect_relevant_text_for_quotes,
     extract_all_forms,
+    extract_document_citations,
     identify_proximal_sets,
     is_obvious_variant,
     make_entity_pair_key,
     normalize_for_comparison,
     osa_distance,
+    validate_document_citations,
 )
 from interaction_finder.logging import logfire
 from interaction_finder.resources import Resource
@@ -1558,6 +1560,8 @@ Provide: accepted (true/false), relationship (selected label), confidence (high/
                 )
                 return (pair_key, judgment)
             # Need LLM investigation
+            # Collect valid document IDs from all assessments for citation validation
+            valid_doc_ids = {a.resource_id.id for a in assessments}
             # Detect contentious pairs (supporting + refuting evidence)
             is_contentious = bool(spread.supporting and spread.refuting)
 
@@ -1603,6 +1607,15 @@ Provide: accepted (true/false), relationship (selected label), confidence (high/
                     ),
                 )
 
+            # Extract and validate document citations from reasoning
+            cited_ids = extract_document_citations(result.output.reasoning)
+            valid_citations, invalid_citations = validate_document_citations(
+                cited_ids, valid_doc_ids
+            )
+            if invalid_citations:
+                ctx.deps.logger.warning(
+                    f"Invalid document citations in reasoning for {pair_key}: {invalid_citations}"
+                )
             # Create judgment using LLM-selected relationship
             first_assessment = assessments[0]
             judgment = PairJudgment(
@@ -1621,6 +1634,7 @@ Provide: accepted (true/false), relationship (selected label), confidence (high/
                 accepted=result.output.accepted,
                 confidence=result.output.confidence,
                 reasoning=result.output.reasoning,
+                cited_documents=valid_citations,
             )
             return (pair_key, judgment)
         finally:

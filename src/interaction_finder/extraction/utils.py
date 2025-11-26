@@ -834,3 +834,53 @@ def adjust_heading_levels(text: str, target_min_level: int) -> str:
         return "#" * new_level + " "
 
     return _HEADING_PATTERN.sub(adjust_heading, text)
+
+
+# Pattern for document ID citations: [N_hash] where N is a number and hash is exactly 8 lowercase alphanumeric chars
+_CITATION_PATTERN = re.compile(r"\[(\d+_[a-z0-9]{8})\]")
+
+
+def extract_document_citations(text: str) -> list[str]:
+    """Extract document ID citations from text.
+
+    Finds all citations in the format [N_hash] where N is a counter
+    and hash is the alphanumeric resource hash.
+
+    Parameters:
+        text: Text potentially containing citations
+
+    Returns:
+        List of unique document IDs in order of first appearance
+
+    Examples:
+        >>> extract_document_citations("Evidence from [1_abc123] and [2_def456]")
+        ['1_abc123', '2_def456']
+
+        >>> extract_document_citations("Cited [1_abc123] twice [1_abc123]")
+        ['1_abc123']
+    """
+    seen = set()
+    result = []
+    for match in _CITATION_PATTERN.finditer(text):
+        doc_id = match.group(1)
+        if doc_id not in seen:
+            seen.add(doc_id)
+            result.append(doc_id)
+    return result
+
+
+def validate_document_citations(
+    cited_ids: list[str], valid_ids: set[str]
+) -> tuple[list[str], list[str]]:
+    """Validate cited document IDs against a set of valid IDs.
+
+    Parameters:
+        cited_ids: Document IDs extracted from text
+        valid_ids: Set of document IDs that were provided in the prompt
+
+    Returns:
+        (valid_citations, invalid_citations) tuple
+    """
+    valid = [doc_id for doc_id in cited_ids if doc_id in valid_ids]
+    invalid = [doc_id for doc_id in cited_ids if doc_id not in valid_ids]
+    return valid, invalid
