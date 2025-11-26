@@ -197,15 +197,10 @@ class StatusTable:
             categories.setdefault(counter.category, []).append(counter)
         # Build rows: (label, value, annotation)
         rows: list[tuple[str, str, str]] = []
-        first_category = True
         for category, cat_counters in categories.items():
             # Category activation: any counter not unstarted
             cat_active = any(c.status != "unstarted" for c in cat_counters)
             label_style = "bold cyan" if cat_active else "cyan"
-            # Blank line between categories (except first)
-            if not first_category and category:
-                rows.append(("", "", ""))
-            first_category = False
             # Category header (if named)
             if category:
                 rows.append((f"[{label_style}]{category}[/]", "", ""))
