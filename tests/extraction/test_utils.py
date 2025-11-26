@@ -1100,6 +1100,14 @@ class TestFindBestEntityMatch:
         """Test empty candidates returns None."""
         assert find_best_entity_match("BRCA1", []) is None
 
+    def test_empty_query(self):
+        """Test empty query returns None."""
+        assert find_best_entity_match("", ["a", "b"]) is None
+
+    def test_whitespace_query(self):
+        """Test whitespace-only query returns None."""
+        assert find_best_entity_match("   ", ["a", "b"]) is None
+
     def test_no_match_found(self):
         """Test returns None when no match found."""
         assert find_best_entity_match("BRCA1", ["TP53", "EGFR"]) is None
@@ -1108,6 +1116,57 @@ class TestFindBestEntityMatch:
         """Test returns the original candidate string, not normalized."""
         result = find_best_entity_match("brca1", ["BRCA1"])
         assert result == "BRCA1"  # Original form, not "brca1"
+
+    def test_original_wins_regardless_of_order(self):
+        """Test original candidate wins over variant regardless of list order."""
+        # "a" should match candidate "a", not "a (b)" via its variant
+        assert find_best_entity_match("a", ["a (b)", "a"]) == "a"
+        assert find_best_entity_match("a", ["a", "a (b)"]) == "a"
+
+    def test_variant_collision_uses_first_candidate(self):
+        """Test when multiple candidates share a variant, first in list wins."""
+        # Both "a (b)" and "a (c)" have variant "a", first one wins
+        assert find_best_entity_match("a", ["a (b)", "a (c)"]) == "a (b)"
+        assert find_best_entity_match("a", ["a (c)", "a (b)"]) == "a (c)"
+
+    def test_parenthetical_content_matches_candidate(self):
+        """Test query can match via parenthetical content of candidate."""
+        result = find_best_entity_match("b", ["a (b)", "c"])
+        assert result == "a (b)"
+
+    # Short string edge cases - fuzzy matching should be conservative
+    def test_rejects_single_char_mismatch(self):
+        """Test single char query doesn't fuzzy match different char."""
+        assert find_best_entity_match("A", ["B"]) is None
+
+    def test_rejects_short_transposition(self):
+        """Test short string transpositions are rejected (too risky)."""
+        assert find_best_entity_match("AB", ["BA"]) is None
+        assert find_best_entity_match("IL", ["LI"]) is None
+
+    def test_rejects_similar_gene_numbers(self):
+        """Test similar gene names with different numbers don't match."""
+        # p53, p63, p73 are different genes - should not fuzzy match
+        assert find_best_entity_match("p53", ["p63"]) is None
+
+    def test_rejects_gene_family_members(self):
+        """Test gene family members don't fuzzy match each other."""
+        assert find_best_entity_match("SMAD1", ["SMAD2"]) is None
+        assert find_best_entity_match("VEGFR1", ["VEGFR2"]) is None
+        assert find_best_entity_match("IL-6", ["IL-8"]) is None
+        assert find_best_entity_match("BRCA1", ["BRCA2"]) is None
+        assert find_best_entity_match("HER2", ["HER3"]) is None
+
+    def test_allows_longer_number_differences(self):
+        """Test that longer numbers (3+ digits) can still fuzzy match."""
+        # Study numbers, years, etc. with 3+ digits aren't gene families
+        # These go through normal fuzzy matching rules (90% similar, passes)
+        assert find_best_entity_match("Study 2024", ["Study 2025"]) == "Study 2025"
+
+    def test_accepts_high_similarity_typo(self):
+        """Test typos in longer strings are accepted."""
+        # BMPR2 vs BMRP2 (transposition) - letters differ, not just numbers
+        assert find_best_entity_match("BMRP2", ["BMPR2"]) == "BMPR2"
 
     # Real-world examples from the warning messages
     def test_real_example_gdf2_bmp9(self):
@@ -1167,6 +1226,23 @@ class TestFindBestEntityMatch:
             ["a (b)", "a", "b"],
         )
         assert result == "a (b)"
+
+    def test_parenthetical_candidate_expansion(self):
+        """Test query without parens matches candidate with parens."""
+        result = find_best_entity_match(
+            "a",
+            ["a (b)", "c", "d"],
+        )
+        assert result == "a (b)"
+
+    def test_parenthetical_original_preferred_over_expanded(self):
+        """Test original candidate preferred over another's expanded variant."""
+        # Query "a" should match candidate "a" not "a (b)" via its variant
+        result = find_best_entity_match(
+            "a",
+            ["a (b)", "a"],
+        )
+        assert result == "a"
 
     def test_parenthetical_acronym_matches(self):
         """Test matching acronym inside parentheses to candidate."""

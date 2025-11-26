@@ -277,15 +277,19 @@ def find_best_entity_match(
     query_variants = _extract_query_variants(query)
     if not query_variants:
         return None
-    # Build lookup: normalized candidate → original candidate
+    # Build lookup: normalized form → original candidate
+    # Two passes: variants first, then originals, so originals always win
     norm_to_original: dict[str, str] = {}
     for c in candidates:
-        c_norm = normalize_for_comparison(c)
-        if c_norm not in norm_to_original:
-            norm_to_original[c_norm] = c
+        for c_variant in _extract_query_variants(c)[1:]:  # Skip original (index 0)
+            c_norm = normalize_for_comparison(c_variant)
+            if c_norm not in norm_to_original:
+                norm_to_original[c_norm] = c
+    for c in candidates:
+        norm_to_original[normalize_for_comparison(c)] = c  # Originals overwrite
     # Normalize query variants once
     variant_norms = [normalize_for_comparison(v) for v in query_variants]
-    # Stage 1+2: Exact and normalized match (combined)
+    # Stage 1+2: Exact/normalized match (query variants checked in priority order)
     for v_norm in variant_norms:
         if v_norm in norm_to_original:
             return norm_to_original[v_norm]
@@ -310,9 +314,15 @@ def find_best_entity_match(
         scores.append((best_similarity, best_dist, best_shorter_len, c_orig))
     scores.sort(reverse=True)  # Higher similarity first
     best_similarity, best_dist, shorter_len, best_candidate = scores[0]
+    # Require reasonable similarity (at least 70% match)
+    if best_similarity < 0.7:
+        return None
     # Max distance scales with string length: 1 + floor(len/10)
     max_distance = 1 + shorter_len // 10
     if best_dist > max_distance:
+        return None
+    # Reject matches where only short (1-2 digit) numbers differ (e.g. SMAD1/SMAD2)
+    if _only_short_number_difference(query, best_candidate):
         return None
     # Require specificity: gap to second-best scales inversely with match quality
     # Gap needed = 2 * (1 - best_similarity), so strong matches need small gaps
@@ -320,6 +330,24 @@ def find_best_entity_match(
     if len(scores) > 1 and best_similarity - scores[1][0] < min_gap:
         return None
     return best_candidate
+
+
+# Regex for 1-2 digit numbers not adjacent to other digits
+_SHORT_NUMBER_RE = re.compile(r"(?<!\d)\d{1,2}(?!\d)")
+
+
+def _only_short_number_difference(a: str, b: str) -> bool:
+    """Check if strings differ only in short (1-2 digit) numbers.
+
+    Used to reject fuzzy matches between entities like SMAD1/SMAD2, IL-6/IL-8,
+    p53/p63 which are distinct entities differing only by number, not typos.
+    """
+    a_lower, b_lower = a.lower(), b.lower()
+    if a_lower == b_lower:
+        return False
+    a_masked = _SHORT_NUMBER_RE.sub("#", a_lower)
+    b_masked = _SHORT_NUMBER_RE.sub("#", b_lower)
+    return a_masked == b_masked and a_masked != a_lower
 
 
 def _is_valid_entity_form(form: str) -> bool:
