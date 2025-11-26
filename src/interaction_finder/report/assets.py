@@ -1114,14 +1114,12 @@ function handleToggleRejected(e) {
 function updateHeaderCounts() {
     const filtered = getFilteredPairs();
 
-    // Count entities by kind (extract from rendered HTML)
+    // Count entities by kind (from data-kind attributes on entity name spans)
     const entityKinds = {};
     filtered.forEach(card => {
-        const kinds = Array.from(card.querySelectorAll('.entity-kind'))
-            .map(el => el.textContent.trim());
-
-        const kind1 = kinds[0] || 'unknown';
-        const kind2 = kinds.length > 1 ? kinds[1] : 'unknown';
+        const entitySpans = card.querySelectorAll('.pair-entities > span');
+        const kind1 = entitySpans[0]?.dataset.kind || 'unknown';
+        const kind2 = entitySpans[1]?.dataset.kind || 'unknown';
 
         if (!entityKinds[kind1]) entityKinds[kind1] = new Set();
         if (!entityKinds[kind2]) entityKinds[kind2] = new Set();

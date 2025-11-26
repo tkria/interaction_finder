@@ -115,10 +115,10 @@ def _render_pair_cards(pairs: list[dict[str, Any]]) -> str:
              data-contentious="{str(bool(pair.get("contentious"))).lower()}"
              data-doc-groups='{doc_groups_data}'>
             <div class="pair-entities">
-                <span title="{_escape_html(entity1_aliases_display)}">
+                <span title="{_escape_html(entity1_aliases_display)}" data-kind="{_escape_html(pair["entity1"]["kind"])}">
                     {_escape_html(pair["entity1"]["name"])}
                 </span>
-                <span title="{_escape_html(entity2_aliases_display)}">
+                <span title="{_escape_html(entity2_aliases_display)}" data-kind="{_escape_html(pair["entity2"]["kind"])}">
                     {_escape_html(pair["entity2"]["name"])}
                 </span>
             </div>{kinds_html}{summary_html}
