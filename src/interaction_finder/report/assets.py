@@ -968,10 +968,23 @@ function updateURL(usePushState = false) {
     }
     const newURL = params.toString() ? `?${params.toString()}` : window.location.pathname;
     if (usePushState) {
-        history.pushState(null, '', newURL);
+        // Store current state in history.state so we can detect "return to previous"
+        const stateData = {
+            pair: state.selectedPairId,
+            doc: state.openDocumentIdx,
+            scroll: scroll,
+        };
+        history.pushState(stateData, '', newURL);
     } else {
         history.replaceState(null, '', newURL);
     }
+}
+
+// Check if navigating to (newPairId, newDocIdx) would return to the previous history state
+function wouldReturnToPrevious(newPairId, newDocIdx) {
+    const prev = history.state;
+    if (!prev) return false;
+    return prev.pair === newPairId && prev.doc === newDocIdx;
 }
 
 // Debounced scroll handler for URL updates
@@ -1063,8 +1076,13 @@ function initReport() {
     });
 
     // Handle browser back/forward navigation
-    window.addEventListener('popstate', () => {
+    window.addEventListener('popstate', (event) => {
+        // Prefer scroll from history.state (captured at pushState time) over URL params
+        const historyScroll = event.state?.scroll;
         restoreStateFromURL();
+        if (historyScroll && historyScroll.length === 3) {
+            state.pendingScroll = historyScroll;
+        }
         updateHeaderCounts();
         updatePairListDisplay();
         renderContent();
@@ -1312,16 +1330,17 @@ function toggleDocument(idx) {
     // Capture the clicked header's viewport position before any changes
     const clickedHeader = document.querySelectorAll('.document-header')[idx];
     const headerTopBeforeToggle = clickedHeader ? clickedHeader.getBoundingClientRect().top : null;
-
-    if (state.openDocumentIdx === idx) {
-        state.openDocumentIdx = null;
-    } else {
-        state.openDocumentIdx = idx;
+    // Determine the new document index after toggle
+    const newDocIdx = state.openDocumentIdx === idx ? null : idx;
+    // Check if this would return to the previous history state
+    if (wouldReturnToPrevious(state.selectedPairId, newDocIdx)) {
+        history.back();  // Let popstate handler restore everything including scroll
+        return;
     }
+    state.openDocumentIdx = newDocIdx;
     updateURL(true);  // pushState for document toggle
     renderContent();
     renderReasoning();
-
     // After rendering, adjust scroll to keep clicked header at same viewport position
     if (headerTopBeforeToggle !== null) {
         requestAnimationFrame(() => {
@@ -1330,7 +1349,6 @@ function toggleDocument(idx) {
             if (newClickedHeader) {
                 const headerTopAfterToggle = newClickedHeader.getBoundingClientRect().top;
                 const scrollAdjustment = headerTopAfterToggle - headerTopBeforeToggle;
-
                 if (scrollAdjustment !== 0) {
                     const contentArea = document.getElementById('content');
                     contentArea.scrollTop += scrollAdjustment;
@@ -1516,6 +1534,12 @@ function openDocument(docIdx) {
         console.warn(`Document ${docIdx} not found in pair ${state.selectedPairId}`);
         return;
     }
+    // Check if this would return to the previous history state
+    if (wouldReturnToPrevious(state.selectedPairId, assessIdx)) {
+        history.back();  // Let popstate handler restore everything including scroll
+        return;
+    }
+    updateURL(true);  // pushState with current scroll before changing state
     state.openDocumentIdx = assessIdx;
     renderContent();
     renderReasoning();
@@ -1534,21 +1558,21 @@ function selectPairAndDocument(pairIdx, docIdx) {
     // Find pairIdx in filtered pairs
     const filtered = getFilteredPairs();
     const match = findFilteredPairById(pairIdx, filtered);
-
     if (!match) {
         console.warn(`Pair ${pairIdx} not in filtered list`);
         return;
     }
-
-    state.selectedPairId = pairIdx;
-
     const pairCard = match.card;
     const docIndices = pairCard.dataset.docs.trim().split(' ').map(n => parseInt(n));
     const assessIdx = docIndices.indexOf(docIdx);
-
-    // Open the document (or first if not found)
-    state.openDocumentIdx = assessIdx !== -1 ? assessIdx : 0;
-
+    const newDocIdx = assessIdx !== -1 ? assessIdx : 0;
+    // Check if this would return to the previous history state
+    if (wouldReturnToPrevious(pairIdx, newDocIdx)) {
+        history.back();  // Let popstate handler restore everything including scroll
+        return;
+    }
+    state.selectedPairId = pairIdx;
+    state.openDocumentIdx = newDocIdx;
     updateURL(true);  // pushState for pair+document selection
     updatePairListDisplay();
     renderContent();
