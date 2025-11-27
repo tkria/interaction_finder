@@ -1085,7 +1085,7 @@ class ConsolidateRelationshipsNode(BaseNode[State, Deps, ExtractionResult]):
 
         # Build prompt
         relationships_list = sorted(relationships)
-        relationships_str = "\n".join(f"- {r}" for r in relationships_list)
+        relationships_str = "\n".join(f"- {r!r}" for r in relationships_list)
         entity_types_str = ", ".join(ctx.state.target_entity_types)
 
         prompt = f"""**Research topic:** {ctx.state.topic}
@@ -1828,13 +1828,13 @@ class ConsolidateNewRelationshipsNode(BaseNode[State, Deps, ExtractionResult]):
 
             # Query LLM for polarity classification
             new_labels_list = sorted(new_labels)
-            new_labels_str = "\n".join(f"- {r}" for r in new_labels_list)
+            new_labels_str = "\n".join(f"- {r!r}" for r in new_labels_list)
             entity_types_str = ", ".join(ctx.state.target_entity_types)
             # Include existing labels so agent can consolidate new ones into them
             existing_labels = sorted(ctx.state.relationship_polarities.keys())
             if existing_labels:
                 existing_str = "\n".join(
-                    f"- {r} ({ctx.state.relationship_polarities[r]})"
+                    f"- {r!r} ({ctx.state.relationship_polarities[r]})"
                     for r in existing_labels
                 )
                 existing_section = f"""
@@ -1858,33 +1858,59 @@ For each new relationship, provide:
             agent = get_relationship_consolidation_agent(ctx.deps.config)
             usage = RunUsage()
             try:
+                # Initial attempt
                 with rename_agent(agent, name="ConsolidateNewRelationshipsNode"):
                     async with ctx.deps.agent_semaphore:
                         result = await agent.run(prompt, deps=ctx.deps, usage=usage)
+                self._apply_relationship_consolidations(
+                    result.output.consolidations, ctx
+                )
 
-                # Apply consolidations and store polarities
-                for cons in result.output.consolidations:
-                    ctx.state.relationship_polarities[cons.original] = cons.polarity
-                    ctx.state.relationship_polarities[cons.consolidated] = cons.polarity
-                    # Apply consolidation if label changed
-                    if cons.original != cons.consolidated:
-                        norm_orig = normalize_for_comparison(cons.original)
-                        for (
-                            assessments
-                        ) in ctx.state.pair_assessments_by_resource.values():
-                            for assessment in assessments:
-                                if (
-                                    normalize_for_comparison(assessment.relationship)
-                                    == norm_orig
-                                ):
-                                    assessment.relationship = cons.consolidated
+                # Retry up to 3 times for any missing labels
+                missing = new_labels - set(ctx.state.relationship_polarities.keys())
+                for attempt in range(1, 4):
+                    if not missing:
+                        break
+                    ctx.deps.logger.warning(
+                        f"LLM omitted {len(missing)} labels; retrying (attempt {attempt}/3)"
+                    )
+                    retry_prompt = self._build_classification_prompt(
+                        ctx, missing, entity_types_str, existing_section
+                    )
+                    try:
+                        with rename_agent(
+                            agent,
+                            name=f"ConsolidateNewRelationshipsNode-retry{attempt}",
+                        ):
+                            async with ctx.deps.agent_semaphore:
+                                result = await agent.run(
+                                    retry_prompt, deps=ctx.deps, usage=usage
+                                )
+                        self._apply_relationship_consolidations(
+                            result.output.consolidations, ctx
+                        )
+                        missing = missing - set(
+                            ctx.state.relationship_polarities.keys()
+                        )
+                    except (TimeoutError, ConnectionError, ValueError) as e:
+                        ctx.deps.logger.warning(
+                            f"Retry {attempt} failed: {type(e).__name__}"
+                        )
+                        break
+
+                # Default any remaining missing labels to neutral
+                if missing:
+                    ctx.deps.logger.warning(
+                        f"Defaulting {len(missing)} missing labels to neutral"
+                    )
+                    for label in missing:
+                        ctx.state.relationship_polarities[label] = "neutral"
 
             except (TimeoutError, ConnectionError, ValueError) as e:
                 ctx.deps.logger.warning(
                     f"New relationship consolidation failed: {type(e).__name__}: {e}; "
                     f"defaulting new labels to neutral polarity"
                 )
-                # Default new labels to neutral
                 for label in new_labels:
                     ctx.state.relationship_polarities[label] = "neutral"
 
@@ -1893,6 +1919,46 @@ For each new relationship, provide:
                 self._filter_irrelevant_pairs(ctx)
 
             return JudgeCrossDocumentNode()
+
+    def _build_classification_prompt(
+        self,
+        ctx: GraphRunContext[State, Deps],
+        labels: set[str],
+        entity_types_str: str,
+        existing_section: str,
+    ) -> str:
+        """Build prompt for relationship classification."""
+        labels_str = "\n".join(f"- {r!r}" for r in sorted(labels))
+        return f"""**Research topic:** {ctx.state.topic}
+
+**Target entity types:** {entity_types_str}
+{existing_section}
+**Relationship labels to classify:**
+{labels_str}
+
+For each relationship, provide:
+1. Consolidated canonical form (use an existing label if appropriate, or the original if distinct)
+2. Polarity classification relative to this research topic"""
+
+    def _apply_relationship_consolidations(
+        self,
+        consolidations: list[RelationshipConsolidation],
+        ctx: GraphRunContext[State, Deps],
+    ) -> None:
+        """Apply relationship consolidations and store polarities."""
+        for cons in consolidations:
+            ctx.state.relationship_polarities[cons.original] = cons.polarity
+            ctx.state.relationship_polarities[cons.consolidated] = cons.polarity
+            # Apply consolidation if label changed
+            if cons.original != cons.consolidated:
+                norm_orig = normalize_for_comparison(cons.original)
+                for assessments in ctx.state.pair_assessments_by_resource.values():
+                    for assessment in assessments:
+                        if (
+                            normalize_for_comparison(assessment.relationship)
+                            == norm_orig
+                        ):
+                            assessment.relationship = cons.consolidated
 
     def _filter_irrelevant_pairs(self, ctx: GraphRunContext[State, Deps]) -> None:
         """Filter pairs that now have only irrelevant relationships after sweep.
