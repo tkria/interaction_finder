@@ -1613,36 +1613,52 @@ function renderReasoning(resetScroll = true) {
     }
 }
 
-// Scroll timer for doc-link hover (scroll accordion into view after 1s)
+// Doc-link hover state
+let docLinkHoverDoc = null;
 let docLinkScrollTimer = null;
+let docLinkLastScrollTime = 0;
 // Set up delegated hover handlers for .doc-link elements (called once at init)
 function initDocLinkHover() {
     const rightbar = document.getElementById('rightbar');
     const content = document.getElementById('content');
     if (!rightbar || !content) return;
-    const getAccordion = (e) => {
-        const link = e.target.closest('.doc-link');
-        const docIdx = link?.dataset.doc;
-        return docIdx ? document.querySelector(`.document-accordion[data-doc="${docIdx}"]`) : null;
+    const scrollIntoViewIfNeeded = (accordion) => {
+        const rect = accordion.getBoundingClientRect();
+        const contentRect = content.getBoundingClientRect();
+        if (rect.top < contentRect.top || rect.bottom > contentRect.bottom) {
+            accordion.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+        docLinkLastScrollTime = Date.now();
     };
     rightbar.addEventListener('mouseover', (e) => {
-        const accordion = getAccordion(e);
+        const link = e.target.closest('.doc-link');
+        const docIdx = link?.dataset.doc;
+        if (docIdx === docLinkHoverDoc) return;
+        // Clear previous
+        if (docLinkHoverDoc) {
+            document.querySelector(`.document-accordion[data-doc="${docLinkHoverDoc}"]`)
+                ?.classList.remove('doc-link-hover');
+        }
+        clearTimeout(docLinkScrollTimer);
+        docLinkHoverDoc = docIdx;
+        if (!docIdx) return;
+        const accordion = document.querySelector(`.document-accordion[data-doc="${docIdx}"]`);
         if (!accordion) return;
         accordion.classList.add('doc-link-hover');
-        clearTimeout(docLinkScrollTimer);
-        docLinkScrollTimer = setTimeout(() => {
-            const rect = accordion.getBoundingClientRect();
-            const contentRect = content.getBoundingClientRect();
-            if (rect.top < contentRect.top || rect.bottom > contentRect.bottom) {
-                accordion.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-            }
-        }, 1000);
+        // Immediate scroll if recently scrolled, otherwise 1s delay
+        if (Date.now() - docLinkLastScrollTime < 5000) {
+            scrollIntoViewIfNeeded(accordion);
+        } else {
+            docLinkScrollTimer = setTimeout(() => scrollIntoViewIfNeeded(accordion), 1000);
+        }
     });
-    rightbar.addEventListener('mouseout', (e) => {
-        const accordion = getAccordion(e);
-        if (!accordion) return;
-        accordion.classList.remove('doc-link-hover');
+    rightbar.addEventListener('mouseleave', () => {
+        if (docLinkHoverDoc) {
+            document.querySelector(`.document-accordion[data-doc="${docLinkHoverDoc}"]`)
+                ?.classList.remove('doc-link-hover');
+        }
         clearTimeout(docLinkScrollTimer);
+        docLinkHoverDoc = null;
     });
 }
 
