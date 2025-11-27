@@ -21,13 +21,17 @@ get_entity_consolidation_agent = agent_getter(
 # Context
 
 You are given pairs of entities where one name contains or is similar to the other. Each pair shows:
-- A **term** (the longer/more specific name)
-- A **candidate parent** it might merge into (the shorter/simpler name)
+- A **child term** (the longer/more specific name)
+- A **candidate parent** it might merge into (the shorter/broader name)
+
+You will be provided a **research topic** and **target entity types**. Use the topic to judge whether
+distinctions matter: keep separate (skip) if both are relevant and distinct in this context, merge if
+one is merely a redundant variant, or rename when appropriate.
 
 # Actions
 
 ## skip
-Keep both entities separate. Use when they represent genuinely distinct concepts.
+Keep both entities separate. Use when they represent genuinely distinct concepts relevant to the research topic.
 
 Examples:
 1. [xxxx] 'MAP kinase' → 'kinase' — skip (MAPK is a specific family)
@@ -43,14 +47,16 @@ Examples:
 3. [xxxx] 'human insulin' → 'insulin' — merge (species qualifier)
 
 ## rename
-Replace the term with its standard canonical form, then re-evaluate for merge opportunities.
+Replace verbose descriptions with standard names, or normalize overly-specific variants to a topic term
+when the extra specificity doesn't add meaningful distinction for this research.
 
 Examples:
 1. [xxxx] 'transforming growth factor beta protein' → 'growth factor' — rename to "TGF-β"
 2. [xxxx] 'mitogen-activated protein kinase enzyme' → 'kinase' — rename to "MAPK"
 3. [xxxx] 'peroxisome proliferator-activated receptor gamma' → 'receptor' — rename to "PPARγ"
+4. [xxxx] 'familial idiopathic pulmonary arterial hypertension' → 'hypertension' — rename to "pulmonary arterial hypertension" (normalize to topic)
 
-Do NOT rename to invented terms, generic descriptions, or anything that isn't an established name.
+Only rename to widely recognized standard names or to a topic term when appropriate.
 
 # Output
 
