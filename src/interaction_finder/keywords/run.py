@@ -108,9 +108,6 @@ async def run_keyword_research(
             }
             # Initialize resource pool
             resource_pool = ResourcePool()
-            # Initialize progress tracking (set max_rounds in progress)
-            if progress:
-                progress.set_round(0, kw_config.max_rounds)
             # Create dependencies
             deps = Deps(
                 http_client=http_client,
