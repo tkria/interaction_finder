@@ -1245,21 +1245,22 @@ function updateHeaderCounts() {
         }
     });
 
-    // Update only dynamic stats (pairs, entity counts, documents)
-    const pairsEl = document.getElementById('stat-pairs');
-    if (pairsEl) pairsEl.textContent = filtered.length;
-
-    const docsEl = document.getElementById('stat-documents');
-    if (docsEl) docsEl.textContent = docIndices.size;
-
-    // Update entity kind counts (rebuild container since kinds may change)
-    const kindsContainer = document.getElementById('stat-entity-kinds');
-    if (kindsContainer) {
-        const kindItems = Object.entries(entityKinds).map(([kind, names]) =>
-            `<span class="stat-item"><span class="stat-label">${escapeHtml(kind)}:</span> <span>${names.size}</span></span>`
-        ).join('\\n');
-        kindsContainer.innerHTML = kindItems;
+    // Build stat values
+    const stats = {
+        pairs: filtered.length,
+        documents: docIndices.size,
+    };
+    for (const [kind, names] of Object.entries(entityKinds)) {
+        stats[`entity-kind-${kind}`] = names.size;
     }
+
+    // Update all elements with data-stat attributes
+    document.querySelectorAll('[data-stat]').forEach(el => {
+        const statName = el.dataset.stat;
+        if (statName in stats) {
+            el.textContent = stats[statName];
+        }
+    });
 }
 
 // Filter pairs based on search and rejected toggle

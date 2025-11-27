@@ -8,6 +8,7 @@ from interaction_finder.upgrade import create_empty_checkpoint
 from interaction_finder.version import (
     check_checkpoint_version,
     format_version_display,
+    format_version_tooltip,
     get_version_string,
     is_breaking_change,
     parse_version_string,
@@ -97,6 +98,26 @@ class TestFormatVersionDisplay:
     def test_format_variants(self, version_str, expected):
         """Format all version string variants for display."""
         assert format_version_display(version_str) == expected
+
+
+class TestFormatVersionTooltip:
+    """Tests for format_version_tooltip function."""
+
+    @pytest.mark.parametrize(
+        "version_str,expected_display,expected_tooltip",
+        [
+            ("474v0.1.0#1822414", "0.1.0", "rev.474 #1822414"),
+            ("1v1.0.0#abc", "1.0.0", "rev.1 #abc"),
+            ("100v1.2.3", "1.2.3", "rev.100"),
+            ("v0.1.0", "0.1.0", None),
+            ("v2.0.0#deadbeef", "2.0.0", "#deadbeef"),
+        ],
+    )
+    def test_format_variants(self, version_str, expected_display, expected_tooltip):
+        """Format all version string variants with tooltip."""
+        display, tooltip = format_version_tooltip(version_str)
+        assert display == expected_display
+        assert tooltip == expected_tooltip
 
 
 class TestIsBreakingChange:

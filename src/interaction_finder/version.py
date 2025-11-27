@@ -82,6 +82,29 @@ def format_version_display(version_str: str) -> str:
     return semver_str
 
 
+def format_version_tooltip(version_str: str) -> tuple[str, str | None]:
+    """Format version for tooltip display.
+
+    Returns:
+        (display_text, tooltip_text) where tooltip may be None if no extra info
+
+    Example:
+        '474v0.1.0#1822414' -> ('0.1.0', 'rev.474 #1822414')
+        'v0.1.0' -> ('0.1.0', None)
+    """
+    count, semver, hash_ = parse_version_string(version_str)
+    semver_str = f"{semver[0]}.{semver[1]}.{semver[2]}"
+    # Build tooltip only if we have extra info
+    if count is not None and hash_ is not None:
+        tooltip = f"rev.{count} #{hash_}"
+        return semver_str, tooltip
+    elif count is not None:
+        return semver_str, f"rev.{count}"
+    elif hash_ is not None:
+        return semver_str, f"#{hash_}"
+    return semver_str, None
+
+
 def check_checkpoint_version(checkpoint_version: str | None) -> tuple[bool, bool]:
     """Check checkpoint version against current.
 

@@ -7,7 +7,7 @@ No JSON embedding - all data queryable from HTML structure.
 from typing import Any
 
 from interaction_finder.report.assets import get_css, get_js
-from interaction_finder.version import format_version_display
+from interaction_finder.version import format_version_tooltip
 
 
 def _render_pair_cards(pairs: list[dict[str, Any]]) -> str:
@@ -155,24 +155,18 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 <h1 class="header-title">{{ title }}</h1>
                 <div class="header-stats">
                     <span class="stat-item">
-                        <span class="stat-label">Topic:</span>
-                        <span>{{ metadata.topic }}</span>
-                    </span>
-                    <span class="stat-item">
                         <span class="stat-label">Pairs:</span>
-                        <span id="stat-pairs">{{ metadata.total_pairs }}</span>
+                        <span data-stat="pairs">{{ metadata.total_pairs }}</span>
                     </span>
-                    <span id="stat-entity-kinds">
                     {% for kind, count in metadata.entity_stats.items() %}
                     <span class="stat-item">
                         <span class="stat-label">{{ kind }}:</span>
-                        <span>{{ count }}</span>
+                        <span data-stat="entity-kind-{{ kind }}">{{ count }}</span>
                     </span>
                     {% endfor %}
-                    </span>
                     <span class="stat-item">
                         <span class="stat-label">Documents:</span>
-                        <span id="stat-documents">{{ metadata.resource_count }}</span>
+                        <span data-stat="documents">{{ metadata.resource_count }}</span>
                     </span>
                     {{ metadata.version_stat }}
                 </div>
@@ -326,10 +320,11 @@ def render_template(
     # Build version stat HTML (only if version provided)
     version_stat_html = ""
     if version:
-        display_version = format_version_display(version)
+        display_text, tooltip = format_version_tooltip(version)
+        tooltip_attr = f' data-tooltip="{_escape_html(tooltip)}"' if tooltip else ""
         version_stat_html = f"""<span class="stat-item">
                         <span class="stat-label">Version:</span>
-                        <span>{_escape_html(display_version)}</span>
+                        <span{tooltip_attr}>{_escape_html(display_text)}</span>
                     </span>"""
     # Replace placeholders
     replacements = {
