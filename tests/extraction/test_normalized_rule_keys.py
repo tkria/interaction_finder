@@ -10,7 +10,7 @@ import pytest
 from unittest.mock import MagicMock
 
 from interaction_finder.extraction.nodes import ConsolidateEntitiesNode
-from interaction_finder.extraction.models import EntityMention
+from interaction_finder.extraction.models import EntityMention, EntityRef
 from interaction_finder.resources import ResourceId
 from interaction_finder.extraction.state import State
 from interaction_finder.extraction.utils import normalize_for_comparison
@@ -55,33 +55,66 @@ class TestNormalizedRuleKeys:
         # Three docs with different capitalizations
         ctx.state.validated_entities_by_resource = {
             resource1: {
-                "BRCA": EntityMention(
-                    kind="gene", name="BRCA", aliases=[], quotes=[], reasoning="doc1"
+                "BRCA": EntityRef(
+                    canonical="BRCA",
+                    mentions=[
+                        EntityMention(
+                            kind="gene", name="BRCA", aliases=[], quotes=[], reasoning="doc1"
+                        )
+                    ],
                 ),
-                "BRCA1": EntityMention(
-                    kind="gene", name="BRCA1", aliases=[], quotes=[], reasoning="doc1"
+                "BRCA1": EntityRef(
+                    canonical="BRCA1",
+                    mentions=[
+                        EntityMention(
+                            kind="gene", name="BRCA1", aliases=[], quotes=[], reasoning="doc1"
+                        )
+                    ],
                 ),
             },
             resource2: {
-                "brca": EntityMention(
-                    kind="gene", name="brca", aliases=[], quotes=[], reasoning="doc2"
+                "brca": EntityRef(
+                    canonical="brca",
+                    mentions=[
+                        EntityMention(
+                            kind="gene", name="brca", aliases=[], quotes=[], reasoning="doc2"
+                        )
+                    ],
                 ),
-                "brca1": EntityMention(
-                    kind="gene", name="brca1", aliases=[], quotes=[], reasoning="doc2"
+                "brca1": EntityRef(
+                    canonical="brca1",
+                    mentions=[
+                        EntityMention(
+                            kind="gene", name="brca1", aliases=[], quotes=[], reasoning="doc2"
+                        )
+                    ],
                 ),
             },
             resource3: {
-                "Brca": EntityMention(
-                    kind="gene", name="Brca", aliases=[], quotes=[], reasoning="doc3"
+                "Brca": EntityRef(
+                    canonical="Brca",
+                    mentions=[
+                        EntityMention(
+                            kind="gene", name="Brca", aliases=[], quotes=[], reasoning="doc3"
+                        )
+                    ],
                 ),
-                "Brca1": EntityMention(
-                    kind="gene", name="Brca1", aliases=[], quotes=[], reasoning="doc3"
+                "Brca1": EntityRef(
+                    canonical="Brca1",
+                    mentions=[
+                        EntityMention(
+                            kind="gene", name="Brca1", aliases=[], quotes=[], reasoning="doc3"
+                        )
+                    ],
                 ),
             },
         }
 
-        # Single rule using normalized key, canonical target
-        merge_rules = {("brca1", "gene"): "BRCA"}
+        # Single rule using normalized key, value is (target, reasoning) tuple
+        merge_rules = {
+            ("brca1", "gene"): ("BRCA", "test"),
+            ("brca", "gene"): ("BRCA", "auto"),
+        }
 
         node._apply_merge_rules_globally(merge_rules, ctx)
 
@@ -94,7 +127,7 @@ class TestNormalizedRuleKeys:
             parent_name = list(entities.keys())[0]
             parent = entities[parent_name]
             assert any(
-                normalize_for_comparison(a) == "brca1" for a in parent.aliases
+                normalize_for_comparison(a) == "brca1" for a in parent.aliases()
             ), f"BRCA1 variant not in aliases for {resource_id}"
 
     def test_normalized_rule_matches_greek_variants(self, mock_deps):
@@ -115,29 +148,50 @@ class TestNormalizedRuleKeys:
 
         ctx.state.validated_entities_by_resource = {
             resource1: {
-                "TGF": EntityMention(
-                    kind="gene", name="TGF", aliases=[], quotes=[], reasoning="parent"
+                "TGF": EntityRef(
+                    canonical="TGF",
+                    mentions=[
+                        EntityMention(
+                            kind="gene", name="TGF", aliases=[], quotes=[], reasoning="parent"
+                        )
+                    ],
                 ),
-                "TGF-β": EntityMention(
-                    kind="gene", name="TGF-β", aliases=[], quotes=[], reasoning="child"
+                "TGF-β": EntityRef(
+                    canonical="TGF-β",
+                    mentions=[
+                        EntityMention(
+                            kind="gene", name="TGF-β", aliases=[], quotes=[], reasoning="child"
+                        )
+                    ],
                 ),
             },
             resource2: {
-                "TGF": EntityMention(
-                    kind="gene", name="TGF", aliases=[], quotes=[], reasoning="parent"
+                "TGF": EntityRef(
+                    canonical="TGF",
+                    mentions=[
+                        EntityMention(
+                            kind="gene", name="TGF", aliases=[], quotes=[], reasoning="parent"
+                        )
+                    ],
                 ),
-                "TGF-beta": EntityMention(
-                    kind="gene",
-                    name="TGF-beta",
-                    aliases=[],
-                    quotes=[],
-                    reasoning="child",
+                "TGF-beta": EntityRef(
+                    canonical="TGF-beta",
+                    mentions=[
+                        EntityMention(
+                            kind="gene",
+                            name="TGF-beta",
+                            aliases=[],
+                            quotes=[],
+                            reasoning="child",
+                        )
+                    ],
                 ),
             },
         }
 
         # Rule for normalized "tgf beta" matches both TGF-β and TGF-beta
-        merge_rules = {("tgf beta", "gene"): "TGF"}
+        # Value is (target, reasoning) tuple
+        merge_rules = {("tgf beta", "gene"): ("TGF", "test")}
 
         node._apply_merge_rules_globally(merge_rules, ctx)
 
@@ -170,32 +224,42 @@ class TestParentheticalMatching:
 
         ctx.state.validated_entities_by_resource = {
             resource1: {
-                "PAH": EntityMention(
-                    kind="disease",
-                    name="PAH",
-                    aliases=[],
-                    quotes=[],
-                    reasoning="parent",
+                "PAH": EntityRef(
+                    canonical="PAH",
+                    mentions=[
+                        EntityMention(
+                            kind="disease",
+                            name="PAH",
+                            aliases=[],
+                            quotes=[],
+                            reasoning="parent",
+                        )
+                    ],
                 ),
-                "Pulmonary arterial hypertension (PAH)": EntityMention(
-                    kind="disease",
-                    name="Pulmonary arterial hypertension (PAH)",
-                    aliases=[],
-                    quotes=[],
-                    reasoning="child",
+                "Pulmonary arterial hypertension (PAH)": EntityRef(
+                    canonical="Pulmonary arterial hypertension (PAH)",
+                    mentions=[
+                        EntityMention(
+                            kind="disease",
+                            name="Pulmonary arterial hypertension (PAH)",
+                            aliases=[],
+                            quotes=[],
+                            reasoning="child",
+                        )
+                    ],
                 ),
             },
         }
 
-        # Rule uses base form (without parenthetical)
-        merge_rules = {("pulmonary arterial hypertension", "disease"): "PAH"}
+        # Rule uses base form (without parenthetical) - value is (target, reasoning) tuple
+        merge_rules = {("pulmonary arterial hypertension", "disease"): ("PAH", "test")}
 
         node._apply_merge_rules_globally(merge_rules, ctx)
 
         entities = ctx.state.validated_entities_by_resource[resource1]
         assert "PAH" in entities
         assert len(entities) == 1
-        assert "Pulmonary arterial hypertension (PAH)" in entities["PAH"].aliases
+        assert "Pulmonary arterial hypertension (PAH)" in entities["PAH"].aliases()
 
     def test_parenthetical_entity_finds_parenthetical_target(self, mock_deps):
         """Parenthetical entity should find parenthetical target by expanded form.
@@ -216,29 +280,40 @@ class TestParentheticalMatching:
 
         ctx.state.validated_entities_by_resource = {
             resource1: {
-                "Pulmonary arterial hypertension (PAH)": EntityMention(
-                    kind="disease",
-                    name="Pulmonary arterial hypertension (PAH)",
-                    aliases=[],
-                    quotes=[],
-                    reasoning="parent",
+                "Pulmonary arterial hypertension (PAH)": EntityRef(
+                    canonical="Pulmonary arterial hypertension (PAH)",
+                    mentions=[
+                        EntityMention(
+                            kind="disease",
+                            name="Pulmonary arterial hypertension (PAH)",
+                            aliases=[],
+                            quotes=[],
+                            reasoning="parent",
+                        )
+                    ],
                 ),
-                "Idiopathic pulmonary arterial hypertension (IPAH)": EntityMention(
-                    kind="disease",
-                    name="Idiopathic pulmonary arterial hypertension (IPAH)",
-                    aliases=[],
-                    quotes=[],
-                    reasoning="child",
+                "Idiopathic pulmonary arterial hypertension (IPAH)": EntityRef(
+                    canonical="Idiopathic pulmonary arterial hypertension (IPAH)",
+                    mentions=[
+                        EntityMention(
+                            kind="disease",
+                            name="Idiopathic pulmonary arterial hypertension (IPAH)",
+                            aliases=[],
+                            quotes=[],
+                            reasoning="child",
+                        )
+                    ],
                 ),
             },
         }
 
         # Rule uses base forms - target matches via parenthetical expansion
+        # Value is (target, reasoning) tuple
         merge_rules = {
             (
                 "idiopathic pulmonary arterial hypertension",
                 "disease",
-            ): "Pulmonary arterial hypertension"
+            ): ("Pulmonary arterial hypertension (PAH)", "test")
         }
 
         node._apply_merge_rules_globally(merge_rules, ctx)
@@ -247,7 +322,7 @@ class TestParentheticalMatching:
         # Should have merged - child entity absorbed into parent
         assert len(entities) == 1
         remaining = list(entities.values())[0]
-        assert "Idiopathic pulmonary arterial hypertension (IPAH)" in remaining.aliases
+        assert "Idiopathic pulmonary arterial hypertension (IPAH)" in remaining.aliases()
 
 
 class TestTransitiveChainNormalization:
@@ -265,16 +340,17 @@ class TestTransitiveChainNormalization:
         node = ConsolidateEntitiesNode()
 
         # Input rules with canonical targets but normalized keys
+        # Value is (target, reasoning) tuple
         merge_rules = {
-            ("brca2", "gene"): "BRCA1",
-            ("brca1", "gene"): "BRCA",
+            ("brca2", "gene"): ("BRCA1", "test"),
+            ("brca1", "gene"): ("BRCA", "test"),
         }
 
         resolved = node._resolve_transitive_merges(merge_rules)
 
-        # Both should point to final parent BRCA
-        assert resolved[("brca2", "gene")] == "BRCA"
-        assert resolved[("brca1", "gene")] == "BRCA"
+        # Both should point to final parent BRCA - value is (target, reasoning)
+        assert resolved[("brca2", "gene")][0] == "BRCA"
+        assert resolved[("brca1", "gene")][0] == "BRCA"
 
     def test_chain_handles_case_mismatch_in_targets(self, mock_deps):
         """Chain should handle when target canonical doesn't match key case.
@@ -288,13 +364,14 @@ class TestTransitiveChainNormalization:
         """
         node = ConsolidateEntitiesNode()
 
+        # Value is (target, reasoning) tuple
         merge_rules = {
-            ("gene x", "gene"): "Gene X",
-            ("gene x variant", "gene"): "gene x",
+            ("gene x", "gene"): ("Gene X", "test"),
+            ("gene x variant", "gene"): ("gene x", "test"),
         }
 
         resolved = node._resolve_transitive_merges(merge_rules)
 
-        # Chain should resolve to final canonical
-        assert resolved[("gene x variant", "gene")] == "Gene X"
-        assert resolved[("gene x", "gene")] == "Gene X"
+        # Chain should resolve to final canonical - value is (target, reasoning)
+        assert resolved[("gene x variant", "gene")][0] == "Gene X"
+        assert resolved[("gene x", "gene")][0] == "Gene X"

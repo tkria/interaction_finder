@@ -11,7 +11,7 @@ import pytest
 from pydantic_graph import GraphRunContext
 
 from interaction_finder.extraction.nodes import ConsolidateEntitiesNode
-from interaction_finder.extraction.models import EntityMention
+from interaction_finder.extraction.models import EntityMention, EntityRef
 from interaction_finder.extraction.state import State
 from interaction_finder.resources import ResourceId, ResourcePool
 from interaction_finder.settings import IfetcherConfig
@@ -56,27 +56,30 @@ def test_merge_combines_aliases_from_both_entities(mock_deps):
 
     # Parent has its own aliases, child has its own aliases
     state.validated_entities_by_resource[resource1] = {
-        "BRCA": EntityMention(
-            kind="gene",
-            name="BRCA",
-            aliases=["breast cancer gene", "BRCA-related"],
-            quotes=[],
-            reasoning="parent",
-        ),
-        "BRCA1": EntityMention(
-            kind="gene",
-            name="BRCA1",
-            aliases=["BRCA1 gene", "breast cancer 1"],
-            quotes=[],
-            reasoning="child",
-        ),
+        name: EntityRef(canonical=name, mentions=[mention])
+        for name, mention in {
+            "BRCA": EntityMention(
+                kind="gene",
+                name="BRCA",
+                aliases=["breast cancer gene", "BRCA-related"],
+                quotes=[],
+                reasoning="parent",
+            ),
+            "BRCA1": EntityMention(
+                kind="gene",
+                name="BRCA1",
+                aliases=["BRCA1 gene", "breast cancer 1"],
+                quotes=[],
+                reasoning="child",
+            ),
+        }.items()
     }
 
     node = ConsolidateEntitiesNode()
     ctx = GraphRunContext(state=state, deps=mock_deps)
 
-    # Create merge rule: BRCA1 → BRCA (key is normalized, target is canonical)
-    merge_rules = {("brca1", "gene"): "BRCA"}
+    # Create merge rule: BRCA1 → BRCA (key is normalized, value is (target, reasoning) tuple)
+    merge_rules = {("brca1", "gene"): ("BRCA", "test")}
 
     # Note: canonical_name_variants no longer needed with new implementation
 
@@ -98,7 +101,7 @@ def test_merge_combines_aliases_from_both_entities(mock_deps):
         "BRCA1 gene",  # Child's alias
         "breast cancer 1",  # Child's alias
     }
-    assert set(merged_entity.aliases) == expected_aliases
+    assert set(merged_entity.aliases()) == expected_aliases
 
 
 def test_rename_preserves_existing_aliases(mock_deps):
@@ -119,24 +122,28 @@ def test_rename_preserves_existing_aliases(mock_deps):
 
     # Entity with existing aliases that will be renamed to a different form
     state.validated_entities_by_resource[resource1] = {
-        "pulmonary arterial hypertension": EntityMention(
-            kind="phenotype",
-            name="pulmonary arterial hypertension",
-            aliases=["pulmonary hypertension"],
-            quotes=[],
-            reasoning="test",
-        )
+        name: EntityRef(canonical=name, mentions=[mention])
+        for name, mention in {
+            "pulmonary arterial hypertension": EntityMention(
+                kind="phenotype",
+                name="pulmonary arterial hypertension",
+                aliases=["pulmonary hypertension"],
+                quotes=[],
+                reasoning="test",
+            )
+        }.items()
     }
 
     node = ConsolidateEntitiesNode()
     ctx = GraphRunContext(state=state, deps=mock_deps)
 
     # Rename to standard abbreviation (different normalized form)
+    # Value is (target, reasoning) tuple
     merge_rules = {
         (
             "pulmonary arterial hypertension",
             "phenotype",
-        ): "PAH"
+        ): ("PAH", "test")
     }
 
     node._apply_merge_rules_globally(merge_rules, ctx)
@@ -151,7 +158,7 @@ def test_rename_preserves_existing_aliases(mock_deps):
         "pulmonary hypertension",  # Original alias
         "pulmonary arterial hypertension",  # Old canonical name
     }
-    assert set(renamed_entity.aliases) == expected_aliases
+    assert set(renamed_entity.aliases()) == expected_aliases
 
 
 def test_cross_document_merge_with_explicit_rule(mock_deps):
@@ -173,36 +180,42 @@ def test_cross_document_merge_with_explicit_rule(mock_deps):
 
     # UK spelling with aliases
     state.validated_entities_by_resource[resource1] = {
-        "Hereditary haemorrhagic telangiectasia": EntityMention(
-            kind="phenotype",
-            name="Hereditary haemorrhagic telangiectasia",
-            aliases=["HHT", "Osler-Weber-Rendu syndrome"],
-            quotes=[],
-            reasoning="UK doc",
-        )
+        name: EntityRef(canonical=name, mentions=[mention])
+        for name, mention in {
+            "Hereditary haemorrhagic telangiectasia": EntityMention(
+                kind="phenotype",
+                name="Hereditary haemorrhagic telangiectasia",
+                aliases=["HHT", "Osler-Weber-Rendu syndrome"],
+                quotes=[],
+                reasoning="UK doc",
+            )
+        }.items()
     }
 
     # US spelling with different aliases
     state.validated_entities_by_resource[resource2] = {
-        "Hereditary Hemorrhagic Telangiectasia": EntityMention(
-            kind="phenotype",
-            name="Hereditary Hemorrhagic Telangiectasia",
-            aliases=["HHT", "Osler disease"],
-            quotes=[],
-            reasoning="US doc",
-        )
+        name: EntityRef(canonical=name, mentions=[mention])
+        for name, mention in {
+            "Hereditary Hemorrhagic Telangiectasia": EntityMention(
+                kind="phenotype",
+                name="Hereditary Hemorrhagic Telangiectasia",
+                aliases=["HHT", "Osler disease"],
+                quotes=[],
+                reasoning="US doc",
+            )
+        }.items()
     }
 
     node = ConsolidateEntitiesNode()
     ctx = GraphRunContext(state=state, deps=mock_deps)
 
     # Explicit merge rule (simulating LLM decision): UK spelling → US spelling
-    # Key is normalized form of UK spelling, target is canonical US spelling
+    # Key is normalized form of UK spelling, value is (target, reasoning) tuple
     merge_rules = {
         (
             "hereditary haemorrhagic telangiectasia",
             "phenotype",
-        ): "Hereditary Hemorrhagic Telangiectasia"
+        ): ("Hereditary Hemorrhagic Telangiectasia", "test")
     }
 
     node._apply_merge_rules_globally(merge_rules, ctx)
@@ -214,16 +227,16 @@ def test_cross_document_merge_with_explicit_rule(mock_deps):
 
     # Doc1 entity should have old UK name in aliases plus original aliases
     doc1_entity = doc1_entities["Hereditary Hemorrhagic Telangiectasia"]
-    assert "Hereditary haemorrhagic telangiectasia" in doc1_entity.aliases
-    assert "HHT" in doc1_entity.aliases
-    assert "Osler-Weber-Rendu syndrome" in doc1_entity.aliases
+    assert "Hereditary haemorrhagic telangiectasia" in doc1_entity.aliases()
+    assert "HHT" in doc1_entity.aliases()
+    assert "Osler-Weber-Rendu syndrome" in doc1_entity.aliases()
 
     # Doc2 entity unchanged (rule doesn't apply - different normalized form)
     doc2_entities = state.validated_entities_by_resource[resource2]
     assert "Hereditary Hemorrhagic Telangiectasia" in doc2_entities
     doc2_entity = doc2_entities["Hereditary Hemorrhagic Telangiectasia"]
-    assert "HHT" in doc2_entity.aliases
-    assert "Osler disease" in doc2_entity.aliases
+    assert "HHT" in doc2_entity.aliases()
+    assert "Osler disease" in doc2_entity.aliases()
 
 
 def test_multiple_merges_accumulate_aliases(mock_deps):
@@ -239,36 +252,39 @@ def test_multiple_merges_accumulate_aliases(mock_deps):
 
     # Three entities that will merge: BRCA2 → BRCA1 → BRCA
     state.validated_entities_by_resource[resource1] = {
-        "BRCA": EntityMention(
-            kind="gene",
-            name="BRCA",
-            aliases=["breast cancer associated"],
-            quotes=[],
-            reasoning="parent",
-        ),
-        "BRCA1": EntityMention(
-            kind="gene",
-            name="BRCA1",
-            aliases=["BRCA1 gene"],
-            quotes=[],
-            reasoning="child1",
-        ),
-        "BRCA2": EntityMention(
-            kind="gene",
-            name="BRCA2",
-            aliases=["BRCA2 gene"],
-            quotes=[],
-            reasoning="child2",
-        ),
+        name: EntityRef(canonical=name, mentions=[mention])
+        for name, mention in {
+            "BRCA": EntityMention(
+                kind="gene",
+                name="BRCA",
+                aliases=["breast cancer associated"],
+                quotes=[],
+                reasoning="parent",
+            ),
+            "BRCA1": EntityMention(
+                kind="gene",
+                name="BRCA1",
+                aliases=["BRCA1 gene"],
+                quotes=[],
+                reasoning="child1",
+            ),
+            "BRCA2": EntityMention(
+                kind="gene",
+                name="BRCA2",
+                aliases=["BRCA2 gene"],
+                quotes=[],
+                reasoning="child2",
+            ),
+        }.items()
     }
 
     node = ConsolidateEntitiesNode()
     ctx = GraphRunContext(state=state, deps=mock_deps)
 
-    # Create transitive merge rules: BRCA2→BRCA1, BRCA1→BRCA (keys normalized, targets canonical)
+    # Create transitive merge rules: BRCA2→BRCA1, BRCA1→BRCA (keys normalized, values are (target, reasoning) tuples)
     merge_rules = {
-        ("brca2", "gene"): "BRCA1",
-        ("brca1", "gene"): "BRCA",
+        ("brca2", "gene"): ("BRCA1", "test"),
+        ("brca1", "gene"): ("BRCA", "test"),
     }
     # Rules must be resolved transitively before applying
     resolved_rules = node._resolve_transitive_merges(merge_rules)
@@ -288,7 +304,7 @@ def test_multiple_merges_accumulate_aliases(mock_deps):
         "BRCA2",  # BRCA2's canonical name
         "BRCA2 gene",  # BRCA2's alias
     }
-    assert set(final_entity.aliases) == expected_aliases
+    assert set(final_entity.aliases()) == expected_aliases
 
 
 def test_no_duplicate_aliases(mock_deps):
@@ -304,31 +320,34 @@ def test_no_duplicate_aliases(mock_deps):
 
     # Both entities have overlapping aliases
     state.validated_entities_by_resource[resource1] = {
-        "BRCA": EntityMention(
-            kind="gene",
-            name="BRCA",
-            aliases=[
-                "breast cancer gene",
-                "BRCA-related",
-                "BRCA1",
-            ],  # Already has BRCA1!
-            quotes=[],
-            reasoning="parent",
-        ),
-        "BRCA1": EntityMention(
-            kind="gene",
-            name="BRCA1",
-            aliases=["breast cancer gene", "BRCA1 specific"],  # Overlapping alias
-            quotes=[],
-            reasoning="child",
-        ),
+        name: EntityRef(canonical=name, mentions=[mention])
+        for name, mention in {
+            "BRCA": EntityMention(
+                kind="gene",
+                name="BRCA",
+                aliases=[
+                    "breast cancer gene",
+                    "BRCA-related",
+                    "BRCA1",
+                ],  # Already has BRCA1!
+                quotes=[],
+                reasoning="parent",
+            ),
+            "BRCA1": EntityMention(
+                kind="gene",
+                name="BRCA1",
+                aliases=["breast cancer gene", "BRCA1 specific"],  # Overlapping alias
+                quotes=[],
+                reasoning="child",
+            ),
+        }.items()
     }
 
     node = ConsolidateEntitiesNode()
     ctx = GraphRunContext(state=state, deps=mock_deps)
 
-    # Key by normalized form, target is canonical name
-    merge_rules = {("brca1", "gene"): "BRCA"}
+    # Key by normalized form, value is (target, reasoning) tuple
+    merge_rules = {("brca1", "gene"): ("BRCA", "test")}
 
     ctx.state.canonical_name_variants[("brca", "gene")] = {"BRCA"}
     ctx.state.canonical_name_variants[("brca1", "gene")] = {"BRCA1"}
@@ -340,7 +359,7 @@ def test_no_duplicate_aliases(mock_deps):
 
     # Check that "breast cancer gene" and "BRCA1" don't appear multiple times
     alias_counts = {}
-    for alias in merged_entity.aliases:
+    for alias in merged_entity.aliases():
         alias_counts[alias] = alias_counts.get(alias, 0) + 1
 
     for alias, count in alias_counts.items():

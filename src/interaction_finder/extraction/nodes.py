@@ -40,7 +40,9 @@ from interaction_finder.extraction.consolidate_entities import (
     get_entity_consolidation_agent,
 )
 from interaction_finder.extraction.models import (
+    ConsolidationRule,
     EntityPairKey,
+    EntityRef,
     ExtractionMetadata,
     ExtractionResult,
     PairAssessment,
@@ -72,6 +74,16 @@ _TOKEN_CHARS = string.ascii_letters + string.digits
 def _generate_token(length: int = 4) -> str:
     """Generate a random alphanumeric token for pair verification."""
     return "".join(secrets.choice(_TOKEN_CHARS) for _ in range(length))
+
+
+def _convert_consolidation_rules(
+    state_rules: dict[tuple[str, str], tuple[str, str]],
+) -> list[ConsolidationRule]:
+    """Convert state consolidation rules to serializable ConsolidationRule objects."""
+    return [
+        ConsolidationRule(source=source, kind=kind, target=target, reasoning=reasoning)
+        for (source, kind), (target, reasoning) in state_rules.items()
+    ]
 
 
 def _resolve_pair_from_decision(
@@ -194,6 +206,7 @@ class ProcessDocumentsNode(BaseNode[State, Deps, ExtractionResult]):
                 quotes_validated=0,
                 quotes_failed=0,
             ),
+            consolidation_rules=[],
         )
 
     async def _process_document(
@@ -243,7 +256,11 @@ class ProcessDocumentsNode(BaseNode[State, Deps, ExtractionResult]):
                 if not validated:
                     return  # No valid entities after kind filtering
 
-                ctx.state.validated_entities_by_resource[resource.id] = validated
+                # Store validated entities as EntityRefs (preserve original mentions)
+                ctx.state.validated_entities_by_resource[resource.id] = {
+                    name: EntityRef(canonical=name, mentions=[mention])
+                    for name, mention in validated.items()
+                }
 
                 # Update progress (documents_processed incremented in main loop for atomicity)
                 if ctx.deps.progress:
@@ -304,7 +321,7 @@ class ProcessDocumentsNode(BaseNode[State, Deps, ExtractionResult]):
                 try:
                     assessments = await assess_document_pairs(
                         pairs,
-                        validated,
+                        ctx.state.validated_entities_by_resource[resource.id],
                         resource,
                         ctx.state.topic,
                         ctx.deps.config.tools.extraction.region_padding_chunks,
@@ -428,22 +445,23 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
 
         for entities in ctx.state.validated_entities_by_resource.values():
             for entity_name, entity in entities.items():
-                if entity.kind not in unique_by_kind:
-                    unique_by_kind[entity.kind] = {}
+                entity_kind = entity.kind
+                if entity_kind not in unique_by_kind:
+                    unique_by_kind[entity_kind] = {}
 
                 # Extract all forms: name + aliases + parenthetical expansions
-                all_forms = extract_all_forms(entity_name, entity.aliases)
+                all_forms = extract_all_forms(entity_name, entity.aliases())
 
                 # Normalize each form and map it to this entity's canonical name
                 for form in all_forms:
                     norm_form = normalize_for_comparison(form)
-                    if norm_form not in unique_by_kind[entity.kind]:
-                        unique_by_kind[entity.kind][norm_form] = set()
+                    if norm_form not in unique_by_kind[entity_kind]:
+                        unique_by_kind[entity_kind][norm_form] = set()
 
-                    unique_by_kind[entity.kind][norm_form].add(entity_name)
+                    unique_by_kind[entity_kind][norm_form].add(entity_name)
 
                     # Track canonical variant globally
-                    norm_key = (norm_form, entity.kind)
+                    norm_key = (norm_form, entity_kind)
                     if norm_key not in ctx.state.canonical_name_variants:
                         ctx.state.canonical_name_variants[norm_key] = set()
                     ctx.state.canonical_name_variants[norm_key].add(entity_name)
@@ -480,7 +498,7 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
     def _find_merge_candidates(
         self, unique_entities: dict[str, dict[str, set[str]]]
     ) -> tuple[
-        dict[tuple[str, str], str],
+        dict[tuple[str, str], tuple[str, str]],
         dict[str, list[tuple[str, str]]],
         dict[tuple[str, str], str],
     ]:
@@ -497,11 +515,11 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
 
         Returns:
             Tuple of:
-            - {(canonical_child, kind): canonical_parent} for auto-merge rules
+            - {(norm_child, kind): (target, reasoning)} for auto-merge rules with provenance
             - {kind: [(norm_parent, norm_child), ...]} for LLM review pairs
             - {(normalized_form, kind): canonical_name} for Phase 3 lookups
         """
-        auto_merge_rules: dict[tuple[str, str], str] = {}
+        auto_merge_rules: dict[tuple[str, str], tuple[str, str]] = {}
 
         # PHASE 1: Handle exact normalized matches (capitalization variants)
         # When multiple canonical names map to the same normalized form, merge them
@@ -516,7 +534,10 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
                     for child_name in canonical_names:
                         if child_name != canonical:
                             child_norm = normalize_for_comparison(child_name)
-                            auto_merge_rules[(child_norm, kind)] = canonical
+                            auto_merge_rules[(child_norm, kind)] = (
+                                canonical,
+                                "auto:cap",
+                            )
                             phase1_rule_count += 1
                     # CONSOLIDATE: Update unique_entities to have single canonical
                     # This ensures phase 2 works with consolidated 1:1 mappings
@@ -563,7 +584,10 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
                             else:
                                 parent_norm, child_norm = norm2, norm1
                                 parent_canonical = canonical2
-                            auto_merge_rules[(child_norm, kind)] = parent_canonical
+                            auto_merge_rules[(child_norm, kind)] = (
+                                parent_canonical,
+                                "auto:fuzzy",
+                            )
                             del normalized_entities[child_norm]
                             phase2_rule_count += 1
                             # Skip to next pair (one norm_form is now gone)
@@ -618,7 +642,7 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
 
     def _propagate_rules_to_unique_entities(
         self,
-        rules: dict[tuple[str, str], str],
+        rules: dict[tuple[str, str], tuple[str, str]],
         unique_entities: dict[str, dict[str, set[str]]],
     ) -> None:
         """Propagate merge rules to update canonical names in unique_entities.
@@ -626,6 +650,8 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
         After creating merge rules, canonical names in unique_entities may reference
         entities that have been merged away. This follows rule chains to update all
         references to point to the final canonical name.
+
+        Rules are (norm_child, kind) → (target, reasoning). Only target is used here.
 
         Mutates unique_entities in place.
         """
@@ -637,7 +663,7 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
                     current = canonical
                     visited = {normalize_for_comparison(current)}
                     while (normalize_for_comparison(current), kind) in rules:
-                        current = rules[(normalize_for_comparison(current), kind)]
+                        current = rules[(normalize_for_comparison(current), kind)][0]
                         current_norm = normalize_for_comparison(current)
                         if current_norm in visited:
                             break  # Cycle detection
@@ -669,16 +695,16 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
         canonical_lookup: dict[tuple[str, str], str],
         unique_entities: dict[str, dict[str, set[str]]],
         ctx: GraphRunContext[State, Deps],
-    ) -> tuple[dict[tuple[str, str], str], set[tuple[str, str]]]:
+    ) -> tuple[dict[tuple[str, str], tuple[str, str]], set[tuple[str, str]]]:
         """Query LLM for consolidation decisions on entity pairs.
 
         Returns:
             Tuple of (rules, new_names) where:
-            - rules maps (norm_child, kind) → canonical_target
+            - rules maps (norm_child, kind) → (target, reasoning)
             - new_names is set of (new_canonical, kind) for targets that don't
               exist in unique_entities (i.e., renames to new names)
         """
-        rules: dict[tuple[str, str], str] = {}
+        rules: dict[tuple[str, str], tuple[str, str]] = {}
         new_names: set[tuple[str, str]] = set()
         for kind, pairs in candidate_pairs_by_kind.items():
             kind_entities = unique_entities.get(kind, {})
@@ -690,7 +716,8 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
                     # Cache stores target canonical name (merge/rename) or False (skip)
                     target = ctx.state.merge_decision_cache[cache_key]
                     if target:
-                        rules[(norm_child, kind)] = target
+                        # Cached decisions use "cached" as reasoning (original LLM reasoning not stored)
+                        rules[(norm_child, kind)] = (target, "cached")
                         # Check if target is a new name (rename to non-existent entity)
                         target_norm = normalize_for_comparison(target)
                         if target_norm not in kind_entities:
@@ -723,15 +750,15 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
         kind_entities: dict[str, set[str]],
         batch_num: int,
         ctx: GraphRunContext[State, Deps],
-    ) -> tuple[dict[tuple[str, str], str], set[tuple[str, str]]]:
+    ) -> tuple[dict[tuple[str, str], tuple[str, str]], set[tuple[str, str]]]:
         """Process a batch of entity pairs for consolidation decisions.
 
         Returns:
             Tuple of (rules, new_names) where:
-            - rules maps (norm_child, kind) → canonical_target
+            - rules maps (norm_child, kind) → (target, reasoning)
             - new_names is set of (new_canonical, kind) for targets not in kind_entities
         """
-        rules: dict[tuple[str, str], str] = {}
+        rules: dict[tuple[str, str], tuple[str, str]] = {}
         new_names: set[tuple[str, str]] = set()
         # Build prompt structures
         pairs_description = []
@@ -807,7 +834,7 @@ For each pair, decide the appropriate action (skip, merge, or rename)."""
                 # Cache decision and create rule (same for merge and rename)
                 for np, nc in norm_pairs:
                     ctx.state.merge_decision_cache[(np, nc, kind)] = target
-                rules[(norm_child, kind)] = target
+                rules[(norm_child, kind)] = (target, decision.reasoning)
                 # Check if target is a new name (not in existing entities)
                 target_norm = normalize_for_comparison(target)
                 if target_norm not in kind_entities:
@@ -817,23 +844,25 @@ For each pair, decide the appropriate action (skip, merge, or rename)."""
         return rules, new_names
 
     def _resolve_transitive_merges(
-        self, merge_rules: dict[tuple[str, str], str]
-    ) -> dict[tuple[str, str], str]:
+        self, merge_rules: dict[tuple[str, str], tuple[str, str]]
+    ) -> dict[tuple[str, str], tuple[str, str]]:
         """Resolve transitive merge chains.
 
         If A→B and B→C, resolve to A→C (and B→C).
         This ensures all entities in a chain ultimately point to the final parent.
 
-        Rules are keyed by (normalized_form, kind). Targets are canonical names.
+        Rules are keyed by (normalized_form, kind). Values are (target, reasoning).
         When following chains, we normalize targets to check for further rules.
+        The final reasoning is taken from the last link in the chain.
 
         Returns:
             Resolved merge rules with transitive chains collapsed
         """
         resolved = {}
-        for (child_norm, kind), target in merge_rules.items():
+        for (child_norm, kind), (target, reasoning) in merge_rules.items():
             # Follow the chain: child → target → target's target → ...
             final_target = target
+            final_reasoning = reasoning
             visited = {child_norm}  # Prevent infinite loops
             # Normalize target to check if it's also a key in the rules
             while True:
@@ -844,148 +873,123 @@ For each pair, decide the appropriate action (skip, merge, or rename)."""
                     # Cycle detected - stop here
                     break
                 visited.add(target_norm)
-                final_target = merge_rules[(target_norm, kind)]
-            resolved[(child_norm, kind)] = final_target
+                final_target, final_reasoning = merge_rules[(target_norm, kind)]
+            resolved[(child_norm, kind)] = (final_target, final_reasoning)
         return resolved
 
     def _apply_merge_rules_globally(
         self,
-        rules: dict[tuple[str, str], str],
+        rules: dict[tuple[str, str], tuple[str, str]],
         ctx: GraphRunContext[State, Deps],
     ) -> None:
         """Apply merge/rename rules to all documents.
 
-        Rules map (norm_child, kind) → target. Keys are normalized forms for
-        cross-document consistency. Target may be a normalized form (for merge)
+        Rules map (norm_child, kind) → (target, reasoning). Keys are normalized forms
+        for cross-document consistency. Target may be a normalized form (for merge)
         or a canonical name (for rename). Rules should be transitively resolved
         before calling.
+
+        Also stores rules in state.consolidation_rules for provenance tracking.
         """
         if not rules:
             return
+        # Store rules for provenance (includes reasoning)
+        ctx.state.consolidation_rules.update(rules)
+        target_by_norm_and_kind: dict[tuple[str, str], str] = {}
+        for (_norm, kind), (target, _) in rules.items():
+            target_key = (normalize_for_comparison(target), kind)
+            target_by_norm_and_kind.setdefault(target_key, target)
         for resource_id, entities in ctx.state.validated_entities_by_resource.items():
-            # Collect all (target, child_name) pairs to process
-            # Check all expanded forms for rule matches (handles "Name (Abbrev)" patterns)
-            to_process = []
-            for child_name in list(entities.keys()):
-                child = entities[child_name]
-                # Check all normalized forms: direct + expanded from parentheticals
-                all_forms = extract_all_forms(child_name, child.aliases)
+            # Build new EntityRefs without mutating underlying mentions
+            grouped: dict[str, list[EntityMention]] = defaultdict(list)
+
+            for child_name, ref in entities.items():
+                target_name = None
+                all_forms = extract_all_forms(child_name, ref.aliases())
                 for form in all_forms:
-                    key = (normalize_for_comparison(form), child.kind)
+                    key = (normalize_for_comparison(form), ref.kind)
                     if key in rules:
-                        target = rules[key]
-                        # Skip if target is exactly the same as child (true no-op)
-                        if target != child_name:
-                            to_process.append((target, child_name))
-                        break  # Found a matching rule, no need to check other forms
-            # Apply merges/renames
-            for target_value, child_name in to_process:
-                if child_name not in entities:
-                    continue
-                child = entities[child_name]
-                # Find existing entity that matches target
-                # Check all expanded forms to handle "Name (Abbrev)" patterns
-                target_norm = normalize_for_comparison(target_value)
-                existing_target_name = None
-                for name, entity in entities.items():
-                    if name == child_name:
-                        continue
-                    # Check if any expanded form matches target
-                    entity_forms = extract_all_forms(name, entity.aliases)
-                    entity_norms = {normalize_for_comparison(f) for f in entity_forms}
-                    if target_norm in entity_norms:
-                        existing_target_name = name
+                        target_name = rules[key][0]
                         break
-                if existing_target_name is not None:
-                    # Both exist - merge child into target
-                    target = entities[existing_target_name]
-                    if child.name not in target.aliases:
-                        target.aliases.append(child.name)
-                    target.quotes.extend(child.quotes)
-                    target.reasoning += f" | MERGED({child.name}): {child.reasoning}"
-                    for alias in child.aliases:
-                        if alias not in target.aliases:
-                            target.aliases.append(alias)
-                    del entities[child_name]
-                    ctx.state.entities_merged += 1
-                else:
-                    # Target doesn't exist - rename child to target_value
-                    if child_name not in child.aliases:
-                        child.aliases.append(child_name)
-                    child.name = target_value
-                    entities[target_value] = child
-                    del entities[child_name]
+                canonical_target = target_by_norm_and_kind.get(
+                    (normalize_for_comparison(child_name), ref.kind)
+                )
+                canonical = target_name or canonical_target or child_name
+                grouped[canonical].extend(ref.mentions)
+
+            new_entities: dict[str, EntityRef] = {
+                canonical: EntityRef(canonical=canonical, mentions=mentions)
+                for canonical, mentions in grouped.items()
+            }
+
+            # Count actual merges within the resource (renames without consolidation
+            # should not contribute to the merge tally).
+            merges_for_resource = max(0, len(entities) - len(new_entities))
+            ctx.state.entities_merged += merges_for_resource
+            ctx.state.validated_entities_by_resource[resource_id] = new_entities
 
     def _update_pair_entity_references(
         self,
-        merge_rules: dict[tuple[str, str], str],
+        merge_rules: dict[tuple[str, str], tuple[str, str]],
         ctx: GraphRunContext[State, Deps],
     ) -> None:
-        """Update EntityMention references in PairAssessments after merging.
+        """Update EntityRef references in PairAssessments after merging.
 
         After entities are merged, pair assessments may reference old entity names.
-        This method updates those references to use the merged names.
+        This method replaces the EntityRef objects with the consolidated versions from
+        validated_entities_by_resource, which have the updated canonical names and
+        aggregated mentions from all merged entities.
 
-        Rules are keyed by (normalized_form, kind) for cross-document consistency.
+        Rules are keyed by (normalized_form, kind). Values are (target, reasoning).
 
         Parameters:
-            merge_rules: Mapping of (norm_child, kind) → target
+            merge_rules: Mapping of (norm_child, kind) → (target, reasoning)
             ctx: Graph run context with state containing assessments
         """
         if not merge_rules:
             return
         for resource_id, assessments in ctx.state.pair_assessments_by_resource.items():
+            # Get consolidated entities for this resource
+            consolidated_entities = ctx.state.validated_entities_by_resource.get(
+                resource_id, {}
+            )
             for assessment in assessments:
-                # Check if entity1 was merged (by normalized form)
+                # Update entity1: check if it was merged, then look up consolidated version
                 e1_key = (
-                    normalize_for_comparison(assessment.entity1.name),
+                    normalize_for_comparison(assessment.entity1.canonical),
                     assessment.entity1.kind,
                 )
                 if e1_key in merge_rules:
-                    merged_name = merge_rules[e1_key]
-                    # Update if canonical name is different (even if normalized same)
-                    if merged_name != assessment.entity1.name:
-                        self._update_entity_in_assessment(
-                            assessment, "entity1", merged_name
+                    # Entity was merged - get target name and look up consolidated EntityRef
+                    merged_name = merge_rules[e1_key][0]
+                    if merged_name in consolidated_entities:
+                        # Use consolidated entity with all merged mentions
+                        assessment.entity1 = consolidated_entities[merged_name]
+                    else:
+                        # Fallback: update canonical but preserve existing mentions
+                        # (happens when validated_entities_by_resource not yet updated)
+                        assessment.entity1 = EntityRef(
+                            canonical=merged_name,
+                            mentions=assessment.entity1.mentions,
                         )
-                # Check if entity2 was merged
+                # Update entity2: check if it was merged, then look up consolidated version
                 e2_key = (
-                    normalize_for_comparison(assessment.entity2.name),
+                    normalize_for_comparison(assessment.entity2.canonical),
                     assessment.entity2.kind,
                 )
                 if e2_key in merge_rules:
-                    merged_name = merge_rules[e2_key]
-                    # Update if canonical name is different (even if normalized same)
-                    if merged_name != assessment.entity2.name:
-                        self._update_entity_in_assessment(
-                            assessment, "entity2", merged_name
+                    # Entity was merged - get target name and look up consolidated EntityRef
+                    merged_name = merge_rules[e2_key][0]
+                    if merged_name in consolidated_entities:
+                        # Use consolidated entity with all merged mentions
+                        assessment.entity2 = consolidated_entities[merged_name]
+                    else:
+                        # Fallback: update canonical but preserve existing mentions
+                        # (happens when validated_entities_by_resource not yet updated)
+                        assessment.entity2 = EntityRef(
+                            canonical=merged_name,
+                            mentions=assessment.entity2.mentions,
                         )
-
-    def _update_entity_in_assessment(
-        self,
-        assessment: PairAssessment,
-        attr: str,
-        new_name: str,
-    ) -> None:
-        """Update entity reference in assessment (mutates in place).
-
-        Parameters:
-            assessment: PairAssessment to update
-            attr: Attribute name ("entity1" or "entity2")
-            new_name: New canonical name to use
-        """
-        entity = getattr(assessment, attr)
-        old_name = entity.name
-
-        # Add old name to aliases if not already present
-        if old_name not in entity.aliases:
-            entity.aliases.append(old_name)
-
-        # Update name
-        entity.name = new_name
-
-        # Update reasoning to show merge
-        entity.reasoning += f" | MERGED_FROM({old_name})"
 
 
 @dataclass
@@ -1221,20 +1225,23 @@ For each relationship, provide:
 
                 ctx.state.pair_judgments[pair_key] = PairJudgment(
                     entity1=SimpleEntity(
-                        name=first.entity1.name,
+                        name=first.entity1.canonical,
                         kind=first.entity1.kind,
-                        aliases=first.entity1.aliases,
+                        aliases=first.entity1.aliases(),
                     ),
                     entity2=SimpleEntity(
-                        name=first.entity2.name,
+                        name=first.entity2.canonical,
                         kind=first.entity2.kind,
-                        aliases=first.entity2.aliases,
+                        aliases=first.entity2.aliases(),
                     ),
                     relationship=first.relationship,
                     spread=spread,
                     accepted=False,
                     confidence="high",
-                    reasoning="All relationship types for this pair were classified as irrelevant to the research question",
+                    reasoning=(
+                        "All relationship types for this pair were classified as "
+                        "irrelevant to the research question"
+                    ),
                 )
                 filtered_pairs.add(pair_key)
 
@@ -1500,14 +1507,14 @@ Provide: accepted (true/false), relationship (selected label), confidence (high/
                 first_assessment = assessments[0]
                 judgment = PairJudgment(
                     entity1=SimpleEntity(
-                        name=first_assessment.entity1.name,
+                        name=first_assessment.entity1.canonical,
                         kind=first_assessment.entity1.kind,
-                        aliases=first_assessment.entity1.aliases,
+                        aliases=first_assessment.entity1.aliases(),
                     ),
                     entity2=SimpleEntity(
-                        name=first_assessment.entity2.name,
+                        name=first_assessment.entity2.canonical,
                         kind=first_assessment.entity2.kind,
-                        aliases=first_assessment.entity2.aliases,
+                        aliases=first_assessment.entity2.aliases(),
                     ),
                     relationship=relationship,
                     spread=spread,
@@ -1547,14 +1554,14 @@ Provide: accepted (true/false), relationship (selected label), confidence (high/
                     pair_key,
                     PairJudgment(
                         entity1=SimpleEntity(
-                            name=first_assessment.entity1.name,
+                            name=first_assessment.entity1.canonical,
                             kind=first_assessment.entity1.kind,
-                            aliases=first_assessment.entity1.aliases,
+                            aliases=first_assessment.entity1.aliases(),
                         ),
                         entity2=SimpleEntity(
-                            name=first_assessment.entity2.name,
+                            name=first_assessment.entity2.canonical,
                             kind=first_assessment.entity2.kind,
-                            aliases=first_assessment.entity2.aliases,
+                            aliases=first_assessment.entity2.aliases(),
                         ),
                         relationship=first_assessment.relationship,
                         spread=spread,
@@ -1575,14 +1582,14 @@ Provide: accepted (true/false), relationship (selected label), confidence (high/
             first_assessment = assessments[0]
             judgment = PairJudgment(
                 entity1=SimpleEntity(
-                    name=first_assessment.entity1.name,
+                    name=first_assessment.entity1.canonical,
                     kind=first_assessment.entity1.kind,
-                    aliases=first_assessment.entity1.aliases,
+                    aliases=first_assessment.entity1.aliases(),
                 ),
                 entity2=SimpleEntity(
-                    name=first_assessment.entity2.name,
+                    name=first_assessment.entity2.canonical,
                     kind=first_assessment.entity2.kind,
-                    aliases=first_assessment.entity2.aliases,
+                    aliases=first_assessment.entity2.aliases(),
                 ),
                 relationship=result.output.relationship,
                 spread=spread,
@@ -1924,14 +1931,14 @@ For each new relationship, provide:
 
                 ctx.state.pair_judgments[pair_key] = PairJudgment(
                     entity1=SimpleEntity(
-                        name=first.entity1.name,
+                        name=first.entity1.canonical,
                         kind=first.entity1.kind,
-                        aliases=first.entity1.aliases,
+                        aliases=first.entity1.aliases(),
                     ),
                     entity2=SimpleEntity(
-                        name=first.entity2.name,
+                        name=first.entity2.canonical,
                         kind=first.entity2.kind,
-                        aliases=first.entity2.aliases,
+                        aliases=first.entity2.aliases(),
                     ),
                     relationship=first.relationship,
                     spread=spread,
@@ -2012,6 +2019,9 @@ class FinalizeNode(BaseNode[State, Deps, ExtractionResult]):
                 resources=ctx.deps.resource_pool,
                 judgments=all_judgments,
                 metadata=metadata,
+                consolidation_rules=_convert_consolidation_rules(
+                    ctx.state.consolidation_rules
+                ),
             )
 
             return End(result)

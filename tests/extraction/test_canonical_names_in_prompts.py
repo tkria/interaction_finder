@@ -17,6 +17,7 @@ from pydantic_graph import GraphRunContext
 
 from interaction_finder.extraction.models import (
     EntityMention,
+    EntityRef,
     EntityConsolidationDecision,
     EntityConsolidationDecisions,
 )
@@ -24,6 +25,10 @@ from interaction_finder.extraction.nodes import ConsolidateEntitiesNode
 from interaction_finder.extraction.state import State
 from interaction_finder.extraction.utils import build_permitted_pairs
 from interaction_finder.resources import ResourceId
+
+
+def ref_map(data: dict[str, EntityMention]) -> dict[str, EntityRef]:
+    return {name: EntityRef(canonical=name, mentions=[mention]) for name, mention in data.items()}
 
 
 @pytest.fixture
@@ -57,22 +62,24 @@ class TestCanonicalNamesInPrompts:
         # Create entities with canonical names that will normalize to substrings
         resource1 = ResourceId(url="https://example.com/doc1", counter=0)
         ctx.state.validated_entities_by_resource = {
-            resource1: {
-                "BMPR2": EntityMention(
-                    kind="gene",
-                    name="BMPR2",
-                    aliases=["BMPR2"],
-                    quotes=[],
-                    reasoning="test",
-                ),
-                "BMPR2 gene": EntityMention(
-                    kind="gene",
-                    name="BMPR2 gene",
-                    aliases=["BMPR2 gene"],
-                    quotes=[],
-                    reasoning="test",
-                ),
-            }
+            resource1: ref_map(
+                {
+                    "BMPR2": EntityMention(
+                        kind="gene",
+                        name="BMPR2",
+                        aliases=["BMPR2"],
+                        quotes=[],
+                        reasoning="test",
+                    ),
+                    "BMPR2 gene": EntityMention(
+                        kind="gene",
+                        name="BMPR2 gene",
+                        aliases=["BMPR2 gene"],
+                        quotes=[],
+                        reasoning="test",
+                    ),
+                }
+            )
         }
 
         # Mock the agent to capture the prompt
@@ -153,22 +160,24 @@ class TestCanonicalNamesInPrompts:
         # "pah" is substring of "pah disease"
         resource1 = ResourceId(url="https://example.com/doc1", counter=0)
         ctx.state.validated_entities_by_resource = {
-            resource1: {
-                "PAH": EntityMention(
-                    kind="disease",
-                    name="PAH",
-                    aliases=["PAH"],
-                    quotes=[],
-                    reasoning="test",
-                ),
-                "PAH Disease": EntityMention(
-                    kind="disease",
-                    name="PAH Disease",
-                    aliases=["PAH Disease"],
-                    quotes=[],
-                    reasoning="test",
-                ),
-            }
+            resource1: ref_map(
+                {
+                    "PAH": EntityMention(
+                        kind="disease",
+                        name="PAH",
+                        aliases=["PAH"],
+                        quotes=[],
+                        reasoning="test",
+                    ),
+                    "PAH Disease": EntityMention(
+                        kind="disease",
+                        name="PAH Disease",
+                        aliases=["PAH Disease"],
+                        quotes=[],
+                        reasoning="test",
+                    ),
+                }
+            )
         }
 
         captured_prompt = None

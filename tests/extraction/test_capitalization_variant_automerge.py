@@ -11,10 +11,14 @@ import pytest
 from pydantic_graph import GraphRunContext
 
 from interaction_finder.extraction.nodes import ConsolidateEntitiesNode
-from interaction_finder.extraction.models import EntityMention
+from interaction_finder.extraction.models import EntityMention, EntityRef
 from interaction_finder.extraction.state import State
 from interaction_finder.resources import ResourceId, ResourcePool
 from interaction_finder.settings import IfetcherConfig
+
+
+def ref_map(data: dict[str, EntityMention]) -> dict[str, EntityRef]:
+    return {name: EntityRef(canonical=name, mentions=[mention]) for name, mention in data.items()}
 
 
 @pytest.fixture
@@ -58,25 +62,29 @@ def test_two_capitalization_variants_automerge_without_llm(mock_deps):
     resource2 = ResourceId(url="http://doc2.com", id="doc2")
 
     # Two documents with same entity, different capitalization
-    state.validated_entities_by_resource[resource1] = {
-        "Pulmonary Hypertension": EntityMention(
-            kind="phenotype",
-            name="Pulmonary Hypertension",
-            aliases=[],
-            quotes=[],
-            reasoning="Doc1",
-        )
-    }
+    state.validated_entities_by_resource[resource1] = ref_map(
+        {
+            "Pulmonary Hypertension": EntityMention(
+                kind="phenotype",
+                name="Pulmonary Hypertension",
+                aliases=[],
+                quotes=[],
+                reasoning="Doc1",
+            )
+        }
+    )
 
-    state.validated_entities_by_resource[resource2] = {
-        "Pulmonary hypertension": EntityMention(
-            kind="phenotype",
-            name="Pulmonary hypertension",
-            aliases=[],
-            quotes=[],
-            reasoning="Doc2",
-        )
-    }
+    state.validated_entities_by_resource[resource2] = ref_map(
+        {
+            "Pulmonary hypertension": EntityMention(
+                kind="phenotype",
+                name="Pulmonary hypertension",
+                aliases=[],
+                quotes=[],
+                reasoning="Doc2",
+            )
+        }
+    )
 
     node = ConsolidateEntitiesNode()
     ctx = GraphRunContext(state=state, deps=mock_deps)
@@ -104,7 +112,8 @@ def test_two_capitalization_variants_automerge_without_llm(mock_deps):
     # Rules are keyed by normalized form for cross-document consistency
     rule_keys = list(exact_rules.keys())
     child_key = rule_keys[0]
-    parent_canonical = exact_rules[child_key]
+    # Value is (target, reasoning) tuple
+    parent_canonical, reasoning = exact_rules[child_key]
 
     # Check that the key is (normalized_form, kind)
     assert child_key[1] == "phenotype", "Second element should be kind"
@@ -145,35 +154,41 @@ def test_three_capitalization_variants_all_automerge(mock_deps):
     resource3 = ResourceId(url="http://doc3.com", id="doc3")
 
     # Three documents with same entity, different capitalizations
-    state.validated_entities_by_resource[resource1] = {
-        "HEREDITARY HEMORRHAGIC TELANGIECTASIA": EntityMention(
-            kind="phenotype",
-            name="HEREDITARY HEMORRHAGIC TELANGIECTASIA",
-            aliases=[],
-            quotes=[],
-            reasoning="Doc1",
-        )
-    }
+    state.validated_entities_by_resource[resource1] = ref_map(
+        {
+            "HEREDITARY HEMORRHAGIC TELANGIECTASIA": EntityMention(
+                kind="phenotype",
+                name="HEREDITARY HEMORRHAGIC TELANGIECTASIA",
+                aliases=[],
+                quotes=[],
+                reasoning="Doc1",
+            )
+        }
+    )
 
-    state.validated_entities_by_resource[resource2] = {
-        "Hereditary Hemorrhagic Telangiectasia": EntityMention(
-            kind="phenotype",
-            name="Hereditary Hemorrhagic Telangiectasia",
-            aliases=[],
-            quotes=[],
-            reasoning="Doc2",
-        )
-    }
+    state.validated_entities_by_resource[resource2] = ref_map(
+        {
+            "Hereditary Hemorrhagic Telangiectasia": EntityMention(
+                kind="phenotype",
+                name="Hereditary Hemorrhagic Telangiectasia",
+                aliases=[],
+                quotes=[],
+                reasoning="Doc2",
+            )
+        }
+    )
 
-    state.validated_entities_by_resource[resource3] = {
-        "hereditary hemorrhagic telangiectasia": EntityMention(
-            kind="phenotype",
-            name="hereditary hemorrhagic telangiectasia",
-            aliases=[],
-            quotes=[],
-            reasoning="Doc3",
-        )
-    }
+    state.validated_entities_by_resource[resource3] = ref_map(
+        {
+            "hereditary hemorrhagic telangiectasia": EntityMention(
+                kind="phenotype",
+                name="hereditary hemorrhagic telangiectasia",
+                aliases=[],
+                quotes=[],
+                reasoning="Doc3",
+            )
+        }
+    )
 
     node = ConsolidateEntitiesNode()
     ctx = GraphRunContext(state=state, deps=mock_deps)
@@ -194,9 +209,10 @@ def test_three_capitalization_variants_all_automerge(mock_deps):
         f"Key should be normalized form, got: {child_key}"
     )
 
-    # Target should be the best canonical (title case)
-    assert exact_rules[child_key] == "Hereditary Hemorrhagic Telangiectasia", (
-        f"Target should be best canonical, got: {exact_rules[child_key]}"
+    # Value is (target, reasoning) tuple - target should be the best canonical (title case)
+    target, reasoning = exact_rules[child_key]
+    assert target == "Hereditary Hemorrhagic Telangiectasia", (
+        f"Target should be best canonical, got: {target}"
     )
 
     # No variants should go to LLM
@@ -229,35 +245,41 @@ def test_capitalization_variants_with_real_substring(mock_deps):
     resource2 = ResourceId(url="http://doc2.com", id="doc2")
     resource3 = ResourceId(url="http://doc3.com", id="doc3")
 
-    state.validated_entities_by_resource[resource1] = {
-        "BRCA": EntityMention(
-            kind="gene",
-            name="BRCA",
-            aliases=[],
-            quotes=[],
-            reasoning="Doc1",
-        )
-    }
+    state.validated_entities_by_resource[resource1] = ref_map(
+        {
+            "BRCA": EntityMention(
+                kind="gene",
+                name="BRCA",
+                aliases=[],
+                quotes=[],
+                reasoning="Doc1",
+            )
+        }
+    )
 
-    state.validated_entities_by_resource[resource2] = {
-        "brca": EntityMention(
-            kind="gene",
-            name="brca",
-            aliases=[],
-            quotes=[],
-            reasoning="Doc2",
-        )
-    }
+    state.validated_entities_by_resource[resource2] = ref_map(
+        {
+            "brca": EntityMention(
+                kind="gene",
+                name="brca",
+                aliases=[],
+                quotes=[],
+                reasoning="Doc2",
+            )
+        }
+    )
 
-    state.validated_entities_by_resource[resource3] = {
-        "BRCA1": EntityMention(
-            kind="gene",
-            name="BRCA1",
-            aliases=[],
-            quotes=[],
-            reasoning="Doc3",
-        )
-    }
+    state.validated_entities_by_resource[resource3] = ref_map(
+        {
+            "BRCA1": EntityMention(
+                kind="gene",
+                name="BRCA1",
+                aliases=[],
+                quotes=[],
+                reasoning="Doc3",
+            )
+        }
+    )
 
     node = ConsolidateEntitiesNode()
     ctx = GraphRunContext(state=state, deps=mock_deps)
@@ -300,25 +322,29 @@ def test_exact_match_rules_use_canonical_names_not_normalized(mock_deps):
     resource1 = ResourceId(url="http://doc1.com", id="doc1")
     resource2 = ResourceId(url="http://doc2.com", id="doc2")
 
-    state.validated_entities_by_resource[resource1] = {
-        "BRCA1": EntityMention(
-            kind="gene",
-            name="BRCA1",
-            aliases=[],
-            quotes=[],
-            reasoning="Doc1",
-        )
-    }
+    state.validated_entities_by_resource[resource1] = ref_map(
+        {
+            "BRCA1": EntityMention(
+                kind="gene",
+                name="BRCA1",
+                aliases=[],
+                quotes=[],
+                reasoning="Doc1",
+            )
+        }
+    )
 
-    state.validated_entities_by_resource[resource2] = {
-        "brca1": EntityMention(
-            kind="gene",
-            name="brca1",
-            aliases=[],
-            quotes=[],
-            reasoning="Doc2",
-        )
-    }
+    state.validated_entities_by_resource[resource2] = ref_map(
+        {
+            "brca1": EntityMention(
+                kind="gene",
+                name="brca1",
+                aliases=[],
+                quotes=[],
+                reasoning="Doc2",
+            )
+        }
+    )
 
     node = ConsolidateEntitiesNode()
     ctx = GraphRunContext(state=state, deps=mock_deps)
@@ -330,7 +356,8 @@ def test_exact_match_rules_use_canonical_names_not_normalized(mock_deps):
     assert len(exact_rules) == 1, f"Should have 1 rule, got {len(exact_rules)}"
 
     rule_key = list(exact_rules.keys())[0]
-    rule_target = exact_rules[rule_key]
+    # Value is (target, reasoning) tuple
+    rule_target, reasoning = exact_rules[rule_key]
 
     # Key should be (canonical_name, kind)
     child_name, kind = rule_key

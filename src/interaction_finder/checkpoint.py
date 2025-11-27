@@ -76,8 +76,21 @@ def _rehydrate_judgments_quotes(judgments: list[dict], pool: ResourcePool) -> No
         for assessment in iter_assessments(judgment):
             for quote in assessment.get("quotes", []):
                 inject(quote)
-            for entity in [assessment.get(k) for k in ["entity1", "entity2"]]:
-                if isinstance(entity, dict):
+            # Handle both old (EntityMention dict) and new (EntityRef tuple) structures
+            for entity_field in ["entity1", "entity2"]:
+                entity = assessment.get(entity_field)
+                if entity is None:
+                    continue
+                # New EntityRef structure: [canonical, [mentions]]
+                if isinstance(entity, (list, tuple)) and len(entity) == 2:
+                    mentions = entity[1]
+                    if isinstance(mentions, list):
+                        for mention in mentions:
+                            if isinstance(mention, dict):
+                                for quote in mention.get("quotes", []):
+                                    inject(quote)
+                # Old EntityMention structure: {kind, name, quotes, ...}
+                elif isinstance(entity, dict):
                     for quote in entity.get("quotes", []):
                         inject(quote)
 

@@ -9,7 +9,7 @@ import pytest
 from pydantic_graph import GraphRunContext
 
 from interaction_finder.extraction.nodes import ConsolidateEntitiesNode
-from interaction_finder.extraction.models import EntityMention
+from interaction_finder.extraction.models import EntityMention, EntityRef
 from interaction_finder.extraction.state import State
 from interaction_finder.resources import ResourceId, ResourcePool
 from interaction_finder.settings import IfetcherConfig
@@ -60,12 +60,17 @@ def test_canonical_name_variants_cleared_between_runs(mock_deps):
 
     # First run: Only doc1
     state.validated_entities_by_resource[resource1] = {
-        "BRCA1": EntityMention(
-            kind="gene",
-            name="BRCA1",
-            aliases=[],
-            quotes=[],
-            reasoning="First run",
+        "BRCA1": EntityRef(
+            canonical="BRCA1",
+            mentions=[
+                EntityMention(
+                    kind="gene",
+                    name="BRCA1",
+                    aliases=[],
+                    quotes=[],
+                    reasoning="First run",
+                )
+            ],
         )
     }
 
@@ -82,12 +87,17 @@ def test_canonical_name_variants_cleared_between_runs(mock_deps):
 
     # Add second document with different entity
     state.validated_entities_by_resource[resource2] = {
-        "TP53": EntityMention(
-            kind="gene",
-            name="TP53",
-            aliases=[],
-            quotes=[],
-            reasoning="Second run",
+        "TP53": EntityRef(
+            canonical="TP53",
+            mentions=[
+                EntityMention(
+                    kind="gene",
+                    name="TP53",
+                    aliases=[],
+                    quotes=[],
+                    reasoning="Second run",
+                )
+            ],
         )
     }
 
@@ -128,19 +138,29 @@ def test_canonical_name_variants_no_stale_data_after_entity_removal(mock_deps):
 
     # First run: Two entities
     state.validated_entities_by_resource[resource1] = {
-        "BRCA1": EntityMention(
-            kind="gene",
-            name="BRCA1",
-            aliases=[],
-            quotes=[],
-            reasoning="First",
+        "BRCA1": EntityRef(
+            canonical="BRCA1",
+            mentions=[
+                EntityMention(
+                    kind="gene",
+                    name="BRCA1",
+                    aliases=[],
+                    quotes=[],
+                    reasoning="First",
+                )
+            ],
         ),
-        "TP53": EntityMention(
-            kind="gene",
-            name="TP53",
-            aliases=[],
-            quotes=[],
-            reasoning="First",
+        "TP53": EntityRef(
+            canonical="TP53",
+            mentions=[
+                EntityMention(
+                    kind="gene",
+                    name="TP53",
+                    aliases=[],
+                    quotes=[],
+                    reasoning="First",
+                )
+            ],
         ),
     }
 

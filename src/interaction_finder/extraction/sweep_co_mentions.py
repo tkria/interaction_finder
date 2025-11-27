@@ -24,6 +24,7 @@ from interaction_finder.extraction.deps import Deps
 from interaction_finder.extraction.models import (
     EntityMention,
     EntityPairKey,
+    EntityRef,
     PairAssessment,
 )
 from interaction_finder.extraction.utils import (
@@ -132,7 +133,7 @@ class CoMentionRegion:
 
 
 def collect_global_aliases(
-    validated_entities_by_resource: dict[ResourceId, dict[str, EntityMention]],
+    validated_entities_by_resource: dict[ResourceId, dict[str, "EntityRef"]],
 ) -> dict[str, set[str]]:
     """Build canonical_name → all_aliases mapping across all resources.
 
@@ -144,8 +145,8 @@ def collect_global_aliases(
     """
     global_aliases: dict[str, set[str]] = defaultdict(set)
     for entities in validated_entities_by_resource.values():
-        for name, entity in entities.items():
-            global_aliases[name].update(entity.aliases)
+        for ref in entities.values():
+            global_aliases[ref.canonical].update(ref.aliases())
     return dict(global_aliases)
 
 
@@ -560,7 +561,7 @@ def create_minimal_entity_mention(
 
 def get_entity_kind(
     canonical_name: str,
-    validated_entities_by_resource: dict[ResourceId, dict[str, EntityMention]],
+    validated_entities_by_resource: dict[ResourceId, dict[str, EntityRef]],
 ) -> str | None:
     """Get entity kind from any document's validated entities.
 
@@ -584,7 +585,7 @@ async def assess_co_mention_region(
     known_relationships: list[str],
     config: IfetcherConfig,
     deps: Deps,
-    validated_entities: dict[str, EntityMention] | None = None,
+    validated_entities: dict[str, EntityRef] | None = None,
 ) -> list[PairAssessment]:
     """Assess all candidate pairs in a merged region with a single LLM call.
 
@@ -697,32 +698,34 @@ Provide supporting quotes for confirmed relationships."""
                 "rejected: no valid quotes"
             )
             continue
-        # Get or create EntityMention objects (use matched canonical names)
+        # Get or create EntityRef objects (preserve original mentions)
         if validated_entities and matched_e1 in validated_entities:
-            entity1 = validated_entities[matched_e1]
+            entity1_ref = validated_entities[matched_e1]
         else:
-            entity1 = create_minimal_entity_mention(
+            mention1 = create_minimal_entity_mention(
                 canonical_name=matched_e1,
                 kind=candidate.entity1_kind,
                 matched_form=confirmed.entity1_name.lower(),
                 quotes=validated_quotes,
                 reasoning=confirmed.reasoning,
             )
+            entity1_ref = EntityRef(canonical=mention1.name, mentions=[mention1])
         if validated_entities and matched_e2 in validated_entities:
-            entity2 = validated_entities[matched_e2]
+            entity2_ref = validated_entities[matched_e2]
         else:
-            entity2 = create_minimal_entity_mention(
+            mention2 = create_minimal_entity_mention(
                 canonical_name=matched_e2,
                 kind=candidate.entity2_kind,
                 matched_form=confirmed.entity2_name.lower(),
                 quotes=validated_quotes,
                 reasoning=confirmed.reasoning,
             )
+            entity2_ref = EntityRef(canonical=mention2.name, mentions=[mention2])
         assessments.append(
             PairAssessment(
                 resource_id=region.resource_id,
-                entity1=entity1,
-                entity2=entity2,
+                entity1=entity1_ref,
+                entity2=entity2_ref,
                 relationship=confirmed.relationship,
                 quotes=validated_quotes,
                 confidence=confirmed.confidence,

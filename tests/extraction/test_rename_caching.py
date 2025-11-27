@@ -154,9 +154,10 @@ class TestRenameCaching:
             )
         # LLM should not have been called
         assert not mock_agent.run.called
-        # Rule should be created from cache
+        # Rule should be created from cache - value is (target, reasoning) tuple
         assert ("transforming growth factor beta", "gene") in rules
-        assert rules[("transforming growth factor beta", "gene")] == "TGF-β"
+        target, reasoning = rules[("transforming growth factor beta", "gene")]
+        assert target == "TGF-β"
         # New name should be returned (target not in unique_entities)
         assert ("TGF-β", "gene") in new_names
         # Cache hit should be recorded
@@ -195,8 +196,8 @@ class TestRenameMergeOpportunities:
         auto_rules, _, _ = node._find_merge_candidates(unique_entities)
         # One of the canonicals should be merged into the other
         assert len(auto_rules) == 1
-        # Target should be the best canonical (uppercase)
-        target = list(auto_rules.values())[0]
+        # Target should be the best canonical (uppercase) - value is (target, reasoning) tuple
+        target, reasoning = list(auto_rules.values())[0]
         assert target == "TGF"
 
 
@@ -263,10 +264,11 @@ class TestCachedDecisionsAcrossRuns:
                 candidate_pairs, canonical_lookup, unique_entities, ctx
             )
 
-        # Verify first run called LLM and created rule
+        # Verify first run called LLM and created rule - value is (target, reasoning) tuple
         assert mock_agent.run.called
         assert ("brca1", "gene") in rules1
-        assert rules1[("brca1", "gene")] == "BRCA"
+        target1, reasoning1 = rules1[("brca1", "gene")]
+        assert target1 == "BRCA"
         assert ctx.state.merge_decision_cache[("brca", "brca1", "gene")] == "BRCA"
 
         # RUN 2: Same pair encountered again (reset mock)
@@ -282,9 +284,10 @@ class TestCachedDecisionsAcrossRuns:
 
         # Should NOT call LLM - use cache
         assert not mock_agent.run.called
-        # Should still produce the same rule
+        # Should still produce the same rule - value is (target, reasoning) tuple
         assert ("brca1", "gene") in rules2
-        assert rules2[("brca1", "gene")] == "BRCA"
+        target2, reasoning2 = rules2[("brca1", "gene")]
+        assert target2 == "BRCA"
 
     @pytest.mark.asyncio
     async def test_skip_decision_persists_across_runs(self, mock_deps):
@@ -416,9 +419,10 @@ class TestCachedDecisionsAcrossRuns:
                 candidate_pairs, canonical_lookup, unique_entities, ctx
             )
 
-        # Verify rename rule created
+        # Verify rename rule created - value is (target, reasoning) tuple
         assert ("tgf beta protein", "gene") in rules1
-        assert rules1[("tgf beta protein", "gene")] == "TGF-β"
+        target, reasoning = rules1[("tgf beta protein", "gene")]
+        assert target == "TGF-β"
 
         # Cache should have the target
         assert (
@@ -596,7 +600,7 @@ class TestCachedDecisionsAcrossRuns:
                 candidate_pairs, canonical_lookup, unique_entities, ctx
             )
 
-        # Verify first run results
+        # Verify first run results - values are (target, reasoning) tuples
         assert call_count == 1  # LLM called once
 
         # Skip: no rule for TP/TP53
@@ -604,11 +608,13 @@ class TestCachedDecisionsAcrossRuns:
 
         # Merge: BRCA1 → BRCA
         assert ("brca1", "gene") in rules1
-        assert rules1[("brca1", "gene")] == "BRCA"
+        merge_target, merge_reasoning = rules1[("brca1", "gene")]
+        assert merge_target == "BRCA"
 
         # Rename: TGF-beta protein → TGF-β
         assert ("tgf beta protein", "gene") in rules1
-        assert rules1[("tgf beta protein", "gene")] == "TGF-β"
+        rename_target, rename_reasoning = rules1[("tgf beta protein", "gene")]
+        assert rename_target == "TGF-β"
 
         # New name flagged (TGF-β doesn't exist yet)
         assert ("TGF-β", "gene") in new_names1
@@ -636,10 +642,12 @@ class TestCachedDecisionsAcrossRuns:
         # LLM should NOT be called
         assert not mock_agent.run.called
 
-        # Same rules should be produced from cache
+        # Same rules should be produced from cache - values are (target, reasoning) tuples
         assert ("tp53", "gene") not in rules2  # Still skip
-        assert rules2[("brca1", "gene")] == "BRCA"  # Still merge
-        assert rules2[("tgf beta protein", "gene")] == "TGF-β"  # Still rename
+        merge_target2, merge_reasoning2 = rules2[("brca1", "gene")]
+        assert merge_target2 == "BRCA"  # Still merge
+        rename_target2, rename_reasoning2 = rules2[("tgf beta protein", "gene")]
+        assert rename_target2 == "TGF-β"  # Still rename
 
         # Cache hits should be recorded
         assert ctx.state.merge_cache_hits == 3

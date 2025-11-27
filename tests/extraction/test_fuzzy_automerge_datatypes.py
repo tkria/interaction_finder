@@ -9,7 +9,7 @@ import pytest
 from pydantic_graph import GraphRunContext
 
 from interaction_finder.extraction.nodes import ConsolidateEntitiesNode
-from interaction_finder.extraction.models import EntityMention
+from interaction_finder.extraction.models import EntityMention, EntityRef
 from interaction_finder.extraction.state import State
 from interaction_finder.resources import ResourceId, ResourcePool
 from interaction_finder.settings import IfetcherConfig
@@ -40,6 +40,13 @@ def mock_deps(mock_config):
     return deps
 
 
+def ref_map(data: dict[str, EntityMention]) -> dict[str, EntityRef]:
+    return {
+        name: EntityRef(canonical=name, mentions=[mention])
+        for name, mention in data.items()
+    }
+
+
 def test_fuzzy_automerge_uses_normalized_keys_and_canonical_targets(mock_deps):
     """Test that fuzzy auto-merge uses normalized keys and canonical targets.
 
@@ -61,25 +68,29 @@ def test_fuzzy_automerge_uses_normalized_keys_and_canonical_targets(mock_deps):
     resource1 = ResourceId(url="http://doc1.com", id="doc1")
     resource2 = ResourceId(url="http://doc2.com", id="doc2")
 
-    state.validated_entities_by_resource[resource1] = {
-        "Telangiectasia": EntityMention(
-            kind="phenotype",
-            name="Telangiectasia",
-            aliases=[],
-            quotes=[],
-            reasoning="Singular form",
-        )
-    }
+    state.validated_entities_by_resource[resource1] = ref_map(
+        {
+            "Telangiectasia": EntityMention(
+                kind="phenotype",
+                name="Telangiectasia",
+                aliases=[],
+                quotes=[],
+                reasoning="Singular form",
+            )
+        }
+    )
 
-    state.validated_entities_by_resource[resource2] = {
-        "Telangiectasias": EntityMention(
-            kind="phenotype",
-            name="Telangiectasias",
-            aliases=[],
-            quotes=[],
-            reasoning="Plural form",
-        )
-    }
+    state.validated_entities_by_resource[resource2] = ref_map(
+        {
+            "Telangiectasias": EntityMention(
+                kind="phenotype",
+                name="Telangiectasias",
+                aliases=[],
+                quotes=[],
+                reasoning="Plural form",
+            )
+        }
+    )
 
     node = ConsolidateEntitiesNode()
     ctx = GraphRunContext(state=state, deps=mock_deps)
@@ -94,7 +105,8 @@ def test_fuzzy_automerge_uses_normalized_keys_and_canonical_targets(mock_deps):
 
     # Get the rule
     rule_key = list(auto_merge_rules.keys())[0]
-    rule_target = auto_merge_rules[rule_key]
+    # Value is (target, reasoning) tuple
+    rule_target, reasoning = auto_merge_rules[rule_key]
 
     # Rule key should be (normalized_form, kind) for cross-document consistency
     child_norm, kind = rule_key
@@ -135,35 +147,41 @@ def test_fuzzy_automerge_after_capitalization_consolidation(mock_deps):
     resource2 = ResourceId(url="http://doc2.com", id="doc2")
     resource3 = ResourceId(url="http://doc3.com", id="doc3")
 
-    state.validated_entities_by_resource[resource1] = {
-        "Haemorrhagic": EntityMention(
-            kind="phenotype",
-            name="Haemorrhagic",
-            aliases=[],
-            quotes=[],
-            reasoning="UK mixed case",
-        )
-    }
+    state.validated_entities_by_resource[resource1] = ref_map(
+        {
+            "Haemorrhagic": EntityMention(
+                kind="phenotype",
+                name="Haemorrhagic",
+                aliases=[],
+                quotes=[],
+                reasoning="UK mixed case",
+            )
+        }
+    )
 
-    state.validated_entities_by_resource[resource2] = {
-        "haemorrhagic": EntityMention(
-            kind="phenotype",
-            name="haemorrhagic",
-            aliases=[],
-            quotes=[],
-            reasoning="UK lowercase",
-        )
-    }
+    state.validated_entities_by_resource[resource2] = ref_map(
+        {
+            "haemorrhagic": EntityMention(
+                kind="phenotype",
+                name="haemorrhagic",
+                aliases=[],
+                quotes=[],
+                reasoning="UK lowercase",
+            )
+        }
+    )
 
-    state.validated_entities_by_resource[resource3] = {
-        "Hemorrhagic": EntityMention(
-            kind="phenotype",
-            name="Hemorrhagic",
-            aliases=[],
-            quotes=[],
-            reasoning="US spelling",
-        )
-    }
+    state.validated_entities_by_resource[resource3] = ref_map(
+        {
+            "Hemorrhagic": EntityMention(
+                kind="phenotype",
+                name="Hemorrhagic",
+                aliases=[],
+                quotes=[],
+                reasoning="US spelling",
+            )
+        }
+    )
 
     node = ConsolidateEntitiesNode()
     ctx = GraphRunContext(state=state, deps=mock_deps)
@@ -188,10 +206,12 @@ def test_fuzzy_automerge_after_capitalization_consolidation(mock_deps):
         f"Should have 2 rules (Phase 1 + Phase 2), got {len(auto_merge_rules)}"
     )
 
-    # Phase 1 rule: UK lowercase → UK mixed case
+    # Phase 1 rule: UK lowercase → UK mixed case (value is (target, reasoning) tuple)
     assert ("haemorrhagic", "phenotype") in auto_merge_rules
-    assert auto_merge_rules[("haemorrhagic", "phenotype")] == "Haemorrhagic"
+    target1, reasoning1 = auto_merge_rules[("haemorrhagic", "phenotype")]
+    assert target1 == "Haemorrhagic"
 
     # Phase 2 rule: US spelling → UK canonical (established form wins)
     assert ("hemorrhagic", "phenotype") in auto_merge_rules
-    assert auto_merge_rules[("hemorrhagic", "phenotype")] == "Haemorrhagic"
+    target2, reasoning2 = auto_merge_rules[("hemorrhagic", "phenotype")]
+    assert target2 == "Haemorrhagic"

@@ -26,6 +26,7 @@ if TYPE_CHECKING:
 from interaction_finder.extraction.models import (
     EntityMention,
     EntityPairKey,
+    EntityRef,
     PairAssessment,
     PairJudgment,
     ProximalEntitySet,
@@ -70,8 +71,8 @@ class State:
     )
 
     # === Stage 2: Entity Validation ===
-    # Entities after kind validation and substring merging
-    validated_entities_by_resource: dict[ResourceId, dict[str, EntityMention]] = field(
+    # Entities after kind validation and substring merging (stored as EntityRefs)
+    validated_entities_by_resource: dict[ResourceId, dict[str, EntityRef]] = field(
         default_factory=dict
     )
     # Count of entities merged (for metadata)
@@ -90,6 +91,11 @@ class State:
     # Cache hits/misses for metrics
     merge_cache_hits: int = 0
     merge_cache_misses: int = 0
+    # Consolidation rules for provenance: (normalized_name, kind) → (target_canonical, reasoning)
+    # Reasoning is "auto:cap", "auto:fuzzy", or full LLM reasoning string
+    consolidation_rules: dict[tuple[str, str], tuple[str, str]] = field(
+        default_factory=dict
+    )
 
     # === Stage 3: Proximal Set Identification ===
     # Groups of entities found in close proximity per resource

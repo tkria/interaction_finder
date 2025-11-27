@@ -14,6 +14,7 @@ from pydantic_graph import GraphRunContext
 
 from interaction_finder.extraction.models import (
     EntityMention,
+    EntityRef,
     PairAssessment,
     RelationshipConsolidation,
     RelationshipConsolidations,
@@ -62,24 +63,26 @@ class TestCollectUniqueRelationships:
         ctx = GraphRunContext(state=state, deps=mock_deps)
 
         resource1 = ResourceId(url="https://example.com/doc1", counter=0)
+        gene = EntityMention(
+            kind="gene",
+            name="BRCA1",
+            aliases=[],
+            quotes=[],
+            reasoning="test",
+        )
+        disease = EntityMention(
+            kind="disease",
+            name="Cancer",
+            aliases=[],
+            quotes=[],
+            reasoning="test",
+        )
         ctx.state.pair_assessments_by_resource = {
             resource1: [
                 PairAssessment(
                     resource_id=resource1,
-                    entity1=EntityMention(
-                        kind="gene",
-                        name="BRCA1",
-                        aliases=[],
-                        quotes=[],
-                        reasoning="test",
-                    ),
-                    entity2=EntityMention(
-                        kind="disease",
-                        name="Cancer",
-                        aliases=[],
-                        quotes=[],
-                        reasoning="test",
-                    ),
+                    entity1=EntityRef(canonical=gene.name, mentions=[gene]),
+                    entity2=EntityRef(canonical=disease.name, mentions=[disease]),
                     relationship="associated_with",
                     quotes=[],
                     confidence="high",
@@ -120,13 +123,37 @@ class TestCollectUniqueRelationships:
             quotes=[],
             reasoning="test",
         )
+        entity1_ref = EntityRef(canonical=entity1.name, mentions=[entity1])
+        entity2_ref = EntityRef(canonical=entity2.name, mentions=[entity2])
+        entity1_ref = EntityRef(canonical=entity1.name, mentions=[entity1])
+        entity2_ref = EntityRef(canonical=entity2.name, mentions=[entity2])
+        entity1_ref = EntityRef(canonical=entity1.name, mentions=[entity1])
+        entity2_ref = EntityRef(canonical=entity2.name, mentions=[entity2])
+        entity1_ref = EntityRef(canonical=entity1.name, mentions=[entity1])
+        entity2_ref = EntityRef(canonical=entity2.name, mentions=[entity2])
+        entity1_ref = EntityRef(canonical=entity1.name, mentions=[entity1])
+        entity2_ref = EntityRef(canonical=entity2.name, mentions=[entity2])
+        entity1_ref = EntityRef(canonical=entity1.name, mentions=[entity1])
+        entity2_ref = EntityRef(canonical=entity2.name, mentions=[entity2])
+        entity1_ref = EntityRef(canonical=entity1.name, mentions=[entity1])
+        entity2_ref = EntityRef(canonical=entity2.name, mentions=[entity2])
+        entity1_ref = EntityRef(canonical=entity1.name, mentions=[entity1])
+        entity2_ref = EntityRef(canonical=entity2.name, mentions=[entity2])
+        entity1_ref = EntityRef(canonical=entity1.name, mentions=[entity1])
+        entity2_ref = EntityRef(canonical=entity2.name, mentions=[entity2])
+        entity1_ref = EntityRef(canonical=entity1.name, mentions=[entity1])
+        entity2_ref = EntityRef(canonical=entity2.name, mentions=[entity2])
+        entity1_ref = EntityRef(canonical=entity1.name, mentions=[entity1])
+        entity2_ref = EntityRef(canonical=entity2.name, mentions=[entity2])
+        entity1_ref = EntityRef(canonical=entity1.name, mentions=[entity1])
+        entity2_ref = EntityRef(canonical=entity2.name, mentions=[entity2])
 
         ctx.state.pair_assessments_by_resource = {
             resource1: [
                 PairAssessment(
                     resource_id=resource1,
-                    entity1=entity1,
-                    entity2=entity2,
+                    entity1=entity1_ref,
+                    entity2=entity2_ref,
                     relationship="associated_with",
                     quotes=[],
                     confidence="high",
@@ -136,8 +163,8 @@ class TestCollectUniqueRelationships:
             resource2: [
                 PairAssessment(
                     resource_id=resource2,
-                    entity1=entity1,
-                    entity2=entity2,
+                    entity1=entity1_ref,
+                    entity2=entity2_ref,
                     relationship="increases_risk_of",
                     quotes=[],
                     confidence="high",
@@ -145,8 +172,8 @@ class TestCollectUniqueRelationships:
                 ),
                 PairAssessment(
                     resource_id=resource2,
-                    entity1=entity1,
-                    entity2=entity2,
+                    entity1=entity1_ref,
+                    entity2=entity2_ref,
                     relationship="regulates",
                     quotes=[],
                     confidence="medium",
@@ -210,13 +237,15 @@ class TestUnifiedConsolidationIntegration:
             quotes=[],
             reasoning="test",
         )
+        entity1_ref = EntityRef(canonical=entity1.name, mentions=[entity1])
+        entity2_ref = EntityRef(canonical=entity2.name, mentions=[entity2])
 
         ctx.state.pair_assessments_by_resource = {
             resource1: [
                 PairAssessment(
                     resource_id=resource1,
-                    entity1=entity1,
-                    entity2=entity2,
+                    entity1=entity1_ref,
+                    entity2=entity2_ref,
                     relationship="linked_to",  # Will be consolidated to "associated_with"
                     quotes=[],
                     confidence="high",
@@ -226,8 +255,8 @@ class TestUnifiedConsolidationIntegration:
             resource2: [
                 PairAssessment(
                     resource_id=resource2,
-                    entity1=entity1,
-                    entity2=entity2,
+                    entity1=entity1_ref,
+                    entity2=entity2_ref,
                     relationship="increases_risk_of",  # Will stay as is
                     quotes=[],
                     confidence="high",
@@ -235,8 +264,8 @@ class TestUnifiedConsolidationIntegration:
                 ),
                 PairAssessment(
                     resource_id=resource2,
-                    entity1=entity1,
-                    entity2=entity2,
+                    entity1=entity1_ref,
+                    entity2=entity2_ref,
                     relationship="spatial_colocalization",  # Will be marked irrelevant
                     quotes=[],
                     confidence="low",
@@ -330,13 +359,15 @@ class TestUnifiedConsolidationIntegration:
             quotes=[],
             reasoning="test",
         )
+        entity1_ref = EntityRef(canonical=entity1.name, mentions=[entity1])
+        entity2_ref = EntityRef(canonical=entity2.name, mentions=[entity2])
 
         ctx.state.pair_assessments_by_resource = {
             resource1: [
                 PairAssessment(
                     resource_id=resource1,
-                    entity1=entity1,
-                    entity2=entity2,
+                    entity1=entity1_ref,
+                    entity2=entity2_ref,
                     relationship="associated_with",
                     quotes=[],
                     confidence="high",
@@ -408,6 +439,9 @@ class TestUnifiedConsolidationIntegration:
             quotes=[],
             reasoning="test",
         )
+        entity1_ref = EntityRef(canonical=entity1.name, mentions=[entity1])
+        entity2_ref = EntityRef(canonical=entity2.name, mentions=[entity2])
+        entity3_ref = EntityRef(canonical=entity3.name, mentions=[entity3])
 
         # Pair 1: Has both relevant and irrelevant assessments (should NOT be filtered)
         # Pair 2: Has only irrelevant assessments (SHOULD be filtered)
@@ -416,8 +450,8 @@ class TestUnifiedConsolidationIntegration:
                 # BRCA1-Cancer: mixed (supporting + irrelevant)
                 PairAssessment(
                     resource_id=resource1,
-                    entity1=entity1,
-                    entity2=entity2,
+                    entity1=entity1_ref,
+                    entity2=entity2_ref,
                     relationship="increases_risk_of",
                     quotes=[],
                     confidence="high",
@@ -425,8 +459,8 @@ class TestUnifiedConsolidationIntegration:
                 ),
                 PairAssessment(
                     resource_id=resource1,
-                    entity1=entity1,
-                    entity2=entity2,
+                    entity1=entity1_ref,
+                    entity2=entity2_ref,
                     relationship="spatial_colocalization",
                     quotes=[],
                     confidence="low",
@@ -437,8 +471,8 @@ class TestUnifiedConsolidationIntegration:
                 # TP53-Cancer: only irrelevant
                 PairAssessment(
                     resource_id=resource2,
-                    entity1=entity3,
-                    entity2=entity2,
+                    entity1=entity3_ref,
+                    entity2=entity2_ref,
                     relationship="spatial_colocalization",
                     quotes=[],
                     confidence="low",
@@ -529,13 +563,15 @@ class TestUnifiedConsolidationIntegration:
             quotes=[],
             reasoning="test",
         )
+        entity1_ref = EntityRef(canonical=entity1.name, mentions=[entity1])
+        entity2_ref = EntityRef(canonical=entity2.name, mentions=[entity2])
 
         ctx.state.pair_assessments_by_resource = {
             resource1: [
                 PairAssessment(
                     resource_id=resource1,
-                    entity1=entity1,
-                    entity2=entity2,
+                    entity1=entity1_ref,
+                    entity2=entity2_ref,
                     relationship="associated_with",
                     quotes=[],
                     confidence="high",

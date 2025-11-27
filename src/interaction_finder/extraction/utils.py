@@ -13,6 +13,7 @@ _HEADING_PATTERN = re.compile(r"^(#{1,6})\s", re.MULTILINE)
 
 from interaction_finder.extraction.models import (
     EntityMention,
+    EntityRef,
     EntityPairKey,
     PairAssessment,
     PairSpread,
@@ -740,32 +741,30 @@ def collect_relevant_text_for_quotes(
     return "\n".join(text_parts)
 
 
-def make_entity_pair_key(
-    entity1: EntityMention, entity2: EntityMention
-) -> EntityPairKey:
-    """Create consistent EntityPairKey for two entities.
+def _extract_name_and_kind(entity: EntityRef) -> tuple[str, str]:
+    """Extract canonical/name and kind from an EntityRef."""
+    if not entity.mentions:
+        raise TypeError("EntityRef must contain at least one mention")
+    name = entity.canonical
+    kind = entity.kind
+    return name, kind
 
-    Orders entities lexicographically by their kinds to ensure consistent
-    pairing (e.g., always gene-disease, not disease-gene).
 
-    Parameters:
-        entity1: First entity
-        entity2: Second entity
-
-    Returns:
-        EntityPairKey with entities ordered by kind
-    """
+def make_entity_pair_key(entity1: EntityRef, entity2: EntityRef) -> EntityPairKey:
+    """Create consistent EntityPairKey for two entities."""
+    name1, kind1 = _extract_name_and_kind(entity1)
+    name2, kind2 = _extract_name_and_kind(entity2)
     # Order by kind lexicographically
-    if entity1.kind < entity2.kind:
-        return EntityPairKey(entity1_name=entity1.name, entity2_name=entity2.name)
-    elif entity1.kind > entity2.kind:
-        return EntityPairKey(entity1_name=entity2.name, entity2_name=entity1.name)
+    if kind1 < kind2:
+        return EntityPairKey(entity1_name=name1, entity2_name=name2)
+    elif kind1 > kind2:
+        return EntityPairKey(entity1_name=name2, entity2_name=name1)
     else:
         # Same kind - order by name lexicographically
-        if entity1.name < entity2.name:
-            return EntityPairKey(entity1_name=entity1.name, entity2_name=entity2.name)
+        if name1 < name2:
+            return EntityPairKey(entity1_name=name1, entity2_name=name2)
         else:
-            return EntityPairKey(entity1_name=entity2.name, entity2_name=entity1.name)
+            return EntityPairKey(entity1_name=name2, entity2_name=name1)
 
 
 # =============================================================================

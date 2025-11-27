@@ -4,6 +4,7 @@ import pytest
 
 from interaction_finder.extraction.models import (
     EntityMention,
+    EntityRef,
     PairAssessment,
     ProximalEntitySet,
 )
@@ -562,6 +563,7 @@ class TestMakeEntityPairKey:
             quotes=[],
             reasoning="test",
         )
+        entity1_ref = EntityRef(canonical=entity1.name, mentions=[entity1])
         entity2 = EntityMention(
             kind="disease",
             name="breast cancer",
@@ -569,14 +571,15 @@ class TestMakeEntityPairKey:
             quotes=[],
             reasoning="test",
         )
+        entity2_ref = EntityRef(canonical=entity2.name, mentions=[entity2])
 
         # disease comes before gene alphabetically
-        key = make_entity_pair_key(entity1, entity2)
+        key = make_entity_pair_key(entity1_ref, entity2_ref)
         assert key.entity1_name == "breast cancer"
         assert key.entity2_name == "BRCA1"
 
         # Reverse order should give same key
-        key2 = make_entity_pair_key(entity2, entity1)
+        key2 = make_entity_pair_key(entity2_ref, entity1_ref)
         assert key == key2
 
     def test_orders_by_name_when_same_kind(self):
@@ -584,11 +587,13 @@ class TestMakeEntityPairKey:
         entity1 = EntityMention(
             kind="gene", name="BRCA2", aliases=["BRCA2"], quotes=[], reasoning="test"
         )
+        entity1_ref = EntityRef(canonical=entity1.name, mentions=[entity1])
         entity2 = EntityMention(
             kind="gene", name="BRCA1", aliases=["BRCA1"], quotes=[], reasoning="test"
         )
+        entity2_ref = EntityRef(canonical=entity2.name, mentions=[entity2])
 
-        key = make_entity_pair_key(entity1, entity2)
+        key = make_entity_pair_key(entity1_ref, entity2_ref)
         # BRCA1 comes before BRCA2
         assert key.entity1_name == "BRCA1"
         assert key.entity2_name == "BRCA2"
@@ -598,12 +603,14 @@ class TestMakeEntityPairKey:
         entity1 = EntityMention(
             kind="gene", name="TP53", aliases=["TP53"], quotes=[], reasoning="test"
         )
+        entity1_ref = EntityRef(canonical=entity1.name, mentions=[entity1])
         entity2 = EntityMention(
             kind="gene", name="BRCA1", aliases=["BRCA1"], quotes=[], reasoning="test"
         )
+        entity2_ref = EntityRef(canonical=entity2.name, mentions=[entity2])
 
-        key1 = make_entity_pair_key(entity1, entity2)
-        key2 = make_entity_pair_key(entity2, entity1)
+        key1 = make_entity_pair_key(entity1_ref, entity2_ref)
+        key2 = make_entity_pair_key(entity2_ref, entity1_ref)
 
         assert key1 == key2
 
@@ -665,6 +672,7 @@ class TestBuildPairSpread:
             quotes=[],
             reasoning="test",
         )
+        self.entity1_ref = EntityRef(canonical=self.entity1.name, mentions=[self.entity1])
         self.entity2 = EntityMention(
             kind="disease",
             name="breast cancer",
@@ -672,6 +680,7 @@ class TestBuildPairSpread:
             quotes=[],
             reasoning="test",
         )
+        self.entity2_ref = EntityRef(canonical=self.entity2.name, mentions=[self.entity2])
 
     def test_groups_assessments_by_polarity(self):
         """Test that assessments are correctly grouped by polarity."""
@@ -683,32 +692,32 @@ class TestBuildPairSpread:
         }
 
         assessments = [
-            PairAssessment(
-                resource_id=self.resource.id,
-                entity1=self.entity1,
-                entity2=self.entity2,
-                relationship="increases_risk_of",
-                quotes=[],
-                confidence="high",
-                reasoning="test",
-            ),
-            PairAssessment(
-                resource_id=self.resource.id,
-                entity1=self.entity1,
-                entity2=self.entity2,
-                relationship="protects_against",
-                quotes=[],
-                confidence="medium",
-                reasoning="test",
-            ),
-            PairAssessment(
-                resource_id=self.resource.id,
-                entity1=self.entity1,
-                entity2=self.entity2,
-                relationship="regulates",
-                quotes=[],
-                confidence="low",
-                reasoning="test",
+                PairAssessment(
+                    resource_id=self.resource.id,
+                    entity1=self.entity1_ref,
+                    entity2=self.entity2_ref,
+                    relationship="increases_risk_of",
+                    quotes=[],
+                    confidence="high",
+                    reasoning="test",
+                ),
+                PairAssessment(
+                    resource_id=self.resource.id,
+                    entity1=self.entity1_ref,
+                    entity2=self.entity2_ref,
+                    relationship="protects_against",
+                    quotes=[],
+                    confidence="medium",
+                    reasoning="test",
+                ),
+                PairAssessment(
+                    resource_id=self.resource.id,
+                    entity1=self.entity1_ref,
+                    entity2=self.entity2_ref,
+                    relationship="regulates",
+                    quotes=[],
+                    confidence="low",
+                    reasoning="test",
             ),
         ]
 
@@ -731,32 +740,32 @@ class TestBuildPairSpread:
         }
 
         assessments = [
-            PairAssessment(
-                resource_id=self.resource.id,
-                entity1=self.entity1,
-                entity2=self.entity2,
-                relationship="increases_risk_of",
-                quotes=[],
-                confidence="high",
-                reasoning="test",
-            ),
-            PairAssessment(
-                resource_id=self.resource.id,
-                entity1=self.entity1,
-                entity2=self.entity2,
-                relationship="causes",
-                quotes=[],
-                confidence="high",
-                reasoning="test",
-            ),
-            PairAssessment(
-                resource_id=self.resource.id,
-                entity1=self.entity1,
-                entity2=self.entity2,
-                relationship="associated_with",
-                quotes=[],
-                confidence="medium",
-                reasoning="test",
+                PairAssessment(
+                    resource_id=self.resource.id,
+                    entity1=self.entity1_ref,
+                    entity2=self.entity2_ref,
+                    relationship="increases_risk_of",
+                    quotes=[],
+                    confidence="high",
+                    reasoning="test",
+                ),
+                PairAssessment(
+                    resource_id=self.resource.id,
+                    entity1=self.entity1_ref,
+                    entity2=self.entity2_ref,
+                    relationship="causes",
+                    quotes=[],
+                    confidence="high",
+                    reasoning="test",
+                ),
+                PairAssessment(
+                    resource_id=self.resource.id,
+                    entity1=self.entity1_ref,
+                    entity2=self.entity2_ref,
+                    relationship="associated_with",
+                    quotes=[],
+                    confidence="medium",
+                    reasoning="test",
             ),
         ]
 
@@ -785,8 +794,8 @@ class TestBuildPairSpread:
         assessments = [
             PairAssessment(
                 resource_id=self.resource.id,
-                entity1=self.entity1,
-                entity2=self.entity2,
+                entity1=self.entity1_ref,
+                entity2=self.entity2_ref,
                 relationship="unknown_relationship",
                 quotes=[],
                 confidence="high",
@@ -807,8 +816,8 @@ class TestBuildPairSpread:
         assessments = [
             PairAssessment(
                 resource_id=self.resource.id,
-                entity1=self.entity1,
-                entity2=self.entity2,
+                entity1=self.entity1_ref,
+                entity2=self.entity2_ref,
                 relationship="increases_risk_of",
                 quotes=[],
                 confidence="high",
@@ -816,8 +825,8 @@ class TestBuildPairSpread:
             ),
             PairAssessment(
                 resource_id=self.resource.id,
-                entity1=self.entity1,
-                entity2=self.entity2,
+                entity1=self.entity1_ref,
+                entity2=self.entity2_ref,
                 relationship="protects_against",
                 quotes=[],
                 confidence="high",

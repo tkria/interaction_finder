@@ -14,11 +14,16 @@ from interaction_finder.extraction.models import (
     EntityConsolidationDecision,
     EntityConsolidationDecisions,
     EntityMention,
+    EntityRef,
 )
 from interaction_finder.extraction.nodes import ConsolidateEntitiesNode
 from interaction_finder.extraction.state import State
 from interaction_finder.extraction.utils import build_permitted_pairs
 from interaction_finder.resources import ResourceId, ResourcePool
+
+
+def ref_map(data: dict[str, EntityMention]) -> dict[str, EntityRef]:
+    return {name: EntityRef(canonical=name, mentions=[mention]) for name, mention in data.items()}
 
 
 def create_mock_agent_with_override(run_return_value):
@@ -60,33 +65,39 @@ class TestCanonicalNameTracking:
         resource3 = ResourceId(url="https://example.com/doc3", counter=2)
 
         ctx.state.validated_entities_by_resource = {
-            resource1: {
-                "Pulmonary Arterial Hypertension": EntityMention(
-                    kind="disease",
-                    name="Pulmonary Arterial Hypertension",
-                    aliases=[],
-                    quotes=[],
-                    reasoning="doc1",
-                ),
-            },
-            resource2: {
-                "pulmonary arterial hypertension": EntityMention(
-                    kind="disease",
-                    name="pulmonary arterial hypertension",
-                    aliases=[],
-                    quotes=[],
-                    reasoning="doc2",
-                ),
-            },
-            resource3: {
-                "Pulmonary arterial hypertension": EntityMention(
-                    kind="disease",
-                    name="Pulmonary arterial hypertension",
-                    aliases=[],
-                    quotes=[],
-                    reasoning="doc3",
-                ),
-            },
+            resource1: ref_map(
+                {
+                    "Pulmonary Arterial Hypertension": EntityMention(
+                        kind="disease",
+                        name="Pulmonary Arterial Hypertension",
+                        aliases=[],
+                        quotes=[],
+                        reasoning="doc1",
+                    ),
+                }
+            ),
+            resource2: ref_map(
+                {
+                    "pulmonary arterial hypertension": EntityMention(
+                        kind="disease",
+                        name="pulmonary arterial hypertension",
+                        aliases=[],
+                        quotes=[],
+                        reasoning="doc2",
+                    ),
+                }
+            ),
+            resource3: ref_map(
+                {
+                    "Pulmonary arterial hypertension": EntityMention(
+                        kind="disease",
+                        name="Pulmonary arterial hypertension",
+                        aliases=[],
+                        quotes=[],
+                        reasoning="doc3",
+                    ),
+                }
+            ),
         }
 
         # Run collection phase (no merges expected, just tracking)
@@ -138,56 +149,62 @@ class TestCrossDocumentCanonicalMerging:
 
         ctx.state.validated_entities_by_resource = {
             # Doc1: Capital PAH + Capital Idiopathic PAH
-            resource1: {
-                "Pulmonary Arterial Hypertension": EntityMention(
-                    kind="disease",
-                    name="Pulmonary Arterial Hypertension",
-                    aliases=[],
-                    quotes=[],
-                    reasoning="doc1",
-                ),
-                "Idiopathic Pulmonary Arterial Hypertension": EntityMention(
-                    kind="disease",
-                    name="Idiopathic Pulmonary Arterial Hypertension",
-                    aliases=[],
-                    quotes=[],
-                    reasoning="doc1",
-                ),
-            },
+            resource1: ref_map(
+                {
+                    "Pulmonary Arterial Hypertension": EntityMention(
+                        kind="disease",
+                        name="Pulmonary Arterial Hypertension",
+                        aliases=[],
+                        quotes=[],
+                        reasoning="doc1",
+                    ),
+                    "Idiopathic Pulmonary Arterial Hypertension": EntityMention(
+                        kind="disease",
+                        name="Idiopathic Pulmonary Arterial Hypertension",
+                        aliases=[],
+                        quotes=[],
+                        reasoning="doc1",
+                    ),
+                }
+            ),
             # Doc2: lowercase pah + lowercase idiopathic pah
-            resource2: {
-                "pulmonary arterial hypertension": EntityMention(
-                    kind="disease",
-                    name="pulmonary arterial hypertension",
-                    aliases=[],
-                    quotes=[],
-                    reasoning="doc2",
-                ),
-                "idiopathic pulmonary arterial hypertension": EntityMention(
-                    kind="disease",
-                    name="idiopathic pulmonary arterial hypertension",
-                    aliases=[],
-                    quotes=[],
-                    reasoning="doc2",
-                ),
-            },
+            resource2: ref_map(
+                {
+                    "pulmonary arterial hypertension": EntityMention(
+                        kind="disease",
+                        name="pulmonary arterial hypertension",
+                        aliases=[],
+                        quotes=[],
+                        reasoning="doc2",
+                    ),
+                    "idiopathic pulmonary arterial hypertension": EntityMention(
+                        kind="disease",
+                        name="idiopathic pulmonary arterial hypertension",
+                        aliases=[],
+                        quotes=[],
+                        reasoning="doc2",
+                    ),
+                }
+            ),
             # Doc3: Mixed case PAH + Mixed case Idiopathic PAH
-            resource3: {
-                "Pulmonary arterial hypertension": EntityMention(
-                    kind="disease",
-                    name="Pulmonary arterial hypertension",
-                    aliases=[],
-                    quotes=[],
-                    reasoning="doc3",
-                ),
-                "Idiopathic pulmonary arterial hypertension": EntityMention(
-                    kind="disease",
-                    name="Idiopathic pulmonary arterial hypertension",
-                    aliases=[],
-                    quotes=[],
-                    reasoning="doc3",
-                ),
-            },
+            resource3: ref_map(
+                {
+                    "Pulmonary arterial hypertension": EntityMention(
+                        kind="disease",
+                        name="Pulmonary arterial hypertension",
+                        aliases=[],
+                        quotes=[],
+                        reasoning="doc3",
+                    ),
+                    "Idiopathic pulmonary arterial hypertension": EntityMention(
+                        kind="disease",
+                        name="Idiopathic pulmonary arterial hypertension",
+                        aliases=[],
+                        quotes=[],
+                        reasoning="doc3",
+                    ),
+                }
+            ),
         }
 
         # Apply global merging
@@ -214,17 +231,17 @@ class TestCrossDocumentCanonicalMerging:
             )
 
             # The child should be in aliases
-            assert len(entity.aliases) >= 1
+            assert len(entity.aliases()) >= 1
             child_aliases = [
                 alias
-                for alias in entity.aliases
+                for alias in entity.aliases()
                 if normalize_for_comparison(alias)
                 == "idiopathic pulmonary arterial hypertension"
             ]
             assert len(child_aliases) >= 1
 
             # Check reasoning shows merge
-            assert "MERGED" in entity.reasoning
+            assert "MERGED" in entity.reasoning()
 
         # Should have merged 3 entities total (one per document)
         assert ctx.state.entities_merged == 3
@@ -259,22 +276,24 @@ class TestCrossDocumentCanonicalMerging:
         resource1 = ResourceId(url="https://example.com/doc1", counter=0)
         # Document has names WITH (PAH) suffix
         ctx.state.validated_entities_by_resource = {
-            resource1: {
-                "Pulmonary arterial hypertension (PAH)": EntityMention(
-                    kind="disease",
-                    name="Pulmonary arterial hypertension (PAH)",
-                    aliases=[],
-                    quotes=[],
-                    reasoning="doc1",
-                ),
-                "Idiopathic pulmonary arterial hypertension (IPAH)": EntityMention(
-                    kind="disease",
-                    name="Idiopathic pulmonary arterial hypertension (IPAH)",
-                    aliases=[],
-                    quotes=[],
-                    reasoning="doc1",
-                ),
-            },
+            resource1: ref_map(
+                {
+                    "Pulmonary arterial hypertension (PAH)": EntityMention(
+                        kind="disease",
+                        name="Pulmonary arterial hypertension (PAH)",
+                        aliases=[],
+                        quotes=[],
+                        reasoning="doc1",
+                    ),
+                    "Idiopathic pulmonary arterial hypertension (IPAH)": EntityMention(
+                        kind="disease",
+                        name="Idiopathic pulmonary arterial hypertension (IPAH)",
+                        aliases=[],
+                        quotes=[],
+                        reasoning="doc1",
+                    ),
+                }
+            ),
         }
         # Mock LLM for any additional pairs (pah/ipah forms create extra pairs)
         mock_result = MagicMock()
@@ -324,15 +343,17 @@ class TestMergeWithMissingParent:
 
         # Document only has child, not parent
         ctx.state.validated_entities_by_resource = {
-            resource1: {
-                "Idiopathic Pulmonary Arterial Hypertension": EntityMention(
-                    kind="disease",
-                    name="Idiopathic Pulmonary Arterial Hypertension",
-                    aliases=[],
-                    quotes=[],
-                    reasoning="doc1",
-                ),
-            },
+            resource1: ref_map(
+                {
+                    "Idiopathic Pulmonary Arterial Hypertension": EntityMention(
+                        kind="disease",
+                        name="Idiopathic Pulmonary Arterial Hypertension",
+                        aliases=[],
+                        quotes=[],
+                        reasoning="doc1",
+                    ),
+                }
+            ),
         }
 
         # Apply global merging

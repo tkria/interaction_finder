@@ -9,7 +9,7 @@ import pytest
 from pydantic_graph import GraphRunContext
 
 from interaction_finder.extraction.nodes import ConsolidateEntitiesNode
-from interaction_finder.extraction.models import EntityMention
+from interaction_finder.extraction.models import EntityMention, EntityRef
 from interaction_finder.extraction.state import State
 from interaction_finder.resources import ResourceId, ResourcePool
 from interaction_finder.settings import IfetcherConfig
@@ -55,32 +55,47 @@ def test_capitalization_variants_use_same_canonical_name(mock_deps):
     resource3 = ResourceId(url="http://doc3.com", id="doc3")
 
     state.validated_entities_by_resource[resource1] = {
-        "Pulmonary arterial hypertension": EntityMention(
-            kind="phenotype",
-            name="Pulmonary arterial hypertension",
-            aliases=[],
-            quotes=[],
-            reasoning="Test1",
+        "Pulmonary arterial hypertension": EntityRef(
+            canonical="Pulmonary arterial hypertension",
+            mentions=[
+                EntityMention(
+                    kind="phenotype",
+                    name="Pulmonary arterial hypertension",
+                    aliases=[],
+                    quotes=[],
+                    reasoning="Test1",
+                )
+            ],
         )
     }
 
     state.validated_entities_by_resource[resource2] = {
-        "Pulmonary Arterial Hypertension": EntityMention(
-            kind="phenotype",
-            name="Pulmonary Arterial Hypertension",
-            aliases=[],
-            quotes=[],
-            reasoning="Test2",
+        "Pulmonary Arterial Hypertension": EntityRef(
+            canonical="Pulmonary Arterial Hypertension",
+            mentions=[
+                EntityMention(
+                    kind="phenotype",
+                    name="Pulmonary Arterial Hypertension",
+                    aliases=[],
+                    quotes=[],
+                    reasoning="Test2",
+                )
+            ],
         )
     }
 
     state.validated_entities_by_resource[resource3] = {
-        "pulmonary arterial hypertension": EntityMention(
-            kind="phenotype",
-            name="pulmonary arterial hypertension",
-            aliases=[],
-            quotes=[],
-            reasoning="Test3",
+        "pulmonary arterial hypertension": EntityRef(
+            canonical="pulmonary arterial hypertension",
+            mentions=[
+                EntityMention(
+                    kind="phenotype",
+                    name="pulmonary arterial hypertension",
+                    aliases=[],
+                    quotes=[],
+                    reasoning="Test3",
+                )
+            ],
         )
     }
 
@@ -119,11 +134,11 @@ def test_capitalization_variants_use_same_canonical_name(mock_deps):
     doc3_entity = list(state.validated_entities_by_resource[resource3].values())[0]
 
     # Doc1 was "Pulmonary arterial hypertension", renamed to "Pulmonary Arterial Hypertension"
-    assert "Pulmonary arterial hypertension" in doc1_entity.aliases
+    assert "Pulmonary arterial hypertension" in doc1_entity.aliases()
     # Doc2 was already "Pulmonary Arterial Hypertension", no rename needed
-    assert len(doc2_entity.aliases) == 0
+    assert len(doc2_entity.aliases()) == 0
     # Doc3 was "pulmonary arterial hypertension", renamed to "Pulmonary Arterial Hypertension"
-    assert "pulmonary arterial hypertension" in doc3_entity.aliases
+    assert "pulmonary arterial hypertension" in doc3_entity.aliases()
 
 
 def test_spelling_variants_use_same_canonical_name(mock_deps):
@@ -140,22 +155,32 @@ def test_spelling_variants_use_same_canonical_name(mock_deps):
     resource2 = ResourceId(url="http://doc2.com", id="doc2")
 
     state.validated_entities_by_resource[resource1] = {
-        "Hereditary haemorrhagic telangiectasia": EntityMention(
-            kind="phenotype",
-            name="Hereditary haemorrhagic telangiectasia",
-            aliases=[],
-            quotes=[],
-            reasoning="Test1",
+        "Hereditary haemorrhagic telangiectasia": EntityRef(
+            canonical="Hereditary haemorrhagic telangiectasia",
+            mentions=[
+                EntityMention(
+                    kind="phenotype",
+                    name="Hereditary haemorrhagic telangiectasia",
+                    aliases=[],
+                    quotes=[],
+                    reasoning="Test1",
+                )
+            ],
         )
     }
 
     state.validated_entities_by_resource[resource2] = {
-        "Hereditary Hemorrhagic Telangiectasia": EntityMention(
-            kind="phenotype",
-            name="Hereditary Hemorrhagic Telangiectasia",
-            aliases=[],
-            quotes=[],
-            reasoning="Test2",
+        "Hereditary Hemorrhagic Telangiectasia": EntityRef(
+            canonical="Hereditary Hemorrhagic Telangiectasia",
+            mentions=[
+                EntityMention(
+                    kind="phenotype",
+                    name="Hereditary Hemorrhagic Telangiectasia",
+                    aliases=[],
+                    quotes=[],
+                    reasoning="Test2",
+                )
+            ],
         )
     }
 
@@ -210,12 +235,17 @@ def test_mixed_variants_across_many_documents(mock_deps):
     for i, variant in enumerate(variants):
         resource = ResourceId(url=f"http://doc{i}.com", id=f"doc{i}")
         state.validated_entities_by_resource[resource] = {
-            variant: EntityMention(
-                kind="phenotype",
-                name=variant,
-                aliases=[],
-                quotes=[],
-                reasoning=f"Test{i}",
+            variant: EntityRef(
+                canonical=variant,
+                mentions=[
+                    EntityMention(
+                        kind="phenotype",
+                        name=variant,
+                        aliases=[],
+                        quotes=[],
+                        reasoning=f"Test{i}",
+                    )
+                ],
             )
         }
 

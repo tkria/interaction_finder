@@ -10,7 +10,7 @@ import pytest
 from unittest.mock import AsyncMock, patch
 
 from interaction_finder.extraction.nodes import ConsolidateEntitiesNode
-from interaction_finder.extraction.models import EntityMention
+from interaction_finder.extraction.models import EntityMention, EntityRef
 from interaction_finder.extraction.state import State
 from interaction_finder.extraction.deps import Deps
 from interaction_finder.resources import ResourcePool, ResourceId
@@ -40,6 +40,13 @@ def mock_deps(mock_config):
     return deps
 
 
+def ref_map(data: dict[str, EntityMention]) -> dict[str, EntityRef]:
+    return {
+        name: EntityRef(canonical=name, mentions=[mention])
+        for name, mention in data.items()
+    }
+
+
 def test_identical_canonical_names_auto_merged(mock_deps):
     """Test that pairs with identical canonical names are auto-merged without LLM call."""
 
@@ -57,26 +64,30 @@ def test_identical_canonical_names_auto_merged(mock_deps):
 
     # Create entities in state
     resource_id1 = ResourceId(url="http://doc1.com", id="doc1")
-    state.validated_entities_by_resource[resource_id1] = {
-        "BMPR2": EntityMention(
-            kind="gene",
-            name="BMPR2",
-            aliases=["BMPR2 gene"],  # This alias causes the bug
-            quotes=[],
-            reasoning="Test entity",
-        )
-    }
+    state.validated_entities_by_resource[resource_id1] = ref_map(
+        {
+            "BMPR2": EntityMention(
+                kind="gene",
+                name="BMPR2",
+                aliases=["BMPR2 gene"],  # This alias causes the bug
+                quotes=[],
+                reasoning="Test entity",
+            )
+        }
+    )
 
     resource_id2 = ResourceId(url="http://doc2.com", id="doc2")
-    state.validated_entities_by_resource[resource_id2] = {
-        "BMPR2": EntityMention(
-            kind="gene",
-            name="BMPR2",
-            aliases=[],
-            quotes=[],
-            reasoning="Test entity in second doc",
-        )
-    }
+    state.validated_entities_by_resource[resource_id2] = ref_map(
+        {
+            "BMPR2": EntityMention(
+                kind="gene",
+                name="BMPR2",
+                aliases=[],
+                quotes=[],
+                reasoning="Test entity in second doc",
+            )
+        }
+    )
 
     # Create node and run collection
     node = ConsolidateEntitiesNode()
@@ -146,26 +157,30 @@ def test_different_canonical_names_sent_to_llm(mock_deps):
 
     # Create entities with genuinely different canonical names
     resource_id1 = ResourceId(url="http://doc1.com", id="doc1")
-    state.validated_entities_by_resource[resource_id1] = {
-        "BMPR2": EntityMention(
-            kind="gene",
-            name="BMPR2",
-            aliases=[],
-            quotes=[],
-            reasoning="Test entity",
-        )
-    }
+    state.validated_entities_by_resource[resource_id1] = ref_map(
+        {
+            "BMPR2": EntityMention(
+                kind="gene",
+                name="BMPR2",
+                aliases=[],
+                quotes=[],
+                reasoning="Test entity",
+            )
+        }
+    )
 
     resource_id2 = ResourceId(url="http://doc2.com", id="doc2")
-    state.validated_entities_by_resource[resource_id2] = {
-        "BMPR2 gene": EntityMention(  # Different canonical name
-            kind="gene",
-            name="BMPR2 gene",
-            aliases=[],
-            quotes=[],
-            reasoning="Test entity in second doc",
-        )
-    }
+    state.validated_entities_by_resource[resource_id2] = ref_map(
+        {
+            "BMPR2 gene": EntityMention(  # Different canonical name
+                kind="gene",
+                name="BMPR2 gene",
+                aliases=[],
+                quotes=[],
+                reasoning="Test entity in second doc",
+            )
+        }
+    )
 
     # Create node and run collection
     node = ConsolidateEntitiesNode()
@@ -230,22 +245,24 @@ def test_mixed_identical_and_different_pairs(mock_deps):
     # 1. BMPR2 with alias -> creates identical pair (bmpr2, bmpr2 gene)
     # 2. BMP9 standalone -> creates different pair (bmp9, bmpr2)
     resource_id1 = ResourceId(url="http://doc1.com", id="doc1")
-    state.validated_entities_by_resource[resource_id1] = {
-        "BMPR2": EntityMention(
-            kind="gene",
-            name="BMPR2",
-            aliases=["BMPR2 gene"],  # Identical canonical case
-            quotes=[],
-            reasoning="Test",
-        ),
-        "BMP9": EntityMention(
-            kind="gene",
-            name="BMP9",
-            aliases=[],
-            quotes=[],
-            reasoning="Test",
-        ),
-    }
+    state.validated_entities_by_resource[resource_id1] = ref_map(
+        {
+            "BMPR2": EntityMention(
+                kind="gene",
+                name="BMPR2",
+                aliases=["BMPR2 gene"],  # Identical canonical case
+                quotes=[],
+                reasoning="Test",
+            ),
+            "BMP9": EntityMention(
+                kind="gene",
+                name="BMP9",
+                aliases=[],
+                quotes=[],
+                reasoning="Test",
+            ),
+        }
+    )
 
     node = ConsolidateEntitiesNode()
     unique_entities = node._collect_unique_entities(

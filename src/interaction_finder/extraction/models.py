@@ -78,6 +78,63 @@ class EntityPairKey(NamedTuple):
     entity2_name: str
 
 
+class EntityRef(NamedTuple):
+    """Reference to an entity with mutable canonical name and immutable provenance.
+
+    Separates identity (canonical name, updated by consolidation) from provenance
+    (original extractions, preserved immutably). This enables tracing what was
+    originally extracted vs what resulted from consolidation decisions.
+
+    Attributes:
+        canonical: Current canonical name (may be updated by consolidation rules)
+        mentions: Original EntityMention(s) from extraction (immutable, append-only)
+    """
+
+    canonical: str
+    mentions: list[EntityMention]
+
+    def aliases(self) -> list[str]:
+        """Aggregate aliases from all mentions (ordered, deduped)."""
+        seen: set[str] = set()
+        result: list[str] = []
+        for mention in self.mentions:
+            # Include original name if it differs from canonical
+            if mention.name != self.canonical and mention.name not in seen:
+                result.append(mention.name)
+                seen.add(mention.name)
+            for alias in mention.aliases:
+                if alias not in seen:
+                    result.append(alias)
+                    seen.add(alias)
+        return result
+
+    def quotes(self) -> list[ResourceQuote]:
+        """Aggregate quotes from all mentions."""
+        aggregated: list[ResourceQuote] = []
+        for mention in self.mentions:
+            aggregated.extend(mention.quotes)
+        return aggregated
+
+    def reasoning(self) -> str:
+        """Merge reasoning from all mentions."""
+        if not self.mentions:
+            return ""
+        parts = []
+        for mention in self.mentions:
+            if mention.name == self.canonical:
+                parts.append(mention.reasoning)
+            else:
+                parts.append(f"MERGED({mention.name}): {mention.reasoning}")
+        return " | ".join(parts)
+
+    @property
+    def kind(self) -> str:
+        """Kind is taken from the first mention."""
+        if not self.mentions:
+            raise ValueError("EntityRef has no mentions to derive kind")
+        return self.mentions[0].kind
+
+
 # =============================================================================
 # Agent output models (Pydantic - what LLMs return)
 # =============================================================================
@@ -275,8 +332,8 @@ class PairAssessment(BaseModel):
 
     Attributes:
         resource_id: Which document this assessment is from
-        entity1: First entity with full information
-        entity2: Second entity with full information
+        entity1: First entity reference (canonical name + original mentions)
+        entity2: Second entity reference (canonical name + original mentions)
         relationship: Selected relationship type
         quotes: Supporting quotes from this document
         confidence: Qualitative confidence in this association
@@ -286,8 +343,8 @@ class PairAssessment(BaseModel):
     """
 
     resource_id: ResourceId
-    entity1: EntityMention
-    entity2: EntityMention
+    entity1: EntityRef
+    entity2: EntityRef
     relationship: str
     quotes: list[ResourceQuote]
     confidence: Literal["high", "medium", "low"]
@@ -380,6 +437,20 @@ class ExtractionMetadata(BaseModel):
     quotes_failed: int
 
 
+class ConsolidationRule(BaseModel):
+    """Single entity consolidation rule for provenance tracking.
+
+    Records how one entity name was mapped to another during consolidation.
+    """
+
+    source: str = Field(description="Original normalized entity name")
+    kind: str = Field(description="Entity kind (e.g., 'gene', 'phenotype')")
+    target: str = Field(description="Target canonical name after consolidation")
+    reasoning: str = Field(
+        description="Reason for consolidation: 'auto:cap', 'auto:fuzzy', 'cached', or LLM reasoning"
+    )
+
+
 class ExtractionResult(BaseModel):
     """Final pipeline output.
 
@@ -402,6 +473,10 @@ class ExtractionResult(BaseModel):
         description="All pair judgments (accepted and rejected)"
     )
     metadata: ExtractionMetadata = Field(description="Extraction statistics")
+    consolidation_rules: list[ConsolidationRule] = Field(
+        default_factory=list,
+        description="Entity consolidation rules applied during extraction",
+    )
 
     @model_validator(mode="before")
     @classmethod

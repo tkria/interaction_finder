@@ -4,10 +4,16 @@ import logging
 
 import pytest
 
+from interaction_finder.extraction.models import EntityMention, EntityRef
 from interaction_finder.resources import ResourcePool
 from tests.conftest_helpers import skip_unless_tainted
 
 pytest_collection_modifyitems = skip_unless_tainted("extraction")
+
+
+def make_entity_ref(entity: EntityMention) -> EntityRef:
+    """Helper to wrap an EntityMention in an EntityRef for test fixtures."""
+    return EntityRef(canonical=entity.name, mentions=[entity])
 
 
 @pytest.fixture

@@ -4,7 +4,11 @@ import re
 
 import pytest
 
-from interaction_finder.extraction.models import EntityMention, PairAssessment
+from interaction_finder.extraction.models import (
+    EntityMention,
+    EntityRef,
+    PairAssessment,
+)
 from interaction_finder.extraction.sweep_co_mentions import (
     CandidatePair,
     CoMentionRegion,
@@ -81,6 +85,23 @@ def entity_breast_cancer():
     )
 
 
+@pytest.fixture
+def entity_ref_brca1(entity_brca1):
+    return EntityRef(canonical=entity_brca1.name, mentions=[entity_brca1])
+
+
+@pytest.fixture
+def entity_ref_tp53(entity_tp53):
+    return EntityRef(canonical=entity_tp53.name, mentions=[entity_tp53])
+
+
+@pytest.fixture
+def entity_ref_breast_cancer(entity_breast_cancer):
+    return EntityRef(
+        canonical=entity_breast_cancer.name, mentions=[entity_breast_cancer]
+    )
+
+
 # =============================================================================
 # Test collect_global_aliases
 # =============================================================================
@@ -97,7 +118,11 @@ class TestCollectGlobalAliases:
     def test_single_resource_single_entity(self, entity_brca1):
         """Single resource with single entity collects its aliases."""
         resource_id = ResourceId(url="https://example.com/1", counter=1)
-        entities = {entity_brca1.name: entity_brca1}
+        entities = {
+            entity_brca1.name: EntityRef(
+                canonical=entity_brca1.name, mentions=[entity_brca1]
+            )
+        }
         result = collect_global_aliases({resource_id: entities})
         assert result == {"BRCA1": {"BRCA-1", "breast cancer 1"}}
 
@@ -121,14 +146,28 @@ class TestCollectGlobalAliases:
             reasoning="Test",
         )
         result = collect_global_aliases(
-            {resource_id1: {"BRCA1": entity1}, resource_id2: {"BRCA1": entity2}}
+            {
+                resource_id1: {
+                    "BRCA1": EntityRef(canonical="BRCA1", mentions=[entity1])
+                },
+                resource_id2: {
+                    "BRCA1": EntityRef(canonical="BRCA1", mentions=[entity2])
+                },
+            }
         )
         assert result == {"BRCA1": {"BRCA-1", "breast cancer 1", "FANCS"}}
 
     def test_multiple_entities(self, entity_brca1, entity_tp53):
         """Multiple entities each get their own alias set."""
         resource_id = ResourceId(url="https://example.com/1", counter=1)
-        entities = {entity_brca1.name: entity_brca1, entity_tp53.name: entity_tp53}
+        entities = {
+            entity_brca1.name: EntityRef(
+                canonical=entity_brca1.name, mentions=[entity_brca1]
+            ),
+            entity_tp53.name: EntityRef(
+                canonical=entity_tp53.name, mentions=[entity_tp53]
+            ),
+        }
         result = collect_global_aliases({resource_id: entities})
         assert "BRCA1" in result
         assert "TP53" in result
@@ -261,15 +300,15 @@ class TestIsCoMentionCovered:
     """Tests for is_co_mention_covered function."""
 
     def test_both_positions_in_span_covered(
-        self, sample_resource, entity_brca1, entity_breast_cancer
+        self, sample_resource, entity_ref_brca1, entity_ref_breast_cancer
     ):
         """Both positions within a quote span means covered."""
         # Create a quote spanning positions 0-100
         quote = sample_resource.quote("BRCA1 is a tumor suppressor gene")
         assessment = PairAssessment(
             resource_id=sample_resource.id,
-            entity1=entity_brca1,
-            entity2=entity_breast_cancer,
+            entity1=entity_ref_brca1,
+            entity2=entity_ref_breast_cancer,
             relationship="associated_with",
             quotes=[quote],
             confidence="high",
@@ -280,14 +319,14 @@ class TestIsCoMentionCovered:
         assert is_co_mention_covered(span_start + 1, span_end - 1, [assessment])
 
     def test_one_position_outside_not_covered(
-        self, sample_resource, entity_brca1, entity_breast_cancer
+        self, sample_resource, entity_ref_brca1, entity_ref_breast_cancer
     ):
         """One position outside quote span means not covered."""
         quote = sample_resource.quote("BRCA1 is a tumor suppressor gene")
         assessment = PairAssessment(
             resource_id=sample_resource.id,
-            entity1=entity_brca1,
-            entity2=entity_breast_cancer,
+            entity1=entity_ref_brca1,
+            entity2=entity_ref_breast_cancer,
             relationship="associated_with",
             quotes=[quote],
             confidence="high",
@@ -302,15 +341,15 @@ class TestIsCoMentionCovered:
         assert not is_co_mention_covered(10, 20, [])
 
     def test_multiple_quotes_checks_all(
-        self, sample_resource, entity_brca1, entity_breast_cancer
+        self, sample_resource, entity_ref_brca1, entity_ref_breast_cancer
     ):
         """Checks all quotes for coverage."""
         quote1 = sample_resource.quote("BRCA1 is a tumor suppressor gene")
         quote2 = sample_resource.quote("BRCA1 and TP53 interact")
         assessment = PairAssessment(
             resource_id=sample_resource.id,
-            entity1=entity_brca1,
-            entity2=entity_breast_cancer,
+            entity1=entity_ref_brca1,
+            entity2=entity_ref_breast_cancer,
             relationship="associated_with",
             quotes=[quote1, quote2],
             confidence="high",
@@ -329,9 +368,11 @@ class TestIsCoMentionCovered:
 class TestClassifyCoMention:
     """Tests for classify_co_mention function."""
 
-    def test_no_existing_assessment(self, sample_resource, entity_brca1, entity_tp53):
+    def test_no_existing_assessment(
+        self, sample_resource, entity_ref_brca1, entity_ref_tp53
+    ):
         """No existing assessment returns novel with no_existing_assessment priority."""
-        pair_key = make_entity_pair_key(entity_brca1, entity_tp53)
+        pair_key = make_entity_pair_key(entity_ref_brca1, entity_ref_tp53)
         is_novel, priority = classify_co_mention(
             10, 20, pair_key, sample_resource.id, {}
         )
@@ -339,20 +380,20 @@ class TestClassifyCoMention:
         assert priority == "no_existing_assessment"
 
     def test_existing_assessment_different_region(
-        self, sample_resource, entity_brca1, entity_breast_cancer
+        self, sample_resource, entity_ref_brca1, entity_ref_breast_cancer
     ):
         """Existing assessment in different region returns novel with uncovered_region."""
         quote = sample_resource.quote("BRCA1 is a tumor suppressor gene")
         assessment = PairAssessment(
             resource_id=sample_resource.id,
-            entity1=entity_brca1,
-            entity2=entity_breast_cancer,
+            entity1=entity_ref_brca1,
+            entity2=entity_ref_breast_cancer,
             relationship="associated_with",
             quotes=[quote],
             confidence="high",
             reasoning="Test",
         )
-        pair_key = make_entity_pair_key(entity_brca1, entity_breast_cancer)
+        pair_key = make_entity_pair_key(entity_ref_brca1, entity_ref_breast_cancer)
         # Position far from the quote
         is_novel, priority = classify_co_mention(
             250, 260, pair_key, sample_resource.id, {sample_resource.id: [assessment]}
@@ -361,20 +402,20 @@ class TestClassifyCoMention:
         assert priority == "uncovered_region"
 
     def test_covered_region_not_novel(
-        self, sample_resource, entity_brca1, entity_breast_cancer
+        self, sample_resource, entity_ref_brca1, entity_ref_breast_cancer
     ):
         """Positions within existing quote are not novel."""
         quote = sample_resource.quote("BRCA1 is a tumor suppressor gene")
         assessment = PairAssessment(
             resource_id=sample_resource.id,
-            entity1=entity_brca1,
-            entity2=entity_breast_cancer,
+            entity1=entity_ref_brca1,
+            entity2=entity_ref_breast_cancer,
             relationship="associated_with",
             quotes=[quote],
             confidence="high",
             reasoning="Test",
         )
-        pair_key = make_entity_pair_key(entity_brca1, entity_breast_cancer)
+        pair_key = make_entity_pair_key(entity_ref_brca1, entity_ref_breast_cancer)
         span_start, span_end = quote.spans[0]
         is_novel, priority = classify_co_mention(
             span_start + 1,
@@ -395,10 +436,10 @@ class TestFindNovelCoMentionsInResource:
     """Tests for find_novel_co_mentions_in_resource function."""
 
     def test_finds_co_mentions_within_chunk_distance(
-        self, sample_resource, entity_brca1, entity_tp53
+        self, sample_resource, entity_ref_brca1, entity_ref_tp53
     ):
         """Finds co-mentions when entities are within chunk distance."""
-        pair_key = make_entity_pair_key(entity_brca1, entity_tp53)
+        pair_key = make_entity_pair_key(entity_ref_brca1, entity_ref_tp53)
         assessed_pairs = {pair_key}
         entity_patterns = {
             "BRCA1": build_entity_search_pattern("BRCA1", set()),
@@ -417,10 +458,10 @@ class TestFindNovelCoMentionsInResource:
         assert all(isinstance(cm, NovelCoMention) for cm in co_mentions)
 
     def test_filters_beyond_chunk_distance(
-        self, sample_resource, entity_brca1, entity_tp53
+        self, sample_resource, entity_ref_brca1, entity_ref_tp53
     ):
         """Filters co-mentions beyond chunk distance."""
-        pair_key = make_entity_pair_key(entity_brca1, entity_tp53)
+        pair_key = make_entity_pair_key(entity_ref_brca1, entity_ref_tp53)
         assessed_pairs = {pair_key}
         entity_patterns = {
             "BRCA1": build_entity_search_pattern("BRCA1", set()),
@@ -440,10 +481,10 @@ class TestFindNovelCoMentionsInResource:
             assert cm.chunk_range[0] == cm.chunk_range[1]
 
     def test_deduplicates_by_chunk_range(
-        self, sample_resource, entity_brca1, entity_breast_cancer
+        self, sample_resource, entity_ref_brca1, entity_ref_breast_cancer
     ):
         """Deduplicates co-mentions with same chunk range."""
-        pair_key = make_entity_pair_key(entity_brca1, entity_breast_cancer)
+        pair_key = make_entity_pair_key(entity_ref_brca1, entity_ref_breast_cancer)
         assessed_pairs = {pair_key}
         entity_patterns = {
             "BRCA1": build_entity_search_pattern("BRCA1", set()),
@@ -465,7 +506,7 @@ class TestFindNovelCoMentionsInResource:
             seen_ranges.add(key)
 
     def test_skips_covered_co_mentions(
-        self, sample_resource, entity_brca1, entity_breast_cancer
+        self, sample_resource, entity_ref_brca1, entity_ref_breast_cancer
     ):
         """Skips co-mentions that are already covered by existing assessments."""
         quote = sample_resource.quote(
@@ -473,14 +514,14 @@ class TestFindNovelCoMentionsInResource:
         )
         assessment = PairAssessment(
             resource_id=sample_resource.id,
-            entity1=entity_brca1,
-            entity2=entity_breast_cancer,
+            entity1=entity_ref_brca1,
+            entity2=entity_ref_breast_cancer,
             relationship="associated_with",
             quotes=[quote],
             confidence="high",
             reasoning="Test",
         )
-        pair_key = make_entity_pair_key(entity_brca1, entity_breast_cancer)
+        pair_key = make_entity_pair_key(entity_ref_brca1, entity_ref_breast_cancer)
         assessed_pairs = {pair_key}
         entity_patterns = {
             "BRCA1": build_entity_search_pattern("BRCA1", set()),
@@ -515,13 +556,17 @@ class TestCollectAssessedPairs:
         assert result == set()
 
     def test_collects_unique_pairs(
-        self, sample_resource, entity_brca1, entity_tp53, entity_breast_cancer
+        self,
+        sample_resource,
+        entity_ref_brca1,
+        entity_ref_tp53,
+        entity_ref_breast_cancer,
     ):
         """Collects unique pairs from assessments."""
         assessment1 = PairAssessment(
             resource_id=sample_resource.id,
-            entity1=entity_brca1,
-            entity2=entity_tp53,
+            entity1=entity_ref_brca1,
+            entity2=entity_ref_tp53,
             relationship="interacts_with",
             quotes=[],
             confidence="high",
@@ -529,8 +574,8 @@ class TestCollectAssessedPairs:
         )
         assessment2 = PairAssessment(
             resource_id=sample_resource.id,
-            entity1=entity_brca1,
-            entity2=entity_breast_cancer,
+            entity1=entity_ref_brca1,
+            entity2=entity_ref_breast_cancer,
             relationship="associated_with",
             quotes=[],
             confidence="high",
@@ -541,13 +586,15 @@ class TestCollectAssessedPairs:
         )
         assert len(result) == 2
 
-    def test_deduplicates_same_pair(self, sample_resource, entity_brca1, entity_tp53):
+    def test_deduplicates_same_pair(
+        self, sample_resource, entity_ref_brca1, entity_ref_tp53
+    ):
         """Same pair in multiple resources counted once."""
         resource_id2 = ResourceId(url="https://example.com/2", counter=2)
         assessment1 = PairAssessment(
             resource_id=sample_resource.id,
-            entity1=entity_brca1,
-            entity2=entity_tp53,
+            entity1=entity_ref_brca1,
+            entity2=entity_ref_tp53,
             relationship="interacts_with",
             quotes=[],
             confidence="high",
@@ -555,8 +602,8 @@ class TestCollectAssessedPairs:
         )
         assessment2 = PairAssessment(
             resource_id=resource_id2,
-            entity1=entity_brca1,
-            entity2=entity_tp53,
+            entity1=entity_ref_brca1,
+            entity2=entity_ref_tp53,
             relationship="regulates",
             quotes=[],
             confidence="medium",
@@ -576,9 +623,11 @@ class TestCollectAssessedPairs:
 class TestSelectCoMentionsToAssess:
     """Tests for select_co_mentions_to_assess function."""
 
-    def test_returns_all_co_mentions(self, sample_resource, entity_brca1, entity_tp53):
+    def test_returns_all_co_mentions(
+        self, sample_resource, entity_ref_brca1, entity_ref_tp53
+    ):
         """Currently returns all co-mentions unchanged."""
-        pair_key = make_entity_pair_key(entity_brca1, entity_tp53)
+        pair_key = make_entity_pair_key(entity_ref_brca1, entity_ref_tp53)
         co_mentions = [
             NovelCoMention(
                 resource_id=sample_resource.id,
@@ -650,9 +699,11 @@ class TestMergeCoMentionsIntoRegions:
         result = merge_co_mentions_into_regions([], {})
         assert result == []
 
-    def test_single_co_mention(self, sample_resource, entity_brca1, entity_tp53):
+    def test_single_co_mention(
+        self, sample_resource, entity_ref_brca1, entity_ref_tp53
+    ):
         """Single co-mention creates single region."""
-        pair_key = make_entity_pair_key(entity_brca1, entity_tp53)
+        pair_key = make_entity_pair_key(entity_ref_brca1, entity_ref_tp53)
         co_mentions = [
             NovelCoMention(
                 resource_id=sample_resource.id,
@@ -672,9 +723,11 @@ class TestMergeCoMentionsIntoRegions:
         assert result[0].chunk_range == (2, 3)
         assert len(result[0].candidate_pairs) == 1
 
-    def test_adjacent_ranges_merged(self, sample_resource, entity_brca1, entity_tp53):
+    def test_adjacent_ranges_merged(
+        self, sample_resource, entity_ref_brca1, entity_ref_tp53
+    ):
         """Adjacent chunk ranges (gap=1) are merged into single region."""
-        pair_key = make_entity_pair_key(entity_brca1, entity_tp53)
+        pair_key = make_entity_pair_key(entity_ref_brca1, entity_ref_tp53)
         co_mentions = [
             NovelCoMention(
                 resource_id=sample_resource.id,
@@ -703,10 +756,10 @@ class TestMergeCoMentionsIntoRegions:
         assert result[0].chunk_range == (0, 3)
 
     def test_non_adjacent_ranges_separate(
-        self, sample_resource, entity_brca1, entity_tp53
+        self, sample_resource, entity_ref_brca1, entity_ref_tp53
     ):
         """Non-adjacent chunk ranges create separate regions."""
-        pair_key = make_entity_pair_key(entity_brca1, entity_tp53)
+        pair_key = make_entity_pair_key(entity_ref_brca1, entity_ref_tp53)
         co_mentions = [
             NovelCoMention(
                 resource_id=sample_resource.id,
@@ -734,11 +787,15 @@ class TestMergeCoMentionsIntoRegions:
         assert len(result) == 2
 
     def test_multiple_pairs_in_same_region(
-        self, sample_resource, entity_brca1, entity_tp53, entity_breast_cancer
+        self,
+        sample_resource,
+        entity_ref_brca1,
+        entity_ref_tp53,
+        entity_ref_breast_cancer,
     ):
         """Multiple pairs in overlapping ranges collected in same region."""
-        pair_key1 = make_entity_pair_key(entity_brca1, entity_tp53)
-        pair_key2 = make_entity_pair_key(entity_brca1, entity_breast_cancer)
+        pair_key1 = make_entity_pair_key(entity_ref_brca1, entity_ref_tp53)
+        pair_key2 = make_entity_pair_key(entity_ref_brca1, entity_ref_breast_cancer)
         co_mentions = [
             NovelCoMention(
                 resource_id=sample_resource.id,
@@ -768,11 +825,11 @@ class TestMergeCoMentionsIntoRegions:
         assert result[0].chunk_range == (0, 2)
 
     def test_different_resources_separate(
-        self, sample_resource, entity_brca1, entity_tp53
+        self, sample_resource, entity_ref_brca1, entity_ref_tp53
     ):
         """Co-mentions in different resources create separate regions."""
         resource_id2 = ResourceId(url="https://example.com/2", counter=2)
-        pair_key = make_entity_pair_key(entity_brca1, entity_tp53)
+        pair_key = make_entity_pair_key(entity_ref_brca1, entity_ref_tp53)
         co_mentions = [
             NovelCoMention(
                 resource_id=sample_resource.id,
@@ -803,10 +860,10 @@ class TestMergeCoMentionsIntoRegions:
         assert resource_id2 in resource_ids
 
     def test_deduplicates_pairs_in_region(
-        self, sample_resource, entity_brca1, entity_tp53
+        self, sample_resource, entity_ref_brca1, entity_ref_tp53
     ):
         """Same pair appearing multiple times in merged region is deduplicated."""
-        pair_key = make_entity_pair_key(entity_brca1, entity_tp53)
+        pair_key = make_entity_pair_key(entity_ref_brca1, entity_ref_tp53)
         co_mentions = [
             NovelCoMention(
                 resource_id=sample_resource.id,
@@ -835,9 +892,11 @@ class TestMergeCoMentionsIntoRegions:
         # Same pair should only appear once in candidate_pairs
         assert len(result[0].candidate_pairs) == 1
 
-    def test_entity_kinds_assigned(self, sample_resource, entity_brca1, entity_tp53):
+    def test_entity_kinds_assigned(
+        self, sample_resource, entity_ref_brca1, entity_ref_tp53
+    ):
         """Entity kinds are correctly assigned to candidate pairs."""
-        pair_key = make_entity_pair_key(entity_brca1, entity_tp53)
+        pair_key = make_entity_pair_key(entity_ref_brca1, entity_ref_tp53)
         co_mentions = [
             NovelCoMention(
                 resource_id=sample_resource.id,
@@ -857,10 +916,10 @@ class TestMergeCoMentionsIntoRegions:
         assert candidate.entity2_kind == "gene"
 
     def test_missing_entity_kind_defaults(
-        self, sample_resource, entity_brca1, entity_tp53
+        self, sample_resource, entity_ref_brca1, entity_ref_tp53
     ):
         """Missing entity kinds default to 'entity'."""
-        pair_key = make_entity_pair_key(entity_brca1, entity_tp53)
+        pair_key = make_entity_pair_key(entity_ref_brca1, entity_ref_tp53)
         co_mentions = [
             NovelCoMention(
                 resource_id=sample_resource.id,

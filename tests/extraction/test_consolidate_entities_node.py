@@ -15,6 +15,7 @@ from pydantic_graph import GraphRunContext
 
 from interaction_finder.extraction.models import (
     EntityMention,
+    EntityRef,
     EntityConsolidationDecision,
     EntityConsolidationDecisions,
 )
@@ -22,6 +23,14 @@ from interaction_finder.extraction.nodes import ConsolidateEntitiesNode
 from interaction_finder.extraction.state import State
 from interaction_finder.extraction.utils import build_permitted_pairs
 from interaction_finder.resources import ResourceId, ResourcePool
+
+
+def ref_map(data: dict[str, EntityMention]) -> dict[str, EntityRef]:
+    """Convert EntityMention mapping to EntityRef mapping."""
+    return {
+        name: EntityRef(canonical=name, mentions=[mention])
+        for name, mention in data.items()
+    }
 
 
 def build_canonical_lookup_from_unique_entities(unique_entities):
@@ -69,22 +78,24 @@ class TestCollectUniqueEntities:
         # Add entities to state
         resource1 = ResourceId(url="https://example.com/doc1", counter=0)
         ctx.state.validated_entities_by_resource = {
-            resource1: {
-                "BRCA1": EntityMention(
-                    kind="gene",
-                    name="BRCA1",
-                    aliases=["BRCA1"],
-                    quotes=[],
-                    reasoning="test",
-                ),
-                "TP53": EntityMention(
-                    kind="gene",
-                    name="TP53",
-                    aliases=["TP53"],
-                    quotes=[],
-                    reasoning="test",
-                ),
-            }
+            resource1: ref_map(
+                {
+                    "BRCA1": EntityMention(
+                        kind="gene",
+                        name="BRCA1",
+                        aliases=["BRCA1"],
+                        quotes=[],
+                        reasoning="test",
+                    ),
+                    "TP53": EntityMention(
+                        kind="gene",
+                        name="TP53",
+                        aliases=["TP53"],
+                        quotes=[],
+                        reasoning="test",
+                    ),
+                }
+            )
         }
 
         unique = node._collect_unique_entities(ctx)
@@ -109,24 +120,28 @@ class TestCollectUniqueEntities:
         resource2 = ResourceId(url="https://example.com/doc2", counter=1)
 
         ctx.state.validated_entities_by_resource = {
-            resource1: {
-                "BRCA1": EntityMention(
-                    kind="gene",
-                    name="BRCA1",
-                    aliases=["BRCA1"],
-                    quotes=[],
-                    reasoning="test",
-                )
-            },
-            resource2: {
-                "brca1": EntityMention(
-                    kind="gene",
-                    name="brca1",
-                    aliases=["brca1"],
-                    quotes=[],
-                    reasoning="test",
-                )
-            },
+            resource1: ref_map(
+                {
+                    "BRCA1": EntityMention(
+                        kind="gene",
+                        name="BRCA1",
+                        aliases=["BRCA1"],
+                        quotes=[],
+                        reasoning="test",
+                    )
+                }
+            ),
+            resource2: ref_map(
+                {
+                    "brca1": EntityMention(
+                        kind="gene",
+                        name="brca1",
+                        aliases=["brca1"],
+                        quotes=[],
+                        reasoning="test",
+                    )
+                }
+            ),
         }
 
         unique = node._collect_unique_entities(ctx)
@@ -152,31 +167,35 @@ class TestCollectUniqueEntities:
         resource2 = ResourceId(url="https://example.com/doc2", counter=1)
 
         ctx.state.validated_entities_by_resource = {
-            resource1: {
-                "BRCA1": EntityMention(
-                    kind="gene",
-                    name="BRCA1",
-                    aliases=["BRCA1"],
-                    quotes=[],
-                    reasoning="test",
-                )
-            },
-            resource2: {
-                "brca1": EntityMention(
-                    kind="gene",
-                    name="brca1",
-                    aliases=["brca1"],
-                    quotes=[],
-                    reasoning="test",
-                ),
-                "Brca1": EntityMention(
-                    kind="gene",
-                    name="Brca1",
-                    aliases=["Brca1"],
-                    quotes=[],
-                    reasoning="test",
-                ),
-            },
+            resource1: ref_map(
+                {
+                    "BRCA1": EntityMention(
+                        kind="gene",
+                        name="BRCA1",
+                        aliases=["BRCA1"],
+                        quotes=[],
+                        reasoning="test",
+                    )
+                }
+            ),
+            resource2: ref_map(
+                {
+                    "brca1": EntityMention(
+                        kind="gene",
+                        name="brca1",
+                        aliases=["brca1"],
+                        quotes=[],
+                        reasoning="test",
+                    ),
+                    "Brca1": EntityMention(
+                        kind="gene",
+                        name="Brca1",
+                        aliases=["Brca1"],
+                        quotes=[],
+                        reasoning="test",
+                    ),
+                }
+            ),
         }
 
         node._collect_unique_entities(ctx)
@@ -202,22 +221,24 @@ class TestCollectUniqueEntities:
 
         resource1 = ResourceId(url="https://example.com/doc1", counter=0)
         ctx.state.validated_entities_by_resource = {
-            resource1: {
-                "BRCA1": EntityMention(
-                    kind="gene",
-                    name="BRCA1",
-                    aliases=["BRCA1"],
-                    quotes=[],
-                    reasoning="test",
-                ),
-                "breast cancer": EntityMention(
-                    kind="disease",
-                    name="breast cancer",
-                    aliases=["breast cancer"],
-                    quotes=[],
-                    reasoning="test",
-                ),
-            }
+            resource1: ref_map(
+                {
+                    "BRCA1": EntityMention(
+                        kind="gene",
+                        name="BRCA1",
+                        aliases=["BRCA1"],
+                        quotes=[],
+                        reasoning="test",
+                    ),
+                    "breast cancer": EntityMention(
+                        kind="disease",
+                        name="breast cancer",
+                        aliases=["breast cancer"],
+                        quotes=[],
+                        reasoning="test",
+                    ),
+                }
+            )
         }
 
         unique = node._collect_unique_entities(ctx)
@@ -354,9 +375,10 @@ class TestGetGlobalMergeDecisions:
             # Should have called LLM
             assert mock_agent.run.called
             assert len(merge_rules) == 1
-            # Merge rules keyed by normalized form, target is canonical name
+            # Merge rules keyed by normalized form, value is (target, reasoning) tuple
             assert ("brca1", "gene") in merge_rules
-            assert merge_rules[("brca1", "gene")] == "BRCA"
+            target, reasoning = merge_rules[("brca1", "gene")]
+            assert target == "BRCA"
 
             # Cache should be populated with target canonical name
             assert ctx.state.merge_decision_cache[("brca", "brca1", "gene")] == "BRCA"
@@ -399,10 +421,11 @@ class TestGetGlobalMergeDecisions:
 
             # Should NOT have called LLM
             assert not mock_agent.run.called
-            # Should return merge rule from cache (keyed by normalized form)
+            # Should return merge rule from cache - value is (target, reasoning) tuple
             assert len(merge_rules) == 1
             assert ("brca1", "gene") in merge_rules
-            assert merge_rules[("brca1", "gene")] == "BRCA"
+            target, reasoning = merge_rules[("brca1", "gene")]
+            assert target == "BRCA"
             # Metrics
             assert ctx.state.merge_cache_hits == 1
             assert ctx.state.merge_cache_misses == 0
@@ -488,10 +511,11 @@ class TestGetGlobalMergeDecisions:
 
             # Should call LLM only for uncached pair
             assert mock_agent.run.called
-            # Should have merge rule only for cached pair (keyed by normalized form)
+            # Should have merge rule only for cached pair - value is (target, reasoning) tuple
             assert len(merge_rules) == 1
             assert ("brca1", "gene") in merge_rules
-            assert merge_rules[("brca1", "gene")] == "BRCA"
+            target, reasoning = merge_rules[("brca1", "gene")]
+            assert target == "BRCA"
             # Metrics
             assert ctx.state.merge_cache_hits == 1
             assert ctx.state.merge_cache_misses == 1
@@ -546,67 +570,71 @@ class TestResolveTransitiveMerges:
         """Should resolve A→B→C to A→C, B→C."""
         node = ConsolidateEntitiesNode()
 
+        # Rules use (target, reasoning) tuple format
         merge_rules = {
-            ("a", "gene"): "b",
-            ("b", "gene"): "c",
+            ("a", "gene"): ("b", "test"),
+            ("b", "gene"): ("c", "test"),
         }
 
         resolved = node._resolve_transitive_merges(merge_rules)
 
-        # Both should point to final parent 'c'
-        assert resolved[("a", "gene")] == "c"
-        assert resolved[("b", "gene")] == "c"
+        # Both should point to final parent 'c' - value is (target, reasoning)
+        assert resolved[("a", "gene")][0] == "c"
+        assert resolved[("b", "gene")][0] == "c"
 
     def test_resolves_long_chain(self):
         """Should resolve A→B→C→D to A→D, B→D, C→D."""
         node = ConsolidateEntitiesNode()
 
+        # Rules use (target, reasoning) tuple format
         merge_rules = {
-            ("a", "gene"): "b",
-            ("b", "gene"): "c",
-            ("c", "gene"): "d",
+            ("a", "gene"): ("b", "test"),
+            ("b", "gene"): ("c", "test"),
+            ("c", "gene"): ("d", "test"),
         }
 
         resolved = node._resolve_transitive_merges(merge_rules)
 
-        # All should point to final parent 'd'
-        assert resolved[("a", "gene")] == "d"
-        assert resolved[("b", "gene")] == "d"
-        assert resolved[("c", "gene")] == "d"
+        # All should point to final parent 'd' - value is (target, reasoning)
+        assert resolved[("a", "gene")][0] == "d"
+        assert resolved[("b", "gene")][0] == "d"
+        assert resolved[("c", "gene")][0] == "d"
 
     def test_handles_multiple_independent_chains(self):
         """Should handle multiple independent merge chains."""
         node = ConsolidateEntitiesNode()
 
+        # Rules use (target, reasoning) tuple format
         merge_rules = {
-            ("a", "gene"): "b",
-            ("b", "gene"): "c",
-            ("x", "gene"): "y",
+            ("a", "gene"): ("b", "test"),
+            ("b", "gene"): ("c", "test"),
+            ("x", "gene"): ("y", "test"),
         }
 
         resolved = node._resolve_transitive_merges(merge_rules)
 
-        # First chain
-        assert resolved[("a", "gene")] == "c"
-        assert resolved[("b", "gene")] == "c"
+        # First chain - value is (target, reasoning)
+        assert resolved[("a", "gene")][0] == "c"
+        assert resolved[("b", "gene")][0] == "c"
 
         # Second chain (no transitivity)
-        assert resolved[("x", "gene")] == "y"
+        assert resolved[("x", "gene")][0] == "y"
 
     def test_handles_no_chains(self):
         """Should pass through rules with no chains."""
         node = ConsolidateEntitiesNode()
 
+        # Rules use (target, reasoning) tuple format
         merge_rules = {
-            ("a", "gene"): "b",
-            ("c", "gene"): "d",
+            ("a", "gene"): ("b", "test"),
+            ("c", "gene"): ("d", "test"),
         }
 
         resolved = node._resolve_transitive_merges(merge_rules)
 
-        # No changes - no chains to resolve
-        assert resolved[("a", "gene")] == "b"
-        assert resolved[("c", "gene")] == "d"
+        # No changes - no chains to resolve - value is (target, reasoning)
+        assert resolved[("a", "gene")][0] == "b"
+        assert resolved[("c", "gene")][0] == "d"
 
     def test_handles_empty_rules(self):
         """Should handle empty merge rules."""
@@ -621,11 +649,11 @@ class TestResolveTransitiveMerges:
         """Should detect and stop at circular references."""
         node = ConsolidateEntitiesNode()
 
-        # Create artificial cycle: a→b, b→c, c→a
+        # Create artificial cycle: a→b, b→c, c→a - rules use (target, reasoning) format
         merge_rules = {
-            ("a", "gene"): "b",
-            ("b", "gene"): "c",
-            ("c", "gene"): "a",
+            ("a", "gene"): ("b", "test"),
+            ("b", "gene"): ("c", "test"),
+            ("c", "gene"): ("a", "test"),
         }
 
         resolved = node._resolve_transitive_merges(merge_rules)
@@ -638,20 +666,21 @@ class TestResolveTransitiveMerges:
         """Should handle different entity kinds independently."""
         node = ConsolidateEntitiesNode()
 
+        # Rules use (target, reasoning) tuple format
         merge_rules = {
-            ("a", "gene"): "b",
-            ("b", "gene"): "c",
-            ("a", "disease"): "b",  # Different kind, no chain
+            ("a", "gene"): ("b", "test"),
+            ("b", "gene"): ("c", "test"),
+            ("a", "disease"): ("b", "test"),  # Different kind, no chain
         }
 
         resolved = node._resolve_transitive_merges(merge_rules)
 
-        # Gene chain resolved
-        assert resolved[("a", "gene")] == "c"
-        assert resolved[("b", "gene")] == "c"
+        # Gene chain resolved - value is (target, reasoning)
+        assert resolved[("a", "gene")][0] == "c"
+        assert resolved[("b", "gene")][0] == "c"
 
         # Disease - no chain
-        assert resolved[("a", "disease")] == "b"
+        assert resolved[("a", "disease")][0] == "b"
 
 
 class TestApplyMergeRulesGlobally:
@@ -669,26 +698,28 @@ class TestApplyMergeRulesGlobally:
 
         resource1 = ResourceId(url="https://example.com/doc1", counter=0)
         ctx.state.validated_entities_by_resource = {
-            resource1: {
-                "BRCA": EntityMention(
-                    kind="gene",
-                    name="BRCA",
-                    aliases=["BRCA"],
-                    quotes=[],
-                    reasoning="parent",
-                ),
-                "BRCA1": EntityMention(
-                    kind="gene",
-                    name="BRCA1",
-                    aliases=["BRCA1"],
-                    quotes=[],
-                    reasoning="child",
-                ),
-            }
+            resource1: ref_map(
+                {
+                    "BRCA": EntityMention(
+                        kind="gene",
+                        name="BRCA",
+                        aliases=["BRCA"],
+                        quotes=[],
+                        reasoning="parent",
+                    ),
+                    "BRCA1": EntityMention(
+                        kind="gene",
+                        name="BRCA1",
+                        aliases=["BRCA1"],
+                        quotes=[],
+                        reasoning="child",
+                    ),
+                }
+            )
         }
 
-        # Rules keyed by normalized form, target is canonical name
-        merge_rules = {("brca1", "gene"): "BRCA"}
+        # Rules keyed by normalized form, value is (target, reasoning) tuple
+        merge_rules = {("brca1", "gene"): ("BRCA", "test")}
 
         node._apply_merge_rules_globally(merge_rules, ctx)
 
@@ -696,8 +727,8 @@ class TestApplyMergeRulesGlobally:
         entities = ctx.state.validated_entities_by_resource[resource1]
         assert "BRCA" in entities
         assert "BRCA1" not in entities
-        assert "BRCA1" in entities["BRCA"].aliases
-        assert "MERGED(BRCA1)" in entities["BRCA"].reasoning
+        assert "BRCA1" in entities["BRCA"].aliases()
+        assert "MERGED(BRCA1)" in entities["BRCA"].reasoning()
         assert ctx.state.entities_merged == 1
 
     def test_applies_merge_across_multiple_documents(self, mock_deps):
@@ -714,43 +745,48 @@ class TestApplyMergeRulesGlobally:
         resource2 = ResourceId(url="https://example.com/doc2", counter=1)
 
         ctx.state.validated_entities_by_resource = {
-            resource1: {
-                "BRCA": EntityMention(
-                    kind="gene",
-                    name="BRCA",
-                    aliases=["BRCA"],
-                    quotes=[],
-                    reasoning="parent1",
-                ),
-                "BRCA1": EntityMention(
-                    kind="gene",
-                    name="BRCA1",
-                    aliases=["BRCA1"],
-                    quotes=[],
-                    reasoning="child1",
-                ),
-            },
-            resource2: {
-                "brca": EntityMention(
-                    kind="gene",
-                    name="brca",
-                    aliases=["brca"],
-                    quotes=[],
-                    reasoning="parent2",
-                ),
-                "brca1": EntityMention(
-                    kind="gene",
-                    name="brca1",
-                    aliases=["brca1"],
-                    quotes=[],
-                    reasoning="child2",
-                ),
-            },
+            resource1: ref_map(
+                {
+                    "BRCA": EntityMention(
+                        kind="gene",
+                        name="BRCA",
+                        aliases=["BRCA"],
+                        quotes=[],
+                        reasoning="parent1",
+                    ),
+                    "BRCA1": EntityMention(
+                        kind="gene",
+                        name="BRCA1",
+                        aliases=["BRCA1"],
+                        quotes=[],
+                        reasoning="child1",
+                    ),
+                }
+            ),
+            resource2: ref_map(
+                {
+                    "brca": EntityMention(
+                        kind="gene",
+                        name="brca",
+                        aliases=["brca"],
+                        quotes=[],
+                        reasoning="parent2",
+                    ),
+                    "brca1": EntityMention(
+                        kind="gene",
+                        name="brca1",
+                        aliases=["brca1"],
+                        quotes=[],
+                        reasoning="child2",
+                    ),
+                }
+            ),
         }
 
         # Rules keyed by normalized form - matches both BRCA1 and brca1
         # First matching entity's canonical name is used as target
-        merge_rules = {("brca1", "gene"): "BRCA"}
+        # Value is (target, reasoning) tuple
+        merge_rules = {("brca1", "gene"): ("BRCA", "test")}
 
         node._apply_merge_rules_globally(merge_rules, ctx)
 
@@ -761,7 +797,8 @@ class TestApplyMergeRulesGlobally:
         assert "BRCA" in entities1
         assert "BRCA1" not in entities1
 
-        assert "brca" in entities2
+        assert "BRCA" in entities2
+        assert "brca" not in entities2
         assert "brca1" not in entities2
 
         assert ctx.state.entities_merged == 2
@@ -780,36 +817,40 @@ class TestApplyMergeRulesGlobally:
         resource2 = ResourceId(url="https://example.com/doc2", counter=1)
 
         ctx.state.validated_entities_by_resource = {
-            resource1: {
-                "BRCA": EntityMention(
-                    kind="gene",
-                    name="BRCA",
-                    aliases=["BRCA"],
-                    quotes=[],
-                    reasoning="parent",
-                ),
-                "BRCA1": EntityMention(
-                    kind="gene",
-                    name="BRCA1",
-                    aliases=["BRCA1"],
-                    quotes=[],
-                    reasoning="child",
-                ),
-            },
-            resource2: {
-                # Only has child, no parent
-                "BRCA1": EntityMention(
-                    kind="gene",
-                    name="BRCA1",
-                    aliases=["BRCA1"],
-                    quotes=[],
-                    reasoning="child",
-                )
-            },
+            resource1: ref_map(
+                {
+                    "BRCA": EntityMention(
+                        kind="gene",
+                        name="BRCA",
+                        aliases=["BRCA"],
+                        quotes=[],
+                        reasoning="parent",
+                    ),
+                    "BRCA1": EntityMention(
+                        kind="gene",
+                        name="BRCA1",
+                        aliases=["BRCA1"],
+                        quotes=[],
+                        reasoning="child",
+                    ),
+                }
+            ),
+            resource2: ref_map(
+                {
+                    # Only has child, no parent
+                    "BRCA1": EntityMention(
+                        kind="gene",
+                        name="BRCA1",
+                        aliases=["BRCA1"],
+                        quotes=[],
+                        reasoning="child",
+                    )
+                }
+            ),
         }
 
-        # Rules keyed by normalized form, target is canonical name
-        merge_rules = {("brca1", "gene"): "BRCA"}
+        # Rules keyed by normalized form, value is (target, reasoning) tuple
+        merge_rules = {("brca1", "gene"): ("BRCA", "test")}
 
         node._apply_merge_rules_globally(merge_rules, ctx)
 
@@ -824,7 +865,7 @@ class TestApplyMergeRulesGlobally:
         # Old name should be in aliases
         assert (
             "BRCA1"
-            in ctx.state.validated_entities_by_resource[resource2]["BRCA"].aliases
+            in ctx.state.validated_entities_by_resource[resource2]["BRCA"].aliases()
         )
 
         assert ctx.state.entities_merged == 1  # Only doc1 has actual merge
@@ -841,15 +882,17 @@ class TestApplyMergeRulesGlobally:
 
         resource1 = ResourceId(url="https://example.com/doc1", counter=0)
         ctx.state.validated_entities_by_resource = {
-            resource1: {
-                "BRCA1": EntityMention(
-                    kind="gene",
-                    name="BRCA1",
-                    aliases=["BRCA1"],
-                    quotes=[],
-                    reasoning="test",
-                )
-            }
+            resource1: ref_map(
+                {
+                    "BRCA1": EntityMention(
+                        kind="gene",
+                        name="BRCA1",
+                        aliases=["BRCA1"],
+                        quotes=[],
+                        reasoning="test",
+                    )
+                }
+            )
         }
 
         merge_rules = {}
@@ -872,42 +915,44 @@ class TestApplyMergeRulesGlobally:
 
         resource1 = ResourceId(url="https://example.com/doc1", counter=0)
         ctx.state.validated_entities_by_resource = {
-            resource1: {
-                "BRCA": EntityMention(
-                    kind="gene",
-                    name="BRCA",
-                    aliases=["BRCA"],
-                    quotes=[],
-                    reasoning="gene_parent",
-                ),
-                "BRCA1": EntityMention(
-                    kind="gene",
-                    name="BRCA1",
-                    aliases=["BRCA1"],
-                    quotes=[],
-                    reasoning="gene_child",
-                ),
-                "PAH": EntityMention(
-                    kind="disease",
-                    name="PAH",
-                    aliases=["PAH"],
-                    quotes=[],
-                    reasoning="disease_parent",
-                ),
-                "Pulmonary Arterial Hypertension": EntityMention(
-                    kind="disease",
-                    name="Pulmonary Arterial Hypertension",
-                    aliases=["PAH"],
-                    quotes=[],
-                    reasoning="disease_child",
-                ),
-            }
+            resource1: ref_map(
+                {
+                    "BRCA": EntityMention(
+                        kind="gene",
+                        name="BRCA",
+                        aliases=["BRCA"],
+                        quotes=[],
+                        reasoning="gene_parent",
+                    ),
+                    "BRCA1": EntityMention(
+                        kind="gene",
+                        name="BRCA1",
+                        aliases=["BRCA1"],
+                        quotes=[],
+                        reasoning="gene_child",
+                    ),
+                    "PAH": EntityMention(
+                        kind="disease",
+                        name="PAH",
+                        aliases=["PAH"],
+                        quotes=[],
+                        reasoning="disease_parent",
+                    ),
+                    "Pulmonary Arterial Hypertension": EntityMention(
+                        kind="disease",
+                        name="Pulmonary Arterial Hypertension",
+                        aliases=["PAH"],
+                        quotes=[],
+                        reasoning="disease_child",
+                    ),
+                }
+            )
         }
 
-        # Rules keyed by normalized form, target is canonical name
+        # Rules keyed by normalized form, value is (target, reasoning) tuple
         merge_rules = {
-            ("brca1", "gene"): "BRCA",
-            ("pulmonary arterial hypertension", "disease"): "PAH",
+            ("brca1", "gene"): ("BRCA", "test"),
+            ("pulmonary arterial hypertension", "disease"): ("PAH", "test"),
         }
 
         node._apply_merge_rules_globally(merge_rules, ctx)
@@ -945,38 +990,40 @@ class TestApplyMergeRulesGlobally:
 
         resource1 = ResourceId(url="https://example.com/doc1", counter=0)
         ctx.state.validated_entities_by_resource = {
-            resource1: {
-                "PAH": EntityMention(
-                    kind="disease",
-                    name="PAH",
-                    aliases=["PAH"],
-                    quotes=[],
-                    reasoning="short form",
-                ),
-                "pulmonary arterial hypertension": EntityMention(
-                    kind="disease",
-                    name="pulmonary arterial hypertension",
-                    aliases=["pulmonary arterial hypertension"],
-                    quotes=[],
-                    reasoning="full form",
-                ),
-                "Associated pulmonary arterial hypertension": EntityMention(
-                    kind="disease",
-                    name="Associated pulmonary arterial hypertension",
-                    aliases=["Associated pulmonary arterial hypertension"],
-                    quotes=[],
-                    reasoning="specific variant",
-                ),
-            }
+            resource1: ref_map(
+                {
+                    "PAH": EntityMention(
+                        kind="disease",
+                        name="PAH",
+                        aliases=["PAH"],
+                        quotes=[],
+                        reasoning="short form",
+                    ),
+                    "pulmonary arterial hypertension": EntityMention(
+                        kind="disease",
+                        name="pulmonary arterial hypertension",
+                        aliases=["pulmonary arterial hypertension"],
+                        quotes=[],
+                        reasoning="full form",
+                    ),
+                    "Associated pulmonary arterial hypertension": EntityMention(
+                        kind="disease",
+                        name="Associated pulmonary arterial hypertension",
+                        aliases=["Associated pulmonary arterial hypertension"],
+                        quotes=[],
+                        reasoning="specific variant",
+                    ),
+                }
+            )
         }
 
-        # Create merge chain: A→B→C - keys are normalized, targets are canonical
+        # Create merge chain: A→B→C - keys are normalized, value is (target, reasoning) tuple
         merge_rules = {
             (
                 "associated pulmonary arterial hypertension",
                 "disease",
-            ): "pulmonary arterial hypertension",
-            ("pulmonary arterial hypertension", "disease"): "PAH",
+            ): ("pulmonary arterial hypertension", "test"),
+            ("pulmonary arterial hypertension", "disease"): ("PAH", "test"),
         }
         # Rules must be resolved transitively before applying
         resolved_rules = node._resolve_transitive_merges(merge_rules)
@@ -990,8 +1037,10 @@ class TestApplyMergeRulesGlobally:
         assert "Associated pulmonary arterial hypertension" not in entities
 
         # Both entities should be in PAH's aliases
-        assert "pulmonary arterial hypertension" in entities["PAH"].aliases
-        assert "Associated pulmonary arterial hypertension" in entities["PAH"].aliases
+        assert "pulmonary arterial hypertension" in entities["PAH"].aliases()
+        assert (
+            "Associated pulmonary arterial hypertension" in entities["PAH"].aliases()
+        )
 
         assert ctx.state.entities_merged == 2
 
@@ -1014,38 +1063,42 @@ class TestIntegration:
         resource2 = ResourceId(url="https://example.com/doc2", counter=1)
 
         ctx.state.validated_entities_by_resource = {
-            resource1: {
-                "BRCA": EntityMention(
-                    kind="gene",
-                    name="BRCA",
-                    aliases=["BRCA"],
-                    quotes=[],
-                    reasoning="parent",
-                ),
-                "BRCA1": EntityMention(
-                    kind="gene",
-                    name="BRCA1",
-                    aliases=["BRCA1"],
-                    quotes=[],
-                    reasoning="child",
-                ),
-            },
-            resource2: {
-                "brca": EntityMention(
-                    kind="gene",
-                    name="brca",
-                    aliases=["brca"],
-                    quotes=[],
-                    reasoning="parent",
-                ),
-                "brca1": EntityMention(
-                    kind="gene",
-                    name="brca1",
-                    aliases=["brca1"],
-                    quotes=[],
-                    reasoning="child",
-                ),
-            },
+            resource1: ref_map(
+                {
+                    "BRCA": EntityMention(
+                        kind="gene",
+                        name="BRCA",
+                        aliases=["BRCA"],
+                        quotes=[],
+                        reasoning="parent",
+                    ),
+                    "BRCA1": EntityMention(
+                        kind="gene",
+                        name="BRCA1",
+                        aliases=["BRCA1"],
+                        quotes=[],
+                        reasoning="child",
+                    ),
+                }
+            ),
+            resource2: ref_map(
+                {
+                    "brca": EntityMention(
+                        kind="gene",
+                        name="brca",
+                        aliases=["brca"],
+                        quotes=[],
+                        reasoning="parent",
+                    ),
+                    "brca1": EntityMention(
+                        kind="gene",
+                        name="brca1",
+                        aliases=["brca1"],
+                        quotes=[],
+                        reasoning="child",
+                    ),
+                }
+            ),
         }
 
         # Mock LLM to approve merge (pair_id=1 for brca/brca1)

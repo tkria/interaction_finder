@@ -12,7 +12,11 @@ import pytest
 from pydantic_graph import GraphRunContext
 
 from interaction_finder.extraction.nodes import ConsolidateEntitiesNode
-from interaction_finder.extraction.models import EntityMention, PairAssessment
+from interaction_finder.extraction.models import (
+    EntityMention,
+    EntityRef,
+    PairAssessment,
+)
 from interaction_finder.extraction.state import State
 from interaction_finder.resources import ResourceId, ResourcePool
 from interaction_finder.settings import IfetcherConfig
@@ -81,15 +85,15 @@ def test_pair_assessments_see_entity_renames_via_shared_references(mock_deps):
     )
 
     state.validated_entities_by_resource[resource1] = {
-        "BRCA": brca_entity,
-        "brca": brca_lower,
+        "BRCA": EntityRef(canonical="BRCA", mentions=[brca_entity]),
+        "brca": EntityRef(canonical="brca", mentions=[brca_lower]),
     }
 
-    # Create PairAssessment that references the child entity
+    # Create PairAssessment that references the child entity via EntityRef
     assessment = PairAssessment(
         resource_id=resource1,
-        entity1=brca_lower,  # Same object reference!
-        entity2=brca_entity,
+        entity1=EntityRef(canonical=brca_lower.name, mentions=[brca_lower]),
+        entity2=EntityRef(canonical=brca_entity.name, mentions=[brca_entity]),
         relationship="interacts_with",
         quotes=[],
         confidence="high",
@@ -98,8 +102,8 @@ def test_pair_assessments_see_entity_renames_via_shared_references(mock_deps):
 
     state.pair_assessments_by_resource[resource1] = [assessment]
 
-    # Merge child → parent
-    merge_rules = {("brca", "gene"): "BRCA"}
+    # Merge child → parent - value is (target, reasoning) tuple
+    merge_rules = {("brca", "gene"): ("BRCA", "test")}
 
     node = ConsolidateEntitiesNode()
     ctx = GraphRunContext(state=state, deps=mock_deps)
@@ -107,14 +111,9 @@ def test_pair_assessments_see_entity_renames_via_shared_references(mock_deps):
     node._apply_merge_rules_globally(merge_rules, ctx)
     node._update_pair_entity_references(merge_rules, ctx)
 
-    # Verify: The assessment's entity1 should now have the parent's name
-    # This works because entity1 is a reference to the same object that was mutated
-    assert assessment.entity1.name == "BRCA", (
-        "PairAssessment should see renamed entity via shared reference"
-    )
-
-    # The old name should be in aliases
-    assert "brca" in assessment.entity1.aliases
+    # Verify: canonical updated, mentions preserved
+    assert assessment.entity1.canonical == "BRCA"
+    assert "brca" in assessment.entity1.aliases()
 
 
 def test_pair_assessments_see_entity_merges_via_shared_references(mock_deps):
@@ -158,15 +157,15 @@ def test_pair_assessments_see_entity_merges_via_shared_references(mock_deps):
     )
 
     state.validated_entities_by_resource[resource1] = {
-        "BRCA": brca_parent,
-        "brca": brca_child,
+        "BRCA": EntityRef(canonical="BRCA", mentions=[brca_parent]),
+        "brca": EntityRef(canonical="brca", mentions=[brca_child]),
     }
 
-    # Create assessment referencing parent
+    # Create assessment referencing parent via EntityRef
     assessment = PairAssessment(
         resource_id=resource1,
-        entity1=brca_parent,
-        entity2=brca_parent,
+        entity1=EntityRef(canonical=brca_parent.name, mentions=[brca_parent]),
+        entity2=EntityRef(canonical=brca_parent.name, mentions=[brca_parent]),
         relationship="self_reference",
         quotes=[],
         confidence="high",
@@ -175,22 +174,24 @@ def test_pair_assessments_see_entity_merges_via_shared_references(mock_deps):
 
     state.pair_assessments_by_resource[resource1] = [assessment]
 
-    # Merge child → parent within same document
-    merge_rules = {("brca", "gene"): "BRCA"}
+    # Merge child → parent within same document - value is (target, reasoning) tuple
+    merge_rules = {("brca", "gene"): ("BRCA", "test")}
 
     node = ConsolidateEntitiesNode()
     ctx = GraphRunContext(state=state, deps=mock_deps)
 
     node._apply_merge_rules_globally(merge_rules, ctx)
+    node._update_pair_entity_references(merge_rules, ctx)
 
     # Verify: Parent entity now has quotes from both entities
     assert "Quote from parent" in brca_parent.quotes
-    assert "Quote from child" in brca_parent.quotes
+    assert "Quote from child" in brca_child.quotes
 
-    # Assessment sees the merged data via shared reference
-    assert len(assessment.entity1.quotes) == 2
+    # Assessment sees combined mentions via EntityRef aliases/quotes aggregation
+    assert "brca" in assessment.entity1.aliases()
+    assert len(assessment.entity1.quotes()) == 2
 
-    # Child should be removed from entities dict
+    # Child should be removed from entities dict (only canonical remains)
     assert "brca" not in state.validated_entities_by_resource[resource1]
     assert "BRCA" in state.validated_entities_by_resource[resource1]
 

@@ -20,6 +20,7 @@ from interaction_finder.extraction.judge_pair_evidence import get_pair_judge_age
 from interaction_finder.extraction.models import (
     EntityMention,
     EntityPairKey,
+    EntityRef,
     PairAssessment,
     ProximalEntitySet,
 )
@@ -372,8 +373,8 @@ async def extract_document_pairs(
 
 
 async def assess_single_pair(
-    entity1: EntityMention,
-    entity2: EntityMention,
+    entity1: EntityRef,
+    entity2: EntityRef,
     relationship_candidates: set[str],
     quotes: list,
     resource: Resource,
@@ -385,8 +386,8 @@ async def assess_single_pair(
     """Assess evidence for a single entity pair in a document.
 
     Parameters:
-        entity1: First entity in pair
-        entity2: Second entity in pair
+        entity1: First entity reference in pair
+        entity2: Second entity reference in pair
         relationship_candidates: Possible relationship types from extraction
         quotes: Supporting quotes for this pair
         resource: Source document
@@ -418,7 +419,7 @@ Assess evidence for an entity association.
 
 **Topic:** {topic}
 
-**Pair:** {entity1.name} ({entity1.kind}) <-> {entity2.name} ({entity2.kind})
+**Pair:** {entity1.canonical} ({entity1.kind}) <-> {entity2.canonical} ({entity2.kind})
 
 **Relationship type candidates:** {candidates_str}
 
@@ -436,12 +437,14 @@ Assess evidence for an entity association.
     # Call pair judge LLM agent
     agent = get_pair_judge_agent(config)
     try:
-        with rename_agent(agent, name=f"AssessPair: {entity1.name} ⇌ {entity2.name}"):
+        with rename_agent(
+            agent, name=f"AssessPair: {entity1.canonical} ⇌ {entity2.canonical}"
+        ):
             async with deps.agent_semaphore:
                 result = await agent.run(prompt, deps=deps, usage=usage)
     except (TimeoutError, ConnectionError, ValueError) as e:
         deps.logger.error(
-            f"Pair assessment failed for {entity1.name}-{entity2.name}: "
+            f"Pair assessment failed for {entity1.canonical}-{entity2.canonical}: "
             f"{type(e).__name__}: {e}"
         )
         return None
@@ -451,7 +454,7 @@ Assess evidence for an entity association.
         quotes[i] for i in result.output.supporting_quote_ids if i < len(quotes)
     ]
 
-    # Create assessment with full entity information
+    # Create assessment with EntityRef (already in correct format)
     assessment = PairAssessment(
         resource_id=resource.id,
         entity1=entity1,
@@ -467,7 +470,7 @@ Assess evidence for an entity association.
 
 async def assess_document_pairs(
     pairs: list[tuple],
-    entities: dict[str, EntityMention],
+    entities: dict[str, EntityRef],
     resource: Resource,
     topic: str,
     region_padding_chunks: int,
@@ -478,7 +481,7 @@ async def assess_document_pairs(
 
     Parameters:
         pairs: Raw pairs from extraction (may contain duplicates)
-        entities: All entities in document
+        entities: All entity references in document (canonical names mapped to EntityRefs)
         resource: Source document
         topic: Research topic context
         region_padding_chunks: Padding for text regions
@@ -493,21 +496,21 @@ async def assess_document_pairs(
     pairs_dict: dict[EntityPairKey, dict] = {}
 
     for entity1_name, entity2_name, rel_types, quotes in pairs:
-        # Get entity objects
-        entity1 = entities[entity1_name]
-        entity2 = entities[entity2_name]
+        # Get entity references (already EntityRefs after validation)
+        entity1_ref = entities[entity1_name]
+        entity2_ref = entities[entity2_name]
 
         # Create canonical ordered key
-        pair_key = make_entity_pair_key(entity1, entity2)
+        pair_key = make_entity_pair_key(entity1_ref, entity2_ref)
 
         if pair_key not in pairs_dict:
-            # Store entities in canonical order determined by pair_key
-            ordered_entity1 = entities[pair_key.entity1_name]
-            ordered_entity2 = entities[pair_key.entity2_name]
+            # Store entity references in canonical order determined by pair_key
+            ordered_entity1_ref = entities[pair_key.entity1_name]
+            ordered_entity2_ref = entities[pair_key.entity2_name]
 
             pairs_dict[pair_key] = {
-                "entity1": ordered_entity1,
-                "entity2": ordered_entity2,
+                "entity1": ordered_entity1_ref,
+                "entity2": ordered_entity2_ref,
                 "relationship_candidates": set(),
                 "quotes": [],
             }

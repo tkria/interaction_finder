@@ -362,10 +362,12 @@ class TestPairJudgment:
             reasoning="test",
         )
 
+        from interaction_finder.extraction.models import EntityRef
+
         supporting = PairAssessment(
             resource_id=resource.id,
-            entity1=entity1,
-            entity2=entity2,
+            entity1=EntityRef(canonical=entity1.name, mentions=[entity1]),
+            entity2=EntityRef(canonical=entity2.name, mentions=[entity2]),
             relationship="increases_risk_of",
             quotes=[],
             confidence="high",
@@ -373,8 +375,8 @@ class TestPairJudgment:
         )
         refuting = PairAssessment(
             resource_id=resource.id,
-            entity1=entity1,
-            entity2=entity2,
+            entity1=EntityRef(canonical=entity1.name, mentions=[entity1]),
+            entity2=EntityRef(canonical=entity2.name, mentions=[entity2]),
             relationship="protects_against",
             quotes=[],
             confidence="medium",
@@ -416,7 +418,11 @@ class TestPairSpread:
             url="http://example.com", title="Test", document_text="Test"
         )
 
-        from interaction_finder.extraction.models import EntityMention, PairAssessment
+        from interaction_finder.extraction.models import (
+            EntityMention,
+            EntityRef,
+            PairAssessment,
+        )
 
         entity1 = EntityMention(
             kind="gene", name="BRCA1", aliases=["BRCA1"], quotes=[], reasoning="test"
@@ -431,8 +437,8 @@ class TestPairSpread:
 
         assessment = PairAssessment(
             resource_id=resource.id,
-            entity1=entity1,
-            entity2=entity2,
+            entity1=EntityRef(canonical=entity1.name, mentions=[entity1]),
+            entity2=EntityRef(canonical=entity2.name, mentions=[entity2]),
             relationship="increases_risk_of",
             quotes=[],
             confidence="high",
@@ -452,7 +458,11 @@ class TestPairSpread:
             url="http://example.com", title="Test", document_text="Test"
         )
 
-        from interaction_finder.extraction.models import EntityMention, PairAssessment
+        from interaction_finder.extraction.models import (
+            EntityMention,
+            EntityRef,
+            PairAssessment,
+        )
 
         entity1 = EntityMention(
             kind="gene", name="BRCA1", aliases=["BRCA1"], quotes=[], reasoning="test"
@@ -467,8 +477,8 @@ class TestPairSpread:
 
         assessment1 = PairAssessment(
             resource_id=resource.id,
-            entity1=entity1,
-            entity2=entity2,
+            entity1=EntityRef(canonical=entity1.name, mentions=[entity1]),
+            entity2=EntityRef(canonical=entity2.name, mentions=[entity2]),
             relationship="increases_risk_of",
             quotes=[],
             confidence="high",
@@ -477,8 +487,8 @@ class TestPairSpread:
 
         assessment2 = PairAssessment(
             resource_id=resource.id,
-            entity1=entity1,
-            entity2=entity2,
+            entity1=EntityRef(canonical=entity1.name, mentions=[entity1]),
+            entity2=EntityRef(canonical=entity2.name, mentions=[entity2]),
             relationship="protects_against",
             quotes=[],
             confidence="medium",
@@ -508,7 +518,11 @@ class TestPairSpread:
             url="http://example.com", title="Test", document_text="Test"
         )
 
-        from interaction_finder.extraction.models import EntityMention, PairAssessment
+        from interaction_finder.extraction.models import (
+            EntityMention,
+            EntityRef,
+            PairAssessment,
+        )
 
         entity1 = EntityMention(
             kind="gene", name="BRCA1", aliases=["BRCA1"], quotes=[], reasoning="test"
@@ -520,12 +534,14 @@ class TestPairSpread:
             quotes=[],
             reasoning="test",
         )
+        entity1_ref = EntityRef(canonical=entity1.name, mentions=[entity1])
+        entity2_ref = EntityRef(canonical=entity2.name, mentions=[entity2])
 
         assessments = {
             "supporting": PairAssessment(
                 resource_id=resource.id,
-                entity1=entity1,
-                entity2=entity2,
+                entity1=entity1_ref,
+                entity2=entity2_ref,
                 relationship="increases_risk_of",
                 quotes=[],
                 confidence="high",
@@ -533,8 +549,8 @@ class TestPairSpread:
             ),
             "refuting": PairAssessment(
                 resource_id=resource.id,
-                entity1=entity1,
-                entity2=entity2,
+                entity1=entity1_ref,
+                entity2=entity2_ref,
                 relationship="protects_against",
                 quotes=[],
                 confidence="high",
@@ -542,8 +558,8 @@ class TestPairSpread:
             ),
             "neutral": PairAssessment(
                 resource_id=resource.id,
-                entity1=entity1,
-                entity2=entity2,
+                entity1=entity1_ref,
+                entity2=entity2_ref,
                 relationship="regulates",
                 quotes=[],
                 confidence="medium",
@@ -551,8 +567,8 @@ class TestPairSpread:
             ),
             "irrelevant": PairAssessment(
                 resource_id=resource.id,
-                entity1=entity1,
-                entity2=entity2,
+                entity1=entity1_ref,
+                entity2=entity2_ref,
                 relationship="spatial_colocalization",
                 quotes=[],
                 confidence="low",
@@ -590,7 +606,11 @@ class TestPairJudgmentSerialization:
             url="http://example.com", title="Test", document_text="Test"
         )
 
-        from interaction_finder.extraction.models import EntityMention, PairAssessment
+        from interaction_finder.extraction.models import (
+            EntityMention,
+            EntityRef,
+            PairAssessment,
+        )
 
         entity1 = EntityMention(
             kind="gene", name="BRCA1", aliases=["BRCA1"], quotes=[], reasoning="test"
@@ -605,8 +625,8 @@ class TestPairJudgmentSerialization:
 
         assessment = PairAssessment(
             resource_id=resource.id,
-            entity1=entity1,
-            entity2=entity2,
+            entity1=EntityRef(canonical=entity1.name, mentions=[entity1]),
+            entity2=EntityRef(canonical=entity2.name, mentions=[entity2]),
             relationship="increases_risk_of",
             quotes=[],
             confidence="high",
@@ -646,7 +666,11 @@ class TestPairJudgmentSerialization:
             url="http://example.com", title="Test", document_text="Test"
         )
 
-        from interaction_finder.extraction.models import EntityMention, PairAssessment
+        from interaction_finder.extraction.models import (
+            EntityMention,
+            EntityRef,
+            PairAssessment,
+        )
 
         entity1 = EntityMention(
             kind="gene", name="BRCA1", aliases=["BRCA1"], quotes=[], reasoning="test"
@@ -658,11 +682,13 @@ class TestPairJudgmentSerialization:
             quotes=[],
             reasoning="test",
         )
+        entity1_ref = EntityRef(canonical=entity1.name, mentions=[entity1])
+        entity2_ref = EntityRef(canonical=entity2.name, mentions=[entity2])
 
         supporting_assessment = PairAssessment(
             resource_id=resource.id,
-            entity1=entity1,
-            entity2=entity2,
+            entity1=entity1_ref,
+            entity2=entity2_ref,
             relationship="increases_risk_of",
             quotes=[],
             confidence="high",
@@ -671,8 +697,8 @@ class TestPairJudgmentSerialization:
 
         refuting_assessment = PairAssessment(
             resource_id=resource.id,
-            entity1=entity1,
-            entity2=entity2,
+            entity1=entity1_ref,
+            entity2=entity2_ref,
             relationship="protects_against",
             quotes=[],
             confidence="medium",
@@ -728,6 +754,8 @@ class TestExtractionResultRehydration:
                 fuzzy_similarity=None,
             )
 
+        from interaction_finder.extraction.models import EntityRef
+
         entity1 = EntityMention(
             kind="gene",
             name="BRCA1",
@@ -745,8 +773,8 @@ class TestExtractionResultRehydration:
 
         assessment = PairAssessment(
             resource_id=resource.id,
-            entity1=entity1,
-            entity2=entity2,
+            entity1=EntityRef(canonical=entity1.name, mentions=[entity1]),
+            entity2=EntityRef(canonical=entity2.name, mentions=[entity2]),
             relationship="increases_risk_of",
             quotes=[make_quote("pair quote")],
             confidence="high",
@@ -796,5 +824,5 @@ class TestExtractionResultRehydration:
         assert isinstance(quote.resource, type(resource))
         assert quote.resource.id == resource.id
 
-        entity_quote = restored_assessment.entity1.quotes[0]
+        entity_quote = restored_assessment.entity1.mentions[0].quotes[0]
         assert entity_quote.resource.id == resource.id
