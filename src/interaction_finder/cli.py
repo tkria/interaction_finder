@@ -94,6 +94,27 @@ def get_options_with_fallback(
     return effective_config, effective_mode, effective_verbose, effective_overrides
 
 
+def _check_and_backup_checkpoint(path: Path, checkpoint_version: str | None) -> None:
+    """Check checkpoint version and create backup if needed."""
+    from interaction_finder.version import check_checkpoint_version, get_version_string
+
+    is_older, is_breaking = check_checkpoint_version(checkpoint_version)
+    current = get_version_string()
+    if is_breaking:
+        console.print(
+            f"[yellow]⚠ Checkpoint was created with {checkpoint_version} "
+            f"but current version is {current} (breaking change)[/yellow]"
+        )
+        backup_path = path.with_suffix(path.suffix + ".bak")
+        backup_path.write_text(path.read_text())
+        console.print(f"[dim]Created backup: {backup_path}[/dim]")
+    elif is_older:
+        console.print(
+            f"[dim]ℹ Checkpoint was created with older version {checkpoint_version} "
+            f"(current: {current})[/dim]"
+        )
+
+
 def load_checkpoint_or_create(checkpoint_or_topic: str) -> tuple[Any, str]:
     """Load checkpoint from file or create empty checkpoint from topic string.
 
@@ -110,6 +131,8 @@ def load_checkpoint_or_create(checkpoint_or_topic: str) -> tuple[Any, str]:
     path = Path(checkpoint_or_topic)
     if path.exists() and path.is_file():
         checkpoint = PipelineCheckpoint.model_validate_json(path.read_text())
+        # Check version and backup if needed
+        _check_and_backup_checkpoint(path, checkpoint.created_by)
         return checkpoint, checkpoint.topic
 
     # Treat as topic string
@@ -1133,7 +1156,8 @@ def report(
             f"\n[bold]Loading extraction results:[/bold] {extraction_file.name}"
         )
         checkpoint = PipelineCheckpoint.model_validate_json(extraction_file.read_text())
-
+        # Check version and backup if needed
+        _check_and_backup_checkpoint(extraction_file, checkpoint.created_by)
         # Ensure extraction stage is present
         if not checkpoint.extraction:
             raise ValueError("Checkpoint does not contain extraction results")

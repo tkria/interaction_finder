@@ -9,6 +9,7 @@ from typing import Any
 import httpx
 
 from interaction_finder.checkpoint import PipelineCheckpoint, SearchStageData
+from interaction_finder.version import get_version_string
 from interaction_finder.fetcher import PageFetcher
 from interaction_finder.logging import logfire, get_logger
 
@@ -222,6 +223,7 @@ async def run_widesearch_with_checkpoint(
         return PipelineCheckpoint(
             topic=topic,
             resources=resource_pool,  # Accumulated pool
+            created_by=get_version_string(),
             keywords=input_checkpoint.keywords,  # PRESERVED from input
             search=SearchStageData(
                 results=result.output,

@@ -1245,19 +1245,20 @@ function updateHeaderCounts() {
         }
     });
 
-    // Update the stats display
-    const statsEl = document.querySelector('.header-stats');
-    if (statsEl) {
-        const statsItems = [];
-        statsItems.push(`<span class="stat-item"><span class="stat-label">Pairs:</span> <span>${filtered.length}</span></span>`);
+    // Update only dynamic stats (pairs, entity counts, documents)
+    const pairsEl = document.getElementById('stat-pairs');
+    if (pairsEl) pairsEl.textContent = filtered.length;
 
-        for (const [kind, names] of Object.entries(entityKinds)) {
-            statsItems.push(`<span class="stat-item"><span class="stat-label">${escapeHtml(kind)}:</span> <span>${names.size}</span></span>`);
-        }
+    const docsEl = document.getElementById('stat-documents');
+    if (docsEl) docsEl.textContent = docIndices.size;
 
-        statsItems.push(`<span class="stat-item"><span class="stat-label">Documents:</span> <span>${docIndices.size}</span></span>`);
-
-        statsEl.innerHTML = statsItems.join('\\n');
+    // Update entity kind counts (rebuild container since kinds may change)
+    const kindsContainer = document.getElementById('stat-entity-kinds');
+    if (kindsContainer) {
+        const kindItems = Object.entries(entityKinds).map(([kind, names]) =>
+            `<span class="stat-item"><span class="stat-label">${escapeHtml(kind)}:</span> <span>${names.size}</span></span>`
+        ).join('\\n');
+        kindsContainer.innerHTML = kindItems;
     }
 }
 

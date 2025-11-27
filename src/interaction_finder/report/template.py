@@ -7,6 +7,7 @@ No JSON embedding - all data queryable from HTML structure.
 from typing import Any
 
 from interaction_finder.report.assets import get_css, get_js
+from interaction_finder.version import format_version_display
 
 
 def _render_pair_cards(pairs: list[dict[str, Any]]) -> str:
@@ -159,18 +160,21 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     </span>
                     <span class="stat-item">
                         <span class="stat-label">Pairs:</span>
-                        <span>{{ metadata.total_pairs }}</span>
+                        <span id="stat-pairs">{{ metadata.total_pairs }}</span>
                     </span>
+                    <span id="stat-entity-kinds">
                     {% for kind, count in metadata.entity_stats.items() %}
                     <span class="stat-item">
                         <span class="stat-label">{{ kind }}:</span>
                         <span>{{ count }}</span>
                     </span>
                     {% endfor %}
+                    </span>
                     <span class="stat-item">
                         <span class="stat-label">Documents:</span>
-                        <span>{{ metadata.resource_count }}</span>
+                        <span id="stat-documents">{{ metadata.resource_count }}</span>
                     </span>
+                    {{ metadata.version_stat }}
                 </div>
             </div>
             <div class="header-controls-wrapper">
@@ -238,6 +242,7 @@ def render_template(
     indexed_docs: list[tuple[int, Any]],
     topic: str,
     title: str | None = None,
+    version: str | None = None,
 ) -> str:
     """Render HTML report from prepared data.
 
@@ -248,6 +253,7 @@ def render_template(
         indexed_docs: List of (doc_idx, resource) tuples for metadata
         topic: Report topic for header
         title: Optional report title (defaults to "Extraction Report: {topic}")
+        version: Optional version string to display in header
 
     Returns:
         Complete HTML document as string
@@ -317,12 +323,21 @@ def render_template(
             unique_docs.add(assess["doc_idx"])
     resource_count = len(unique_docs)
 
+    # Build version stat HTML (only if version provided)
+    version_stat_html = ""
+    if version:
+        display_version = format_version_display(version)
+        version_stat_html = f"""<span class="stat-item">
+                        <span class="stat-label">Version:</span>
+                        <span>{_escape_html(display_version)}</span>
+                    </span>"""
     # Replace placeholders
     replacements = {
         "{{ title }}": _escape_html(title),
         "{{ metadata.topic }}": _escape_html(topic),
         "{{ metadata.total_pairs }}": str(total_pairs),
         "{{ metadata.resource_count }}": str(resource_count),
+        "{{ metadata.version_stat }}": version_stat_html,
         "{{ css }}": get_css(),
         "{{ js }}": get_js(),
         "{{ document_templates }}": document_templates_html,

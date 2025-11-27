@@ -198,5 +198,6 @@ def generate_report(
         indexed_docs,
         checkpoint.topic,
         title=title,
+        version=checkpoint.created_by,
     )
     return write_output(html)

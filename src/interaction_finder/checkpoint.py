@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from interaction_finder.resources import ResourcePool
 from interaction_finder.search.models import SearchResult
+from interaction_finder.version import get_version_string
 
 if TYPE_CHECKING:
     from interaction_finder.extraction.models import (
@@ -172,6 +173,10 @@ class PipelineCheckpoint(BaseModel):
     topic: str = Field(description="Research topic being investigated")
     resources: ResourcePool = Field(
         description="Unified resource pool accumulating across all stages"
+    )
+    created_by: Optional[str] = Field(
+        default=None,
+        description="Version of interaction-finder that created this checkpoint",
     )
 
     # Optional stage-specific data (added progressively)

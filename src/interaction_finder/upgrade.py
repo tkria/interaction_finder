@@ -22,6 +22,7 @@ from interaction_finder.checkpoint import PipelineCheckpoint
 from interaction_finder.resources import ResourcePool
 from interaction_finder.search.models import SearchBackend
 from interaction_finder.settings import IfetcherConfig
+from interaction_finder.version import get_version_string
 
 # Type aliases for clarity
 StageLevel = Literal["none", "keywords", "search", "extraction"]
@@ -266,4 +267,5 @@ def create_empty_checkpoint(topic: str) -> PipelineCheckpoint:
     return PipelineCheckpoint(
         topic=topic,
         resources=ResourcePool(),
+        created_by=get_version_string(),
     )

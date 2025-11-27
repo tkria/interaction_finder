@@ -8,6 +8,7 @@ import asyncio
 import logging
 
 from interaction_finder.checkpoint import ExtractionStageData, PipelineCheckpoint
+from interaction_finder.version import get_version_string
 from interaction_finder.extraction.deps import Deps
 from interaction_finder.extraction.graph import graph
 from interaction_finder.extraction.nodes import ProcessDocumentsNode
@@ -90,6 +91,7 @@ async def run_extraction(
         return PipelineCheckpoint(
             topic=topic,
             resources=resource_pool,
+            created_by=get_version_string(),
             keywords=input_checkpoint.keywords,  # PRESERVED
             search=input_checkpoint.search,  # PRESERVED
             extraction=ExtractionStageData(
