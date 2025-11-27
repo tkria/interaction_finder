@@ -2,6 +2,9 @@
 
 Provides Counter and StatusTable for tracking progress, with LiveStatusTable
 for live-updating Rich displays with status messages and category grouping.
+
+Counter updates automatically trigger display refreshes via an observer pattern,
+eliminating the need for manual update() calls.
 """
 
 from dataclasses import dataclass
@@ -32,6 +35,7 @@ class Counter:
     in_progress: int | None
     completed: int
     status: Literal["unstarted", "active", "complete"]
+    _parent: "StatusTable | None"
 
     def __init__(
         self,
@@ -48,6 +52,20 @@ class Counter:
         self.in_progress = 0 if track_in_progress else None
         self.completed = 0
         self.status = "unstarted"
+        self._parent = None
+
+    def __setattr__(self, name: str, value) -> None:
+        """Intercept attribute assignment to trigger updates."""
+        # Set the attribute first
+        object.__setattr__(self, name, value)
+        # Notify parent if this is a state change (not initialization or parent assignment)
+        if name != "_parent" and hasattr(self, "_parent"):
+            self._notify_change()
+
+    def _notify_change(self) -> None:
+        """Notify parent StatusTable of state change."""
+        if self._parent is not None:
+            self._parent._on_counter_changed()
 
     def activate(self) -> None:
         """Mark counter as active."""
@@ -73,15 +91,18 @@ class Counter:
         """Move n items from in_progress to completed (3-part counters only)."""
         if self.in_progress is None:
             raise ValueError(f"Counter {self.name!r} doesn't track in_progress")
-        self.in_progress -= n
-        self.completed += n
+        # Use object.__setattr__ to avoid triggering notification twice
+        object.__setattr__(self, "in_progress", self.in_progress - n)
+        object.__setattr__(self, "completed", self.completed + n)
+        # Notify once after both updates
+        self._notify_change()
 
     def rich(self) -> str:
         """Render counter value with Rich markup."""
         if self.total == 0:
             return f"[bold yellow]{self.completed}[/]"
         if self.status == "unstarted":
-            return "[bold yellow]0[/]"
+            return "[bold bright_black]0[/]"
         if self.status == "complete" or self.in_progress is None:
             return f"[bold green]{self.completed}[/]/[bold yellow]{self.total}[/]"
         in_prog_style = (
@@ -104,6 +125,9 @@ class StatusTable:
     def __init__(self, *counters: Counter):
         self.status: str = ""
         self.counters: list[Counter] = list(counters)
+        # Wire up parent references for automatic update notifications
+        for counter in self.counters:
+            counter._parent = self
 
     def __getitem__(self, name: str) -> Counter:
         """Access counter by name."""
@@ -116,15 +140,18 @@ class StatusTable:
         """Set status message."""
         self.status = message
 
+    def _on_counter_changed(self) -> None:
+        """Called when any counter's state changes. Override in subclasses."""
+
+    def _update(self) -> None:
+        """Internal method to refresh display. Override in subclasses."""
+
     # No-op methods for compatibility when used without live display
     def start(self) -> None:
         """No-op for base class."""
 
     def stop(self) -> None:
         """No-op for base class."""
-
-    def update(self) -> None:
-        """Trigger immediate display refresh. Usually not needed due to auto-refresh."""
 
     def succeed(self) -> None:
         """No-op for base class."""
@@ -179,32 +206,32 @@ class LiveStatusTable(StatusTable):
             self._live.stop()
             self._live = None
 
-    def update(self) -> None:
-        """Trigger immediate display refresh.
-
-        Usually not needed - the display auto-refreshes at 4fps. Only call this
-        if you need sub-250ms feedback for a specific update.
-        """
+    def _update(self) -> None:
+        """Internal method to refresh display immediately."""
         if self._live is not None:
             self._live.update(self._render())
 
     def set_status(self, message: str) -> None:
         """Set status message and refresh display."""
         self.status = message
-        self.update()
+        self._update()
+
+    def _on_counter_changed(self) -> None:
+        """Automatically trigger display refresh when counter state changes."""
+        self._update()
 
     def succeed(self) -> None:
         """Mark operation as successful and stop display."""
         self._result = "success"
         self.status = f"✓ Completed in {self._elapsed()}"
-        self.update()
+        self._update()
         self.stop()
 
     def fail(self) -> None:
         """Mark operation as failed and stop display."""
         self._result = "failure"
         self.status = f"✗ Failed after {self._elapsed()}"
-        self.update()
+        self._update()
         self.stop()
 
     def _elapsed(self) -> str:

@@ -106,11 +106,11 @@ class TestCounterRich:
         assert "[bold yellow]42[/]" == result
 
     def test_rich_unstarted(self):
-        """Unstarted counter renders zero."""
+        """Unstarted counter renders zero in bold grey."""
         counter = Counter("Test", track_in_progress=True)
         counter.total = 10  # Has total but status is unstarted
         result = counter.rich()
-        assert result == "[bold yellow]0[/]"
+        assert result == "[bold bright_black]0[/]"
 
     def test_rich_two_part_complete(self):
         """Complete 2-part counter renders complete/total."""
@@ -140,9 +140,9 @@ class TestCounterRich:
         counter.in_progress = 3
         counter.completed = 5
         counter.status = "unstarted"  # Not active
-        # When unstarted with total set, shows 0
+        # When unstarted with total set, shows 0 in grey
         result = counter.rich()
-        assert result == "[bold yellow]0[/]"
+        assert result == "[bold bright_black]0[/]"
 
 
 class TestStatusTable:
