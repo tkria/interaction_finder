@@ -7,15 +7,15 @@ import pytest
 from pydantic import ValidationError
 
 from interaction_finder.extraction.models import (
+    EntityConsolidationDecision,
+    EntityConsolidationDecisions,
     EntityExtractionOut,
     EntityInfo,
     EntityMention,
-    EntityMergeDecision,
-    EntityMergeDecisions,
     ExtractionMetadata,
     ExtractionResult,
-    PairJudgment,
     PairAssessment,
+    PairJudgment,
     PairSpread,
     ProximalPairExtraction,
     ProximalPairInfo,
@@ -150,45 +150,81 @@ class TestEntityExtractionOut:
         assert output.entities[1].name == "breast cancer"
 
 
-class TestEntityMergeDecision:
-    """Tests for EntityMergeDecision model."""
+class TestEntityConsolidationDecision:
+    """Tests for EntityConsolidationDecision model."""
 
-    def test_valid_merge_decision(self):
-        """Test creating valid merge decision."""
-        decision = EntityMergeDecision(
+    def test_valid_skip_decision(self):
+        """Test creating valid skip decision."""
+        decision = EntityConsolidationDecision(
             pair_id=1,
             pair_token="xK7m",
-            should_merge=True,
-            reasoning="BRCA is commonly used shorthand for BRCA1 in this context.",
+            action="skip",
+            reasoning="These are distinct biological entities that should remain separate.",
         )
         assert decision.pair_id == 1
         assert decision.pair_token == "xK7m"
-        assert decision.should_merge is True
+        assert decision.action == "skip"
+        assert decision.target is None
+
+    def test_valid_merge_decision(self):
+        """Test creating valid merge decision."""
+        decision = EntityConsolidationDecision(
+            pair_id=1,
+            pair_token="xK7m",
+            action="merge",
+            reasoning="BRCA is commonly used shorthand for BRCA1 in this context.",
+        )
+        assert decision.pair_id == 1
+        assert decision.action == "merge"
+        assert decision.target is None
+
+    def test_valid_rename_decision(self):
+        """Test creating valid rename decision with target."""
+        decision = EntityConsolidationDecision(
+            pair_id=1,
+            pair_token="xK7m",
+            action="rename",
+            target="APAH",
+            reasoning="The verbose name should be simplified to its standard abbreviation.",
+        )
+        assert decision.action == "rename"
+        assert decision.target == "APAH"
+
+    def test_rename_requires_target(self):
+        """Test that rename action requires target."""
+        with pytest.raises(ValidationError):
+            EntityConsolidationDecision(
+                pair_id=1,
+                pair_token="xK7m",
+                action="rename",
+                target=None,
+                reasoning="The verbose name should be simplified to its standard abbreviation.",
+            )
 
     def test_requires_reasoning_min_length(self):
         """Test that reasoning must be at least 20 characters."""
         with pytest.raises(ValidationError):
-            EntityMergeDecision(
+            EntityConsolidationDecision(
                 pair_id=1,
                 pair_token="xK7m",
-                should_merge=True,
+                action="skip",
                 reasoning="Too short",
             )
 
     def test_requires_token_exact_length(self):
         """Test that token must be exactly 4 characters."""
         with pytest.raises(ValidationError):
-            EntityMergeDecision(
+            EntityConsolidationDecision(
                 pair_id=1,
                 pair_token="abc",  # Too short
-                should_merge=True,
+                action="merge",
                 reasoning="BRCA is commonly used shorthand for BRCA1.",
             )
         with pytest.raises(ValidationError):
-            EntityMergeDecision(
+            EntityConsolidationDecision(
                 pair_id=1,
                 pair_token="abcde",  # Too long
-                should_merge=True,
+                action="merge",
                 reasoning="BRCA is commonly used shorthand for BRCA1.",
             )
 

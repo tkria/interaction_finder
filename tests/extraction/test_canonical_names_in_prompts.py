@@ -17,8 +17,8 @@ from pydantic_graph import GraphRunContext
 
 from interaction_finder.extraction.models import (
     EntityMention,
-    EntityMergeDecision,
-    EntityMergeDecisions,
+    EntityConsolidationDecision,
+    EntityConsolidationDecisions,
 )
 from interaction_finder.extraction.nodes import ConsolidateEntitiesNode
 from interaction_finder.extraction.state import State
@@ -32,6 +32,7 @@ def mock_deps():
     deps = MagicMock()
     deps.config = MagicMock()
     deps.config.tools.extraction.merge_batch_size = 50
+    deps.config.tools.extraction.max_rename_iterations = 3
     deps.logger = MagicMock()
     deps.agent_semaphore = MagicMock()
     deps.agent_semaphore.__aenter__ = AsyncMock()
@@ -83,12 +84,12 @@ class TestCanonicalNamesInPrompts:
             # Return a decision to merge (pair_id=1 for first pair)
             # Token "test" won't match the real token, but ID-based lookup will be used
             return MagicMock(
-                output=EntityMergeDecisions(
+                output=EntityConsolidationDecisions(
                     decisions=[
-                        EntityMergeDecision(
+                        EntityConsolidationDecision(
                             pair_id=1,
                             pair_token="test",
-                            should_merge=True,
+                            action="merge",
                             reasoning="Same gene, different naming conventions",
                         )
                     ]
@@ -101,7 +102,7 @@ class TestCanonicalNamesInPrompts:
 
         # Patch the agent getter
         with patch(
-            "interaction_finder.extraction.nodes.get_entity_merge_agent",
+            "interaction_finder.extraction.nodes.get_entity_consolidation_agent",
             return_value=mock_agent,
         ):
             await node.run(ctx)
@@ -114,9 +115,9 @@ class TestCanonicalNamesInPrompts:
         assert "BMPR2 gene" in captured_prompt, "Should show canonical 'BMPR2 gene'"
 
         # Verify entity lines show proper case, not all lowercase
-        # New format: "[ID] Parent: 'name' | Child: 'name'"
+        # New format: "N. [token] 'term' → 'parent'"
         lines = captured_prompt.split("\n")
-        entity_lines = [l for l in lines if "Parent:" in l and "Child:" in l]
+        entity_lines = [l for l in lines if "→" in l and "[" in l]
         # At least one entity line should exist
         assert len(entity_lines) > 0, "Should have entity pair lines in prompt"
 
@@ -177,12 +178,12 @@ class TestCanonicalNamesInPrompts:
             captured_prompt = prompt
             # Token "test" won't match the real token, but ID-based lookup will be used
             return MagicMock(
-                output=EntityMergeDecisions(
+                output=EntityConsolidationDecisions(
                     decisions=[
-                        EntityMergeDecision(
+                        EntityConsolidationDecision(
                             pair_id=1,
                             pair_token="test",
-                            should_merge=True,
+                            action="merge",
                             reasoning="Same entity, different naming",
                         )
                     ]
@@ -194,7 +195,7 @@ class TestCanonicalNamesInPrompts:
         mock_agent._name = "test_agent"
 
         with patch(
-            "interaction_finder.extraction.nodes.get_entity_merge_agent",
+            "interaction_finder.extraction.nodes.get_entity_consolidation_agent",
             return_value=mock_agent,
         ):
             await node.run(ctx)

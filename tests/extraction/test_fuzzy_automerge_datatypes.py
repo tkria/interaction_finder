@@ -1,7 +1,7 @@
-"""Test that fuzzy auto-merge uses canonical names, not normalized forms.
+"""Test that fuzzy auto-merge uses normalized keys and canonical targets.
 
-This verifies Issue 3 is fixed: fuzzy Tier 1 auto-merge rules should map
-canonical names to canonical names, not normalized forms to normalized forms.
+Rules are keyed by normalized form for cross-document consistency.
+Targets are canonical names to preserve proper casing in output.
 """
 
 import asyncio
@@ -40,8 +40,8 @@ def mock_deps(mock_config):
     return deps
 
 
-def test_fuzzy_automerge_uses_canonical_names_not_normalized(mock_deps):
-    """Test that fuzzy auto-merge rules use canonical entity names.
+def test_fuzzy_automerge_uses_normalized_keys_and_canonical_targets(mock_deps):
+    """Test that fuzzy auto-merge uses normalized keys and canonical targets.
 
     Scenario:
     - "Telangiectasia" (singular)
@@ -49,8 +49,8 @@ def test_fuzzy_automerge_uses_canonical_names_not_normalized(mock_deps):
 
     Expected:
     - Auto-merge rule created (obvious plural variant)
-    - Rule maps canonical names: ("Telangiectasias", kind) → "Telangiectasia"
-    - NOT normalized forms: ("telangiectasias", kind) → "telangiectasia"
+    - Rule key is normalized: ("telangiectasias", kind)
+    - Rule target is canonical: "Telangiectasia"
     """
     state = State(
         topic="test",
@@ -96,25 +96,21 @@ def test_fuzzy_automerge_uses_canonical_names_not_normalized(mock_deps):
     rule_key = list(auto_merge_rules.keys())[0]
     rule_target = auto_merge_rules[rule_key]
 
-    # Rule key should be (canonical_name, kind)
-    child_name, kind = rule_key
+    # Rule key should be (normalized_form, kind) for cross-document consistency
+    child_norm, kind = rule_key
     assert kind == "phenotype"
-
-    # Both key and target should be CANONICAL names (with proper capitalization)
-    assert child_name == "Telangiectasias", (
-        f"Rule key should be canonical 'Telangiectasias', got: {child_name}"
+    assert child_norm == "telangiectasias", (
+        f"Rule key should be normalized 'telangiectasias', got: {child_norm}"
     )
+
+    # Target should be CANONICAL name (with proper capitalization)
     assert rule_target == "Telangiectasia", (
         f"Rule target should be canonical 'Telangiectasia', got: {rule_target}"
     )
 
-    # Should NOT be normalized forms
-    assert child_name != "telangiectasias", "Rule key should not be normalized form"
-    assert rule_target != "telangiectasia", "Rule target should not be normalized form"
-
 
 def test_fuzzy_automerge_after_capitalization_consolidation(mock_deps):
-    """Test that fuzzy matching works on entities consolidated in Phase 1.
+    """Test that Phase 2 preserves Phase 1 winners as parents.
 
     Scenario:
     - "Haemorrhagic" (UK spelling, mixed case)
@@ -122,9 +118,12 @@ def test_fuzzy_automerge_after_capitalization_consolidation(mock_deps):
     - "Hemorrhagic" (US spelling)
 
     Expected:
-    1. Phase 1 consolidates UK variants → "Haemorrhagic"
-    2. Phase 2 fuzzy matches: "Haemorrhagic" vs "Hemorrhagic" (OSA=1, s→z)
-    3. Auto-merge rule: ("Hemorrhagic", phenotype) → "Haemorrhagic"
+    1. Phase 1 consolidates UK variants: ("haemorrhagic", phenotype) → "Haemorrhagic"
+    2. Phase 2 fuzzy matches: "haemorrhagic" is established (had Phase 1 rule),
+       so US spelling merges INTO UK: ("hemorrhagic", phenotype) → "Haemorrhagic"
+
+    This ensures that corpus-established spellings (with multiple cap variants)
+    take precedence over single-variant spellings in fuzzy auto-merge.
     """
     state = State(
         topic="test",
@@ -172,29 +171,27 @@ def test_fuzzy_automerge_after_capitalization_consolidation(mock_deps):
     unique_entities = node._collect_unique_entities(ctx)
     auto_merge_rules, _, _ = node._find_merge_candidates(unique_entities)
 
-    # Should have 2 rules:
-    # 1. Phase 1: haemorrhagic → Haemorrhagic (capitalization)
-    # 2. Phase 2: Hemorrhagic → Haemorrhagic (fuzzy spelling variant)
+    # With normalized keys:
+    # - "Haemorrhagic" and "haemorrhagic" both normalize to "haemorrhagic" (12 chars)
+    # - "Hemorrhagic" normalizes to "hemorrhagic" (11 chars)
+    #
+    # Phase 1: UK variants consolidated to "Haemorrhagic"
+    #   Rule: ("haemorrhagic", phenotype) → "Haemorrhagic"
+    #
+    # Phase 2: Fuzzy match haemorrhagic (12) vs hemorrhagic (11)
+    #   "haemorrhagic" had Phase 1 rule (established), so it becomes parent
+    #   Rule: ("hemorrhagic", phenotype) → "Haemorrhagic"
+    #
+    # Final: 2 rules, both mapping to UK canonical "Haemorrhagic"
+
     assert len(auto_merge_rules) == 2, (
-        f"Should have 2 auto-merge rules (1 exact + 1 fuzzy), got {len(auto_merge_rules)}"
+        f"Should have 2 rules (Phase 1 + Phase 2), got {len(auto_merge_rules)}"
     )
 
-    # Check that both rules use canonical names
-    for (child_name, kind), parent_name in auto_merge_rules.items():
-        assert kind == "phenotype"
+    # Phase 1 rule: UK lowercase → UK mixed case
+    assert ("haemorrhagic", "phenotype") in auto_merge_rules
+    assert auto_merge_rules[("haemorrhagic", "phenotype")] == "Haemorrhagic"
 
-        # All should be canonical names (not normalized forms)
-        assert child_name[0].isupper() or child_name[0].islower(), (
-            f"Child should be canonical name: {child_name}"
-        )
-        assert parent_name[0].isupper() or parent_name[0].islower(), (
-            f"Parent should be canonical name: {parent_name}"
-        )
-
-        # Normalized forms would be all lowercase
-        # Canonical names preserve original capitalization
-        assert (
-            child_name != child_name.lower() or len(child_name) == 1
-        ) or child_name == "haemorrhagic", (
-            f"Expected canonical name, got normalized: {child_name}"
-        )
+    # Phase 2 rule: US spelling → UK canonical (established form wins)
+    assert ("hemorrhagic", "phenotype") in auto_merge_rules
+    assert auto_merge_rules[("hemorrhagic", "phenotype")] == "Haemorrhagic"

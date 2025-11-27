@@ -76,9 +76,11 @@ class State:
     )
     # Count of entities merged (for metadata)
     entities_merged: int = 0
-    # Memoization cache for merge decisions: maps (norm_parent, norm_child, kind) → should_merge
-    # Used to avoid duplicate LLM calls and ensure consistency across documents
-    merge_decision_cache: dict[tuple[str, str, str], bool] = field(default_factory=dict)
+    # Memoization cache for consolidation decisions: (norm_parent, norm_child, kind) → target | False
+    # Stores target canonical name for merge/rename, or False for skip decisions
+    merge_decision_cache: dict[tuple[str, str, str], str | bool] = field(
+        default_factory=dict
+    )
     # Track all canonical name variants for each normalized entity name
     # Maps (normalized_name, kind) → set of all canonical (un-normalized) variants seen
     # Used to apply merge decisions correctly across documents with different capitalizations

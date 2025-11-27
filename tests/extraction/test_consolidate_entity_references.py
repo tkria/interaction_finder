@@ -210,9 +210,9 @@ class TestUpdatePairEntityReferences:
 
         ctx = GraphRunContext(state=state, deps=mock_deps)
 
-        # Merge rules: BRCA→BRCA1, cancer→Cancer (using canonical names)
+        # Merge rules keyed by normalized form, target is canonical
         merge_rules = {
-            ("BRCA", "gene"): "BRCA1",
+            ("brca", "gene"): "BRCA1",
             ("cancer", "disease"): "Cancer",
         }
 
@@ -327,7 +327,7 @@ class TestUpdatePairEntityReferences:
 
         # New format: canonical names
         merge_rules = {
-            ("BRCA", "gene"): "BRCA1",
+            ("brca", "gene"): "BRCA1",
         }
 
         node._update_pair_entity_references(merge_rules, ctx)
@@ -414,7 +414,7 @@ class TestUpdatePairEntityReferences:
 
         # New format: canonical names
         merge_rules = {
-            ("BRCA", "gene"): "BRCA1",
+            ("brca", "gene"): "BRCA1",
         }
 
         node._update_pair_entity_references(merge_rules, ctx)
@@ -477,7 +477,7 @@ class TestUpdatePairEntityReferences:
 
         # New format: canonical names
         merge_rules = {
-            ("BRCA", "gene"): "BRCA1",
+            ("brca", "gene"): "BRCA1",
         }
 
         node._update_pair_entity_references(merge_rules, ctx)

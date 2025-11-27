@@ -101,17 +101,20 @@ def test_two_capitalization_variants_automerge_without_llm(mock_deps):
         f"Should have exactly 1 exact match rule, got {len(exact_rules)}: {exact_rules}"
     )
 
-    # The rule should map a specific canonical name to another canonical name
-    # Not normalized form to normalized form
+    # Rules are keyed by normalized form for cross-document consistency
     rule_keys = list(exact_rules.keys())
     child_key = rule_keys[0]
-    parent_norm = exact_rules[child_key]
+    parent_canonical = exact_rules[child_key]
 
-    # Check that the key is (canonical_name, kind), not (normalized_form, kind)
+    # Check that the key is (normalized_form, kind)
     assert child_key[1] == "phenotype", "Second element should be kind"
-    child_canonical = child_key[0]
-    assert child_canonical in {"Pulmonary Hypertension", "Pulmonary hypertension"}, (
-        f"Key should be a canonical name, got: {child_canonical}"
+    child_norm = child_key[0]
+    assert child_norm == "pulmonary hypertension", (
+        f"Key should be normalized form, got: {child_norm}"
+    )
+    # Target should be the best canonical name (most complex capitalization)
+    assert parent_canonical == "Pulmonary Hypertension", (
+        f"Target should be best canonical name, got: {parent_canonical}"
     )
 
     # BUG: Currently substring_pairs contains this pair because exact match failed!
@@ -128,8 +131,8 @@ def test_two_capitalization_variants_automerge_without_llm(mock_deps):
 def test_three_capitalization_variants_all_automerge(mock_deps):
     """Test that three or more capitalization variants all merge correctly.
 
-    Bug symptom: Only the last variant gets a merge rule due to dict overwrite.
-    Expected: All variants except the canonical one get merge rules.
+    With normalized rule keys, all 3 variants share the same normalized form,
+    so there's only 1 rule that applies to all of them.
     """
     state = State(
         topic="test",
@@ -178,15 +181,23 @@ def test_three_capitalization_variants_all_automerge(mock_deps):
     unique_entities = node._collect_unique_entities(ctx)
     exact_rules, substring_pairs, _ = node._find_merge_candidates(unique_entities)
 
-    # Should have 2 merge rules (3 variants - 1 canonical = 2 children)
-    assert len(exact_rules) == 2, (
-        f"Should have 2 exact match rules for 3 variants, got {len(exact_rules)}"
+    # With normalized keys, all 3 variants share the same normalized form
+    # So there's only 1 rule that applies to all of them
+    assert len(exact_rules) == 1, (
+        f"Should have 1 exact match rule (normalized key), got {len(exact_rules)}"
     )
 
-    # All keys should be distinct canonical names
+    # The key should be the normalized form
     rule_keys = list(exact_rules.keys())
-    child_names = {key[0] for key in rule_keys}
-    assert len(child_names) == 2, "Should have 2 distinct child canonical names"
+    child_key = rule_keys[0]
+    assert child_key == ("hereditary hemorrhagic telangiectasia", "phenotype"), (
+        f"Key should be normalized form, got: {child_key}"
+    )
+
+    # Target should be the best canonical (title case)
+    assert exact_rules[child_key] == "Hereditary Hemorrhagic Telangiectasia", (
+        f"Target should be best canonical, got: {exact_rules[child_key]}"
+    )
 
     # No variants should go to LLM
     assert "phenotype" not in substring_pairs, (

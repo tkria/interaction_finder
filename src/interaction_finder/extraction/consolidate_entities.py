@@ -1,59 +1,59 @@
-"""Entity merge agent.
+"""Entity consolidation agent.
 
-Determines whether entities with substring relationships should be merged.
-Handles batch processing for efficiency.
+Determines how to handle entity pairs with substring/similarity relationships:
+skip (keep separate), merge (into parent), or rename (simplify verbose names).
 """
 
 from pydantic_ai.settings import ModelSettings
 
 from interaction_finder.agent_config import agent_getter
 from interaction_finder.extraction.deps import Deps
-from interaction_finder.extraction.models import EntityMergeDecisions
+from interaction_finder.extraction.models import EntityConsolidationDecisions
 
 
-get_entity_merge_agent = agent_getter(
+get_entity_consolidation_agent = agent_getter(
     "extraction",
-    "entity_merger",
-    EntityMergeDecisions,
+    "entity_consolidator",
+    EntityConsolidationDecisions,
     Deps,
-    """You are an expert at resolving entity naming ambiguities for literature mining tasks.
+    """You are an expert at resolving entity naming ambiguities for biomedical literature mining.
 
-Your task: decide whether entities should be merged based on the research topic and
-target entity types. The goal is to consolidate entities that represent the same
-biological concept **in the context of this specific research question**.
+# Context
 
-**Key principle: Topic-aware merging**
-Consider what entities are actually relevant to the research topic. Merge entities
-that would be considered the same for this research question, even if they differ
-in biological specificity.
+You are given pairs of entities where one name contains or is similar to the other. Each pair shows:
+- A **term** (the longer/more specific name)
+- A **candidate parent** it might merge into (the shorter/simpler name)
 
-**General examples:**
-- Merge: Gene variants/mutations into the gene name (e.g., "GeneX mutation" → "GeneX")
-- Merge: Disease subtypes into the main condition (e.g., "idiopathic Disease" → "Disease")
-- Merge: Abbreviations into full names (e.g., "ABC" → "Protein ABC")
-- Don't merge: Numbered family members (e.g., "IL-1" vs "IL-12")
-- Don't merge: Broader vs specific categories (e.g., "hypertension" vs "arterial hypertension")
+# Actions
 
-**Decision criteria:**
-1. **Merge if:**
-   - Child is an abbreviation, shorthand, or contains qualifiers for the parent
-   - Child is a subtype/variant of the parent AND the parent is a target entity type
-   - Merging simplifies the data without losing information relevant to the topic
-   - Both entities refer to essentially the same biological entity for this research question
+## skip
+Keep both entities separate. Use when they represent genuinely distinct concepts.
 
-2. **Do not merge if:**
-   - Entities represent fundamentally different biological objects (e.g., gene vs disease)
-   - Child is a distinct member of a family (e.g., IL-1 vs IL-12)
-   - Merging would conflate scientifically distinct concepts (e.g., PH vs PAH)
-   - Child provides important distinguishing information the parent lacks
+Examples:
+1. [xxxx] 'MAP kinase' → 'kinase' — skip (MAPK is a specific family)
+2. [xxxx] 'adrenergic receptor' → 'receptor' — skip (specific receptor type)
+3. [xxxx] 'p53 pathway' → 'p53' — skip (gene vs pathway)
 
-**Output requirements:**
-For each pair, decide whether the child entity should be merged into the parent entity
-(where parent is typically the shorter/more general name and child is the longer/more
-specific name). Reference each pair by its numeric ID and confirmation token from the
-prompt (e.g., for "[3:xK7m]", use pair_id=3 and pair_token="xK7m").
-Provide reasoning for your decision in context of the research topic.
+## merge
+Merge the term into the parent. Use when the term is the same entity with a redundant qualifier or variant.
 
-Bias toward merging when entities are clearly related and merging serves the research goal.""",
+Examples:
+1. [xxxx] 'p53 gene' → 'p53' — merge ("gene" is redundant)
+2. [xxxx] 'mutant BRCA1' → 'BRCA1' — merge (variant of same gene)
+3. [xxxx] 'human insulin' → 'insulin' — merge (species qualifier)
+
+## rename
+Replace the term with its standard canonical form, then re-evaluate for merge opportunities.
+
+Examples:
+1. [xxxx] 'transforming growth factor beta protein' → 'growth factor' — rename to "TGF-β"
+2. [xxxx] 'mitogen-activated protein kinase enzyme' → 'kinase' — rename to "MAPK"
+3. [xxxx] 'peroxisome proliferator-activated receptor gamma' → 'receptor' — rename to "PPARγ"
+
+Do NOT rename to invented terms, generic descriptions, or anything that isn't an established name.
+
+# Output
+
+For each pair, provide pair_id, pair_token, action, target (for rename only), and reasoning.""",
     default_model_settings=ModelSettings(parallel_tool_calls=False),
 )

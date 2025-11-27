@@ -75,8 +75,8 @@ def test_merge_combines_aliases_from_both_entities(mock_deps):
     node = ConsolidateEntitiesNode()
     ctx = GraphRunContext(state=state, deps=mock_deps)
 
-    # Create merge rule: BRCA1 → BRCA (using canonical names)
-    merge_rules = {("BRCA1", "gene"): "BRCA"}
+    # Create merge rule: BRCA1 → BRCA (key is normalized, target is canonical)
+    merge_rules = {("brca1", "gene"): "BRCA"}
 
     # Note: canonical_name_variants no longer needed with new implementation
 
@@ -102,7 +102,12 @@ def test_merge_combines_aliases_from_both_entities(mock_deps):
 
 
 def test_rename_preserves_existing_aliases(mock_deps):
-    """Test that renaming an entity preserves its existing aliases."""
+    """Test that renaming an entity preserves its existing aliases.
+
+    Rename happens when target is a genuinely different entity name (different
+    normalized form), not just a case variation. Case variations are handled
+    by exact-match auto-merging in _find_merge_candidates.
+    """
 
     state = State(
         topic="test",
@@ -112,12 +117,12 @@ def test_rename_preserves_existing_aliases(mock_deps):
 
     resource1 = ResourceId(url="http://doc1.com", id="doc1")
 
-    # Entity with existing aliases that will be renamed
+    # Entity with existing aliases that will be renamed to a different form
     state.validated_entities_by_resource[resource1] = {
         "pulmonary arterial hypertension": EntityMention(
             kind="phenotype",
             name="pulmonary arterial hypertension",
-            aliases=["PAH", "pulmonary hypertension"],
+            aliases=["pulmonary hypertension"],
             quotes=[],
             reasoning="test",
         )
@@ -126,34 +131,36 @@ def test_rename_preserves_existing_aliases(mock_deps):
     node = ConsolidateEntitiesNode()
     ctx = GraphRunContext(state=state, deps=mock_deps)
 
-    # Create rule that renames to title case (cross-document merge scenario)
-    # This simulates: another document has "Pulmonary Arterial Hypertension"
-    # and the merge rule says this entity should adopt that canonical name
+    # Rename to standard abbreviation (different normalized form)
     merge_rules = {
         (
             "pulmonary arterial hypertension",
             "phenotype",
-        ): "Pulmonary Arterial Hypertension"
+        ): "PAH"
     }
 
     node._apply_merge_rules_globally(merge_rules, ctx)
 
     # Entity should be renamed but keep all its aliases
     entities = state.validated_entities_by_resource[resource1]
-    assert "Pulmonary Arterial Hypertension" in entities
+    assert "PAH" in entities
     assert "pulmonary arterial hypertension" not in entities
 
-    renamed_entity = entities["Pulmonary Arterial Hypertension"]
+    renamed_entity = entities["PAH"]
     expected_aliases = {
-        "PAH",  # Original alias
         "pulmonary hypertension",  # Original alias
         "pulmonary arterial hypertension",  # Old canonical name
     }
     assert set(renamed_entity.aliases) == expected_aliases
 
 
-def test_cross_document_fuzzy_merge_preserves_all_variants(mock_deps):
-    """Test that fuzzy merges across documents preserve all name variants."""
+def test_cross_document_merge_with_explicit_rule(mock_deps):
+    """Test that cross-document merges preserve all name variants when rule provided.
+
+    Note: UK/US spelling variations (haemorrhagic/hemorrhagic) have different
+    normalized forms, so they require LLM intervention to merge. This test
+    provides an explicit rule simulating what the LLM would produce.
+    """
 
     state = State(
         topic="test",
@@ -189,32 +196,32 @@ def test_cross_document_fuzzy_merge_preserves_all_variants(mock_deps):
     node = ConsolidateEntitiesNode()
     ctx = GraphRunContext(state=state, deps=mock_deps)
 
-    # Collect entities (this populates canonical_name_variants)
-    unique_entities = node._collect_unique_entities(ctx)
+    # Explicit merge rule (simulating LLM decision): UK spelling → US spelling
+    # Key is normalized form of UK spelling, target is canonical US spelling
+    merge_rules = {
+        (
+            "hereditary haemorrhagic telangiectasia",
+            "phenotype",
+        ): "Hereditary Hemorrhagic Telangiectasia"
+    }
 
-    # Find fuzzy match rules (should auto-merge UK→US spelling)
-    exact_rules, _, _ = node._find_merge_candidates(unique_entities)
-    resolved_rules = node._resolve_transitive_merges(exact_rules)
+    node._apply_merge_rules_globally(merge_rules, ctx)
 
-    node._apply_merge_rules_globally(resolved_rules, ctx)
-
-    # Both documents should now use US spelling
-    for entities in state.validated_entities_by_resource.values():
-        assert "Hereditary Hemorrhagic Telangiectasia" in entities
-        assert "Hereditary haemorrhagic telangiectasia" not in entities
+    # Doc1 should now have US spelling (renamed from UK)
+    doc1_entities = state.validated_entities_by_resource[resource1]
+    assert "Hereditary Hemorrhagic Telangiectasia" in doc1_entities
+    assert "Hereditary haemorrhagic telangiectasia" not in doc1_entities
 
     # Doc1 entity should have old UK name in aliases plus original aliases
-    doc1_entity = state.validated_entities_by_resource[resource1][
-        "Hereditary Hemorrhagic Telangiectasia"
-    ]
+    doc1_entity = doc1_entities["Hereditary Hemorrhagic Telangiectasia"]
     assert "Hereditary haemorrhagic telangiectasia" in doc1_entity.aliases
     assert "HHT" in doc1_entity.aliases
     assert "Osler-Weber-Rendu syndrome" in doc1_entity.aliases
 
-    # Doc2 entity should keep its original aliases (no rename occurred)
-    doc2_entity = state.validated_entities_by_resource[resource2][
-        "Hereditary Hemorrhagic Telangiectasia"
-    ]
+    # Doc2 entity unchanged (rule doesn't apply - different normalized form)
+    doc2_entities = state.validated_entities_by_resource[resource2]
+    assert "Hereditary Hemorrhagic Telangiectasia" in doc2_entities
+    doc2_entity = doc2_entities["Hereditary Hemorrhagic Telangiectasia"]
     assert "HHT" in doc2_entity.aliases
     assert "Osler disease" in doc2_entity.aliases
 
@@ -258,15 +265,14 @@ def test_multiple_merges_accumulate_aliases(mock_deps):
     node = ConsolidateEntitiesNode()
     ctx = GraphRunContext(state=state, deps=mock_deps)
 
-    # Create transitive merge rules: BRCA2→BRCA1, BRCA1→BRCA (using canonical names)
+    # Create transitive merge rules: BRCA2→BRCA1, BRCA1→BRCA (keys normalized, targets canonical)
     merge_rules = {
-        ("BRCA2", "gene"): "BRCA1",
-        ("BRCA1", "gene"): "BRCA",
+        ("brca2", "gene"): "BRCA1",
+        ("brca1", "gene"): "BRCA",
     }
-
-    # Note: canonical_name_variants no longer needed with new implementation
-
-    node._apply_merge_rules_globally(merge_rules, ctx)
+    # Rules must be resolved transitively before applying
+    resolved_rules = node._resolve_transitive_merges(merge_rules)
+    node._apply_merge_rules_globally(resolved_rules, ctx)
 
     # Should have only BRCA left with all aliases
     entities = state.validated_entities_by_resource[resource1]
@@ -321,7 +327,8 @@ def test_no_duplicate_aliases(mock_deps):
     node = ConsolidateEntitiesNode()
     ctx = GraphRunContext(state=state, deps=mock_deps)
 
-    merge_rules = {("brca1", "gene"): "brca"}
+    # Key by normalized form, target is canonical name
+    merge_rules = {("brca1", "gene"): "BRCA"}
 
     ctx.state.canonical_name_variants[("brca", "gene")] = {"BRCA"}
     ctx.state.canonical_name_variants[("brca1", "gene")] = {"BRCA1"}

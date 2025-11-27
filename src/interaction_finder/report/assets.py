@@ -1007,27 +1007,45 @@ function updateURL(usePushState = false) {
     }
     const newURL = params.toString() ? `?${params.toString()}` : window.location.pathname;
     if (usePushState) {
-        // Store current state in history.state so we can detect "return to previous"
-        const stateData = {
+        // Cancel pending scroll updates and save current scroll to state we're leaving
+        cancelPendingScrollUpdate();
+        const prev = history.state;
+        if (prev) {
+            history.replaceState({ ...prev, scroll: getScrollPositions() }, '');
+        }
+        // Push new state with previous pair/doc for back-detection
+        history.pushState({
             pair: state.selectedPairId,
             doc: state.openDocumentIdx,
             scroll: scroll,
-        };
-        history.pushState(stateData, '', newURL);
+            prevPair: prev?.pair ?? null,
+            prevDoc: prev?.doc ?? null,
+        }, '', newURL);
     } else {
-        history.replaceState(null, '', newURL);
+        history.replaceState({
+            ...history.state,
+            pair: state.selectedPairId,
+            doc: state.openDocumentIdx,
+            scroll: scroll,
+        }, '', newURL);
     }
 }
 
 // Check if navigating to (newPairId, newDocIdx) would return to the previous history state
 function wouldReturnToPrevious(newPairId, newDocIdx) {
-    const prev = history.state;
-    if (!prev) return false;
-    return prev.pair === newPairId && prev.doc === newDocIdx;
+    const s = history.state;
+    if (!s || s.prevPair === undefined) return false;
+    return s.prevPair === newPairId && s.prevDoc === newDocIdx;
 }
 
 // Debounced scroll handler for URL updates
 let scrollUpdateTimeout = null;
+function cancelPendingScrollUpdate() {
+    if (scrollUpdateTimeout) {
+        clearTimeout(scrollUpdateTimeout);
+        scrollUpdateTimeout = null;
+    }
+}
 function handleScrollForURL() {
     if (scrollUpdateTimeout) return;
     scrollUpdateTimeout = setTimeout(() => {
@@ -1036,7 +1054,16 @@ function handleScrollForURL() {
     }, 500);
 }
 
-function restoreStateFromURL() {
+// Save current scroll to history.state before navigating away
+function saveScrollAndGoBack() {
+    cancelPendingScrollUpdate();
+    if (history.state) {
+        history.replaceState({ ...history.state, scroll: getScrollPositions() }, '');
+    }
+    history.back();
+}
+
+function restoreStateFromURL(scrollOverride) {
     const urlState = getStateFromURL();
     // Restore search and rejected filter first (affects pair visibility)
     state.searchQuery = urlState.search;
@@ -1044,19 +1071,25 @@ function restoreStateFromURL() {
     // Update UI controls to match
     document.getElementById('search-input').value = urlState.search;
     document.getElementById('show-rejected').checked = urlState.rejected;
+    // Reset selection state (will be set below if URL specifies valid pair)
+    state.selectedPairId = null;
+    state.openDocumentIdx = null;
     // Restore pair selection if valid
     if (urlState.pair !== null && !Number.isNaN(urlState.pair)) {
         const filtered = getFilteredPairs();
         const match = findFilteredPairById(urlState.pair, filtered);
         if (match) {
             state.selectedPairId = urlState.pair;
-            if (urlState.doc !== null && !Number.isNaN(urlState.doc)) {
+            // Restore doc selection if valid and within bounds
+            const docGroups = JSON.parse(match.card.dataset.docGroups || '[]');
+            if (urlState.doc !== null && !Number.isNaN(urlState.doc) &&
+                urlState.doc >= 0 && urlState.doc < docGroups.length) {
                 state.openDocumentIdx = urlState.doc;
             }
         }
     }
-    // Store scroll positions to restore after render
-    state.pendingScroll = urlState.scroll;
+    // Store scroll positions to restore after render (history.state takes precedence)
+    state.pendingScroll = scrollOverride ?? urlState.scroll;
 }
 
 function applyPendingScroll() {
@@ -1133,11 +1166,7 @@ function initReport() {
     // Handle browser back/forward navigation
     window.addEventListener('popstate', (event) => {
         // Prefer scroll from history.state (captured at pushState time) over URL params
-        const historyScroll = event.state?.scroll;
-        restoreStateFromURL();
-        if (historyScroll && historyScroll.length === 3) {
-            state.pendingScroll = historyScroll;
-        }
+        restoreStateFromURL(event.state?.scroll);
         updateHeaderCounts();
         updatePairListDisplay();
         renderContent();
@@ -1164,14 +1193,17 @@ function initReport() {
 
     // Apply scroll positions after render
     applyPendingScroll();
+
+    // Set initial history.state so scroll restoration works on first back navigation
+    updateURL(false);
 }
 
 // Search handler
 function handleSearch(e) {
     state.searchQuery = e.target.value.toLowerCase();
-    updateURL(false);  // replaceState for search
     updateHeaderCounts();
-    updatePairListDisplay();
+    updatePairListDisplay();  // May clear selection if pair no longer matches filter
+    updateURL(false);  // replaceState after state is finalized
     renderContent();
     renderReasoning();
 }
@@ -1179,9 +1211,9 @@ function handleSearch(e) {
 // Toggle rejected pairs
 function handleToggleRejected(e) {
     state.showRejected = e.target.checked;
-    updateURL(false);  // replaceState for filter toggle
     updateHeaderCounts();
-    updatePairListDisplay();
+    updatePairListDisplay();  // May clear selection if pair no longer matches filter
+    updateURL(false);  // replaceState after state is finalized
     renderContent();
     renderReasoning();
 }
@@ -1291,12 +1323,21 @@ function updatePairListDisplay() {
     });
 }
 
-// Select a pair
+// Select a pair (or close open document if same pair clicked)
 function selectPair(pairId) {
     const filtered = getFilteredPairs();
     const match = findFilteredPairById(pairId, filtered);
     if (!match) {
         console.warn(`Pair ${pairId} not available with current filters`);
+        return;
+    }
+    // No-op if already viewing this pair with no document open
+    if (state.selectedPairId === pairId && state.openDocumentIdx === null) {
+        return;
+    }
+    // Check if this would return to the previous history state
+    if (wouldReturnToPrevious(pairId, null)) {
+        saveScrollAndGoBack();
         return;
     }
     state.selectedPairId = pairId;
@@ -1384,6 +1425,14 @@ function renderContent() {
 
 // Toggle document accordion
 function toggleDocument(idx) {
+    // Validate pair is still in filtered list (consistent with other functions)
+    if (state.selectedPairId === null) return;
+    const filtered = getFilteredPairs();
+    const match = findFilteredPairById(state.selectedPairId, filtered);
+    if (!match) {
+        console.warn(`Pair ${state.selectedPairId} not available with current filters`);
+        return;
+    }
     // Capture the clicked header's viewport position before any changes
     const clickedHeader = document.querySelectorAll('.document-header')[idx];
     const headerTopBeforeToggle = clickedHeader ? clickedHeader.getBoundingClientRect().top : null;
@@ -1391,7 +1440,7 @@ function toggleDocument(idx) {
     const newDocIdx = state.openDocumentIdx === idx ? null : idx;
     // Check if this would return to the previous history state
     if (wouldReturnToPrevious(state.selectedPairId, newDocIdx)) {
-        history.back();  // Let popstate handler restore everything including scroll
+        saveScrollAndGoBack();
         return;
     }
     state.openDocumentIdx = newDocIdx;
@@ -1616,8 +1665,14 @@ function scrollToQuote(quoteId) {
 // Open document by doc_idx within currently selected pair
 function openDocument(docIdx) {
     if (state.selectedPairId === null) return;
-    const pairCard = document.getElementById(`pair-${state.selectedPairId}`);
-    if (!pairCard) return;
+    // Validate pair is in filtered list (consistent with other functions)
+    const filtered = getFilteredPairs();
+    const match = findFilteredPairById(state.selectedPairId, filtered);
+    if (!match) {
+        console.warn(`Pair ${state.selectedPairId} not available with current filters`);
+        return;
+    }
+    const pairCard = match.card;
     const docIndices = pairCard.dataset.docs.trim().split(' ').map(n => parseInt(n));
     const assessIdx = docIndices.indexOf(docIdx);
     if (assessIdx === -1) {
@@ -1626,11 +1681,11 @@ function openDocument(docIdx) {
     }
     // Check if this would return to the previous history state
     if (wouldReturnToPrevious(state.selectedPairId, assessIdx)) {
-        history.back();  // Let popstate handler restore everything including scroll
+        saveScrollAndGoBack();
         return;
     }
-    updateURL(true);  // pushState with current scroll before changing state
     state.openDocumentIdx = assessIdx;
+    updateURL(true);  // pushState for document open
     renderContent();
     renderReasoning();
     // Scroll to the document accordion in the content panel
@@ -1656,15 +1711,20 @@ function selectPairAndDocument(pairIdx, docIdx) {
     const docIndices = pairCard.dataset.docs.trim().split(' ').map(n => parseInt(n));
     const assessIdx = docIndices.indexOf(docIdx);
     const newDocIdx = assessIdx !== -1 ? assessIdx : 0;
+    // No-op if already at the target state
+    if (state.selectedPairId === pairIdx && state.openDocumentIdx === newDocIdx) {
+        return;
+    }
     // Check if this would return to the previous history state
     if (wouldReturnToPrevious(pairIdx, newDocIdx)) {
-        history.back();  // Let popstate handler restore everything including scroll
+        saveScrollAndGoBack();
         return;
     }
     state.selectedPairId = pairIdx;
     state.openDocumentIdx = newDocIdx;
     updateURL(true);  // pushState for pair+document selection
     updatePairListDisplay();
+    match.card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     renderContent();
     renderReasoning();
 }

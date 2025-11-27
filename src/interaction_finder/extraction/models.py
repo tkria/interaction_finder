@@ -112,13 +112,17 @@ class EntityExtractionOut(BaseModel):
     entities: list[EntityInfo] = Field(description="Entities found in document")
 
 
-class EntityMergeDecision(BaseModel):
-    """LLM decision on whether to merge two entities.
+class EntityConsolidationDecision(BaseModel):
+    """LLM decision on how to handle an entity pair.
 
-    Used when one entity name is a substring of another (e.g., "BRCA" vs "BRCA1").
+    Used when one entity name is a substring/similar to another (e.g., "BRCA" vs "BRCA1").
     The pair_id and pair_token reference a numbered pair from the prompt, avoiding
     the need to echo back exact entity names (which can introduce subtle variations).
-    The token provides verification that the correct pair was referenced.
+
+    Actions:
+        skip: Keep both entities separate (target=None)
+        merge: Absorb child into parent from the pair (target=None)
+        rename: Rename child to target, then re-evaluate for merge opportunities
     """
 
     pair_id: int = Field(description="ID of the entity pair (from the prompt)")
@@ -127,15 +131,28 @@ class EntityMergeDecision(BaseModel):
         max_length=4,
         description="Confirmation token from the prompt (e.g., 'xK7m')",
     )
-    should_merge: bool = Field(description="Whether these entities should be merged")
-    reasoning: str = Field(min_length=20, description="Explanation of merge decision")
+    action: Literal["skip", "merge", "rename"] = Field(
+        description="Action to take: skip (keep separate), merge (into parent), or rename (child to target)"
+    )
+    target: str | None = Field(
+        default=None,
+        description="New name for rename action; None for skip/merge",
+    )
+    reasoning: str = Field(min_length=20, description="Explanation of decision")
+
+    @model_validator(mode="after")
+    def validate_target_for_action(self) -> "EntityConsolidationDecision":
+        """Ensure target is provided for rename action and absent for others."""
+        if self.action == "rename" and not self.target:
+            raise ValueError("target is required when action is 'rename'")
+        return self
 
 
-class EntityMergeDecisions(BaseModel):
-    """LLM output: batch of merge decisions."""
+class EntityConsolidationDecisions(BaseModel):
+    """LLM output: batch of entity consolidation decisions."""
 
-    decisions: list[EntityMergeDecision] = Field(
-        description="Merge decisions for all candidate pairs"
+    decisions: list[EntityConsolidationDecision] = Field(
+        description="Consolidation decisions for all candidate pairs"
     )
 
 

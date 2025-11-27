@@ -15,8 +15,8 @@ from pydantic_graph import GraphRunContext
 
 from interaction_finder.extraction.models import (
     EntityMention,
-    EntityMergeDecision,
-    EntityMergeDecisions,
+    EntityConsolidationDecision,
+    EntityConsolidationDecisions,
 )
 from interaction_finder.extraction.nodes import ConsolidateEntitiesNode
 from interaction_finder.extraction.state import State
@@ -47,6 +47,7 @@ def mock_deps():
     deps = MagicMock()
     deps.config = MagicMock()
     deps.config.tools.extraction.merge_batch_size = 50
+    deps.config.tools.extraction.max_rename_iterations = 3
     deps.logger = MagicMock()
     deps.resource_pool = ResourcePool()
     return deps
@@ -308,7 +309,7 @@ class TestFindGlobalSubstringPairs:
 
 
 class TestGetGlobalMergeDecisions:
-    """Test _get_global_merge_decisions method."""
+    """Test _get_consolidation_decisions method."""
 
     @pytest.mark.asyncio
     async def test_cache_miss_queries_llm(self, mock_deps):
@@ -328,12 +329,12 @@ class TestGetGlobalMergeDecisions:
         # Mock LLM response (pair_id=1 corresponds to BRCA/BRCA1 pair)
         # Token "test" won't match the real token, but ID-based lookup will be used
         mock_result = MagicMock()
-        mock_result.output = EntityMergeDecisions(
+        mock_result.output = EntityConsolidationDecisions(
             decisions=[
-                EntityMergeDecision(
+                EntityConsolidationDecision(
                     pair_id=1,
                     pair_token="test",
-                    should_merge=True,
+                    action="merge",
                     reasoning="BRCA1 is specific gene, BRCA is shorthand",
                 )
             ]
@@ -342,28 +343,28 @@ class TestGetGlobalMergeDecisions:
 
         import interaction_finder.extraction.nodes as nodes_module
 
-        original_getter = nodes_module.get_entity_merge_agent
-        nodes_module.get_entity_merge_agent = lambda config: mock_agent
+        original_getter = nodes_module.get_entity_consolidation_agent
+        nodes_module.get_entity_consolidation_agent = lambda config: mock_agent
 
         try:
-            merge_rules = await node._get_global_merge_decisions(
-                substring_pairs, canonical_lookup, ctx
+            merge_rules, new_names = await node._get_consolidation_decisions(
+                substring_pairs, canonical_lookup, unique_entities, ctx
             )
 
             # Should have called LLM
             assert mock_agent.run.called
             assert len(merge_rules) == 1
-            # Merge rules use canonical names as keys (consistent with Phase 1)
-            assert ("BRCA1", "gene") in merge_rules
-            assert merge_rules[("BRCA1", "gene")] == "BRCA"
+            # Merge rules keyed by normalized form, target is canonical name
+            assert ("brca1", "gene") in merge_rules
+            assert merge_rules[("brca1", "gene")] == "BRCA"
 
-            # Cache should be populated (using normalized forms as keys)
-            assert ctx.state.merge_decision_cache[("brca", "brca1", "gene")] is True
+            # Cache should be populated with target canonical name
+            assert ctx.state.merge_decision_cache[("brca", "brca1", "gene")] == "BRCA"
             assert ctx.state.merge_cache_misses == 1
             assert ctx.state.merge_cache_hits == 0
 
         finally:
-            nodes_module.get_entity_merge_agent = original_getter
+            nodes_module.get_entity_consolidation_agent = original_getter
 
     @pytest.mark.asyncio
     async def test_cache_hit_skips_llm(self, mock_deps):
@@ -376,8 +377,8 @@ class TestGetGlobalMergeDecisions:
         )
         ctx = GraphRunContext(state=state, deps=mock_deps)
 
-        # Pre-populate cache
-        ctx.state.merge_decision_cache[("brca", "brca1", "gene")] = True
+        # Pre-populate cache with target canonical name
+        ctx.state.merge_decision_cache[("brca", "brca1", "gene")] = "BRCA"
 
         substring_pairs = {"gene": [("brca", "brca1")]}
         unique_entities = {"gene": {"brca": {"BRCA"}, "brca1": {"BRCA1"}}}
@@ -388,26 +389,26 @@ class TestGetGlobalMergeDecisions:
 
         import interaction_finder.extraction.nodes as nodes_module
 
-        original_getter = nodes_module.get_entity_merge_agent
-        nodes_module.get_entity_merge_agent = lambda config: mock_agent
+        original_getter = nodes_module.get_entity_consolidation_agent
+        nodes_module.get_entity_consolidation_agent = lambda config: mock_agent
 
         try:
-            merge_rules = await node._get_global_merge_decisions(
-                substring_pairs, canonical_lookup, ctx
+            merge_rules, new_names = await node._get_consolidation_decisions(
+                substring_pairs, canonical_lookup, unique_entities, ctx
             )
 
             # Should NOT have called LLM
             assert not mock_agent.run.called
-            # Should return merge rule from cache (using canonical names)
+            # Should return merge rule from cache (keyed by normalized form)
             assert len(merge_rules) == 1
-            assert ("BRCA1", "gene") in merge_rules
-            assert merge_rules[("BRCA1", "gene")] == "BRCA"
+            assert ("brca1", "gene") in merge_rules
+            assert merge_rules[("brca1", "gene")] == "BRCA"
             # Metrics
             assert ctx.state.merge_cache_hits == 1
             assert ctx.state.merge_cache_misses == 0
 
         finally:
-            nodes_module.get_entity_merge_agent = original_getter
+            nodes_module.get_entity_consolidation_agent = original_getter
 
     @pytest.mark.asyncio
     async def test_respects_reject_decisions(self, mock_deps):
@@ -427,8 +428,8 @@ class TestGetGlobalMergeDecisions:
         unique_entities = {"gene": {"tp": {"TP"}, "tp53": {"TP53"}}}
         canonical_lookup = build_canonical_lookup_from_unique_entities(unique_entities)
 
-        merge_rules = await node._get_global_merge_decisions(
-            substring_pairs, canonical_lookup, ctx
+        merge_rules, new_names = await node._get_consolidation_decisions(
+            substring_pairs, canonical_lookup, unique_entities, ctx
         )
 
         # No merge rules created
@@ -446,8 +447,8 @@ class TestGetGlobalMergeDecisions:
         )
         ctx = GraphRunContext(state=state, deps=mock_deps)
 
-        # Pre-populate cache for one pair
-        ctx.state.merge_decision_cache[("brca", "brca1", "gene")] = True
+        # Pre-populate cache for one pair with target canonical name
+        ctx.state.merge_decision_cache[("brca", "brca1", "gene")] = "BRCA"
 
         substring_pairs = {"gene": [("brca", "brca1"), ("tp", "tp53")]}
         unique_entities = {
@@ -463,12 +464,12 @@ class TestGetGlobalMergeDecisions:
         # Mock LLM for uncached pair only (pair_id=1 is tp/tp53)
         # Token "test" won't match the real token, but ID-based lookup will be used
         mock_result = MagicMock()
-        mock_result.output = EntityMergeDecisions(
+        mock_result.output = EntityConsolidationDecisions(
             decisions=[
-                EntityMergeDecision(
+                EntityConsolidationDecision(
                     pair_id=1,
                     pair_token="test",
-                    should_merge=False,
+                    action="skip",
                     reasoning="TP and TP53 are different proteins with distinct functions",
                 )
             ]
@@ -477,26 +478,26 @@ class TestGetGlobalMergeDecisions:
 
         import interaction_finder.extraction.nodes as nodes_module
 
-        original_getter = nodes_module.get_entity_merge_agent
-        nodes_module.get_entity_merge_agent = lambda config: mock_agent
+        original_getter = nodes_module.get_entity_consolidation_agent
+        nodes_module.get_entity_consolidation_agent = lambda config: mock_agent
 
         try:
-            merge_rules = await node._get_global_merge_decisions(
-                substring_pairs, canonical_lookup, ctx
+            merge_rules, new_names = await node._get_consolidation_decisions(
+                substring_pairs, canonical_lookup, unique_entities, ctx
             )
 
             # Should call LLM only for uncached pair
             assert mock_agent.run.called
-            # Should have merge rule only for cached pair (using canonical names)
+            # Should have merge rule only for cached pair (keyed by normalized form)
             assert len(merge_rules) == 1
-            assert ("BRCA1", "gene") in merge_rules
-            assert merge_rules[("BRCA1", "gene")] == "BRCA"
+            assert ("brca1", "gene") in merge_rules
+            assert merge_rules[("brca1", "gene")] == "BRCA"
             # Metrics
             assert ctx.state.merge_cache_hits == 1
             assert ctx.state.merge_cache_misses == 1
 
         finally:
-            nodes_module.get_entity_merge_agent = original_getter
+            nodes_module.get_entity_consolidation_agent = original_getter
 
     @pytest.mark.asyncio
     async def test_handles_llm_errors_gracefully(self, mock_deps):
@@ -520,12 +521,12 @@ class TestGetGlobalMergeDecisions:
 
         import interaction_finder.extraction.nodes as nodes_module
 
-        original_getter = nodes_module.get_entity_merge_agent
-        nodes_module.get_entity_merge_agent = lambda config: mock_agent
+        original_getter = nodes_module.get_entity_consolidation_agent
+        nodes_module.get_entity_consolidation_agent = lambda config: mock_agent
 
         try:
-            merge_rules = await node._get_global_merge_decisions(
-                substring_pairs, canonical_lookup, ctx
+            merge_rules, new_names = await node._get_consolidation_decisions(
+                substring_pairs, canonical_lookup, unique_entities, ctx
             )
 
             # Should return empty (no merge rules)
@@ -535,7 +536,7 @@ class TestGetGlobalMergeDecisions:
             assert mock_deps.logger.error.called
 
         finally:
-            nodes_module.get_entity_merge_agent = original_getter
+            nodes_module.get_entity_consolidation_agent = original_getter
 
 
 class TestResolveTransitiveMerges:
@@ -686,8 +687,8 @@ class TestApplyMergeRulesGlobally:
             }
         }
 
-        # New format: rules use canonical names, not normalized forms
-        merge_rules = {("BRCA1", "gene"): "BRCA"}
+        # Rules keyed by normalized form, target is canonical name
+        merge_rules = {("brca1", "gene"): "BRCA"}
 
         node._apply_merge_rules_globally(merge_rules, ctx)
 
@@ -696,7 +697,7 @@ class TestApplyMergeRulesGlobally:
         assert "BRCA" in entities
         assert "BRCA1" not in entities
         assert "BRCA1" in entities["BRCA"].aliases
-        assert "MERGED_GLOBAL(BRCA1)" in entities["BRCA"].reasoning
+        assert "MERGED(BRCA1)" in entities["BRCA"].reasoning
         assert ctx.state.entities_merged == 1
 
     def test_applies_merge_across_multiple_documents(self, mock_deps):
@@ -747,11 +748,9 @@ class TestApplyMergeRulesGlobally:
             },
         }
 
-        # New format: separate rules for each canonical child name
-        merge_rules = {
-            ("BRCA1", "gene"): "BRCA",  # Doc1: BRCA1 → BRCA
-            ("brca1", "gene"): "brca",  # Doc2: brca1 → brca
-        }
+        # Rules keyed by normalized form - matches both BRCA1 and brca1
+        # First matching entity's canonical name is used as target
+        merge_rules = {("brca1", "gene"): "BRCA"}
 
         node._apply_merge_rules_globally(merge_rules, ctx)
 
@@ -809,8 +808,8 @@ class TestApplyMergeRulesGlobally:
             },
         }
 
-        # New format: canonical names
-        merge_rules = {("BRCA1", "gene"): "BRCA"}
+        # Rules keyed by normalized form, target is canonical name
+        merge_rules = {("brca1", "gene"): "BRCA"}
 
         node._apply_merge_rules_globally(merge_rules, ctx)
 
@@ -905,10 +904,10 @@ class TestApplyMergeRulesGlobally:
             }
         }
 
-        # New format: canonical names
+        # Rules keyed by normalized form, target is canonical name
         merge_rules = {
-            ("BRCA1", "gene"): "BRCA",
-            ("Pulmonary Arterial Hypertension", "disease"): "PAH",
+            ("brca1", "gene"): "BRCA",
+            ("pulmonary arterial hypertension", "disease"): "PAH",
         }
 
         node._apply_merge_rules_globally(merge_rules, ctx)
@@ -971,16 +970,17 @@ class TestApplyMergeRulesGlobally:
             }
         }
 
-        # Create merge chain: A→B→C using canonical names
+        # Create merge chain: A→B→C - keys are normalized, targets are canonical
         merge_rules = {
             (
-                "Associated pulmonary arterial hypertension",
+                "associated pulmonary arterial hypertension",
                 "disease",
             ): "pulmonary arterial hypertension",
             ("pulmonary arterial hypertension", "disease"): "PAH",
         }
-
-        node._apply_merge_rules_globally(merge_rules, ctx)
+        # Rules must be resolved transitively before applying
+        resolved_rules = node._resolve_transitive_merges(merge_rules)
+        node._apply_merge_rules_globally(resolved_rules, ctx)
 
         entities = ctx.state.validated_entities_by_resource[resource1]
 
@@ -1051,12 +1051,12 @@ class TestIntegration:
         # Mock LLM to approve merge (pair_id=1 for brca/brca1)
         # Token "test" won't match the real token, but ID-based lookup will be used
         mock_result = MagicMock()
-        mock_result.output = EntityMergeDecisions(
+        mock_result.output = EntityConsolidationDecisions(
             decisions=[
-                EntityMergeDecision(
+                EntityConsolidationDecision(
                     pair_id=1,
                     pair_token="test",
-                    should_merge=True,
+                    action="merge",
                     reasoning="BRCA1 is specific gene",
                 )
             ]
@@ -1065,8 +1065,8 @@ class TestIntegration:
 
         import interaction_finder.extraction.nodes as nodes_module
 
-        original_getter = nodes_module.get_entity_merge_agent
-        nodes_module.get_entity_merge_agent = lambda config: mock_agent
+        original_getter = nodes_module.get_entity_consolidation_agent
+        nodes_module.get_entity_consolidation_agent = lambda config: mock_agent
 
         try:
             result = await node.run(ctx)
@@ -1096,4 +1096,4 @@ class TestIntegration:
             assert ctx.state.entities_merged == 2
 
         finally:
-            nodes_module.get_entity_merge_agent = original_getter
+            nodes_module.get_entity_consolidation_agent = original_getter

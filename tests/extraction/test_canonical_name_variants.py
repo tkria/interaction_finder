@@ -11,9 +11,9 @@ from pydantic_ai.usage import RunUsage
 from pydantic_graph import GraphRunContext
 
 from interaction_finder.extraction.models import (
+    EntityConsolidationDecision,
+    EntityConsolidationDecisions,
     EntityMention,
-    EntityMergeDecision,
-    EntityMergeDecisions,
 )
 from interaction_finder.extraction.nodes import ConsolidateEntitiesNode
 from interaction_finder.extraction.state import State
@@ -35,6 +35,7 @@ def mock_deps():
     deps = MagicMock()
     deps.config = MagicMock()
     deps.config.tools.extraction.merge_batch_size = 50
+    deps.config.tools.extraction.max_rename_iterations = 3
     deps.logger = MagicMock()
     deps.resource_pool = ResourcePool()
     return deps
@@ -121,13 +122,14 @@ class TestCrossDocumentCanonicalMerging:
         ctx = GraphRunContext(state=state, deps=mock_deps)
 
         # Cached decision: merge idiopathic PAH into PAH (normalized forms)
+        # Cache stores target canonical name (the parent to merge into)
         ctx.state.merge_decision_cache[
             (
                 "pulmonary arterial hypertension",
                 "idiopathic pulmonary arterial hypertension",
                 "disease",
             )
-        ] = True
+        ] = "Pulmonary Arterial Hypertension"
 
         # Three documents with different capitalizations
         resource1 = ResourceId(url="https://example.com/doc1", counter=0)
@@ -222,7 +224,7 @@ class TestCrossDocumentCanonicalMerging:
             assert len(child_aliases) >= 1
 
             # Check reasoning shows merge
-            assert "MERGED_GLOBAL" in entity.reasoning
+            assert "MERGED" in entity.reasoning
 
         # Should have merged 3 entities total (one per document)
         assert ctx.state.entities_merged == 3
@@ -246,13 +248,14 @@ class TestCrossDocumentCanonicalMerging:
         ctx = GraphRunContext(state=state, deps=mock_deps)
         # Cache decision for the BASE forms (without abbreviation suffixes)
         # extract_all_forms will expand "Name (Abbrev)" to get "Name", matching cache
+        # Cache stores target canonical name (the parent to merge into)
         ctx.state.merge_decision_cache[
             (
                 "pulmonary arterial hypertension",
                 "idiopathic pulmonary arterial hypertension",
                 "disease",
             )
-        ] = True
+        ] = "Pulmonary arterial hypertension (PAH)"
         resource1 = ResourceId(url="https://example.com/doc1", counter=0)
         # Document has names WITH (PAH) suffix
         ctx.state.validated_entities_by_resource = {
@@ -275,12 +278,12 @@ class TestCrossDocumentCanonicalMerging:
         }
         # Mock LLM for any additional pairs (pah/ipah forms create extra pairs)
         mock_result = MagicMock()
-        mock_result.output = EntityMergeDecisions(decisions=[])
+        mock_result.output = EntityConsolidationDecisions(decisions=[])
         mock_agent = MagicMock()
         mock_agent.run = AsyncMock(return_value=mock_result)
         mock_agent._name = "test_agent"
         with patch(
-            "interaction_finder.extraction.nodes.get_entity_merge_agent",
+            "interaction_finder.extraction.nodes.get_entity_consolidation_agent",
             return_value=mock_agent,
         ):
             # Apply global merging - should hit the cache via expanded forms

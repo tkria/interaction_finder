@@ -98,9 +98,9 @@ def test_identical_canonical_names_auto_merged(mock_deps):
     assert "gene" in substring_pairs
     assert ("bmpr2", "bmpr2 gene") in substring_pairs["gene"]
 
-    # Now test that _get_global_merge_decisions doesn't send these to LLM
+    # Now test that _get_consolidation_decisions doesn't send these to LLM
     with patch(
-        "interaction_finder.extraction.nodes.get_entity_merge_agent"
+        "interaction_finder.extraction.nodes.get_entity_consolidation_agent"
     ) as mock_agent:
         # Setup mock agent that should NOT be called
         mock_result = AsyncMock()
@@ -115,8 +115,10 @@ def test_identical_canonical_names_auto_merged(mock_deps):
 
         canonical_lookup = build_canonical_lookup_from_unique_entities(unique_entities)
         ctx = GraphRunContext(state=state, deps=mock_deps)
-        merge_rules = asyncio.run(
-            node._get_global_merge_decisions(substring_pairs, canonical_lookup, ctx)
+        merge_rules, new_names = asyncio.run(
+            node._get_consolidation_decisions(
+                substring_pairs, canonical_lookup, unique_entities, ctx
+            )
         )
 
         # Agent should NOT have been called (batch was empty after filtering)
@@ -127,10 +129,10 @@ def test_identical_canonical_names_auto_merged(mock_deps):
         # (they're already the same entity)
         assert len(merge_rules) == 0
 
-        # Should have cached the decision (using normalized forms)
+        # Should have cached the decision with target canonical name
         cache_key = ("bmpr2", "bmpr2 gene", "gene")
         assert cache_key in state.merge_decision_cache
-        assert state.merge_decision_cache[cache_key] is True
+        assert state.merge_decision_cache[cache_key] == "BMPR2"
 
 
 def test_different_canonical_names_sent_to_llm(mock_deps):
@@ -181,9 +183,9 @@ def test_different_canonical_names_sent_to_llm(mock_deps):
     # Should find substring relationship
     assert ("bmpr2", "bmpr2 gene") in substring_pairs["gene"]
 
-    # Now test that _get_global_merge_decisions DOES send these to LLM
+    # Now test that _get_consolidation_decisions DOES send these to LLM
     with patch(
-        "interaction_finder.extraction.nodes.get_entity_merge_agent"
+        "interaction_finder.extraction.nodes.get_entity_consolidation_agent"
     ) as mock_agent:
         # Setup mock agent that SHOULD be called
         mock_result = AsyncMock()
@@ -198,20 +200,21 @@ def test_different_canonical_names_sent_to_llm(mock_deps):
 
         canonical_lookup = build_canonical_lookup_from_unique_entities(unique_entities)
         ctx = GraphRunContext(state=state, deps=mock_deps)
-        merge_rules = asyncio.run(
-            node._get_global_merge_decisions(substring_pairs, canonical_lookup, ctx)
+        merge_rules, new_names = asyncio.run(
+            node._get_consolidation_decisions(
+                substring_pairs, canonical_lookup, unique_entities, ctx
+            )
         )
 
         # Agent SHOULD have been called
         mock_agent.return_value.run.assert_called_once()
 
-        # Check the prompt contains the correct canonical names
+        # Check the prompt contains the correct canonical names (new format: 'child' → 'parent')
         call_args = mock_agent.return_value.run.call_args
         prompt = call_args[0][0]
-        assert "Parent: 'BMPR2'" in prompt
-        assert "Child: 'BMPR2 gene'" in prompt
-        # Should NOT have identical names
-        assert "Parent: 'BMPR2'" in prompt and "Child: 'BMPR2'" not in prompt
+        assert "'BMPR2 gene' → 'BMPR2'" in prompt
+        # Should NOT have identical names in the pair
+        assert "'BMPR2' → 'BMPR2'" not in prompt
 
 
 def test_mixed_identical_and_different_pairs(mock_deps):
@@ -258,7 +261,7 @@ def test_mixed_identical_and_different_pairs(mock_deps):
     }
 
     with patch(
-        "interaction_finder.extraction.nodes.get_entity_merge_agent"
+        "interaction_finder.extraction.nodes.get_entity_consolidation_agent"
     ) as mock_agent:
         mock_result = AsyncMock()
         mock_result.output.decisions = []
@@ -271,8 +274,10 @@ def test_mixed_identical_and_different_pairs(mock_deps):
 
         canonical_lookup = build_canonical_lookup_from_unique_entities(unique_entities)
         ctx = GraphRunContext(state=state, deps=mock_deps)
-        merge_rules = asyncio.run(
-            node._get_global_merge_decisions(substring_pairs, canonical_lookup, ctx)
+        merge_rules, new_names = asyncio.run(
+            node._get_consolidation_decisions(
+                substring_pairs, canonical_lookup, unique_entities, ctx
+            )
         )
 
         # Agent SHOULD be called (for the BMP9/BMPR2 pair)
@@ -286,7 +291,7 @@ def test_mixed_identical_and_different_pairs(mock_deps):
         assert prompt.count("BMPR2") == 1  # Only appears once (in the BMP9/BMPR2 pair)
 
         # Should have auto-merged the identical pair (no merge rule since same canonical)
-        # But should have cached the decision
+        # But should have cached the decision with target canonical name
         cache_key = ("bmpr2", "bmpr2 gene", "gene")
         assert cache_key in state.merge_decision_cache
-        assert state.merge_decision_cache[cache_key] is True
+        assert state.merge_decision_cache[cache_key] == "BMPR2"

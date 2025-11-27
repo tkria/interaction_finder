@@ -282,7 +282,13 @@ class IfetcherConfig(BaseModel):
                 50,
                 ge=1,
                 le=200,
-                description="Maximum number of entity merge decisions per LLM call",
+                description="Maximum number of entity consolidation decisions per LLM call",
+            )
+            max_rename_iterations: int = Field(
+                3,
+                ge=1,
+                le=10,
+                description="Maximum iterations for entity rename re-evaluation loop",
             )
             filter_irrelevant_relationships: bool = Field(
                 True,
