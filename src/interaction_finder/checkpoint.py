@@ -76,7 +76,7 @@ def _rehydrate_judgments_quotes(judgments: list[dict], pool: ResourcePool) -> No
         for assessment in iter_assessments(judgment):
             for quote in assessment.get("quotes", []):
                 inject(quote)
-            # Handle both old (EntityMention dict) and new (EntityRef tuple) structures
+            # Handle entity structures
             for entity_field in ["entity1", "entity2"]:
                 entity = assessment.get(entity_field)
                 if entity is None:
@@ -90,9 +90,44 @@ def _rehydrate_judgments_quotes(judgments: list[dict], pool: ResourcePool) -> No
                                 for quote in mention.get("quotes", []):
                                     inject(quote)
                 # Old EntityMention structure: {kind, name, quotes, ...}
-                elif isinstance(entity, dict):
-                    for quote in entity.get("quotes", []):
-                        inject(quote)
+                elif isinstance(entity, dict) and "kind" in entity and "name" in entity:
+                    _convert_legacy_entity_mention_to_ref(
+                        entity, inject, assessment, entity_field
+                    )
+
+
+# ============================================================================
+# BACKWARD COMPATIBILITY: Legacy EntityMention → EntityRef conversion
+# Remove this section after migration period (target: v0.4.0+)
+# ============================================================================
+def _convert_legacy_entity_mention_to_ref(
+    entity: dict,
+    inject: callable,
+    assessment: dict,
+    entity_field: str,
+) -> None:
+    """Convert pre-v0.3.0 EntityMention dict to EntityRef tuple format.
+
+    Legacy format (EntityMention dict):
+        {"kind": "gene", "name": "BRCA1", "aliases": [...], "quotes": [...], "reasoning": "..."}
+
+    New format (EntityRef tuple):
+        ["BRCA1", [{"kind": "gene", "name": "BRCA1", "aliases": [...], "quotes": [...], "reasoning": "..."}]]
+
+    Modifies assessment in-place, replacing entity_field with converted EntityRef tuple.
+
+    This enables loading checkpoints created before the EntityRef refactoring (commit c57e4d3).
+    """
+    # Rehydrate quotes in the old EntityMention dict
+    for quote in entity.get("quotes", []):
+        inject(quote)
+    # Convert: EntityMention dict → EntityRef tuple [canonical, [mention]]
+    canonical = entity["name"]
+    mention = entity  # The entire dict becomes the single mention
+    assessment[entity_field] = [canonical, [mention]]
+
+
+# ============================================================================
 
 
 class KeywordsStageData(BaseModel):
