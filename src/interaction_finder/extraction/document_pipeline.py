@@ -29,7 +29,6 @@ from interaction_finder.extraction.utils import (
     build_text_region,
     collect_relevant_text_for_quotes,
     find_best_entity_match,
-    identify_proximal_sets,
     make_entity_pair_key,
     normalize_for_comparison,
     strip_kind_annotation,
@@ -91,6 +90,9 @@ For each entity of the specified types relevant to the topic, provide:
             agent, name=f"ExtractDocumentEntities: {resource.title[:60]}"
         ):
             async with deps.agent_semaphore:
+                # Mark document as in-progress now that we've acquired the semaphore
+                if deps.progress:
+                    deps.progress["Processed"].work()
                 result = await agent.run(prompt, deps=deps, usage=usage)
     except (TimeoutError, ConnectionError, ValueError) as e:
         deps.logger.error(
@@ -441,7 +443,15 @@ Assess evidence for an entity association.
             agent, name=f"AssessPair: {entity1.canonical} ⇌ {entity2.canonical}"
         ):
             async with deps.agent_semaphore:
-                result = await agent.run(prompt, deps=deps, usage=usage)
+                # Mark pair as in-progress now that we've acquired the semaphore
+                if deps.progress:
+                    deps.progress["Pairs assessed"].work()
+                try:
+                    result = await agent.run(prompt, deps=deps, usage=usage)
+                finally:
+                    # Mark pair as done when assessment completes or fails
+                    if deps.progress:
+                        deps.progress["Pairs assessed"].done()
     except (TimeoutError, ConnectionError, ValueError) as e:
         deps.logger.error(
             f"Pair assessment failed for {entity1.canonical}-{entity2.canonical}: "

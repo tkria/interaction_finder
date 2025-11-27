@@ -213,16 +213,13 @@ class ProcessDocumentsNode(BaseNode[State, Deps, ExtractionResult]):
         self, resource: Resource, ctx: GraphRunContext[State, Deps]
     ):
         """Process a single document through the full per-document pipeline."""
-        # Increment in-progress counter when work starts (tight scoping)
-        if ctx.deps.progress:
-            ctx.deps.progress["Processed"].work()
-
         with logfire.span(
             f"Document {resource.id.id}: {resource.title[:60]}",
             url=resource.id.url,
         ):
             try:
                 # Stage 1: Extract entities with quote validation
+                # Note: .work() is called inside extract_document_entities after semaphore acquisition
                 (
                     entities,
                     quotes_validated,
@@ -312,31 +309,24 @@ class ProcessDocumentsNode(BaseNode[State, Deps, ExtractionResult]):
                     return  # No pairs found in proximal sets
 
                 # Stage 5: Deduplicate and assess pairs
+                # Note: .work() and .done() are called per-pair inside assess_single_pair
                 if ctx.deps.progress:
                     ctx.deps.progress["Pairs assessed"].total += len(pairs)
-                    ctx.deps.progress["Pairs assessed"].work(len(pairs))
                     ctx.deps.progress["Pairs assessed"].activate()
                     ctx.deps.progress.set_status("Assessing pairs")
 
-                try:
-                    assessments = await assess_document_pairs(
-                        pairs,
-                        ctx.state.validated_entities_by_resource[resource.id],
-                        resource,
-                        ctx.state.topic,
-                        ctx.deps.config.tools.extraction.region_padding_chunks,
-                        ctx.deps.config,
-                        ctx.deps,
-                    )
+                assessments = await assess_document_pairs(
+                    pairs,
+                    ctx.state.validated_entities_by_resource[resource.id],
+                    resource,
+                    ctx.state.topic,
+                    ctx.deps.config.tools.extraction.region_padding_chunks,
+                    ctx.deps.config,
+                    ctx.deps,
+                )
 
-                    if assessments:
-                        ctx.state.pair_assessments_by_resource[resource.id] = (
-                            assessments
-                        )
-                finally:
-                    # Mark pairs as done (moves from in_progress to completed)
-                    if ctx.deps.progress:
-                        ctx.deps.progress["Pairs assessed"].done(len(pairs))
+                if assessments:
+                    ctx.state.pair_assessments_by_resource[resource.id] = assessments
 
             except Exception as e:
                 # Log error but don't fail entire pipeline
@@ -572,17 +562,17 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
                             norm1_established = norm1 in phase1_winners
                             norm2_established = norm2 in phase1_winners
                             if norm1_established and not norm2_established:
-                                parent_norm, child_norm = norm1, norm2
+                                child_norm = norm2
                                 parent_canonical = canonical1
                             elif norm2_established and not norm1_established:
-                                parent_norm, child_norm = norm2, norm1
+                                child_norm = norm1
                                 parent_canonical = canonical2
                             elif len(norm1) <= len(norm2):
                                 # Neither or both established: fall back to shorter = parent
-                                parent_norm, child_norm = norm1, norm2
+                                child_norm = norm2
                                 parent_canonical = canonical1
                             else:
-                                parent_norm, child_norm = norm2, norm1
+                                child_norm = norm1
                                 parent_canonical = canonical2
                             auto_merge_rules[(child_norm, kind)] = (
                                 parent_canonical,
@@ -901,6 +891,8 @@ For each pair, decide the appropriate action (skip, merge, or rename)."""
             target_by_norm_and_kind.setdefault(target_key, target)
         for resource_id, entities in ctx.state.validated_entities_by_resource.items():
             # Build new EntityRefs without mutating underlying mentions
+            from interaction_finder.extraction.models import EntityMention
+
             grouped: dict[str, list[EntityMention]] = defaultdict(list)
 
             for child_name, ref in entities.items():
@@ -1488,10 +1480,6 @@ Provide: accepted (true/false), relationship (selected label), confidence (high/
         ctx: GraphRunContext[State, Deps],
     ) -> tuple[EntityPairKey, PairJudgment]:
         """Make final judgment on a single pair."""
-        # Increment in-progress counter when work starts (tight scoping)
-        if ctx.deps.progress:
-            ctx.deps.progress["Unique pairs"].work()
-
         try:
             from interaction_finder.extraction.utils import build_pair_spread
 
@@ -1503,7 +1491,10 @@ Provide: accepted (true/false), relationship (selected label), confidence (high/
                 assessments
             )
             if can_accept:
-                # Create judgment without LLM call
+                # Create judgment without LLM call (no semaphore needed)
+                # Mark as in-progress for consistent counter behavior
+                if ctx.deps.progress:
+                    ctx.deps.progress["Unique pairs"].work()
                 first_assessment = assessments[0]
                 judgment = PairJudgment(
                     entity1=SimpleEntity(
@@ -1542,12 +1533,18 @@ Provide: accepted (true/false), relationship (selected label), confidence (high/
                     name=f"JudgeCrossDocumentNode: {pair_key.entity1_name} ⇌ {pair_key.entity2_name}",
                 ):
                     async with ctx.deps.agent_semaphore:
+                        # Mark pair as in-progress now that we've acquired the semaphore
+                        if ctx.deps.progress:
+                            ctx.deps.progress["Unique pairs"].work()
                         result = await agent.run(prompt, deps=ctx.deps, usage=usage)
             except (TimeoutError, ConnectionError, ValueError) as e:
                 ctx.deps.logger.error(
                     f"Cross-document judgment failed for {pair_key}: "
                     f"{type(e).__name__}: {e}"
                 )
+                # Mark as in-progress for error case (will be marked done in finally)
+                if ctx.deps.progress:
+                    ctx.deps.progress["Unique pairs"].work()
                 # Default to rejection with low confidence
                 first_assessment = assessments[0]
                 return (
@@ -1733,8 +1730,7 @@ class SweepCoMentionsNode(BaseNode[State, Deps, ExtractionResult]):
             # Step 7: Assess regions concurrently
             async def assess_region(region):
                 """Assess all pairs in a region with a single LLM call."""
-                # Mark region as in-progress
-                ctx.deps.progress["Regions"].work()
+                # Note: .work() is called inside assess_co_mention_region after semaphore acquisition
                 try:
                     resource = ctx.deps.resource_pool.get(region.resource_id)
                     if resource is None:

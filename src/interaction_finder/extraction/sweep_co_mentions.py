@@ -660,6 +660,9 @@ Provide supporting quotes for confirmed relationships."""
             agent, name=f"AssessRegion: {len(region.candidate_pairs)} pairs"
         ):
             async with deps.agent_semaphore:
+                # Mark region as in-progress now that we've acquired the semaphore
+                if deps.progress:
+                    deps.progress["Regions"].work()
                 result = await agent.run(prompt, deps=deps, usage=usage)
     except (TimeoutError, ConnectionError, ValueError) as e:
         deps.logger.error(
