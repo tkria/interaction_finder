@@ -99,5 +99,6 @@ async def run_extraction(
                 permitted_pairs=permitted_pairs,
                 judgments=result.output.judgments,
                 metadata=result.output.metadata,
+                consolidation_rules=result.output.consolidation_rules,
             ),
         )

@@ -14,7 +14,8 @@ to enable proper JSON serialization via model_dump().
 from dataclasses import dataclass
 from typing import Iterable, Literal, NamedTuple
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_serializer, model_validator
+from pydantic.functional_validators import SkipValidation
 
 from interaction_finder.resources import ResourceId, ResourcePool, ResourceQuote
 
@@ -23,8 +24,7 @@ from interaction_finder.resources import ResourceId, ResourcePool, ResourceQuote
 # =============================================================================
 
 
-@dataclass
-class EntityMention:
+class EntityMention(BaseModel):
     """Entity found in a single resource (after quote validation).
 
     This is the validated, resource-quote-enriched version of EntityInfo.
@@ -41,7 +41,9 @@ class EntityMention:
     kind: str
     name: str
     aliases: list[str]
-    quotes: list[ResourceQuote]
+    quotes: SkipValidation[
+        list[ResourceQuote]
+    ]  # Skip validation to avoid Resource copying
     reasoning: str
 
 
@@ -78,20 +80,31 @@ class EntityPairKey(NamedTuple):
     entity2_name: str
 
 
-class EntityRef(NamedTuple):
-    """Reference to an entity with mutable canonical name and immutable provenance.
+class EntityRef(BaseModel):
+    """Reference to an entity with mutable canonical name and provenance.
 
     Separates identity (canonical name, updated by consolidation) from provenance
-    (original extractions, preserved immutably). This enables tracing what was
+    (original extractions, preserved as mentions). This enables tracing what was
     originally extracted vs what resulted from consolidation decisions.
+
+    During JSON serialization, EntityRef is replaced with just the canonical name
+    string. The full entity data is collected in an 'entities' dict at the
+    checkpoint level, similar to how ResourceQuote references the ResourcePool.
 
     Attributes:
         canonical: Current canonical name (may be updated by consolidation rules)
-        mentions: Original EntityMention(s) from extraction (immutable, append-only)
+        mentions: Original EntityMention(s) from extraction (append-only)
     """
 
     canonical: str
     mentions: list[EntityMention]
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, serializer, info):
+        """Replace full EntityRef with canonical string during JSON serialization."""
+        if info.mode == "json":
+            return self.canonical
+        return serializer(self)
 
     def aliases(self) -> list[str]:
         """Aggregate aliases from all mentions (ordered, deduped)."""
@@ -478,10 +491,36 @@ class ExtractionResult(BaseModel):
         description="Entity consolidation rules applied during extraction",
     )
 
+    @model_serializer(mode="wrap")
+    def _serialize(self, serializer, info):
+        """Collect unique EntityRefs and serialize with entities dict."""
+        if info.mode != "json":
+            return serializer(self)
+
+        # Collect unique EntityRefs before serialization
+        entities: dict[str, EntityRef] = {}
+        for judgment in self.judgments:
+            for assessment in judgment.iter_assessments():
+                if assessment.entity1.canonical not in entities:
+                    entities[assessment.entity1.canonical] = assessment.entity1
+                if assessment.entity2.canonical not in entities:
+                    entities[assessment.entity2.canonical] = assessment.entity2
+
+        # Do default serialization (EntityRefs become strings via their serializer)
+        data = serializer(self)
+
+        # Manually serialize entities dict (forcing full serialization, not strings)
+        data["entities"] = {
+            canonical: ref.model_dump(mode="python")
+            for canonical, ref in entities.items()
+        }
+
+        return data
+
     @model_validator(mode="before")
     @classmethod
     def _rehydrate_quotes(cls, data):
-        """Restore Resource objects in quotes from resource_url references."""
+        """Restore Resource and EntityRef objects from URL/canonical references."""
         from interaction_finder.checkpoint import (
             _needs_rehydration,
             _rehydrate_judgments_quotes,
@@ -493,5 +532,6 @@ class ExtractionResult(BaseModel):
         if not _needs_rehydration(judgments):
             return data
         pool = ResourcePool.model_validate(data["resources"])
-        _rehydrate_judgments_quotes(judgments, pool)
+        entities = data.get("entities")
+        _rehydrate_judgments_quotes(judgments, pool, entities)
         return data

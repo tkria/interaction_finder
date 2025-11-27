@@ -856,6 +856,9 @@ class Resource(BaseModel):
         if chunks is None:
             chunks = [(0, len(text))]
 
+        # Remove normalized_text from data if present (will be computed from text)
+        data.pop("normalized_text", None)
+
         super().__init__(
             id=id,
             title=title,

@@ -16,6 +16,7 @@ except ImportError:
 from interaction_finder.checkpoint import ExtractionStageData, PipelineCheckpoint
 from interaction_finder.extraction.models import (
     EntityMention,
+    EntityRef,
     ExtractionMetadata,
     ExtractionResult,
     PairAssessment,
@@ -82,10 +83,17 @@ def create_test_checkpoint(
                 reasoning=f"Test reasoning for Entity{pair_idx}_B",
             )
 
+            entity1_ref = EntityRef(
+                canonical=f"Entity{pair_idx}_A", mentions=[entity1_mention]
+            )
+            entity2_ref = EntityRef(
+                canonical=f"Entity{pair_idx}_B", mentions=[entity2_mention]
+            )
+
             assessment = PairAssessment(
                 resource_id=resource.id,
-                entity1=entity1_mention,
-                entity2=entity2_mention,
+                entity1=entity1_ref,
+                entity2=entity2_ref,
                 relationship="associated_with",
                 quotes=[quote],
                 confidence="high",

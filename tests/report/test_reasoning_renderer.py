@@ -326,7 +326,7 @@ class TestReasoningTemplateRenderer:
         # Should contain pair information
         assert "BRCA1" in result
         assert "Cancer" in result
-        assert "associated_with" in result
+        assert "associated with" in result  # Relationship is formatted with space
         assert "high" in result
 
         # Should have highlighted reasoning

@@ -7,6 +7,7 @@ import pytest
 from interaction_finder.checkpoint import ExtractionStageData, PipelineCheckpoint
 from interaction_finder.extraction.models import (
     EntityMention,
+    EntityRef,
     ExtractionMetadata,
     PairAssessment,
     PairJudgment,
@@ -36,10 +37,12 @@ def create_minimal_checkpoint() -> PipelineCheckpoint:
         reasoning="test",
     )
 
+    entity_ref = EntityRef(canonical="BRCA1", mentions=[entity_mention])
+
     assessment = PairAssessment(
         resource_id=resource.id,
-        entity1=entity_mention,
-        entity2=entity_mention,
+        entity1=entity_ref,
+        entity2=entity_ref,
         relationship="test",
         quotes=[quote],
         confidence="high",

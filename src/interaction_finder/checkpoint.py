@@ -10,7 +10,7 @@ accumulates resources across all stages.
 
 from typing import TYPE_CHECKING, Literal, Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, model_serializer, model_validator
 
 from interaction_finder.resources import ResourcePool
 from interaction_finder.search.models import SearchResult
@@ -18,6 +18,8 @@ from interaction_finder.version import get_version_string
 
 if TYPE_CHECKING:
     from interaction_finder.extraction.models import (
+        ConsolidationRule,
+        EntityRef,
         ExtractionMetadata,
         PairJudgment,
     )
@@ -47,10 +49,22 @@ def _needs_rehydration(judgments: list[dict]) -> bool:
     return False
 
 
-def _rehydrate_judgments_quotes(judgments: list[dict], pool: ResourcePool) -> None:
-    """Rehydrate ResourceQuote objects by replacing resource_url with Resource.
+def _rehydrate_judgments_quotes(
+    judgments: list[dict],
+    pool: ResourcePool,
+    entities: dict[str, dict] | None = None,
+) -> None:
+    """Rehydrate ResourceQuote and EntityRef objects.
+
+    Replaces resource_url strings with Resource objects from pool, and
+    canonical entity name strings with full EntityRef dicts from entities dict.
 
     Modifies judgments in-place. Shared by PipelineCheckpoint and ExtractionResult.
+
+    Parameters:
+        judgments: List of judgment dicts to modify in-place
+        pool: ResourcePool to resolve resource_url references
+        entities: Optional dict mapping canonical names to EntityRef dicts
     """
 
     def iter_assessments(judgment: dict):
@@ -64,70 +78,65 @@ def _rehydrate_judgments_quotes(judgments: list[dict], pool: ResourcePool) -> No
                 if isinstance(a, dict):
                     yield a
 
-    def inject(quote: dict):
-        """Replace resource_url with Resource from pool."""
+    def inject_quote(quote: dict):
+        """Replace resource_url with Resource from pool (if needed)."""
+        # Skip if already has resource object (not yet serialized)
+        if "resource" in quote:
+            return
+        # Otherwise rehydrate from resource_url
+        if "resource_url" not in quote:
+            return  # Nothing to do
         resource = pool.get(quote["resource_url"])
         if resource is None:
             raise ValueError(f"Resource {quote['resource_url']} not in pool")
         quote["resource"] = resource
         del quote["resource_url"]
 
+    def inject_entity(entity_ref: str | dict | list) -> dict | list:
+        """Replace canonical string with full EntityRef dict, or rehydrate quotes in existing dict."""
+        # String reference - look up full entity from entities dict
+        if isinstance(entity_ref, str):
+            if entities is None:
+                raise ValueError(
+                    f"Entity string reference '{entity_ref}' found but no entities dict provided"
+                )
+            if entity_ref not in entities:
+                raise ValueError(f"Entity '{entity_ref}' not found in entities dict")
+            # Return the full entity dict, but need to add canonical field
+            entity_dict = entities[entity_ref].copy()
+            entity_dict["canonical"] = entity_ref
+            return entity_dict
+        # Already a dict or list - rehydrate quotes within it
+        return entity_ref
+
     for judgment in judgments:
+        # Rehydrate top-level judgment entities (if present as strings)
+        for entity_field in ["entity1", "entity2"]:
+            if entity_field in judgment:
+                judgment[entity_field] = inject_entity(judgment[entity_field])
+
         for assessment in iter_assessments(judgment):
+            # Rehydrate assessment-level quotes
             for quote in assessment.get("quotes", []):
-                inject(quote)
-            # Handle entity structures
+                inject_quote(quote)
+
+            # Rehydrate entity structures
             for entity_field in ["entity1", "entity2"]:
                 entity = assessment.get(entity_field)
                 if entity is None:
                     continue
-                # New EntityRef structure: [canonical, [mentions]]
-                if isinstance(entity, (list, tuple)) and len(entity) == 2:
-                    mentions = entity[1]
-                    if isinstance(mentions, list):
-                        for mention in mentions:
-                            if isinstance(mention, dict):
-                                for quote in mention.get("quotes", []):
-                                    inject(quote)
-                # Old EntityMention structure: {kind, name, quotes, ...}
-                elif isinstance(entity, dict) and "kind" in entity and "name" in entity:
-                    _convert_legacy_entity_mention_to_ref(
-                        entity, inject, assessment, entity_field
-                    )
 
+                # String reference (new hoisted format) - replace with full EntityRef dict
+                if isinstance(entity, str):
+                    assessment[entity_field] = inject_entity(entity)
+                    entity = assessment[entity_field]
 
-# ============================================================================
-# BACKWARD COMPATIBILITY: Legacy EntityMention → EntityRef conversion
-# Remove this section after migration period (target: v0.4.0+)
-# ============================================================================
-def _convert_legacy_entity_mention_to_ref(
-    entity: dict,
-    inject: callable,
-    assessment: dict,
-    entity_field: str,
-) -> None:
-    """Convert pre-v0.3.0 EntityMention dict to EntityRef tuple format.
-
-    Legacy format (EntityMention dict):
-        {"kind": "gene", "name": "BRCA1", "aliases": [...], "quotes": [...], "reasoning": "..."}
-
-    New format (EntityRef tuple):
-        ["BRCA1", [{"kind": "gene", "name": "BRCA1", "aliases": [...], "quotes": [...], "reasoning": "..."}]]
-
-    Modifies assessment in-place, replacing entity_field with converted EntityRef tuple.
-
-    This enables loading checkpoints created before the EntityRef refactoring (commit c57e4d3).
-    """
-    # Rehydrate quotes in the old EntityMention dict
-    for quote in entity.get("quotes", []):
-        inject(quote)
-    # Convert: EntityMention dict → EntityRef tuple [canonical, [mention]]
-    canonical = entity["name"]
-    mention = entity  # The entire dict becomes the single mention
-    assessment[entity_field] = [canonical, [mention]]
-
-
-# ============================================================================
+                # EntityRef dict structure: {canonical, mentions}
+                if isinstance(entity, dict) and "mentions" in entity:
+                    for mention in entity.get("mentions", []):
+                        if isinstance(mention, dict):
+                            for quote in mention.get("quotes", []):
+                                inject_quote(quote)
 
 
 class KeywordsStageData(BaseModel):
@@ -187,6 +196,10 @@ class ExtractionStageData(BaseModel):
 
     Contains entity pair judgments with full provenance and extraction metadata.
     Does not have resource_urls since extraction doesn't add new resources.
+
+    EntityRef objects in judgments are dehydrated to canonical name strings during
+    serialization, with full entity data stored in the entities dict (similar to
+    how ResourceQuote references ResourcePool).
     """
 
     target_entity_types: list[str] = Field(
@@ -199,6 +212,36 @@ class ExtractionStageData(BaseModel):
         description="All pair judgments (accepted and rejected)"
     )
     metadata: "ExtractionMetadata" = Field(description="Extraction statistics")
+    consolidation_rules: list["ConsolidationRule"] = Field(
+        default_factory=list,
+        description="Entity consolidation rules applied during extraction",
+    )
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, serializer, info):
+        """Collect unique EntityRefs and serialize with entities dict."""
+        if info.mode != "json":
+            return serializer(self)
+
+        # Collect unique EntityRefs before serialization
+        entities: dict[str, "EntityRef"] = {}
+        for judgment in self.judgments:
+            for assessment in judgment.iter_assessments():
+                if assessment.entity1.canonical not in entities:
+                    entities[assessment.entity1.canonical] = assessment.entity1
+                if assessment.entity2.canonical not in entities:
+                    entities[assessment.entity2.canonical] = assessment.entity2
+
+        # Do default serialization (EntityRefs become strings via their serializer)
+        data = serializer(self)
+
+        # Manually serialize entities dict (forcing full serialization, not strings)
+        data["entities"] = {
+            canonical: ref.model_dump(mode="python")
+            for canonical, ref in entities.items()
+        }
+
+        return data
 
 
 class PipelineCheckpoint(BaseModel):
@@ -259,19 +302,21 @@ class PipelineCheckpoint(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _rehydrate_extraction_quotes(cls, data):
-        """Rehydrate ResourceQuote objects in extraction stage if present."""
+        """Rehydrate ResourceQuote and EntityRef objects in extraction stage if present."""
         if not isinstance(data, dict):
             return data
         extraction = data.get("extraction")
         if not isinstance(extraction, dict):
             return data
         judgments = extraction.get("judgments", [])
-        if not _needs_rehydration(judgments):
+        if not judgments:
             return data
+        # Always rehydrate to handle both quote rehydration and entity tuple→dict conversion
         if "resources" not in data:
             raise ValueError("Cannot rehydrate quotes: resources pool missing")
         pool = ResourcePool.model_validate(data["resources"])
-        _rehydrate_judgments_quotes(judgments, pool)
+        entities = extraction.get("entities")
+        _rehydrate_judgments_quotes(judgments, pool, entities)
         return data
 
 
@@ -282,6 +327,8 @@ def _rebuild_models():
     forward references used during TYPE_CHECKING.
     """
     from interaction_finder.extraction.models import (
+        ConsolidationRule,
+        EntityRef,
         ExtractionMetadata,
         PairJudgment,
     )

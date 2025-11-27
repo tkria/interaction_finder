@@ -140,7 +140,8 @@ def test_pair_assessments_see_entity_merges_via_shared_references(mock_deps):
     resource1 = ResourceId(url="http://doc1.com", id="doc1")
 
     # Same doc: Parent and child entity
-    brca_parent = EntityMention(
+    # Use model_construct to bypass validation (test doesn't need real ResourceQuote objects)
+    brca_parent = EntityMention.model_construct(
         kind="gene",
         name="BRCA",
         aliases=[],
@@ -148,7 +149,7 @@ def test_pair_assessments_see_entity_merges_via_shared_references(mock_deps):
         reasoning="Parent",
     )
 
-    brca_child = EntityMention(
+    brca_child = EntityMention.model_construct(
         kind="gene",
         name="brca",
         aliases=[],
@@ -208,7 +209,7 @@ def test_entity_mutation_contract_documented(mock_deps):
     If this test fails, the mutation contract has changed.
     """
     # Create an entity
-    entity = EntityMention(
+    entity = EntityMention.model_construct(
         kind="gene",
         name="BRCA1",
         aliases=["Breast Cancer 1"],
