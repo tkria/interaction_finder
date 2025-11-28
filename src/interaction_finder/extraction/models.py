@@ -16,6 +16,7 @@ from typing import Iterable, Literal, NamedTuple
 
 from pydantic import BaseModel, ConfigDict, Field, model_serializer, model_validator
 from pydantic.functional_validators import SkipValidation
+from pydantic_core import to_jsonable_python
 
 from interaction_finder.resources import ResourceId, ResourcePool, ResourceQuote
 
@@ -509,9 +510,16 @@ class ExtractionResult(BaseModel):
         # Do default serialization (EntityRefs become strings via their serializer)
         data = serializer(self)
 
-        # Manually serialize entities dict (forcing full serialization, not strings)
+        # Manually serialize entities dict with full EntityRef data
+        # We serialize mentions in JSON mode (to convert ResourceQuote.resource to resource_url)
+        # but keep the top-level EntityRef structure (canonical + mentions)
         data["entities"] = {
-            canonical: ref.model_dump(mode="python")
+            canonical: {
+                "canonical": ref.canonical,
+                "mentions": to_jsonable_python(
+                    ref.mentions, fallback=lambda x: x.model_dump(mode="json")
+                ),
+            }
             for canonical, ref in entities.items()
         }
 

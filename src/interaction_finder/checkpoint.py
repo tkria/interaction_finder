@@ -11,8 +11,9 @@ accumulates resources across all stages.
 from typing import TYPE_CHECKING, Literal, Optional
 
 from pydantic import BaseModel, Field, model_serializer, model_validator
+from pydantic_core import to_jsonable_python
 
-from interaction_finder.resources import ResourcePool
+from interaction_finder.resources import ResourcePool, ResourceQuote
 from interaction_finder.search.models import SearchResult
 from interaction_finder.version import get_version_string
 
@@ -105,6 +106,16 @@ def _rehydrate_judgments_quotes(
             # Return the full entity dict, but need to add canonical field
             entity_dict = entities[entity_ref].copy()
             entity_dict["canonical"] = entity_ref
+            # Rehydrate quotes in mentions within this entity
+            for mention in entity_dict.get("mentions", []):
+                if isinstance(mention, dict):
+                    quotes_list = mention.get("quotes", [])
+                    # Replace quote dicts with ResourceQuote objects
+                    for i, quote in enumerate(quotes_list):
+                        if isinstance(quote, dict):
+                            inject_quote(quote)
+                            # Construct ResourceQuote from dict
+                            quotes_list[i] = ResourceQuote.model_construct(**quote)
             return entity_dict
         # Already a dict or list - rehydrate quotes within it
         return entity_ref
@@ -135,8 +146,15 @@ def _rehydrate_judgments_quotes(
                 if isinstance(entity, dict) and "mentions" in entity:
                     for mention in entity.get("mentions", []):
                         if isinstance(mention, dict):
-                            for quote in mention.get("quotes", []):
-                                inject_quote(quote)
+                            quotes_list = mention.get("quotes", [])
+                            # Replace quote dicts with ResourceQuote objects
+                            for i, quote in enumerate(quotes_list):
+                                if isinstance(quote, dict):
+                                    inject_quote(quote)
+                                    # Construct ResourceQuote from dict
+                                    quotes_list[i] = ResourceQuote.model_construct(
+                                        **quote
+                                    )
 
 
 class KeywordsStageData(BaseModel):
@@ -235,9 +253,16 @@ class ExtractionStageData(BaseModel):
         # Do default serialization (EntityRefs become strings via their serializer)
         data = serializer(self)
 
-        # Manually serialize entities dict (forcing full serialization, not strings)
+        # Manually serialize entities dict with full EntityRef data
+        # We serialize mentions in JSON mode (to convert ResourceQuote.resource to resource_url)
+        # but keep the top-level EntityRef structure (canonical + mentions)
         data["entities"] = {
-            canonical: ref.model_dump(mode="python")
+            canonical: {
+                "canonical": ref.canonical,
+                "mentions": to_jsonable_python(
+                    ref.mentions, fallback=lambda x: x.model_dump(mode="json")
+                ),
+            }
             for canonical, ref in entities.items()
         }
 

@@ -734,6 +734,116 @@ class TestPairJudgmentSerialization:
 class TestExtractionResultRehydration:
     """Tests for ExtractionResult serialization/deserialization."""
 
+    def test_entities_dict_uses_resource_url_not_full_resource(self):
+        """Verify entities dict serializes ResourceQuote with resource_url, not full Resource."""
+        pool = ResourcePool()
+        resource = pool.add(
+            url="http://example.com/doc",
+            title="Doc",
+            document_text="Doc text with BRCA1 gene mentioned multiple times.",
+        )
+
+        def make_quote(text: str) -> ResourceQuote:
+            return ResourceQuote.model_construct(
+                resource=resource,
+                query_text=text,
+                spans=[(0, len(text))],
+                is_disjoint=False,
+                fuzzy_corrected=False,
+                original_query=None,
+                fuzzy_similarity=None,
+            )
+
+        from interaction_finder.extraction.models import EntityRef
+
+        entity1 = EntityMention(
+            kind="gene",
+            name="BRCA1",
+            aliases=["BRCA1"],
+            quotes=[make_quote("BRCA1")],
+            reasoning="test entity 1",
+        )
+        entity2 = EntityMention(
+            kind="disease",
+            name="Cancer",
+            aliases=["Cancer"],
+            quotes=[make_quote("Cancer")],
+            reasoning="test entity 2",
+        )
+
+        assessment = PairAssessment(
+            resource_id=resource.id,
+            entity1=EntityRef(canonical=entity1.name, mentions=[entity1]),
+            entity2=EntityRef(canonical=entity2.name, mentions=[entity2]),
+            relationship="increases_risk_of",
+            quotes=[make_quote("pair quote")],
+            confidence="high",
+            reasoning="supporting evidence",
+        )
+
+        judgment = PairJudgment(
+            entity1=SimpleEntity(name="BRCA1", kind="gene", aliases=["BRCA1"]),
+            entity2=SimpleEntity(name="Cancer", kind="disease", aliases=["Cancer"]),
+            relationship="increases_risk_of",
+            spread=PairSpread(supporting=[assessment]),
+            accepted=True,
+            confidence="high",
+            reasoning="Strong evidence",
+        )
+
+        metadata = ExtractionMetadata(
+            topic="Topic",
+            resource_count=1,
+            total_entities_found=2,
+            entities_after_validation=2,
+            entities_merged=0,
+            merge_cache_hits=0,
+            merge_cache_misses=0,
+            proximal_sets_found=0,
+            total_pairs_found=1,
+            pairs_accepted=1,
+            pairs_rejected=0,
+            quotes_validated=3,
+            quotes_failed=0,
+        )
+
+        result = ExtractionResult(
+            topic="Topic",
+            target_entity_types=["gene", "disease"],
+            permitted_pairs={"gene": ["disease"], "disease": ["gene"]},
+            resources=pool,
+            judgments=[judgment],
+            metadata=metadata,
+        )
+
+        # Serialize to JSON
+        serialized = result.model_dump(mode="json")
+
+        # Check that entities dict exists
+        assert "entities" in serialized
+        assert "BRCA1" in serialized["entities"]
+        assert "Cancer" in serialized["entities"]
+
+        # Check that entity mentions have quotes with resource_url (not full resource)
+        brca1_entity = serialized["entities"]["BRCA1"]
+        assert "mentions" in brca1_entity
+        assert len(brca1_entity["mentions"]) == 1
+
+        first_mention = brca1_entity["mentions"][0]
+        assert "quotes" in first_mention
+        assert len(first_mention["quotes"]) == 1
+
+        first_quote = first_mention["quotes"][0]
+        # The bug: this would have "resource" with full Resource object
+        # The fix: should have "resource_url" with just the URL string
+        assert "resource_url" in first_quote, (
+            "Quote should have resource_url, not resource"
+        )
+        assert "resource" not in first_quote, (
+            "Quote should not have full resource object"
+        )
+        assert first_quote["resource_url"] == resource.id.url
+
     def test_rehydrate_spread_based_judgments(self):
         """Ensure rehydration injects Resource objects for spread assessments."""
         pool = ResourcePool()
