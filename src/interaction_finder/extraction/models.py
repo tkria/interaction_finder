@@ -242,8 +242,8 @@ class RelationshipConsolidation(BaseModel):
     """LLM output: combined mapping and polarity classification for one relationship.
 
     This unified model handles both semantic consolidation (merging synonyms)
-    and polarity classification (supporting/refuting/neutral/irrelevant) in a
-    single operation, as both require understanding topic-relationship semantics.
+    and polarity classification (positive/negative/neutral/irrelevant) in a
+    single operation, as both require understanding the relationship semantics.
     """
 
     original: str = Field(
@@ -252,8 +252,8 @@ class RelationshipConsolidation(BaseModel):
     consolidated: str = Field(
         description="Canonical relationship label (may equal original)", min_length=1
     )
-    polarity: Literal["supporting", "refuting", "neutral", "irrelevant"] = Field(
-        description="Semantic polarity of this relationship relative to research topic"
+    polarity: Literal["positive", "negative", "neutral", "irrelevant"] = Field(
+        description="Biological polarity: positive (promoting/increasing), negative (inhibiting/decreasing), neutral (ambiguous direction), or irrelevant (wrong level of analysis)"
     )
     reasoning: str = Field(
         min_length=30,
@@ -380,23 +380,22 @@ class PairAssessment(BaseModel):
 class PairSpread(BaseModel):
     """Assessments grouped by relationship polarity.
 
-    Organizes per-document assessments by the semantic polarity of their
-    relationship labels relative to the research topic. Polarity is derived
-    via lookup from relationship label to polarity mapping created during
-    consolidation.
+    Organizes per-document assessments by the biological polarity of their
+    relationship labels. Polarity is derived via lookup from relationship label
+    to polarity mapping created during consolidation.
 
-    This structure enables explicit synthesis of supporting vs refuting evidence
-    and identification of contentious pairs where evidence contradicts.
+    This structure enables explicit synthesis of positive vs negative evidence
+    and identification of contentious pairs where biological effects contradict.
 
     Attributes:
-        supporting: Assessments with relationships that support the topic
-        refuting: Assessments with relationships that refute/contradict the topic
-        neutral: Assessments with relationships that are relevant but not directional
+        positive: Assessments with promoting/increasing/activating relationships
+        negative: Assessments with inhibiting/decreasing/protective relationships
+        neutral: Assessments with ambiguous directionality
         irrelevant: Assessments with relationships orthogonal to research question
     """
 
-    supporting: list[PairAssessment] = Field(default_factory=list)
-    refuting: list[PairAssessment] = Field(default_factory=list)
+    positive: list[PairAssessment] = Field(default_factory=list)
+    negative: list[PairAssessment] = Field(default_factory=list)
     neutral: list[PairAssessment] = Field(default_factory=list)
     irrelevant: list[PairAssessment] = Field(default_factory=list)
 
@@ -432,8 +431,8 @@ class PairJudgment(BaseModel):
         structured ``spread`` attribute directly when possible.
         """
 
-        yield from self.spread.supporting
-        yield from self.spread.refuting
+        yield from self.spread.positive
+        yield from self.spread.negative
         yield from self.spread.neutral
         yield from self.spread.irrelevant
 

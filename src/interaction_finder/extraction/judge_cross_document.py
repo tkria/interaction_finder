@@ -68,7 +68,7 @@ based on evidence from multiple sources. You will receive:
 7. **Recency:** Have newer findings superseded older claims?
 
 **Special cases:**
-- Conflicting relationships (e.g., "activates" vs "inhibits") → investigate carefully, may indicate context-dependent effects
+- Conflicting biological effects (e.g., "activates" vs "inhibits", positive vs negative polarity) → investigate carefully, may indicate context-dependent effects
 - Single high-confidence + no other evidence → accept with medium confidence (verify but trust strong source)
 - All low confidence → reject unless evidence is consistently suggestive
 - Mixed confidence with contradictions → examine quotes carefully, decide on balance

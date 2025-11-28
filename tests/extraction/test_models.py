@@ -374,7 +374,7 @@ class TestPairJudgment:
             reasoning="refute",
         )
 
-        spread = PairSpread(supporting=[supporting], refuting=[refuting])
+        spread = PairSpread(positive=[supporting], negative=[refuting])
         judgment = PairJudgment(
             entity1=SimpleEntity(name="BRCA1", kind="gene", aliases=["BRCA1"]),
             entity2=SimpleEntity(name="Cancer", kind="disease", aliases=["Cancer"]),
@@ -397,8 +397,8 @@ class TestPairSpread:
     def test_empty_spread(self):
         """Test creating empty PairSpread."""
         spread = PairSpread()
-        assert len(spread.supporting) == 0
-        assert len(spread.refuting) == 0
+        assert len(spread.positive) == 0
+        assert len(spread.negative) == 0
         assert len(spread.neutral) == 0
         assert len(spread.irrelevant) == 0
 
@@ -436,9 +436,9 @@ class TestPairSpread:
             reasoning="test",
         )
 
-        spread = PairSpread(supporting=[assessment])
-        assert len(spread.supporting) == 1
-        assert len(spread.refuting) == 0
+        spread = PairSpread(positive=[assessment])
+        assert len(spread.positive) == 1
+        assert len(spread.negative) == 0
         assert len(spread.neutral) == 0
         assert len(spread.irrelevant) == 0
 
@@ -486,21 +486,21 @@ class TestPairSpread:
             reasoning="refuting evidence",
         )
 
-        spread = PairSpread(supporting=[assessment1], refuting=[assessment2])
+        spread = PairSpread(positive=[assessment1], negative=[assessment2])
 
         # Serialize to dict
         spread_dict = spread.model_dump()
-        assert "supporting" in spread_dict
-        assert "refuting" in spread_dict
-        assert len(spread_dict["supporting"]) == 1
-        assert len(spread_dict["refuting"]) == 1
+        assert "positive" in spread_dict
+        assert "negative" in spread_dict
+        assert len(spread_dict["positive"]) == 1
+        assert len(spread_dict["negative"]) == 1
 
         # Deserialize from dict
         spread_restored = PairSpread.model_validate(spread_dict)
-        assert len(spread_restored.supporting) == 1
-        assert len(spread_restored.refuting) == 1
-        assert spread_restored.supporting[0].relationship == "increases_risk_of"
-        assert spread_restored.refuting[0].relationship == "protects_against"
+        assert len(spread_restored.positive) == 1
+        assert len(spread_restored.negative) == 1
+        assert spread_restored.positive[0].relationship == "increases_risk_of"
+        assert spread_restored.negative[0].relationship == "protects_against"
 
     def test_spread_with_mixed_polarities(self):
         """Test PairSpread with assessments in multiple categories."""
@@ -568,21 +568,21 @@ class TestPairSpread:
         }
 
         spread = PairSpread(
-            supporting=[assessments["supporting"]],
-            refuting=[assessments["refuting"]],
+            positive=[assessments["supporting"]],
+            negative=[assessments["refuting"]],
             neutral=[assessments["neutral"]],
             irrelevant=[assessments["irrelevant"]],
         )
 
         # All categories should have exactly one assessment
-        assert len(spread.supporting) == 1
-        assert len(spread.refuting) == 1
+        assert len(spread.positive) == 1
+        assert len(spread.negative) == 1
         assert len(spread.neutral) == 1
         assert len(spread.irrelevant) == 1
 
         # Verify relationships are correct
-        assert spread.supporting[0].relationship == "increases_risk_of"
-        assert spread.refuting[0].relationship == "protects_against"
+        assert spread.positive[0].relationship == "increases_risk_of"
+        assert spread.negative[0].relationship == "protects_against"
         assert spread.neutral[0].relationship == "regulates"
         assert spread.irrelevant[0].relationship == "spatial_colocalization"
 
@@ -624,7 +624,7 @@ class TestPairJudgmentSerialization:
             reasoning="test",
         )
 
-        spread = PairSpread(supporting=[assessment])
+        spread = PairSpread(positive=[assessment])
 
         judgment = PairJudgment(
             entity1=SimpleEntity(name="BRCA1", kind="gene", aliases=["BRCA1"]),
@@ -639,16 +639,14 @@ class TestPairJudgmentSerialization:
         # Serialize
         judgment_dict = judgment.model_dump()
         assert "spread" in judgment_dict
-        assert "supporting" in judgment_dict["spread"]
-        assert len(judgment_dict["spread"]["supporting"]) == 1
+        assert "positive" in judgment_dict["spread"]
+        assert len(judgment_dict["spread"]["positive"]) == 1
 
         # Deserialize
         judgment_restored = PairJudgment.model_validate(judgment_dict)
         assert judgment_restored.accepted is True
-        assert len(judgment_restored.spread.supporting) == 1
-        assert (
-            judgment_restored.spread.supporting[0].relationship == "increases_risk_of"
-        )
+        assert len(judgment_restored.spread.positive) == 1
+        assert judgment_restored.spread.positive[0].relationship == "increases_risk_of"
 
     def test_judgment_with_contentious_spread(self):
         """Test judgment with both supporting and refuting evidence."""
@@ -697,7 +695,7 @@ class TestPairJudgmentSerialization:
         )
 
         spread = PairSpread(
-            supporting=[supporting_assessment], refuting=[refuting_assessment]
+            positive=[supporting_assessment], negative=[refuting_assessment]
         )
 
         judgment = PairJudgment(
@@ -711,15 +709,15 @@ class TestPairJudgmentSerialization:
         )
 
         # Verify contentious pair structure
-        assert len(judgment.spread.supporting) == 1
-        assert len(judgment.spread.refuting) == 1
+        assert len(judgment.spread.positive) == 1
+        assert len(judgment.spread.negative) == 1
 
         # Serialize and deserialize
         judgment_dict = judgment.model_dump()
         judgment_restored = PairJudgment.model_validate(judgment_dict)
 
-        assert len(judgment_restored.spread.supporting) == 1
-        assert len(judgment_restored.spread.refuting) == 1
+        assert len(judgment_restored.spread.positive) == 1
+        assert len(judgment_restored.spread.negative) == 1
 
 
 class TestExtractionResultRehydration:
@@ -776,7 +774,7 @@ class TestExtractionResultRehydration:
             entity1=SimpleEntity(name="BRCA1", kind="gene", aliases=["BRCA1"]),
             entity2=SimpleEntity(name="Cancer", kind="disease", aliases=["Cancer"]),
             relationship="increases_risk_of",
-            spread=PairSpread(supporting=[assessment]),
+            spread=PairSpread(positive=[assessment]),
             accepted=True,
             confidence="high",
             reasoning="Strong evidence",
@@ -886,7 +884,7 @@ class TestExtractionResultRehydration:
             entity1=SimpleEntity(name="BRCA1", kind="gene", aliases=["BRCA1"]),
             entity2=SimpleEntity(name="Cancer", kind="disease", aliases=["Cancer"]),
             relationship="increases_risk_of",
-            spread=PairSpread(supporting=[assessment]),
+            spread=PairSpread(positive=[assessment]),
             accepted=True,
             confidence="high",
             reasoning="Strong evidence",
@@ -920,7 +918,7 @@ class TestExtractionResultRehydration:
         serialized = result.model_dump(mode="json")
         restored = ExtractionResult.model_validate(serialized)
 
-        restored_assessment = restored.judgments[0].spread.supporting[0]
+        restored_assessment = restored.judgments[0].spread.positive[0]
         quote = restored_assessment.quotes[0]
         assert isinstance(quote.resource, type(resource))
         assert quote.resource.id == resource.id

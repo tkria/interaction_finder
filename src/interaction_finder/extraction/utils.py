@@ -780,7 +780,7 @@ def get_relationship_polarity(relationship: str, polarity_map: dict[str, str]) -
         polarity_map: Mapping from relationship to polarity
 
     Returns:
-        Polarity category: "supporting", "refuting", "neutral", or "irrelevant"
+        Polarity category: "positive", "negative", "neutral", or "irrelevant"
 
     Raises:
         KeyError: If relationship not in mapping (indicates consolidation bug)
@@ -794,7 +794,7 @@ def build_pair_spread(
     """Group assessments by relationship polarity.
 
     Creates a PairSpread by looking up the polarity of each assessment's
-    relationship label and organizing them into supporting/refuting/neutral/irrelevant
+    relationship label and organizing them into positive/negative/neutral/irrelevant
     categories.
 
     Parameters:

@@ -31,7 +31,7 @@ def _render_pair_cards(pairs: list[dict[str, Any]]) -> str:
     show_kinds = len(all_kinds) > 2 or has_self_pair
 
     cards = []
-    polarity_label = {"supporting": "S", "refuting": "R", "neutral": "N"}
+    polarity_label = {"positive": "+", "negative": "-", "neutral": "N"}
 
     for idx, pair in enumerate(pairs):
         # Build entity aliases (comma-separated for data-attribute)
@@ -90,7 +90,7 @@ def _render_pair_cards(pairs: list[dict[str, Any]]) -> str:
         # Build polarity badges
         polarity_badges = []
         polarity_summary = pair.get("polarity_summary", {})
-        for polarity in ("supporting", "refuting", "neutral"):
+        for polarity in ("positive", "negative", "neutral"):
             info = polarity_summary.get(polarity)
             if info and info.get("count"):
                 label = polarity_label[polarity]

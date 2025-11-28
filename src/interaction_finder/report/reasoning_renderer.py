@@ -278,8 +278,8 @@ class ReasoningTemplateRenderer:
 
         # Helper to format polarity badge
         polarity_map = {
-            "supporting": "S",
-            "refuting": "R",
+            "positive": "+",
+            "negative": "-",
             "neutral": "N",
             "irrelevant": "I",
         }

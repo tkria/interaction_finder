@@ -57,10 +57,10 @@ REPORT_CSS = """
     --doc-badge-bg: var(--pico-color-azure-600);
     --doc-badge-hover-bg: var(--pico-color-azure-500);
     --doc-badge-text: var(--pico-color-slate-50);
-    --polarity-supporting-bg: var(--pico-color-green-50);
-    --polarity-supporting-text: var(--pico-color-green-700);
-    --polarity-refuting-bg: var(--pico-color-red-100);
-    --polarity-refuting-text: var(--pico-color-red-700);
+    --polarity-positive-bg: var(--pico-color-green-50);
+    --polarity-positive-text: var(--pico-color-green-700);
+    --polarity-negative-bg: var(--pico-color-red-100);
+    --polarity-negative-text: var(--pico-color-red-700);
     --polarity-neutral-bg: var(--pico-color-zinc-100);
     --polarity-neutral-text: var(--pico-color-slate-600);
     --doc-link-hover-bg: var(--pico-color-azure-100);
@@ -98,10 +98,10 @@ REPORT_CSS = """
     --doc-badge-bg: var(--pico-color-azure-400);
     --doc-badge-hover-bg: var(--pico-color-azure-500);
     --doc-badge-text: var(--pico-color-slate-950);
-    --polarity-supporting-bg: var(--pico-color-green-850);
-    --polarity-supporting-text: var(--pico-color-green-300);
-    --polarity-refuting-bg: var(--pico-color-red-900);
-    --polarity-refuting-text: var(--pico-color-red-300);
+    --polarity-positive-bg: var(--pico-color-green-850);
+    --polarity-positive-text: var(--pico-color-green-300);
+    --polarity-negative-bg: var(--pico-color-red-900);
+    --polarity-negative-text: var(--pico-color-red-300);
     --polarity-neutral-bg: var(--pico-color-slate-900);
     --polarity-neutral-text: var(--pico-color-slate-200);
     --doc-link-hover-bg: var(--pico-color-azure-750);
@@ -137,10 +137,10 @@ REPORT_CSS = """
     --doc-badge-bg: var(--pico-color-azure-400);
     --doc-badge-hover-bg: var(--pico-color-azure-500);
     --doc-badge-text: var(--pico-color-slate-950);
-    --polarity-supporting-bg: var(--pico-color-green-850);
-    --polarity-supporting-text: var(--pico-color-green-300);
-    --polarity-refuting-bg: var(--pico-color-red-900);
-    --polarity-refuting-text: var(--pico-color-red-300);
+    --polarity-positive-bg: var(--pico-color-green-850);
+    --polarity-positive-text: var(--pico-color-green-300);
+    --polarity-negative-bg: var(--pico-color-red-900);
+    --polarity-negative-text: var(--pico-color-red-300);
     --polarity-neutral-bg: var(--pico-color-slate-900);
     --polarity-neutral-text: var(--pico-color-slate-200);
     --doc-link-hover-bg: var(--pico-color-azure-750);
@@ -379,13 +379,13 @@ header {
     border-radius: 0.6em;
     font-weight: 600;
 }
-.polarity-badge.polarity-supporting {
-    background: var(--polarity-supporting-bg);
-    color: var(--polarity-supporting-text);
+.polarity-badge.polarity-positive {
+    background: var(--polarity-positive-bg);
+    color: var(--polarity-positive-text);
 }
-.polarity-badge.polarity-refuting {
-    background: var(--polarity-refuting-bg);
-    color: var(--polarity-refuting-text);
+.polarity-badge.polarity-negative {
+    background: var(--polarity-negative-bg);
+    color: var(--polarity-negative-text);
 }
 .polarity-badge.polarity-neutral {
     background: var(--polarity-neutral-bg);
@@ -424,13 +424,13 @@ header {
     border-radius: 1.5em 0 0 1.5em;
 }
 /* Polarity styling */
-.pc-pill > .supporting {
-    background: var(--polarity-supporting-bg);
-    color: var(--polarity-supporting-text);
+.pc-pill > .positive {
+    background: var(--polarity-positive-bg);
+    color: var(--polarity-positive-text);
 }
-.pc-pill > .refuting {
-    background: var(--polarity-refuting-bg);
-    color: var(--polarity-refuting-text);
+.pc-pill > .negative {
+    background: var(--polarity-negative-bg);
+    color: var(--polarity-negative-text);
 }
 .pc-pill > .neutral,
 .pc-pill > .irrelevant {
@@ -1395,7 +1395,7 @@ function renderContent() {
                 : '';
 
         // Build polarity/confidence badge
-        const polarityMap = {supporting: 'S', refuting: 'R', neutral: 'N', irrelevant: 'I'};
+        const polarityMap = {positive: '+', negative: '-', neutral: 'N', irrelevant: 'I'};
         const badge = polarity && confidence
             ? `<span class="pc-pill">
                    <span class="${escapeHtml(polarity)}">${escapeHtml(polarityMap[polarity] || polarity)}</span>

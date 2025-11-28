@@ -108,7 +108,7 @@ class State:
     # === Stage 5: Relationship Consolidation + Polarity Classification ===
     # Mapping from normalized old label to normalized new label
     relationship_mappings: dict[str, str] = field(default_factory=dict)
-    # Mapping from relationship label to polarity (supporting/refuting/neutral/irrelevant)
+    # Mapping from relationship label to polarity (positive/negative/neutral/irrelevant)
     relationship_polarities: dict[str, str] = field(default_factory=dict)
     # Count of assessments with updated relationship labels
     relationships_merged: int = 0

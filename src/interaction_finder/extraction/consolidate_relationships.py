@@ -24,9 +24,7 @@ get_relationship_consolidation_agent = agent_getter(
 
 Your task: For each relationship label, determine:
 1. **CONSOLIDATION**: Should it be mapped to a canonical form?
-2. **POLARITY**: How does it relate to the research topic?
-
-Both require understanding the research context and relationship semantics.
+2. **POLARITY**: What is its biological direction/effect?
 
 ---
 
@@ -63,46 +61,48 @@ Both require understanding the research context and relationship semantics.
 
 ## PART 2: Polarity Classification
 
-Classify each relationship (after consolidation) by its semantic polarity relative to the research topic.
+Classify each relationship (after consolidation) by its **biological polarity** - the direction of effect it indicates.
 
 **Four categories:**
 
-**SUPPORTING** - Relationship indicates positive association with topic
-- Examples: "increases_risk_of", "causes", "mutations_in", "associated_with" (for risk factors)
-- For genetic risk research: relationships that connect entities to increased disease risk
+**POSITIVE** - Relationship indicates promoting/increasing/activating effect
+- Examples: "increases_risk_of", "causes", "activates", "promotes", "upregulates"
+- Key indicators: mutations that increase disease risk, factors that promote pathology
+- Biological direction: Entity A → more of Entity B or its effects
 
-**REFUTING** - Relationship indicates negative/protective association
-- Examples: "protects_against", "reduces_risk_of", "prevents", "treats"
-- For genetic risk research: relationships that reduce or prevent disease
+**NEGATIVE** - Relationship indicates inhibiting/decreasing/protective effect
+- Examples: "protects_against", "reduces_risk_of", "inhibits", "prevents", "downregulates", "treats"
+- Key indicators: interventions that reduce disease, protective factors, inhibitory mechanisms
+- Biological direction: Entity A → less of Entity B or its effects
 
-**NEUTRAL** - Relationship is relevant but not directional
-- Examples: "regulates" (could be up or down), "binds_to" (mechanism unclear), "interacts_with"
-- Mechanistic relationships where directionality relative to topic is ambiguous
+**NEUTRAL** - Relationship is mechanistic but directionality is ambiguous
+- Examples: "regulates" (could be up or down), "interacts_with", "binds_to" (effect unclear), "associated_with" (direction unknown)
+- Key indicators: general mechanistic terms, bidirectional relationships, correlations without causality
 
-**IRRELEVANT** - Relationship is orthogonal to research question
-- Examples: "spatial_colocalization" (in genetic study), "binds_to" (in clinical outcomes study)
-- Wrong level of analysis for this research question
+**IRRELEVANT** - Relationship is orthogonal to biological mechanism
+- Examples: "spatial_colocalization" (when studying genetics), "mentioned_together" (co-citation without biological claim)
+- Key indicators: methodological relationships, purely observational without biological meaning
 
-**Context-dependent examples:**
+**Examples:**
 
-Topic: "PAH genetic risk factors" | Entity types: gene-disease
-- "mutations_in" → supporting (indicates genetic risk)
-- "protects_against" → refuting (reduces disease risk)
-- "regulates" → neutral (mechanism but direction unclear)
-- "spatial_colocalization" → irrelevant (molecular detail, not genetic association)
+For any research context:
+- "BMPR2 mutations increase PAH risk" → **positive** (mutations promote disease)
+- "BMPR2 inhibitors reduce PAH severity" → **negative** (inhibition reduces disease)
+- "BMPR2 regulates vascular tone" → **neutral** (regulation direction unclear)
+- "BMPR2 co-cited with PAH" → **irrelevant** (no biological mechanism claimed)
 
-Topic: "protective factors in heart disease" | Entity types: gene-disease
-- "reduces_risk_of" → supporting (these ARE the protective factors we're studying)
-- "increases_risk_of" → refuting (opposite of what we're looking for)
-- "associated_with" → neutral (could be either direction)
-- "phosphorylates" → irrelevant (too mechanistic for protective factor study)
+For gene-disease relationships:
+- "increases_risk_of" → **positive** (promotes disease)
+- "protects_against" → **negative** (reduces disease)
+- "associated_with" → **neutral** (correlation, direction unclear)
+- "co-occurs_in_literature" → **irrelevant** (not biological)
 
 **Decision criteria for polarity:**
-- Consider the research question and what constitutes supporting evidence
-- "Supporting" means consistent with research hypothesis/topic
-- "Refuting" means contradicts or opposes research focus
-- "Neutral" means relevant but ambiguous directionality
-- "Irrelevant" means orthogonal (wrong level of analysis)
+- Focus on the **biological direction of effect**, not topic relevance
+- **Positive** = promotes, increases, activates, causes more
+- **Negative** = inhibits, decreases, protects, causes less
+- **Neutral** = relevant mechanism but ambiguous direction
+- **Irrelevant** = orthogonal (wrong level of analysis, no biological claim)
 
 ---
 
@@ -111,7 +111,7 @@ Topic: "protective factors in heart disease" | Entity types: gene-disease
 For each relationship:
 - `original`: The label as it appears
 - `consolidated`: Canonical form (may equal original if already canonical)
-- `polarity`: supporting | refuting | neutral | irrelevant
+- `polarity`: positive | negative | neutral | irrelevant
 - `reasoning`: Explain both consolidation and polarity decisions (30+ chars)
 
 **Important notes:**
@@ -119,7 +119,7 @@ For each relationship:
 - Multiple originals can map to same consolidated label
 - Polarity applies to the consolidated label
 - Empty list is valid if no relationships provided
-- When uncertain about polarity, prefer neutral over irrelevant
+- When uncertain about directionality, prefer neutral over irrelevant
 
 **Conservative approach:**
 - Preserve distinctions when biological meaning differs

@@ -976,8 +976,8 @@ class ConsolidateRelationshipsNode(BaseNode[State, Deps, ExtractionResult]):
 
     This approach ensures:
     - Vocabulary consolidation (merges synonyms like "linked_to" → "associated_with")
-    - Polarity classification (supporting/refuting/neutral/irrelevant)
-    - Topic-appropriate normalization (context-aware decisions)
+    - Polarity classification (positive/negative/neutral/irrelevant)
+    - Biological direction-aware normalization (context-aware decisions)
     - Consistency (same canonical label and polarity across all documents)
     """
 
@@ -1365,13 +1365,13 @@ class JudgeCrossDocumentNode(BaseNode[State, Deps, ExtractionResult]):
                 sections.append(section)
             return "\n\n".join(sections)
 
-        supporting_text = format_assessments(spread.supporting, "Supporting")
-        refuting_text = format_assessments(spread.refuting, "Refuting")
+        positive_text = format_assessments(spread.positive, "Positive")
+        negative_text = format_assessments(spread.negative, "Negative")
         neutral_text = format_assessments(spread.neutral, "Neutral")
 
         # Get all unique relationships
         all_rels = {
-            a.relationship for a in spread.supporting + spread.refuting + spread.neutral
+            a.relationship for a in spread.positive + spread.negative + spread.neutral
         }
         relationships_str = ", ".join(f'"{r}"' for r in sorted(all_rels))
 
@@ -1384,13 +1384,13 @@ Synthesize contradictory evidence for an entity association.
 
 **Relationship types found:** {relationships_str}
 
-**Note:** This is a CONTENTIOUS pair with contradictory evidence. Some documents support the association while others refute it.
+**Note:** This is a CONTENTIOUS pair with contradictory biological effects. Some documents indicate positive effects while others indicate negative effects.
 
 # Document Extracts
 
-{supporting_text}
+{positive_text}
 
-{refuting_text}
+{negative_text}
 
 {neutral_text if neutral_text else ""}
 
@@ -1408,11 +1408,11 @@ Provide: accepted (true/false), relationship (selected from above), confidence (
         spread: PairSpread,
         ctx: GraphRunContext[State, Deps],
     ) -> str:
-        """Build prompt for unidirectional pairs (no supporting+refuting conflict)."""
+        """Build prompt for unidirectional pairs (no positive+negative conflict)."""
         padding = getattr(ctx.deps.config.tools.extraction, "region_padding_chunks", 1)
 
         # Combine all assessments (one polarity category will dominate)
-        all_assessments = spread.supporting + spread.refuting + spread.neutral
+        all_assessments = spread.positive + spread.negative + spread.neutral
         document_sections = []
         for assessment in all_assessments:
             resource = ctx.deps.resource_pool.get(assessment.resource_id)
@@ -1496,8 +1496,8 @@ Provide: accepted (true/false), relationship (selected label), confidence (high/
             # Need LLM investigation
             # Collect valid document IDs from all assessments for citation validation
             valid_doc_ids = {a.resource_id.id for a in assessments}
-            # Detect contentious pairs (supporting + refuting evidence)
-            is_contentious = bool(spread.supporting and spread.refuting)
+            # Detect contentious pairs (positive + negative evidence)
+            is_contentious = bool(spread.positive and spread.negative)
 
             if is_contentious:
                 prompt = self._build_contentious_prompt(pair_key, spread, ctx)

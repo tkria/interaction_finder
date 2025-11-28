@@ -579,7 +579,7 @@ def test_quote_navigation_uses_correct_ids():
                         "relationship": "associated_with",
                         "confidence": "high",
                         "reasoning": "Reasoning",
-                        "polarity": "supporting",
+                        "polarity": "positive",
                         "quotes": [quote_pair1],
                     }
                 ],

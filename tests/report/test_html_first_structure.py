@@ -102,7 +102,7 @@ def create_test_checkpoint(
             assessments.append(assessment)
 
         # Create judgment
-        spread = PairSpread(supporting=list(assessments))
+        spread = PairSpread(positive=list(assessments))
         judgment = PairJudgment(
             entity1=SimpleEntity(
                 name=f"Entity{pair_idx}_A",

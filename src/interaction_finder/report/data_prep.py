@@ -21,7 +21,7 @@ from interaction_finder.report.html_renderer import DocumentQuoteEntry
 from interaction_finder.report.parallel_renderer import render_documents_parallel
 from interaction_finder.report.reasoning_renderer import render_all_reasoning_templates
 
-POLARITY_ORDER = ("supporting", "refuting", "neutral", "irrelevant")
+POLARITY_ORDER = ("positive", "negative", "neutral", "irrelevant")
 CONFIDENCE_ORDER = {"high": 3, "medium": 2, "low": 1}
 
 
@@ -126,7 +126,7 @@ def _build_pair_entry(judgment, resource_pool) -> dict[str, Any]:
             for polarity in POLARITY_ORDER
         },
         "contentious": bool(
-            polarity_counts["supporting"] and polarity_counts["refuting"]
+            polarity_counts["positive"] and polarity_counts["negative"]
         ),
     }
 

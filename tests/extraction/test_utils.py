@@ -621,16 +621,16 @@ class TestGetRelationshipPolarity:
     def test_gets_polarity_for_known_relationship(self):
         """Test looking up polarity for a known relationship."""
         polarity_map = {
-            "increases_risk_of": "supporting",
-            "protects_against": "refuting",
+            "increases_risk_of": "positive",
+            "protects_against": "negative",
             "regulates": "neutral",
             "spatial_colocalization": "irrelevant",
         }
 
         assert (
-            get_relationship_polarity("increases_risk_of", polarity_map) == "supporting"
+            get_relationship_polarity("increases_risk_of", polarity_map) == "positive"
         )
-        assert get_relationship_polarity("protects_against", polarity_map) == "refuting"
+        assert get_relationship_polarity("protects_against", polarity_map) == "negative"
         assert get_relationship_polarity("regulates", polarity_map) == "neutral"
         assert (
             get_relationship_polarity("spatial_colocalization", polarity_map)
@@ -639,7 +639,7 @@ class TestGetRelationshipPolarity:
 
     def test_raises_key_error_for_unknown_relationship(self):
         """Test that KeyError is raised for unknown relationship."""
-        polarity_map = {"increases_risk_of": "supporting"}
+        polarity_map = {"increases_risk_of": "positive"}
 
         with pytest.raises(KeyError):
             get_relationship_polarity("unknown_relationship", polarity_map)
@@ -672,7 +672,9 @@ class TestBuildPairSpread:
             quotes=[],
             reasoning="test",
         )
-        self.entity1_ref = EntityRef(canonical=self.entity1.name, mentions=[self.entity1])
+        self.entity1_ref = EntityRef(
+            canonical=self.entity1.name, mentions=[self.entity1]
+        )
         self.entity2 = EntityMention(
             kind="disease",
             name="breast cancer",
@@ -680,53 +682,55 @@ class TestBuildPairSpread:
             quotes=[],
             reasoning="test",
         )
-        self.entity2_ref = EntityRef(canonical=self.entity2.name, mentions=[self.entity2])
+        self.entity2_ref = EntityRef(
+            canonical=self.entity2.name, mentions=[self.entity2]
+        )
 
     def test_groups_assessments_by_polarity(self):
         """Test that assessments are correctly grouped by polarity."""
         polarity_map = {
-            "increases_risk_of": "supporting",
-            "protects_against": "refuting",
+            "increases_risk_of": "positive",
+            "protects_against": "negative",
             "regulates": "neutral",
             "spatial_colocalization": "irrelevant",
         }
 
         assessments = [
-                PairAssessment(
-                    resource_id=self.resource.id,
-                    entity1=self.entity1_ref,
-                    entity2=self.entity2_ref,
-                    relationship="increases_risk_of",
-                    quotes=[],
-                    confidence="high",
-                    reasoning="test",
-                ),
-                PairAssessment(
-                    resource_id=self.resource.id,
-                    entity1=self.entity1_ref,
-                    entity2=self.entity2_ref,
-                    relationship="protects_against",
-                    quotes=[],
-                    confidence="medium",
-                    reasoning="test",
-                ),
-                PairAssessment(
-                    resource_id=self.resource.id,
-                    entity1=self.entity1_ref,
-                    entity2=self.entity2_ref,
-                    relationship="regulates",
-                    quotes=[],
-                    confidence="low",
-                    reasoning="test",
+            PairAssessment(
+                resource_id=self.resource.id,
+                entity1=self.entity1_ref,
+                entity2=self.entity2_ref,
+                relationship="increases_risk_of",
+                quotes=[],
+                confidence="high",
+                reasoning="test",
+            ),
+            PairAssessment(
+                resource_id=self.resource.id,
+                entity1=self.entity1_ref,
+                entity2=self.entity2_ref,
+                relationship="protects_against",
+                quotes=[],
+                confidence="medium",
+                reasoning="test",
+            ),
+            PairAssessment(
+                resource_id=self.resource.id,
+                entity1=self.entity1_ref,
+                entity2=self.entity2_ref,
+                relationship="regulates",
+                quotes=[],
+                confidence="low",
+                reasoning="test",
             ),
         ]
 
         spread = build_pair_spread(assessments, polarity_map)
 
-        assert len(spread.supporting) == 1
-        assert spread.supporting[0].relationship == "increases_risk_of"
-        assert len(spread.refuting) == 1
-        assert spread.refuting[0].relationship == "protects_against"
+        assert len(spread.positive) == 1
+        assert spread.positive[0].relationship == "increases_risk_of"
+        assert len(spread.negative) == 1
+        assert spread.negative[0].relationship == "protects_against"
         assert len(spread.neutral) == 1
         assert spread.neutral[0].relationship == "regulates"
         assert len(spread.irrelevant) == 0
@@ -734,62 +738,62 @@ class TestBuildPairSpread:
     def test_handles_all_same_polarity(self):
         """Test with all assessments having same polarity."""
         polarity_map = {
-            "increases_risk_of": "supporting",
-            "causes": "supporting",
-            "associated_with": "supporting",
+            "increases_risk_of": "positive",
+            "causes": "positive",
+            "associated_with": "positive",
         }
 
         assessments = [
-                PairAssessment(
-                    resource_id=self.resource.id,
-                    entity1=self.entity1_ref,
-                    entity2=self.entity2_ref,
-                    relationship="increases_risk_of",
-                    quotes=[],
-                    confidence="high",
-                    reasoning="test",
-                ),
-                PairAssessment(
-                    resource_id=self.resource.id,
-                    entity1=self.entity1_ref,
-                    entity2=self.entity2_ref,
-                    relationship="causes",
-                    quotes=[],
-                    confidence="high",
-                    reasoning="test",
-                ),
-                PairAssessment(
-                    resource_id=self.resource.id,
-                    entity1=self.entity1_ref,
-                    entity2=self.entity2_ref,
-                    relationship="associated_with",
-                    quotes=[],
-                    confidence="medium",
-                    reasoning="test",
+            PairAssessment(
+                resource_id=self.resource.id,
+                entity1=self.entity1_ref,
+                entity2=self.entity2_ref,
+                relationship="increases_risk_of",
+                quotes=[],
+                confidence="high",
+                reasoning="test",
+            ),
+            PairAssessment(
+                resource_id=self.resource.id,
+                entity1=self.entity1_ref,
+                entity2=self.entity2_ref,
+                relationship="causes",
+                quotes=[],
+                confidence="high",
+                reasoning="test",
+            ),
+            PairAssessment(
+                resource_id=self.resource.id,
+                entity1=self.entity1_ref,
+                entity2=self.entity2_ref,
+                relationship="associated_with",
+                quotes=[],
+                confidence="medium",
+                reasoning="test",
             ),
         ]
 
         spread = build_pair_spread(assessments, polarity_map)
 
-        assert len(spread.supporting) == 3
-        assert len(spread.refuting) == 0
+        assert len(spread.positive) == 3
+        assert len(spread.negative) == 0
         assert len(spread.neutral) == 0
         assert len(spread.irrelevant) == 0
 
     def test_handles_empty_assessments(self):
         """Test with empty assessments list."""
-        polarity_map = {"increases_risk_of": "supporting"}
+        polarity_map = {"increases_risk_of": "positive"}
 
         spread = build_pair_spread([], polarity_map)
 
-        assert len(spread.supporting) == 0
-        assert len(spread.refuting) == 0
+        assert len(spread.positive) == 0
+        assert len(spread.negative) == 0
         assert len(spread.neutral) == 0
         assert len(spread.irrelevant) == 0
 
     def test_raises_key_error_for_unmapped_relationship(self):
         """Test that KeyError is raised for unmapped relationship."""
-        polarity_map = {"increases_risk_of": "supporting"}
+        polarity_map = {"increases_risk_of": "positive"}
 
         assessments = [
             PairAssessment(
@@ -807,10 +811,10 @@ class TestBuildPairSpread:
             build_pair_spread(assessments, polarity_map)
 
     def test_contentious_pair_detection(self):
-        """Test identifying contentious pairs (supporting + refuting)."""
+        """Test identifying contentious pairs (positive + negative)."""
         polarity_map = {
-            "increases_risk_of": "supporting",
-            "protects_against": "refuting",
+            "increases_risk_of": "positive",
+            "protects_against": "negative",
         }
 
         assessments = [
@@ -836,11 +840,11 @@ class TestBuildPairSpread:
 
         spread = build_pair_spread(assessments, polarity_map)
 
-        # Contentious: has both supporting and refuting
-        is_contentious = bool(spread.supporting and spread.refuting)
+        # Contentious: has both positive and negative
+        is_contentious = bool(spread.positive and spread.negative)
         assert is_contentious
-        assert len(spread.supporting) == 1
-        assert len(spread.refuting) == 1
+        assert len(spread.positive) == 1
+        assert len(spread.negative) == 1
 
 
 class TestIsValidEntityForm:

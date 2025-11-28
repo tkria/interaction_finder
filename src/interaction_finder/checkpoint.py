@@ -39,7 +39,7 @@ def _needs_rehydration(judgments: list[dict]) -> bool:
         # Extract first assessment from either structure
         assessments = container if isinstance(container, list) else []
         if not assessments and isinstance(container, dict):
-            for cat in ("supporting", "refuting", "neutral", "irrelevant"):
+            for cat in ("positive", "negative", "neutral", "irrelevant"):
                 if container.get(cat):
                     assessments = container[cat]
                     break
@@ -74,7 +74,7 @@ def _rehydrate_judgments_quotes(
             if isinstance(a, dict):
                 yield a
         spread = judgment.get("spread", {})
-        for cat in ("supporting", "refuting", "neutral", "irrelevant"):
+        for cat in ("positive", "negative", "neutral", "irrelevant"):
             for a in spread.get(cat, []):
                 if isinstance(a, dict):
                     yield a

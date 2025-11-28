@@ -280,13 +280,13 @@ class TestUnifiedConsolidationIntegration:
                 RelationshipConsolidation(
                     original="linked_to",
                     consolidated="associated_with",
-                    polarity="supporting",
+                    polarity="positive",
                     reasoning="Synonymous with associated_with, indicates positive association",
                 ),
                 RelationshipConsolidation(
                     original="increases_risk_of",
                     consolidated="increases_risk_of",
-                    polarity="supporting",
+                    polarity="positive",
                     reasoning="Clearly indicates genetic risk factor",
                 ),
                 RelationshipConsolidation(
@@ -322,8 +322,8 @@ class TestUnifiedConsolidationIntegration:
 
         # Verify polarity mappings were stored
         assert "associated_with" in ctx.state.relationship_polarities
-        assert ctx.state.relationship_polarities["associated_with"] == "supporting"
-        assert ctx.state.relationship_polarities["increases_risk_of"] == "supporting"
+        assert ctx.state.relationship_polarities["associated_with"] == "positive"
+        assert ctx.state.relationship_polarities["increases_risk_of"] == "positive"
         assert (
             ctx.state.relationship_polarities["spatial_colocalization"] == "irrelevant"
         )
@@ -486,7 +486,7 @@ class TestUnifiedConsolidationIntegration:
                 RelationshipConsolidation(
                     original="increases_risk_of",
                     consolidated="increases_risk_of",
-                    polarity="supporting",
+                    polarity="positive",
                     reasoning="Relevant to research topic, indicates genetic risk factor clearly",
                 ),
                 RelationshipConsolidation(
@@ -509,7 +509,7 @@ class TestUnifiedConsolidationIntegration:
             await node.run(ctx)
 
         # Verify polarity mappings were stored
-        assert ctx.state.relationship_polarities["increases_risk_of"] == "supporting"
+        assert ctx.state.relationship_polarities["increases_risk_of"] == "positive"
         assert (
             ctx.state.relationship_polarities["spatial_colocalization"] == "irrelevant"
         )
