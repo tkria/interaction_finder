@@ -153,51 +153,42 @@ class TestEntityExtractionOut:
 class TestEntityConsolidationDecision:
     """Tests for EntityConsolidationDecision model."""
 
-    def test_valid_skip_decision(self):
-        """Test creating valid skip decision."""
-        decision = EntityConsolidationDecision(
-            pair_id=1,
-            pair_token="xK7m",
-            action="skip",
-            reasoning="These are distinct biological entities that should remain separate.",
-        )
-        assert decision.pair_id == 1
-        assert decision.pair_token == "xK7m"
-        assert decision.action == "skip"
-        assert decision.target is None
-
     def test_valid_merge_decision(self):
-        """Test creating valid merge decision."""
+        """Test creating valid merge decision (rename=None)."""
         decision = EntityConsolidationDecision(
             pair_id=1,
-            pair_token="xK7m",
-            action="merge",
+            confirm_token="xK7m",
+            rename=None,
             reasoning="BRCA is commonly used shorthand for BRCA1 in this context.",
         )
         assert decision.pair_id == 1
-        assert decision.action == "merge"
-        assert decision.target is None
+        assert decision.confirm_token == "xK7m"
+        assert decision.rename is None
 
     def test_valid_rename_decision(self):
         """Test creating valid rename decision with target."""
         decision = EntityConsolidationDecision(
             pair_id=1,
-            pair_token="xK7m",
-            action="rename",
-            target="APAH",
+            confirm_token="xK7m",
+            rename="APAH",
             reasoning="The verbose name should be simplified to its standard abbreviation.",
         )
-        assert decision.action == "rename"
-        assert decision.target == "APAH"
+        assert decision.rename == "APAH"
 
-    def test_rename_requires_target(self):
-        """Test that rename action requires target."""
+    def test_rename_rejects_empty_string(self):
+        """Test that rename cannot be empty string (must be None or non-empty)."""
         with pytest.raises(ValidationError):
             EntityConsolidationDecision(
                 pair_id=1,
-                pair_token="xK7m",
-                action="rename",
-                target=None,
+                confirm_token="xK7m",
+                rename="",
+                reasoning="The verbose name should be simplified to its standard abbreviation.",
+            )
+        with pytest.raises(ValidationError):
+            EntityConsolidationDecision(
+                pair_id=1,
+                confirm_token="xK7m",
+                rename="   ",  # Whitespace only
                 reasoning="The verbose name should be simplified to its standard abbreviation.",
             )
 
@@ -206,25 +197,25 @@ class TestEntityConsolidationDecision:
         with pytest.raises(ValidationError):
             EntityConsolidationDecision(
                 pair_id=1,
-                pair_token="xK7m",
-                action="skip",
+                confirm_token="xK7m",
+                rename=None,
                 reasoning="Too short",
             )
 
     def test_requires_token_exact_length(self):
-        """Test that token must be exactly 4 characters."""
+        """Test that confirm_token must be exactly 4 characters."""
         with pytest.raises(ValidationError):
             EntityConsolidationDecision(
                 pair_id=1,
-                pair_token="abc",  # Too short
-                action="merge",
+                confirm_token="abc",  # Too short
+                rename=None,
                 reasoning="BRCA is commonly used shorthand for BRCA1.",
             )
         with pytest.raises(ValidationError):
             EntityConsolidationDecision(
                 pair_id=1,
-                pair_token="abcde",  # Too long
-                action="merge",
+                confirm_token="abcde",  # Too long
+                rename=None,
                 reasoning="BRCA is commonly used shorthand for BRCA1.",
             )
 

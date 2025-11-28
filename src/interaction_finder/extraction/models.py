@@ -184,46 +184,57 @@ class EntityExtractionOut(BaseModel):
 
 
 class EntityConsolidationDecision(BaseModel):
-    """LLM decision on how to handle an entity pair.
+    """LLM decision to merge or rename an entity pair.
 
     Used when one entity name is a substring/similar to another (e.g., "BRCA" vs "BRCA1").
-    The pair_id and pair_token reference a numbered pair from the prompt, avoiding
+    Pairs not returned are implicitly skipped (kept separate).
+
+    The pair_id and confirm_token reference a numbered pair from the prompt, avoiding
     the need to echo back exact entity names (which can introduce subtle variations).
 
     Actions:
-        skip: Keep both entities separate (target=None)
-        merge: Absorb child into parent from the pair (target=None)
-        rename: Rename child to target, then re-evaluate for merge opportunities
+        - If rename is None: merge child into parent from the pair
+        - If rename is set: rename child to the specified standard name,
+          then re-evaluate for merge opportunities in subsequent iterations
     """
 
     pair_id: int = Field(description="ID of the entity pair (from the prompt)")
-    pair_token: str = Field(
+    confirm_token: str = Field(
         min_length=4,
         max_length=4,
         description="Confirmation token from the prompt (e.g., 'xK7m')",
     )
-    action: Literal["skip", "merge", "rename"] = Field(
-        description="Action to take: skip (keep separate), merge (into parent), or rename (child to target)"
-    )
-    target: str | None = Field(
+    rename: str | None = Field(
         default=None,
-        description="New name for rename action; None for skip/merge",
+        description=(
+            "New standard name if renaming (e.g., 'TGF-β', 'PPARγ'); "
+            "None to merge into parent without renaming"
+        ),
     )
-    reasoning: str = Field(min_length=20, description="Explanation of decision")
+    reasoning: str = Field(
+        min_length=20,
+        description="Explanation: why merge or what the rename accomplishes",
+    )
 
     @model_validator(mode="after")
-    def validate_target_for_action(self) -> "EntityConsolidationDecision":
-        """Ensure target is provided for rename action and absent for others."""
-        if self.action == "rename" and not self.target:
-            raise ValueError("target is required when action is 'rename'")
+    def validate_rename_not_empty(self) -> "EntityConsolidationDecision":
+        """Ensure rename is non-empty if provided."""
+        if self.rename is not None and not self.rename.strip():
+            raise ValueError(
+                "rename must be non-empty string if provided (use None to merge)"
+            )
         return self
 
 
 class EntityConsolidationDecisions(BaseModel):
-    """LLM output: batch of entity consolidation decisions."""
+    """LLM output: batch of entity consolidation decisions.
+
+    Only includes pairs that should merge or be renamed. Pairs not included
+    are implicitly skipped (kept separate).
+    """
 
     decisions: list[EntityConsolidationDecision] = Field(
-        description="Consolidation decisions for all candidate pairs"
+        description="Pairs to merge or rename (omit pairs that should remain separate)"
     )
 
 

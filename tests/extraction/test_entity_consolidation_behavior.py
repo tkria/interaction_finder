@@ -607,17 +607,10 @@ class TestLLMInteraction:
         node = ConsolidateEntitiesNode()
         ctx = GraphRunContext(state=state, deps=mock_deps)
 
-        # Mock LLM to reject the merge
+        # Mock LLM to reject the merge (implicit skip - return empty decisions)
         mock_result = MagicMock()
         mock_result.output = EntityConsolidationDecisions(
-            decisions=[
-                EntityConsolidationDecision(
-                    pair_id=1,
-                    pair_token="TEST",
-                    action="skip",
-                    reasoning="These are different genes and should not be merged together.",
-                )
-            ]
+            decisions=[]  # Empty = all pairs implicitly skipped
         )
         mock_agent = MagicMock()
         mock_agent.run = AsyncMock(return_value=mock_result)

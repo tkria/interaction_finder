@@ -607,7 +607,7 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
             token = _generate_token()
             id_to_pair[pair_id] = (parent, child, token)
             token_to_id[token] = pair_id
-            pairs_description.append(f"{pair_id}. [{token}] {child!r} → {parent!r}")
+            pairs_description.append(f"{pair_id}. [{token}] {child!r} → {parent!r} ?")
 
         if not pairs_description:
             return
@@ -620,7 +620,7 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
 **Entity pairs to evaluate:**
 {chr(10).join(pairs_description)}
 
-For each pair, decide the appropriate action (skip, merge, or rename)."""
+Only return pairs that should merge or be renamed. Omit pairs that should remain separate."""
 
         agent = get_entity_consolidation_agent(ctx.deps.config)
         try:
@@ -629,10 +629,12 @@ For each pair, decide the appropriate action (skip, merge, or rename)."""
                     result = await agent.run(prompt, deps=ctx.deps, usage=RunUsage())
 
             # Process decisions and populate cache
+            returned_ids = {d.pair_id for d in result.output.decisions}
+
             for decision in result.output.decisions:
                 resolved = _resolve_pair_from_decision(
                     decision.pair_id,
-                    decision.pair_token,
+                    decision.confirm_token,
                     id_to_pair,
                     token_to_id,
                     ctx.deps.logger,
@@ -643,19 +645,15 @@ For each pair, decide the appropriate action (skip, merge, or rename)."""
                 parent, child = resolved
                 cache_key = (child, parent, kind)
 
-                # Cache decision: None for skip, target for merge/rename
-                if decision.action == "skip":
-                    ctx.state.agent_merge_cache[cache_key] = (None, decision.reasoning)
-                elif decision.action == "merge":
-                    ctx.state.agent_merge_cache[cache_key] = (
-                        parent,
-                        decision.reasoning,
-                    )
-                elif decision.action == "rename" and decision.target:
-                    ctx.state.agent_merge_cache[cache_key] = (
-                        decision.target,
-                        decision.reasoning,
-                    )
+                # Cache decision: target for merge/rename
+                target = decision.rename if decision.rename else parent
+                ctx.state.agent_merge_cache[cache_key] = (target, decision.reasoning)
+
+            # Cache implicit skips (pairs not returned by LLM)
+            for pair_id, (parent, child, token) in id_to_pair.items():
+                if pair_id not in returned_ids:
+                    cache_key = (child, parent, kind)
+                    ctx.state.agent_merge_cache[cache_key] = (None, "implicit_skip")
 
         except (TimeoutError, ConnectionError, ValueError) as e:
             ctx.deps.logger.error(f"Entity consolidation failed: {e}")
@@ -760,7 +758,7 @@ For each pair, decide the appropriate action (skip, merge, or rename)."""
             token = _generate_token()
             id_to_pair[pair_id] = (canonical_pair, norm_child, token)
             token_to_id[token] = pair_id
-            pairs_description.append(f"{pair_id}. [{token}] {child!r} → {parent!r}")
+            pairs_description.append(f"{pair_id}. [{token}] {child!r} → {parent!r} ?")
         if not pairs_description:
             return rules, new_names
         # Build and execute prompt

@@ -67,17 +67,10 @@ class TestWithinRunCaching:
         )
         ctx = GraphRunContext(state=state, deps=mock_deps)
 
-        # Setup: Mock LLM to return skip decision
+        # Setup: Mock LLM to return skip decision (implicit - empty)
         mock_result = MagicMock()
         mock_result.output = EntityConsolidationDecisions(
-            decisions=[
-                EntityConsolidationDecision(
-                    pair_id=1,
-                    pair_token="ABCD",
-                    action="skip",
-                    reasoning="BRCA and BRCA1 are distinct genes",
-                )
-            ]
+            decisions=[]  # Empty = all pairs implicitly skipped
         )
         mock_agent = MagicMock()
         mock_agent.run = AsyncMock(return_value=mock_result)
@@ -145,14 +138,7 @@ class TestSpeculationBasedConsolidation:
         # Mock LLM for agent review
         mock_result = MagicMock()
         mock_result.output = EntityConsolidationDecisions(
-            decisions=[
-                EntityConsolidationDecision(
-                    pair_id=1,
-                    pair_token="ABCD",
-                    action="skip",
-                    reasoning="BRCA and BRCA1 are distinct genes",
-                )
-            ]
+            decisions=[]  # Empty = all pairs implicitly skipped
         )
         mock_agent = MagicMock()
         mock_agent.run = AsyncMock(return_value=mock_result)
@@ -300,9 +286,8 @@ class TestRenameDecisions:
             decisions=[
                 EntityConsolidationDecision(
                     pair_id=1,
-                    pair_token="ABCD",
-                    action="rename",
-                    target="TGF-β",
+                    confirm_token="ABCD",
+                    rename="TGF-β",
                     reasoning="Standard abbreviation",
                 )
             ]
@@ -369,8 +354,8 @@ class TestRenameDecisions:
             decisions=[
                 EntityConsolidationDecision(
                     pair_id=1,
-                    pair_token="ABCD",
-                    action="merge",
+                    confirm_token="ABCD",
+                    rename=None,  # None = merge
                     reasoning="Plural form should merge",
                 )
             ]
