@@ -816,6 +816,106 @@ def build_pair_spread(
     return spread
 
 
+def build_relationship_opposition_map(
+    consolidations: list,  # list[RelationshipConsolidation]
+    all_relationships: set[str],
+) -> dict[str, set[str]]:
+    """Build normalized mapping of relationships to their opposites.
+
+    Takes the LLM-provided opposites (which reference original labels) and
+    creates a normalized bidirectional mapping that works with both original
+    and consolidated relationship names using fuzzy matching.
+
+    Algorithm:
+    1. Build list of all known relationships (original + consolidated)
+    2. For each relationship's opposites, find best match using find_best_entity_match
+    3. Create bidirectional mapping (if A opposes B, then B opposes A)
+
+    Parameters:
+        consolidations: List of RelationshipConsolidation from LLM
+        all_relationships: Set of all known relationship labels (for validation)
+
+    Returns:
+        Dict mapping normalized relationship to set of normalized opposites
+
+    Examples:
+        >>> consolidations = [
+        ...     RelationshipConsolidation(
+        ...         original="activates",
+        ...         consolidated="activates",
+        ...         polarity="positive",
+        ...         opposites=["inhibits"],
+        ...         reasoning="...",
+        ...     ),
+        ...     RelationshipConsolidation(
+        ...         original="inhibits",
+        ...         consolidated="inhibits",
+        ...         polarity="negative",
+        ...         opposites=["activates"],
+        ...         reasoning="...",
+        ...     ),
+        ... ]
+        >>> build_relationship_opposition_map(consolidations, {"activates", "inhibits"})
+        {'activates': {'inhibits'}, 'inhibits': {'activates'}}
+    """
+    # Build list of all known relationship labels (both original and consolidated)
+    known_relationships = list(all_relationships) + [
+        label
+        for cons in consolidations
+        for label in (cons.original, cons.consolidated)
+        if label not in all_relationships
+    ]
+
+    # Build opposition mapping from LLM output
+    oppositions: dict[str, set[str]] = {}
+    for cons in consolidations:
+        norm_rel = normalize_for_comparison(cons.consolidated)
+        for opposite_str in cons.opposites:
+            matched = find_best_entity_match(opposite_str, known_relationships)
+            if matched:
+                oppositions.setdefault(norm_rel, set()).add(
+                    normalize_for_comparison(matched)
+                )
+
+    # Make bidirectional: if A opposes B, then B opposes A
+    result = {}
+    for rel, opps in oppositions.items():
+        result.setdefault(rel, set()).update(opps)
+        for opp in opps:
+            result.setdefault(opp, set()).add(rel)
+
+    return result
+
+
+def are_relationships_opposed(
+    rel1: str, rel2: str, opposition_map: dict[str, set[str]]
+) -> bool:
+    """Check if two relationships are semantically opposed.
+
+    Uses normalized matching against the opposition map built from LLM output.
+
+    Parameters:
+        rel1: First relationship label
+        rel2: Second relationship label
+        opposition_map: Normalized opposition mapping from build_relationship_opposition_map
+
+    Returns:
+        True if relationships are opposed, False otherwise
+
+    Examples:
+        >>> opposition_map = {'activates': {'inhibits'}, 'inhibits': {'activates'}}
+        >>> are_relationships_opposed("activates", "inhibits", opposition_map)
+        True
+        >>> are_relationships_opposed("activates", "regulates", opposition_map)
+        False
+    """
+    norm1 = normalize_for_comparison(rel1)
+    norm2 = normalize_for_comparison(rel2)
+
+    # Map is bidirectional, so only need to check one direction
+    return norm2 in opposition_map.get(norm1, set())
+
+
 # =============================================================================
 # Markdown utilities
 # =============================================================================

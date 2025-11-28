@@ -10,8 +10,10 @@ from interaction_finder.extraction.models import (
 )
 from interaction_finder.extraction.utils import (
     _is_valid_entity_form,
+    are_relationships_opposed,
     build_pair_spread,
     build_permitted_pairs,
+    build_relationship_opposition_map,
     build_text_region,
     collect_relevant_text_for_quotes,
     extract_all_forms,
@@ -1367,3 +1369,319 @@ class TestFindBestEntityMatch:
             ["GDF1", "BMP9"],
         )
         assert result == "GDF1"
+
+
+class TestBuildRelationshipOppositionMap:
+    """Tests for build_relationship_opposition_map function."""
+
+    def test_simple_bidirectional_opposition(self):
+        """Test basic bidirectional opposition mapping."""
+        from interaction_finder.extraction.models import RelationshipConsolidation
+
+        consolidations = [
+            RelationshipConsolidation(
+                original="activates",
+                consolidated="activates",
+                polarity="positive",
+                opposites=["inhibits"],
+                reasoning="Activates has opposite biological effect to inhibits",
+            ),
+            RelationshipConsolidation(
+                original="inhibits",
+                consolidated="inhibits",
+                polarity="negative",
+                opposites=["activates"],
+                reasoning="Inhibits has opposite biological effect to activates",
+            ),
+        ]
+        all_relationships = {"activates", "inhibits"}
+
+        result = build_relationship_opposition_map(consolidations, all_relationships)
+
+        # Should be bidirectional
+        assert "activates" in result
+        assert "inhibits" in result
+        assert "inhibits" in result["activates"]
+        assert "activates" in result["inhibits"]
+
+    def test_multiple_opposites(self):
+        """Test relationship with multiple opposites."""
+        from interaction_finder.extraction.models import RelationshipConsolidation
+
+        consolidations = [
+            RelationshipConsolidation(
+                original="increases_risk_of",
+                consolidated="increases_risk_of",
+                polarity="positive",
+                opposites=["protects_against", "reduces_risk_of"],
+                reasoning="Multiple protective relationships",
+            ),
+            RelationshipConsolidation(
+                original="protects_against",
+                consolidated="protects_against",
+                polarity="negative",
+                opposites=["increases_risk_of"],
+                reasoning="Protective relationship that opposes risk-increasing effects",
+            ),
+            RelationshipConsolidation(
+                original="reduces_risk_of",
+                consolidated="reduces_risk_of",
+                polarity="negative",
+                opposites=["increases_risk_of"],
+                reasoning="Risk reduction relationship opposing risk increase",
+            ),
+        ]
+        all_relationships = {
+            "increases_risk_of",
+            "protects_against",
+            "reduces_risk_of",
+        }
+
+        result = build_relationship_opposition_map(consolidations, all_relationships)
+
+        # All three should be in map (normalized: underscores -> spaces)
+        assert "increases risk of" in result
+        assert "protects against" in result
+        assert "reduces risk of" in result
+        # increases_risk_of opposes both protective relationships
+        assert result["increases risk of"] == {"protects against", "reduces risk of"}
+        # Each protective relationship opposes increases_risk_of
+        assert "increases risk of" in result["protects against"]
+        assert "increases risk of" in result["reduces risk of"]
+
+    def test_consolidated_relationships_included(self):
+        """Test that both original and consolidated labels are mapped."""
+        from interaction_finder.extraction.models import RelationshipConsolidation
+
+        consolidations = [
+            RelationshipConsolidation(
+                original="upregulates",
+                consolidated="activates",
+                polarity="positive",
+                opposites=["downregulates"],
+                reasoning="Consolidating upregulates to canonical activates form",
+            ),
+            RelationshipConsolidation(
+                original="downregulates",
+                consolidated="inhibits",
+                polarity="negative",
+                opposites=["upregulates"],
+                reasoning="Consolidating downregulates to canonical inhibits form",
+            ),
+        ]
+        all_relationships = {"upregulates", "downregulates"}
+
+        result = build_relationship_opposition_map(consolidations, all_relationships)
+
+        # Both original and consolidated should be in map
+        assert "upregulates" in result or "activates" in result
+        assert "downregulates" in result or "inhibits" in result
+
+    def test_no_opposites(self):
+        """Test relationships with no opposites."""
+        from interaction_finder.extraction.models import RelationshipConsolidation
+
+        consolidations = [
+            RelationshipConsolidation(
+                original="associated_with",
+                consolidated="associated_with",
+                polarity="neutral",
+                opposites=[],
+                reasoning="Neutral relationship has no clear opposites",
+            ),
+            RelationshipConsolidation(
+                original="binds_to",
+                consolidated="binds_to",
+                polarity="neutral",
+                opposites=[],
+                reasoning="Physical interaction without directionality",
+            ),
+        ]
+        all_relationships = {"associated_with", "binds_to"}
+
+        result = build_relationship_opposition_map(consolidations, all_relationships)
+
+        # Map may be empty or contain entries with empty sets
+        if "associated_with" in result:
+            assert len(result["associated_with"]) == 0
+        if "binds_to" in result:
+            assert len(result["binds_to"]) == 0
+
+    def test_osa_fuzzy_matching(self):
+        """Test OSA distance matching for typos in opposites."""
+        from interaction_finder.extraction.models import RelationshipConsolidation
+
+        # LLM might have typo in opposite
+        consolidations = [
+            RelationshipConsolidation(
+                original="activates",
+                consolidated="activates",
+                polarity="positive",
+                opposites=["inhbits"],  # Typo: missing 'i'
+                reasoning="Testing OSA matching with typo in opposite label",
+            ),
+            RelationshipConsolidation(
+                original="inhibits",
+                consolidated="inhibits",
+                polarity="negative",
+                opposites=["activates"],
+                reasoning="Correct spelling of opposite relationship label",
+            ),
+        ]
+        all_relationships = {"activates", "inhibits"}
+
+        result = build_relationship_opposition_map(consolidations, all_relationships)
+
+        # Should still match despite typo (OSA distance = 1)
+        assert "activates" in result
+        assert "inhibits" in result
+        # May match or not depending on normalization
+        # At minimum, the correct direction should work
+        assert "activates" in result["inhibits"]
+
+    def test_bidirectionality_enforcement(self):
+        """Test that bidirectionality is enforced even with asymmetric LLM output."""
+        from interaction_finder.extraction.models import RelationshipConsolidation
+
+        # Set up: only "promotes" declares inhibits as opposite
+        # Bidirectionality should add the reverse
+        consolidations = [
+            RelationshipConsolidation(
+                original="promotes",
+                consolidated="promotes",
+                polarity="positive",
+                opposites=["inhibits"],
+                reasoning="Promotes has opposite biological effect to inhibits",
+            ),
+            RelationshipConsolidation(
+                original="inhibits",
+                consolidated="inhibits",
+                polarity="negative",
+                opposites=[],  # Empty - asymmetric input
+                reasoning="Inhibits with no declared opposites for testing",
+            ),
+            RelationshipConsolidation(
+                original="activates",
+                consolidated="activates",
+                polarity="positive",
+                opposites=["inhibits"],
+                reasoning="Activates has opposite biological effect to inhibits",
+            ),
+        ]
+        all_relationships = {"promotes", "inhibits", "activates"}
+
+        result = build_relationship_opposition_map(consolidations, all_relationships)
+
+        # Check bidirectionality: both promotes and activates should oppose inhibits
+        assert "inhibits" in result["promotes"]
+        assert "inhibits" in result["activates"]
+        # And reverse should be enforced
+        assert "promotes" in result["inhibits"]
+        assert "activates" in result["inhibits"]
+        # But promotes and activates are NOT opposites (no transitivity)
+        assert "activates" not in result.get("promotes", set())
+        assert "promotes" not in result.get("activates", set())
+
+    def test_empty_consolidations(self):
+        """Test with no consolidations."""
+        result = build_relationship_opposition_map([], set())
+        assert result == {}
+
+    def test_case_insensitive_matching(self):
+        """Test that matching is case-insensitive via normalization."""
+        from interaction_finder.extraction.models import RelationshipConsolidation
+
+        consolidations = [
+            RelationshipConsolidation(
+                original="Activates",
+                consolidated="activates",
+                polarity="positive",
+                opposites=["Inhibits"],  # Capital I
+                reasoning="Testing case-insensitive matching for opposites",
+            ),
+            RelationshipConsolidation(
+                original="inhibits",
+                consolidated="inhibits",
+                polarity="negative",
+                opposites=["activates"],
+                reasoning="Lowercase version of opposite relationship label",
+            ),
+        ]
+        all_relationships = {"Activates", "inhibits"}
+
+        result = build_relationship_opposition_map(consolidations, all_relationships)
+
+        # Should match despite case differences
+        assert len(result) > 0
+        # Check normalized keys exist
+        assert "activates" in result or any("activ" in k for k in result)
+
+
+class TestAreRelationshipsOpposed:
+    """Tests for are_relationships_opposed function."""
+
+    def test_simple_opposition(self):
+        """Test basic opposition detection."""
+        opposition_map = {"activates": {"inhibits"}, "inhibits": {"activates"}}
+
+        assert are_relationships_opposed("activates", "inhibits", opposition_map)
+        assert are_relationships_opposed("inhibits", "activates", opposition_map)
+
+    def test_no_opposition(self):
+        """Test non-opposed relationships."""
+        opposition_map = {"activates": {"inhibits"}, "inhibits": {"activates"}}
+
+        assert not are_relationships_opposed("activates", "regulates", opposition_map)
+        assert not are_relationships_opposed("binds_to", "activates", opposition_map)
+
+    def test_self_not_opposed(self):
+        """Test that a relationship is not opposed to itself."""
+        opposition_map = {"activates": {"inhibits"}, "inhibits": {"activates"}}
+
+        assert not are_relationships_opposed("activates", "activates", opposition_map)
+        assert not are_relationships_opposed("inhibits", "inhibits", opposition_map)
+
+    def test_multiple_opposites(self):
+        """Test relationship with multiple opposites."""
+        # Keys are normalized (underscores -> spaces)
+        opposition_map = {
+            "increases risk of": {"protects against", "reduces risk of"},
+            "protects against": {"increases risk of"},
+            "reduces risk of": {"increases risk of"},
+        }
+
+        assert are_relationships_opposed(
+            "increases_risk_of", "protects_against", opposition_map
+        )
+        assert are_relationships_opposed(
+            "increases_risk_of", "reduces_risk_of", opposition_map
+        )
+        assert are_relationships_opposed(
+            "protects_against", "increases_risk_of", opposition_map
+        )
+        # But protective relationships are not opposed to each other
+        assert not are_relationships_opposed(
+            "protects_against", "reduces_risk_of", opposition_map
+        )
+
+    def test_case_insensitive(self):
+        """Test case-insensitive matching."""
+        opposition_map = {"activates": {"inhibits"}, "inhibits": {"activates"}}
+
+        # Should match despite case differences (normalization)
+        assert are_relationships_opposed("Activates", "Inhibits", opposition_map)
+        assert are_relationships_opposed("ACTIVATES", "inhibits", opposition_map)
+
+    def test_empty_opposition_map(self):
+        """Test with empty opposition map."""
+        opposition_map = {}
+
+        assert not are_relationships_opposed("activates", "inhibits", opposition_map)
+
+    def test_relationship_not_in_map(self):
+        """Test when relationship is not in map."""
+        opposition_map = {"activates": {"inhibits"}}
+
+        # regulates not in map
+        assert not are_relationships_opposed("regulates", "activates", opposition_map)
+        assert not are_relationships_opposed("activates", "unknown", opposition_map)

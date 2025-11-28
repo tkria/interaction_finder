@@ -255,6 +255,10 @@ class RelationshipConsolidation(BaseModel):
     polarity: Literal["positive", "negative", "neutral", "irrelevant"] = Field(
         description="Biological polarity: positive (promoting/increasing), negative (inhibiting/decreasing), neutral (ambiguous direction), or irrelevant (wrong level of analysis)"
     )
+    opposites: list[str] = Field(
+        default_factory=list,
+        description="Relationship labels with opposite biological effects (e.g., 'inhibits' opposes 'activates'). Empty list if no clear opposites exist.",
+    )
     reasoning: str = Field(
         min_length=30,
         description="Explanation of consolidation and polarity classification",

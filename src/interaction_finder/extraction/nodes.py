@@ -1015,9 +1015,19 @@ class ConsolidateRelationshipsNode(BaseNode[State, Deps, ExtractionResult]):
                 unique_relationships, ctx, log_missing=True
             )
 
+            # Step 4b: Build and store opposition mappings
+            from interaction_finder.extraction.utils import (
+                build_relationship_opposition_map,
+            )
+
+            ctx.state.relationship_oppositions = build_relationship_opposition_map(
+                consolidations, unique_relationships
+            )
+
             ctx.deps.logger.info(
                 f"Relationship consolidation: {len(consolidations)} relationships processed, "
-                f"{ctx.state.relationships_merged} assessments updated"
+                f"{ctx.state.relationships_merged} assessments updated, "
+                f"{len(ctx.state.relationship_oppositions)} relationships with opposites"
             )
 
             # Step 5: Filter irrelevant relationship types (if enabled)
@@ -1297,18 +1307,21 @@ class JudgeCrossDocumentNode(BaseNode[State, Deps, ExtractionResult]):
             return FinalizeNode()
 
     def _can_accept_deterministically(
-        self, assessments: list[PairAssessment]
+        self, assessments: list[PairAssessment], opposition_map: dict[str, set[str]]
     ) -> tuple[bool, str, str]:
         """Check if we can accept without LLM call.
+
+        Accepts if there are multiple high-confidence assessments with no
+        opposing relationships among them.
 
         Returns:
             (can_accept, relationship, reasoning) or (False, "", "")
         """
-        # Need multiple high-confidence assessments with same relationship
+        # Need multiple high-confidence assessments
         high_conf = [a for a in assessments if a.confidence == "high"]
 
         if len(high_conf) >= 2:
-            # Check if all have same relationship
+            # Check if all have same relationship (fast path)
             relationships = {a.relationship for a in high_conf}
             if len(relationships) == 1:
                 relationship = high_conf[0].relationship
@@ -1319,15 +1332,48 @@ class JudgeCrossDocumentNode(BaseNode[State, Deps, ExtractionResult]):
                     f"with consistent relationship '{relationship}' provide strong evidence.",
                 )
 
+            # Check for opposing relationships (if we have opposition data)
+            has_opposition = False
+            if opposition_map:
+                from itertools import combinations
+                from interaction_finder.extraction.utils import (
+                    are_relationships_opposed,
+                )
+
+                has_opposition = any(
+                    are_relationships_opposed(rel1, rel2, opposition_map)
+                    for rel1, rel2 in combinations(relationships, 2)
+                )
+
+            if not has_opposition:
+                # Multiple high-conf, different but compatible relationships
+                # Pick most common
+                from collections import Counter
+
+                most_common_rel = Counter(
+                    a.relationship for a in high_conf
+                ).most_common(1)[0][0]
+                relationships_str = ", ".join(f"'{r}'" for r in sorted(relationships))
+                return (
+                    True,
+                    most_common_rel,
+                    f"Multiple high-confidence assessments ({len(high_conf)}) "
+                    f"with compatible relationships ({relationships_str}) provide strong evidence.",
+                )
+
         return (False, "", "")
 
-    def _should_investigate(self, assessments: list[PairAssessment]) -> bool:
+    def _should_investigate(
+        self, assessments: list[PairAssessment], opposition_map: dict[str, set[str]]
+    ) -> bool:
         """Determine if we need LLM investigation.
 
         Always investigate except for the deterministic accept case.
         """
         # Check for deterministic accept
-        can_accept, _, _ = self._can_accept_deterministically(assessments)
+        can_accept, _, _ = self._can_accept_deterministically(
+            assessments, opposition_map
+        )
         if can_accept:
             return False
 
@@ -1384,7 +1430,10 @@ Synthesize contradictory evidence for an entity association.
 
 **Relationship types found:** {relationships_str}
 
-**Note:** This is a CONTENTIOUS pair with contradictory biological effects. Some documents indicate positive effects while others indicate negative effects.
+**Note:** This is a CONTENTIOUS pair with contradictory evidence. This may indicate either:
+- Conflicting biological polarities (positive effects vs negative effects)
+- Opposing relationships (e.g., "activates" vs "inhibits")
+- Context-dependent effects that appear contradictory
 
 # Document Extracts
 
@@ -1452,6 +1501,43 @@ Select the most accurate relationship overall (from the ones found above).
 
 Provide: accepted (true/false), relationship (selected label), confidence (high/medium/low), and detailed reasoning. Cite documents using their IDs in square brackets (e.g., [1_abc12345]) when referencing specific evidence."""
 
+    def _is_contentious_pair(
+        self,
+        assessments: list[PairAssessment],
+        spread: PairSpread,
+        ctx: GraphRunContext[State, Deps],
+    ) -> bool:
+        """Detect if a pair has contradictory evidence requiring special handling.
+
+        A pair is contentious if either:
+        1. It has both positive AND negative polarity assessments
+        2. It has opposing relationships (e.g., "activates" vs "inhibits")
+
+        Parameters:
+            assessments: All assessments for this pair
+            spread: Assessments grouped by polarity
+            ctx: Graph context with opposition mapping
+
+        Returns:
+            True if pair is contentious, False otherwise
+        """
+        # Check 1: Contradictory polarity (positive + negative)
+        if spread.positive and spread.negative:
+            return True
+
+        # Check 2: Opposing relationships
+        if not ctx.state.relationship_oppositions:
+            return False
+
+        from itertools import combinations
+        from interaction_finder.extraction.utils import are_relationships_opposed
+
+        relationships = [a.relationship for a in assessments]
+        return any(
+            are_relationships_opposed(rel1, rel2, ctx.state.relationship_oppositions)
+            for rel1, rel2 in combinations(relationships, 2)
+        )
+
     async def _judge_pair(
         self,
         pair_key: EntityPairKey,
@@ -1467,7 +1553,7 @@ Provide: accepted (true/false), relationship (selected label), confidence (high/
 
             # Try deterministic accept
             can_accept, relationship, reasoning = self._can_accept_deterministically(
-                assessments
+                assessments, ctx.state.relationship_oppositions
             )
             if can_accept:
                 # Create judgment without LLM call (no semaphore needed)
@@ -1496,8 +1582,8 @@ Provide: accepted (true/false), relationship (selected label), confidence (high/
             # Need LLM investigation
             # Collect valid document IDs from all assessments for citation validation
             valid_doc_ids = {a.resource_id.id for a in assessments}
-            # Detect contentious pairs (positive + negative evidence)
-            is_contentious = bool(spread.positive and spread.negative)
+            # Detect contentious pairs (positive + negative polarity OR opposing relationships)
+            is_contentious = self._is_contentious_pair(assessments, spread, ctx)
 
             if is_contentious:
                 prompt = self._build_contentious_prompt(pair_key, spread, ctx)
@@ -1920,11 +2006,31 @@ For each relationship, provide:
         consolidations: list[RelationshipConsolidation],
         ctx: GraphRunContext[State, Deps],
     ) -> None:
-        """Apply relationship consolidations and store polarities."""
+        """Apply relationship consolidations, store polarities, and update oppositions."""
+        from interaction_finder.extraction.utils import (
+            build_relationship_opposition_map,
+        )
+
+        # Store polarities
         for cons in consolidations:
             ctx.state.relationship_polarities[cons.original] = cons.polarity
             ctx.state.relationship_polarities[cons.consolidated] = cons.polarity
-            # Apply consolidation if label changed
+
+        # Update opposition map with new relationships
+        # Collect all known relationships (existing + new)
+        all_relationships = set(ctx.state.relationship_polarities.keys())
+        new_oppositions = build_relationship_opposition_map(
+            consolidations, all_relationships
+        )
+        # Merge new oppositions into existing map
+        for rel, opps in new_oppositions.items():
+            if rel in ctx.state.relationship_oppositions:
+                ctx.state.relationship_oppositions[rel].update(opps)
+            else:
+                ctx.state.relationship_oppositions[rel] = opps
+
+        # Apply consolidation if label changed
+        for cons in consolidations:
             if cons.original != cons.consolidated:
                 norm_orig = normalize_for_comparison(cons.original)
                 for assessments in ctx.state.pair_assessments_by_resource.values():

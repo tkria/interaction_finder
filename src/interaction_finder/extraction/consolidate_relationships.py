@@ -1,10 +1,11 @@
 """Relationship consolidation agent.
 
-Provides unified agent for relationship normalization that handles both:
+Provides unified agent for relationship normalization that handles:
 1. Semantic consolidation: Merges synonymous labels
-2. Polarity classification: Classifies supporting/refuting/neutral/irrelevant
+2. Polarity classification: Classifies positive/negative/neutral/irrelevant
+3. Opposition detection: Identifies relationships with opposite biological effects
 
-Both operations require understanding topic-relationship semantics, so they are
+All operations require understanding relationship semantics, so they are
 combined into a single LLM call for efficiency and consistency.
 """
 
@@ -25,6 +26,7 @@ get_relationship_consolidation_agent = agent_getter(
 Your task: For each relationship label, determine:
 1. **CONSOLIDATION**: Should it be mapped to a canonical form?
 2. **POLARITY**: What is its biological direction/effect?
+3. **OPPOSITES**: Which other relationships have opposite biological effects?
 
 ---
 
@@ -106,24 +108,68 @@ For gene-disease relationships:
 
 ---
 
+## PART 3: Opposition Detection
+
+Identify relationships with **opposite biological effects** from among the provided relationships.
+
+**Key principles:**
+
+**Direct opposites** - Clear antonyms indicating reversed biological direction:
+- "activates" ↔ "inhibits"
+- "increases_risk_of" ↔ "decreases_risk_of" / "protects_against"
+- "promotes" ↔ "prevents"
+- "upregulates" ↔ "downregulates"
+- "causes" ↔ "treats" (in disease context)
+
+**Non-opposites** - Do NOT mark as opposites:
+- Different specificity levels: "regulates" is NOT opposite to "activates" (it's more general)
+- Different mechanisms: "binds_to" is NOT opposite to "inhibits" (different level of description)
+- Neutral vs directional: "associated_with" is NOT opposite to anything (too ambiguous)
+- Orthogonal relationships: "spatial_colocalization" has no opposites
+
+**Guidelines:**
+- Only include opposites that appear in the provided relationship list
+- Use the **original** relationship labels as they appear (before consolidation)
+- List all applicable opposites, not just one
+- Empty list is valid if no clear opposites exist
+- Be conservative: only mark clear semantic opposites
+
+**Examples:**
+
+Given relationships: ["activates", "inhibits", "regulates", "binds_to"]
+- "activates" → opposites: ["inhibits"]
+- "inhibits" → opposites: ["activates"]
+- "regulates" → opposites: [] (too general, not opposite to either)
+- "binds_to" → opposites: [] (different level of description)
+
+Given relationships: ["increases_risk_of", "protects_against", "associated_with"]
+- "increases_risk_of" → opposites: ["protects_against"]
+- "protects_against" → opposites: ["increases_risk_of"]
+- "associated_with" → opposites: [] (neutral, no clear direction)
+
+---
+
 ## Output Format
 
 For each relationship:
 - `original`: The label as it appears
 - `consolidated`: Canonical form (may equal original if already canonical)
 - `polarity`: positive | negative | neutral | irrelevant
-- `reasoning`: Explain both consolidation and polarity decisions (30+ chars)
+- `opposites`: List of original relationship labels with opposite effects (empty list if none)
+- `reasoning`: Explain consolidation, polarity, and opposition decisions (30+ chars)
 
 **Important notes:**
 - If label is already canonical, consolidated = original
 - Multiple originals can map to same consolidated label
 - Polarity applies to the consolidated label
-- Empty list is valid if no relationships provided
+- Opposites should reference **original** labels as they appear in the input list
+- Empty opposites list is valid and common
 - When uncertain about directionality, prefer neutral over irrelevant
 
 **Conservative approach:**
 - Preserve distinctions when biological meaning differs
 - Default to neutral if directionality unclear
-- Only mark irrelevant if clearly orthogonal to research level""",
+- Only mark irrelevant if clearly orthogonal to research level
+- Only include clear semantic opposites, not related concepts""",
     default_model_settings=ModelSettings(parallel_tool_calls=False),
 )

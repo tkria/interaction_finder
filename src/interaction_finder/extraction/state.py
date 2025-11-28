@@ -110,6 +110,8 @@ class State:
     relationship_mappings: dict[str, str] = field(default_factory=dict)
     # Mapping from relationship label to polarity (positive/negative/neutral/irrelevant)
     relationship_polarities: dict[str, str] = field(default_factory=dict)
+    # Mapping from normalized relationship to set of normalized opposing relationships
+    relationship_oppositions: dict[str, set[str]] = field(default_factory=dict)
     # Count of assessments with updated relationship labels
     relationships_merged: int = 0
 
