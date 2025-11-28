@@ -9,7 +9,7 @@ Pipeline flow:
    - Validate kinds → validated_entities_by_resource
    - Identify proximal sets → proximal_sets_by_resource
    - Extract & assess pairs → pair_assessments_by_resource
-2. ConsolidateEntitiesNode → entities_merged, canonical_name_variants (global merging + pair reference updates)
+2. ConsolidateEntitiesNode → entities_merged, consolidation_rules (global merging + pair reference updates)
 3. ConsolidateRelationshipsNode → relationship_mappings, relationship_polarities
 4. SweepCoMentionsNode → co_mention_sweep_stats (additional assessments added to pair_assessments_by_resource)
 5. ConsolidateNewRelationshipsNode → extends relationship_polarities for new labels
@@ -77,25 +77,21 @@ class State:
     )
     # Count of entities merged (for metadata)
     entities_merged: int = 0
-    # Memoization cache for consolidation decisions: (norm_parent, norm_child, kind) → target | False
-    # Stores target canonical name for merge/rename, or False for skip decisions
-    merge_decision_cache: dict[tuple[str, str, str], str | bool] = field(
-        default_factory=dict
-    )
-    # Track all canonical name variants for each normalized entity name
-    # Maps (normalized_name, kind) → set of all canonical (un-normalized) variants seen
-    # Used to apply merge decisions correctly across documents with different capitalizations
-    canonical_name_variants: dict[tuple[str, str], set[str]] = field(
-        default_factory=dict
-    )
-    # Cache hits/misses for metrics
-    merge_cache_hits: int = 0
-    merge_cache_misses: int = 0
     # Consolidation rules for provenance: (normalized_name, kind) → (target_canonical, reasoning)
-    # Reasoning is "auto:cap", "auto:fuzzy", or full LLM reasoning string
+    # Reasoning format: "auto:<speculation>:<source>:<match_kind>" or full LLM reasoning string
+    # Examples: "auto:0:original:exact", "auto:1:before_paren:exact", "auto:3:original:fuzzy"
     consolidation_rules: dict[tuple[str, str], tuple[str, str]] = field(
         default_factory=dict
     )
+    # Within-run cache for LLM merge decisions: (child_canonical, parent_canonical, kind) → (target, reasoning)
+    # target is None for "skip", parent for "merge", or custom name for "rename"
+    # Prevents redundant LLM calls when same pair appears across multiple documents
+    agent_merge_cache: dict[tuple[str, str, str], tuple[str | None, str]] = field(
+        default_factory=dict
+    )
+    # Cache statistics
+    merge_cache_hits: int = 0
+    merge_cache_misses: int = 0
 
     # === Stage 3: Proximal Set Identification ===
     # Groups of entities found in close proximity per resource

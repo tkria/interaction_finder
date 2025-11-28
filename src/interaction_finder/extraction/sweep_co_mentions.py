@@ -27,9 +27,12 @@ from interaction_finder.extraction.models import (
     EntityRef,
     PairAssessment,
 )
+from interaction_finder.extraction.entity_matching import (
+    extract_entity_variants,
+    find_entity_match,
+)
 from interaction_finder.extraction.utils import (
     adjust_heading_levels,
-    find_best_entity_match,
     make_entity_pair_key,
 )
 from interaction_finder.resources import (
@@ -628,7 +631,21 @@ async def assess_co_mention_region(
         pair_lookup[(pk.entity2_name, pk.entity1_name)] = candidate
         all_entity_names.add(pk.entity1_name)
         all_entity_names.add(pk.entity2_name)
-    entity_name_list = list(all_entity_names)
+
+    # Build variant map for fuzzy matching
+    entity_variants = {}
+    if validated_entities:
+        for name in all_entity_names:
+            if name in validated_entities:
+                entity_ref = validated_entities[name]
+                entity_variants[name] = extract_entity_variants(
+                    name, entity_ref.aliases()
+                )
+    else:
+        # Fallback: use entity names without aliases
+        for name in all_entity_names:
+            entity_variants[name] = extract_entity_variants(name, None)
+
     # Build relationships section
     if known_relationships:
         relationships_section = (
@@ -673,13 +690,22 @@ Provide supporting quotes for confirmed relationships."""
     assessments: list[PairAssessment] = []
     for confirmed in result.output.confirmed_pairs:
         # Match entity names using fuzzy matching (handles spelling variants, annotations)
-        matched_e1 = find_best_entity_match(confirmed.entity1_name, entity_name_list)
-        matched_e2 = find_best_entity_match(confirmed.entity2_name, entity_name_list)
-        if matched_e1 is None or matched_e2 is None:
+        match1 = find_entity_match(
+            confirmed.entity1_name, entity_variants, allow_fuzzy=True
+        )
+        match2 = find_entity_match(
+            confirmed.entity2_name, entity_variants, allow_fuzzy=True
+        )
+
+        if match1 is None or match2 is None:
             deps.logger.warning(
                 f"LLM returned unknown pair: {confirmed.entity1_name} <-> {confirmed.entity2_name}"
             )
             continue
+
+        matched_e1 = match1.canonical
+        matched_e2 = match2.canonical
+
         # Look up candidate using matched names
         candidate = pair_lookup.get((matched_e1, matched_e2))
         if candidate is None:

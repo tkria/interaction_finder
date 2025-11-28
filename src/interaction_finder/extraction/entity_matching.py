@@ -1,0 +1,596 @@
+"""Entity matching with composable speculation system.
+
+This module provides unified entity matching for both:
+1. Pair extraction / quote validation (finding which entity a name refers to)
+2. Entity consolidation (grouping entities that should merge)
+
+Key concepts:
+- Variant extraction: Each entity expands to multiple variant forms
+- Speculation levels: Track confidence in each variant (0 = most confident)
+- Composable speculation: variant_spec + match_penalty = total_speculation
+- Contested variants: Forms mapping to multiple entities are excluded
+- Auto-merge threshold: Only high-confidence matches merge automatically
+
+Speculation system:
+- 0: Original canonical/alias form
+- 1: Before parenthesis (e.g., "ACTB" from "ACTB (β-Actin)")
+- 2: Primary content (main expansion or alternation)
+- 3: Secondary content
+- 4: Nested expansion (alternations within parentheses)
+- +0: Exact match penalty
+- +3: Fuzzy match penalty (plurals, UK/US spelling)
+- +1: Alias offset (aliases less confident than canonical)
+
+AUTO_MERGE_THRESHOLD = 4: Auto-merges spec ≤ 4, agent reviews spec > 4
+"""
+
+from dataclasses import dataclass
+from typing import Literal
+import re
+
+from interaction_finder.extraction.utils import (
+    normalize_for_comparison,
+    _expand_slash,
+    _is_valid_entity_form,
+    is_obvious_variant,
+    _only_short_number_difference,
+    osa_distance,
+)
+
+
+# ============================================================================
+# Speculation Constants
+# ============================================================================
+
+# Variant speculation levels (from extraction)
+SPEC_ORIGINAL = 0  # Unmodified canonical/alias
+SPEC_BEFORE_PAREN = 1  # "ACTB" from "ACTB (β-Actin)"
+SPEC_PRIMARY_CONTENT = 2  # Main content (expansion/alternation)
+SPEC_SECONDARY_CONTENT = 3  # Secondary content
+SPEC_NESTED_EXPANSION = 4  # Nested alternations
+
+# Match quality penalties (added to variant speculation)
+PENALTY_EXACT = 0  # Exact normalized match
+PENALTY_FUZZY = 3  # Fuzzy match (validated)
+
+# Alias offset (added during extraction for alias-sourced variants)
+OFFSET_ALIAS = 1
+
+# Consolidation threshold
+AUTO_MERGE_THRESHOLD = 4  # Total speculation ≤ 4 → auto-merge
+# Total speculation > 4 → agent review
+
+# Fuzzy matching thresholds
+MIN_LENGTH_FOR_FUZZY = 10  # Only fuzzy-match entities with ≥10 chars
+MIN_FUZZY_SIMILARITY = 0.7  # 70% minimum similarity for fuzzy matches
+
+
+# ============================================================================
+# Data Structures
+# ============================================================================
+
+
+@dataclass
+class SpeculatedVariant:
+    """Variant form with speculation level and provenance."""
+
+    form: str
+    speculation: int  # 0 = most confident
+    source: str  # original, before_paren, paren_expansion, etc.
+    is_from_alias: bool = False
+
+    def __repr__(self) -> str:
+        alias_marker = " [alias]" if self.is_from_alias else ""
+        return f"[{self.speculation}] {self.form}{alias_marker} ({self.source})"
+
+
+@dataclass
+class EntityMatch:
+    """Match result with full speculation tracking."""
+
+    canonical: str
+    matched_variant: SpeculatedVariant
+    query_variant: SpeculatedVariant
+    match_penalty: int  # PENALTY_EXACT or PENALTY_FUZZY
+
+    @property
+    def total_speculation(self) -> int:
+        return self.matched_variant.speculation + self.match_penalty
+
+    def auto_reason(self) -> str:
+        """Format: auto:<total>:<source>:<match_kind>"""
+        source = self.matched_variant.source
+        if self.matched_variant.is_from_alias:
+            source = f"alias:{source}"
+        match_kind = "exact" if self.match_penalty == PENALTY_EXACT else "fuzzy"
+        return f"auto:{self.total_speculation}:{source}:{match_kind}"
+
+
+@dataclass
+class VariantMapping:
+    """Maps normalized variant to canonical with speculation."""
+
+    canonical: str
+    variant: SpeculatedVariant
+
+
+@dataclass
+class ConsolidationCandidates:
+    """Entity pairs grouped by decision type."""
+
+    auto_merge: list[tuple[str, str, str]]  # (child, parent, reasoning)
+    agent_review: list[tuple[str, str]]  # (child, parent)
+    contested_warnings: list[tuple[str, set[str]]]  # (form, canonicals)
+
+
+# ============================================================================
+# Parenthetical Classification
+# ============================================================================
+
+
+def classify_parenthetical(
+    base: str, paren_content: str
+) -> Literal["expansion", "qualifier"]:
+    """Classify parenthetical as expansion (main content) or qualifier (supplementary).
+
+    Returns "expansion" for multi-word, technical notation, or longer-than-base content.
+    Returns "qualifier" for single lowercase words like "gene", "protein".
+    """
+    paren = paren_content.strip()
+    # Single lowercase word without hyphens
+    if paren.islower() and " " not in paren and "-" not in paren:
+        return "qualifier"
+    # Multi-word or technical notation (hyphens, Greek letters)
+    if (
+        " " in paren
+        or "-" in paren
+        or any(c in paren for c in "αβγδεζηθικλμνξοπρστυφχψω")
+    ):
+        return "expansion"
+    # Longer than base
+    if len(paren) > len(base):
+        return "expansion"
+    return "qualifier"
+
+
+# ============================================================================
+# Variant Extraction
+# ============================================================================
+
+
+def extract_entity_variants(
+    entity_name: str,
+    aliases: list[str] | None = None,
+    _is_alias: bool = False,
+) -> list[SpeculatedVariant]:
+    """Extract all variant forms with speculation levels.
+
+    May return duplicates with different speculation levels. Caller should deduplicate
+    if needed (build_variant_map handles this). Aliases processed recursively with
+    +OFFSET_ALIAS speculation offset.
+    """
+    variants: list[SpeculatedVariant] = []
+    base_offset = OFFSET_ALIAS if _is_alias else 0
+
+    # Always include original
+    variants.append(
+        SpeculatedVariant(
+            form=entity_name,
+            speculation=SPEC_ORIGINAL + base_offset,
+            source="original",
+            is_from_alias=_is_alias,
+        )
+    )
+
+    # Check for parenthetical: "Base (Content)"
+    paren_match = re.match(r"^(.+?)\s*\(([^)]+)\)\s*$", entity_name.strip())
+
+    if paren_match:
+        base = paren_match.group(1).strip()
+        paren_content = paren_match.group(2).strip()
+
+        # Add base (before parenthesis)
+        if base and _is_valid_entity_form(base):
+            variants.append(
+                SpeculatedVariant(
+                    form=base,
+                    speculation=SPEC_BEFORE_PAREN + base_offset,
+                    source="before_paren",
+                    is_from_alias=_is_alias,
+                )
+            )
+
+        # Assign speculation based on whether paren is expansion or qualifier
+        paren_type = classify_parenthetical(base, paren_content)
+        if paren_type == "expansion":
+            # Paren is primary, base alts secondary, paren alts nested
+            paren_spec = SPEC_PRIMARY_CONTENT
+            base_alt_spec = SPEC_SECONDARY_CONTENT
+            paren_alt_spec = SPEC_NESTED_EXPANSION
+        else:
+            # Base alts primary, paren secondary, paren alts nested
+            paren_spec = SPEC_SECONDARY_CONTENT
+            base_alt_spec = SPEC_PRIMARY_CONTENT
+            paren_alt_spec = SPEC_NESTED_EXPANSION
+
+        # Determine source labels based on type
+        paren_source = (
+            "paren_expansion" if paren_type == "expansion" else "paren_qualifier"
+        )
+
+        # Extract alternations
+        base_alternations = _expand_slash(base)
+        base_has_slash = len(base_alternations) > 1
+        paren_alternations = _expand_slash(paren_content)
+        paren_has_slash = len(paren_alternations) > 1
+
+        # Add parenthetical content (always add if valid, regardless of slashes)
+        if _is_valid_entity_form(paren_content):
+            variants.append(
+                SpeculatedVariant(
+                    form=paren_content,
+                    speculation=paren_spec + base_offset,
+                    source=paren_source,
+                    is_from_alias=_is_alias,
+                )
+            )
+
+        # Add base alternations (if has slash)
+        if base_has_slash:
+            for alt in base_alternations[1:]:  # Skip original
+                if _is_valid_entity_form(alt):
+                    variants.append(
+                        SpeculatedVariant(
+                            form=alt,
+                            speculation=base_alt_spec + base_offset,
+                            source="base_alternation",
+                            is_from_alias=_is_alias,
+                        )
+                    )
+
+        # Add paren alternations (if has slash)
+        if paren_has_slash:
+            for alt in paren_alternations[1:]:  # Skip original
+                if _is_valid_entity_form(alt):
+                    variants.append(
+                        SpeculatedVariant(
+                            form=alt,
+                            speculation=paren_alt_spec + base_offset,
+                            source="paren_alternation",
+                            is_from_alias=_is_alias,
+                        )
+                    )
+
+    else:
+        # No parentheses - check for alternations
+        alternations = _expand_slash(entity_name)
+        if len(alternations) > 1:
+            for alt in alternations[1:]:  # Skip original (already added)
+                if _is_valid_entity_form(alt):
+                    variants.append(
+                        SpeculatedVariant(
+                            form=alt,
+                            speculation=SPEC_PRIMARY_CONTENT + base_offset,
+                            source="alternation",
+                            is_from_alias=_is_alias,
+                        )
+                    )
+
+    # Process aliases recursively (with +OFFSET_ALIAS)
+    if aliases:
+        for alias in aliases:
+            alias_variants = extract_entity_variants(
+                alias, aliases=None, _is_alias=True
+            )
+            variants.extend(alias_variants)
+
+    # Sort by speculation (stable sort preserves order within level)
+    variants.sort(key=lambda v: v.speculation)
+
+    return variants
+
+
+# ============================================================================
+# Validation
+# ============================================================================
+
+
+def are_safe_capitalization_variants(names: set[str]) -> bool:
+    """Check if names differ only in capitalization (rejects number-only diffs)."""
+    if len(names) <= 1:
+        return True
+
+    # Check 1: All normalize to same form
+    normalized = {normalize_for_comparison(n) for n in names}
+    if len(normalized) != 1:
+        return False
+
+    # Check 2: All identical when lowercased
+    lowercased = {n.lower() for n in names}
+    if len(lowercased) != 1:
+        return False
+
+    # Check 3: Reject number-only differences
+    names_list = list(names)
+    for i, n1 in enumerate(names_list):
+        for n2 in names_list[i + 1 :]:
+            if _only_short_number_difference(n1, n2):
+                return False  # SMAD6 vs SMAD7 - NOT safe!
+
+    return True
+
+
+# ============================================================================
+# Variant Map Building
+# ============================================================================
+
+
+def build_variant_map(
+    entities: dict[str, list[SpeculatedVariant]],
+) -> tuple[dict[str, VariantMapping], set[str]]:
+    """Build variant→canonical map, excluding contested (multi-canonical) variants."""
+    # Collect all mappings
+    norm_to_mappings: dict[str, list[tuple[str, SpeculatedVariant]]] = {}
+
+    for canonical, variants in entities.items():
+        for sv in variants:
+            norm = normalize_for_comparison(sv.form)
+            norm_to_mappings.setdefault(norm, []).append((canonical, sv))
+
+    # Filter contested, keep best uncontested
+    variant_map: dict[str, VariantMapping] = {}
+    contested: set[str] = set()
+
+    for norm, mappings in norm_to_mappings.items():
+        unique_canonicals = {canonical for canonical, _ in mappings}
+
+        if len(unique_canonicals) == 1:
+            # Uncontested - take lowest speculation
+            canonical, best_variant = min(mappings, key=lambda m: m[1].speculation)
+            variant_map[norm] = VariantMapping(
+                canonical=canonical, variant=best_variant
+            )
+        else:
+            # Contested - exclude from map
+            contested.add(norm)
+
+    return variant_map, contested
+
+
+# ============================================================================
+# Entity Matching (for pair extraction / quote validation)
+# ============================================================================
+
+
+def find_entity_match(
+    query: str,
+    entities: dict[str, list[SpeculatedVariant]],
+    *,
+    allow_fuzzy: bool = True,
+) -> EntityMatch | None:
+    """Find best entity match via progressive matching (exact, then fuzzy if enabled)."""
+    # Build variant map (excludes contested)
+    variant_map, _ = build_variant_map(entities)
+
+    # Extract query variants
+    query_variants = extract_entity_variants(query)
+
+    # Stage 1: Try exact matches
+    best_match: EntityMatch | None = None
+
+    for qv in query_variants:
+        norm = normalize_for_comparison(qv.form)
+        if norm in variant_map:
+            mapping = variant_map[norm]
+            match = EntityMatch(
+                canonical=mapping.canonical,
+                matched_variant=mapping.variant,
+                query_variant=qv,
+                match_penalty=PENALTY_EXACT,
+            )
+            # Keep match with lowest total speculation
+            if (
+                best_match is None
+                or match.total_speculation < best_match.total_speculation
+            ):
+                best_match = match
+
+    if best_match is not None:
+        return best_match
+
+    if not allow_fuzzy:
+        return None
+
+    # Stage 2: Fuzzy matching with validation
+    scores: list[tuple[float, int, VariantMapping, SpeculatedVariant]] = []
+
+    for qv in query_variants:
+        qv_norm = normalize_for_comparison(qv.form)
+        for variant_norm, mapping in variant_map.items():
+            dist = osa_distance(qv_norm, variant_norm)
+            shorter_len = min(len(qv_norm), len(variant_norm))
+            if shorter_len == 0:
+                continue
+            similarity = 1 - dist / shorter_len
+
+            # Only trust "obvious" fuzzy matches (validated)
+            if dist == 1 and is_obvious_variant(qv_norm, variant_norm):
+                scores.append((similarity, dist, mapping, qv))
+
+    if not scores:
+        return None
+
+    # Sort by similarity (highest first)
+    scores.sort(reverse=True, key=lambda x: x[0])
+    best_similarity, best_dist, best_mapping, best_qv = scores[0]
+
+    # Validation checks
+    shorter_len = min(
+        len(normalize_for_comparison(best_qv.form)),
+        len(normalize_for_comparison(best_mapping.variant.form)),
+    )
+
+    # Minimum similarity threshold
+    if best_similarity < MIN_FUZZY_SIMILARITY:
+        return None
+
+    # Maximum distance (scales with length)
+    max_distance = 1 + shorter_len // 10
+    if best_dist > max_distance:
+        return None
+
+    # Specificity check (gap to second-best)
+    min_gap = 2 * (1 - best_similarity)
+    if len(scores) > 1 and best_similarity - scores[1][0] < min_gap:
+        return None
+
+    return EntityMatch(
+        canonical=best_mapping.canonical,
+        matched_variant=best_mapping.variant,
+        query_variant=best_qv,
+        match_penalty=PENALTY_FUZZY,
+    )
+
+
+# ============================================================================
+# Consolidation (for entity merging)
+# ============================================================================
+
+
+def _select_best_canonical(canonical_names: set[str]) -> str:
+    """Select best capitalization: prefer mixed-case over all-upper/all-lower."""
+    return max(
+        canonical_names,
+        key=lambda v: (
+            sum(1 for c in v if c.islower())
+            * sum(1 for c in v if c.isupper()),  # Mixed
+            sum(1 for c in v if c.isupper()),  # Uppercase count
+            -sum(1 for c in v if c.islower()),  # Minimize lowercase
+        ),
+    )
+
+
+def find_consolidation_candidates(
+    entities: dict[str, list[SpeculatedVariant]],
+) -> ConsolidationCandidates:
+    """Find entity pairs for consolidation (auto-merge if ≤ threshold, else agent review)."""
+    # Build variant map (excludes contested)
+    variant_map, contested = build_variant_map(entities)
+
+    # Track results
+    auto_merge: list[tuple[str, str, str]] = []
+    agent_review: list[tuple[str, str]] = []
+    contested_warnings: list[tuple[str, set[str]]] = []
+
+    # Handle contested variants: check if they're safe capitalization variants
+    # If safe, pick best canonical and auto-merge. If not, add to warnings.
+    for norm in contested:
+        affected = {
+            canonical
+            for canonical, variants in entities.items()
+            if any(normalize_for_comparison(v.form) == norm for v in variants)
+        }
+        if len(affected) <= 1:
+            continue
+
+        # Check if these are safe capitalization variants (BRCA1/Brca1/brca1)
+        if are_safe_capitalization_variants(affected):
+            # Pick best canonical (prefer mixed-case)
+            best_canonical = _select_best_canonical(affected)
+
+            # Create auto-merge rules for all others
+            # Find the lowest speculation variant from the best canonical
+            best_variants = [
+                v
+                for v in entities[best_canonical]
+                if normalize_for_comparison(v.form) == norm
+            ]
+            if best_variants:
+                best_variant = min(best_variants, key=lambda v: v.speculation)
+                match = EntityMatch(
+                    canonical=best_canonical,
+                    matched_variant=best_variant,
+                    query_variant=best_variant,
+                    match_penalty=PENALTY_EXACT,
+                )
+                for canonical in affected:
+                    if canonical != best_canonical:
+                        auto_merge.append(
+                            (canonical, best_canonical, match.auto_reason())
+                        )
+        else:
+            # Not safe capitalization variants - add warning
+            contested_warnings.append((norm, affected))
+
+    # Find potential merges by inverting variant map
+    norm_to_canonicals: dict[str, set[str]] = {}
+    for canonical, variants in entities.items():
+        for sv in variants:
+            norm = normalize_for_comparison(sv.form)
+            if norm in variant_map:  # Only uncontested
+                norm_to_canonicals.setdefault(norm, set()).add(canonical)
+
+    # Process each potential collision
+    for norm_form, canonicals in norm_to_canonicals.items():
+        if len(canonicals) <= 1:
+            continue
+
+        mapping = variant_map[norm_form]
+        total_spec = mapping.variant.speculation  # Exact match penalty = 0
+
+        # Additional validation for low-speculation matches
+        if mapping.variant.speculation <= SPEC_BEFORE_PAREN:
+            # Should be capitalization variants
+            if not are_safe_capitalization_variants(canonicals):
+                # Not safe - send to agent regardless of speculation
+                for canonical in canonicals:
+                    if canonical != mapping.canonical:
+                        agent_review.append((canonical, mapping.canonical))
+                continue
+
+        # Decide based on speculation threshold
+        if total_spec <= AUTO_MERGE_THRESHOLD:
+            # Auto-merge - create match for reasoning
+            match = EntityMatch(
+                canonical=mapping.canonical,
+                matched_variant=mapping.variant,
+                query_variant=mapping.variant,  # Same for consolidation
+                match_penalty=PENALTY_EXACT,
+            )
+
+            for canonical in canonicals:
+                if canonical != mapping.canonical:
+                    auto_merge.append(
+                        (canonical, mapping.canonical, match.auto_reason())
+                    )
+        else:
+            # Above threshold - agent review
+            for canonical in canonicals:
+                if canonical != mapping.canonical:
+                    agent_review.append((canonical, mapping.canonical))
+
+    # Check for fuzzy spelling variants (tumor/tumour) between remaining entities
+    if PENALTY_FUZZY <= AUTO_MERGE_THRESHOLD:
+        canonical_list = list(entities.keys())
+        for i, canon1 in enumerate(canonical_list):
+            for canon2 in canonical_list[i + 1 :]:
+                base1 = normalize_for_comparison(canon1)
+                base2 = normalize_for_comparison(canon2)
+                dist = osa_distance(base1, base2)
+                # Fuzzy match: dist=1 and passes obvious variant check
+                if dist == 1 and is_obvious_variant(base1, base2):
+                    # Prefer longer name; if same length, alphabetical
+                    parent, child = max(
+                        (canon1, canon2),
+                        (canon2, canon1),
+                        key=lambda p: (len(p[0]), p[0]),
+                    )
+                    auto_merge.append(
+                        (child, parent, f"auto:{PENALTY_FUZZY}:original:fuzzy")
+                    )
+
+    return ConsolidationCandidates(
+        auto_merge=auto_merge,
+        agent_review=agent_review,
+        contested_warnings=contested_warnings,
+    )

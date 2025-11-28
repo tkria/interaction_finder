@@ -24,11 +24,14 @@ from interaction_finder.extraction.models import (
     PairAssessment,
     ProximalEntitySet,
 )
+from interaction_finder.extraction.entity_matching import (
+    extract_entity_variants,
+    find_entity_match,
+)
 from interaction_finder.extraction.utils import (
     adjust_heading_levels,
     build_text_region,
     collect_relevant_text_for_quotes,
-    find_best_entity_match,
     make_entity_pair_key,
     normalize_for_comparison,
     strip_kind_annotation,
@@ -272,16 +275,24 @@ For each binary association between these entities that is clearly stated or imp
     pairs = []
     quotes_validated = 0
     quotes_failed = 0
-    # Build list of valid entity names for fuzzy matching
-    entity_name_list = list(proximal_set.entities)
+
+    # Build variant map once for efficient fuzzy matching
+    entity_variants = {
+        name: extract_entity_variants(name, entities[name].aliases)
+        for name in proximal_set.entities
+    }
 
     for pair_info in result.output.pairs:
         # Match LLM-returned entity names to known entities (handles annotations, variants)
-        entity1 = find_best_entity_match(pair_info.entity1, entity_name_list)
-        entity2 = find_best_entity_match(pair_info.entity2, entity_name_list)
+        match1 = find_entity_match(pair_info.entity1, entity_variants, allow_fuzzy=True)
+        match2 = find_entity_match(pair_info.entity2, entity_variants, allow_fuzzy=True)
+
         # Skip if entities not found (hallucinations or no close match)
-        if entity1 is None or entity2 is None:
+        if match1 is None or match2 is None:
             continue
+
+        entity1 = match1.canonical
+        entity2 = match2.canonical
         # Check if pair kinds are permitted by configuration
         e1_obj = entities.get(entity1)
         e2_obj = entities.get(entity2)

@@ -52,16 +52,19 @@ from interaction_finder.extraction.models import (
     SimpleEntity,
 )
 from interaction_finder.extraction.state import State
+from interaction_finder.extraction.entity_matching import (
+    extract_entity_variants,
+    find_consolidation_candidates,
+    SpeculatedVariant,
+)
 from interaction_finder.extraction.utils import (
     adjust_heading_levels,
     collect_relevant_text_for_quotes,
     extract_all_forms,
     extract_document_citations,
     identify_proximal_sets,
-    is_obvious_variant,
     make_entity_pair_key,
     normalize_for_comparison,
-    osa_distance,
     validate_document_citations,
 )
 from interaction_finder.logging import logfire
@@ -369,28 +372,51 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
             total_rules = 0
             iterations_completed = 0
             # Collect entities once, then iteratively find/process merge opportunities
-            unique_entities = self._collect_unique_entities(ctx)
+            entities_by_kind = self._collect_entity_variants(ctx)
             for iteration in range(1, max_iterations + 1):
                 iterations_completed = iteration
-                # Find auto-merge rules and LLM candidate pairs
-                exact_rules, candidate_pairs, canonical_lookup = (
-                    self._find_merge_candidates(unique_entities)
-                )
-                llm_rules, new_names = await self._get_consolidation_decisions(
-                    candidate_pairs, canonical_lookup, unique_entities, ctx
-                )
-                # Combine and apply all rules
-                all_rules = {**exact_rules, **llm_rules}
+
+                # Find consolidation candidates using new system
+                all_rules: dict[tuple[str, str], tuple[str, str]] = {}
+                new_names: set[str] = set()
+
+                for kind, entities in entities_by_kind.items():
+                    candidates = find_consolidation_candidates(entities)
+
+                    # Log contested warnings
+                    for norm_form, affected in candidates.contested_warnings:
+                        ctx.deps.logger.warning(
+                            f"Contested variant '{norm_form}' ({kind}) maps to: {affected}"
+                        )
+
+                    # Process auto-merge decisions
+                    for child, parent, reasoning in candidates.auto_merge:
+                        child_norm = normalize_for_comparison(child)
+                        all_rules[(child_norm, kind)] = (parent, reasoning)
+
+                    # Process agent review pairs
+                    if candidates.agent_review:
+                        (
+                            llm_rules,
+                            llm_new_names,
+                        ) = await self._get_consolidation_decisions_for_kind(
+                            candidates.agent_review, kind, entities, ctx
+                        )
+                        all_rules.update(llm_rules)
+                        new_names.update(llm_new_names)
+
                 if not all_rules:
                     break  # No more work to do
+
                 resolved_rules = self._resolve_transitive_merges(all_rules)
                 self._apply_merge_rules_globally(resolved_rules, ctx)
                 self._update_pair_entity_references(resolved_rules, ctx)
                 total_rules += len(resolved_rules)
-                # If renames created new names, add them to unique_entities and re-check
+
+                # If renames created new names, add them to entities_by_kind and re-check
                 if not new_names:
                     break
-                self._add_new_names_to_entities(new_names, unique_entities)
+                self._add_new_names_to_entities(new_names, entities_by_kind)
                 ctx.deps.logger.debug(
                     f"Consolidation iteration {iteration}: {len(new_names)} renames, re-evaluating"
                 )
@@ -412,272 +438,227 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
             )
             return ConsolidateRelationshipsNode()
 
-    def _collect_unique_entities(
+    def _collect_entity_variants(
         self, ctx: GraphRunContext[State, Deps]
-    ) -> dict[str, dict[str, set[str]]]:
-        """Collect all unique normalized entity forms with their canonical names.
+    ) -> dict[str, dict[str, list[SpeculatedVariant]]]:
+        """Collect all entities with their speculated variants.
 
-        Expands each entity to all its variant forms (name, aliases, parenthetical
-        expansions) and creates a mapping from normalized forms to canonical entity
-        names. When multiple entities map to the same normalized form, they become
-        merge candidates.
-
-        Also populates ctx.state.canonical_name_variants for debugging/introspection.
-        This is cleared at the start of each collection to prevent stale data.
+        Uses the new extract_entity_variants() system which tracks speculation
+        levels for each variant form. This enables automatic merge decisions
+        based on confidence thresholds and provides rich provenance.
 
         Returns:
-            {kind: {normalized_form: {canonical_name1, canonical_name2, ...}}}
+            {kind: {canonical_name: [SpeculatedVariant, ...]}}
         """
-        # Clear canonical_name_variants to prevent accumulation across multiple runs
-        ctx.state.canonical_name_variants.clear()
-
-        unique_by_kind: dict[str, dict[str, set[str]]] = {}
+        entities_by_kind: dict[str, dict[str, list[SpeculatedVariant]]] = {}
 
         for entities in ctx.state.validated_entities_by_resource.values():
             for entity_name, entity in entities.items():
                 entity_kind = entity.kind
-                if entity_kind not in unique_by_kind:
-                    unique_by_kind[entity_kind] = {}
+                if entity_kind not in entities_by_kind:
+                    entities_by_kind[entity_kind] = {}
 
-                # Extract all forms: name + aliases + parenthetical expansions
-                all_forms = extract_all_forms(entity_name, entity.aliases())
+                # Extract variants with speculation tracking
+                variants = extract_entity_variants(entity_name, entity.aliases())
+                entities_by_kind[entity_kind][entity_name] = variants
 
-                # Normalize each form and map it to this entity's canonical name
-                for form in all_forms:
-                    norm_form = normalize_for_comparison(form)
-                    if norm_form not in unique_by_kind[entity_kind]:
-                        unique_by_kind[entity_kind][norm_form] = set()
-
-                    unique_by_kind[entity_kind][norm_form].add(entity_name)
-
-                    # Track canonical variant globally
-                    norm_key = (norm_form, entity_kind)
-                    if norm_key not in ctx.state.canonical_name_variants:
-                        ctx.state.canonical_name_variants[norm_key] = set()
-                    ctx.state.canonical_name_variants[norm_key].add(entity_name)
-
-        return unique_by_kind
-
-    def _select_best_canonical_name(self, canonical_names: set[str]) -> str:
-        """Select the best canonical name from a set of capitalization variants.
-
-        Uses a multi-tier heuristic to prefer mixed-case over all-uppercase or
-        all-lowercase:
-        1. Primary: Maximize mixed-case complexity (lowercase_count * uppercase_count)
-        2. Tie-breaker 1: Prefer more uppercase letters
-        3. Tie-breaker 2: Minimize lowercase letters
-
-        This prefers: "Pulmonary Arterial Hypertension" > "PULMONARY" > "pulmonary"
-
-        Parameters:
-            canonical_names: Set of canonical name variants (same normalized form)
-
-        Returns:
-            The canonical name with best capitalization
-        """
-        return max(
-            canonical_names,
-            key=lambda v: (
-                sum(1 for c in v if c.islower())
-                * sum(1 for c in v if c.isupper()),  # Mixed-case score
-                sum(1 for c in v if c.isupper()),  # Uppercase count
-                -sum(1 for c in v if c.islower()),  # Minimize lowercase
-            ),
-        )
-
-    def _find_merge_candidates(
-        self, unique_entities: dict[str, dict[str, set[str]]]
-    ) -> tuple[
-        dict[tuple[str, str], tuple[str, str]],
-        dict[str, list[tuple[str, str]]],
-        dict[tuple[str, str], str],
-    ]:
-        """Find merge candidates: exact matches, fuzzy matches, and substring pairs.
-
-        Three-phase approach:
-        1. Auto-merge exact normalized matches (capitalization variants)
-        2. Auto-merge fuzzy Tier 1 matches (OSA distance=1 + obvious patterns)
-        3. Find substring/fuzzy Tier 2 pairs for LLM review
-
-        After Phases 1 & 2, builds a canonical lookup mapping every normalized
-        form to its final canonical name (after applying all merge rules). This
-        ensures Phase 3 lookups are consistent.
-
-        Returns:
-            Tuple of:
-            - {(norm_child, kind): (target, reasoning)} for auto-merge rules with provenance
-            - {kind: [(norm_parent, norm_child), ...]} for LLM review pairs
-            - {(normalized_form, kind): canonical_name} for Phase 3 lookups
-        """
-        auto_merge_rules: dict[tuple[str, str], tuple[str, str]] = {}
-
-        # PHASE 1: Handle exact normalized matches (capitalization variants)
-        # When multiple canonical names map to the same normalized form, merge them
-        # Rules are keyed by normalized form (not canonical) for cross-document consistency
-        phase1_rule_count = 0
-        for kind, normalized_entities in unique_entities.items():
-            for norm_form, canonical_names in list(normalized_entities.items()):
-                if len(canonical_names) > 1:
-                    # Select best canonical name using capitalization complexity
-                    canonical = self._select_best_canonical_name(canonical_names)
-                    # Create merge rules keyed by normalized form of child
-                    for child_name in canonical_names:
-                        if child_name != canonical:
-                            child_norm = normalize_for_comparison(child_name)
-                            auto_merge_rules[(child_norm, kind)] = (
-                                canonical,
-                                "auto:cap",
-                            )
-                            phase1_rule_count += 1
-                    # CONSOLIDATE: Update unique_entities to have single canonical
-                    # This ensures phase 2 works with consolidated 1:1 mappings
-                    normalized_entities[norm_form] = {canonical}
-
-        # PHASE 1.5: Propagate merge rules to ALL normalized forms
-        # If "BRCA1" was merged into "Brca1", update all normalized forms
-        # that reference "BRCA1" to point to "Brca1" instead
-        if phase1_rule_count > 0:
-            self._propagate_rules_to_unique_entities(auto_merge_rules, unique_entities)
-        # PHASE 2: Handle fuzzy matches (spelling variants, pluralization)
-        # Now that capitalization variants are consolidated, check for OSA patterns
-        # Rules are keyed by normalized form for consistency
-        # Track which normalized forms had Phase 1 rules (multiple cap variants = established)
-        phase1_winners = {key[0] for key in auto_merge_rules.keys()}
-        phase2_rule_count = 0
-        for kind, normalized_entities in unique_entities.items():
-            norm_list = list(normalized_entities.keys())
-            for i, norm1 in enumerate(norm_list):
-                for norm2 in norm_list[i + 1 :]:
-                    # Only check if entity names are long enough to avoid false positives
-                    max_len = max(len(norm1), len(norm2))
-                    if max_len >= 10:
-                        distance = osa_distance(norm1, norm2)
-                        # Tier 1: Distance 1 + obvious pattern → auto-merge
-                        if distance == 1 and is_obvious_variant(norm1, norm2):
-                            # Get canonical names (now 1:1 after phase 1 consolidation)
-                            canonical1 = next(iter(normalized_entities[norm1]))
-                            canonical2 = next(iter(normalized_entities[norm2]))
-                            # Determine parent: prefer Phase 1 winner, else shorter norm
-                            # Phase 1 winners had multiple cap variants = more established
-                            norm1_established = norm1 in phase1_winners
-                            norm2_established = norm2 in phase1_winners
-                            if norm1_established and not norm2_established:
-                                child_norm = norm2
-                                parent_canonical = canonical1
-                            elif norm2_established and not norm1_established:
-                                child_norm = norm1
-                                parent_canonical = canonical2
-                            elif len(norm1) <= len(norm2):
-                                # Neither or both established: fall back to shorter = parent
-                                child_norm = norm2
-                                parent_canonical = canonical1
-                            else:
-                                child_norm = norm1
-                                parent_canonical = canonical2
-                            auto_merge_rules[(child_norm, kind)] = (
-                                parent_canonical,
-                                "auto:fuzzy",
-                            )
-                            del normalized_entities[child_norm]
-                            phase2_rule_count += 1
-                            # Skip to next pair (one norm_form is now gone)
-                            break
-        # PHASE 2.5: Propagate Phase 2 merge rules to ALL normalized forms
-        if phase2_rule_count > 0:
-            self._propagate_rules_to_unique_entities(auto_merge_rules, unique_entities)
-        # Build canonical lookup: (normalized_form, kind) → canonical_name
-        # This is the single source of truth for Phase 3 lookups
-        canonical_lookup: dict[tuple[str, str], str] = {}
-        for kind, normalized_entities in unique_entities.items():
-            for norm_form, canonical_names in normalized_entities.items():
-                # After Phase 1 & 2 propagation, should be exactly one canonical
-                assert len(canonical_names) == 1, (
-                    f"Expected 1 canonical after consolidation, got {len(canonical_names)}: {canonical_names}"
-                )
-                canonical_lookup[(norm_form, kind)] = next(iter(canonical_names))
-
-        # PHASE 3: Find substring and fuzzy Tier 2 pairs for LLM review
-        # These work on fully consolidated entities (no capitalization variants)
-        candidate_pairs: dict[str, list[tuple[str, str]]] = {}
-
-        for kind, normalized_entities in unique_entities.items():
-            norm_list = list(normalized_entities.keys())
-            pairs = []
-
-            for i, norm1 in enumerate(norm_list):
-                for norm2 in norm_list[i + 1 :]:
-                    # Check substring relationship
-                    if norm1 in norm2 and norm1 != norm2:
-                        pairs.append((norm1, norm2))
-                    elif norm2 in norm1:
-                        pairs.append((norm2, norm1))
-                    else:
-                        # Check fuzzy Tier 2: 2-10% edit distance → ask LLM
-                        max_len = max(len(norm1), len(norm2))
-                        if max_len >= 10:
-                            distance = osa_distance(norm1, norm2)
-                            ratio = distance / max_len
-
-                            if ratio <= 0.10:
-                                # Order by length (shorter = more general)
-                                if len(norm1) <= len(norm2):
-                                    pairs.append((norm1, norm2))
-                                else:
-                                    pairs.append((norm2, norm1))
-
-            if pairs:
-                candidate_pairs[kind] = pairs
-
-        return auto_merge_rules, candidate_pairs, canonical_lookup
-
-    def _propagate_rules_to_unique_entities(
-        self,
-        rules: dict[tuple[str, str], tuple[str, str]],
-        unique_entities: dict[str, dict[str, set[str]]],
-    ) -> None:
-        """Propagate merge rules to update canonical names in unique_entities.
-
-        After creating merge rules, canonical names in unique_entities may reference
-        entities that have been merged away. This follows rule chains to update all
-        references to point to the final canonical name.
-
-        Rules are (norm_child, kind) → (target, reasoning). Only target is used here.
-
-        Mutates unique_entities in place.
-        """
-        for kind, normalized_entities in unique_entities.items():
-            for norm_form, canonical_names in list(normalized_entities.items()):
-                updated_canonicals = set()
-                for canonical in canonical_names:
-                    # Follow redirect chain using normalized keys
-                    current = canonical
-                    visited = {normalize_for_comparison(current)}
-                    while (normalize_for_comparison(current), kind) in rules:
-                        current = rules[(normalize_for_comparison(current), kind)][0]
-                        current_norm = normalize_for_comparison(current)
-                        if current_norm in visited:
-                            break  # Cycle detection
-                        visited.add(current_norm)
-                    updated_canonicals.add(current)
-                normalized_entities[norm_form] = updated_canonicals
+        return entities_by_kind
 
     def _add_new_names_to_entities(
         self,
-        new_names: set[tuple[str, str]],
-        unique_entities: dict[str, dict[str, set[str]]],
+        new_names: set[str],
+        entities_by_kind: dict[str, dict[str, list[SpeculatedVariant]]],
     ) -> None:
-        """Add new canonical names (from renames) to unique_entities for re-evaluation.
+        """Add new canonical names (from renames) to entities_by_kind for re-evaluation.
 
-        This allows the existing _find_merge_candidates logic to detect any new
-        merge opportunities created by the renames.
+        This allows subsequent iterations to detect any new merge opportunities
+        created by the renames.
+
+        Parameters:
+            new_names: Set of new canonical entity names
+            entities_by_kind: Dict structure to update (kind → canonical → variants)
         """
-        for new_canonical, kind in new_names:
-            if kind not in unique_entities:
-                unique_entities[kind] = {}
-            new_norm = normalize_for_comparison(new_canonical)
-            if new_norm not in unique_entities[kind]:
-                unique_entities[kind][new_norm] = set()
-            unique_entities[kind][new_norm].add(new_canonical)
+        # New names get added with a single variant (the original form at spec level 0)
+        from interaction_finder.extraction.entity_matching import SpeculatedVariant
+
+        # We need to determine which kind each new name belongs to
+        # For now, add to all kinds that have entities (this is conservative)
+        for kind in entities_by_kind:
+            for new_canonical in new_names:
+                if new_canonical not in entities_by_kind[kind]:
+                    # Add with single variant at spec level 0
+                    entities_by_kind[kind][new_canonical] = [
+                        SpeculatedVariant(
+                            form=new_canonical,
+                            speculation=0,
+                            source="original",
+                            is_from_alias=False,
+                        )
+                    ]
+
+    async def _get_consolidation_decisions_for_kind(
+        self,
+        agent_review_pairs: list[tuple[str, str]],
+        kind: str,
+        entities: dict[str, list[SpeculatedVariant]],
+        ctx: GraphRunContext[State, Deps],
+    ) -> tuple[dict[tuple[str, str], tuple[str, str]], set[str]]:
+        """Query LLM for consolidation decisions, using cache to avoid redundant calls.
+
+        Parameters:
+            agent_review_pairs: List of (child_canonical, parent_canonical) pairs
+            kind: Entity kind
+            entities: Dict of canonical_name → list of SpeculatedVariants
+            ctx: Graph run context
+
+        Returns:
+            Tuple of (rules, new_names) where:
+            - rules maps (norm_child, kind) → (target, reasoning)
+            - new_names is set of new canonical names (for renames)
+        """
+        if not agent_review_pairs:
+            return {}, set()
+
+        # Deduplicate pairs and check cache
+        unique_pairs: dict[tuple[str, str, str], tuple[str, str]] = {}
+        for child, parent in agent_review_pairs:
+            cache_key = (child, parent, kind)
+            if cache_key not in unique_pairs:
+                unique_pairs[cache_key] = (child, parent)
+
+        # Separate cached and uncached
+        uncached: list[tuple[str, str]] = []
+        for cache_key, (child, parent) in unique_pairs.items():
+            if cache_key not in ctx.state.agent_merge_cache:
+                uncached.append((child, parent))
+
+        # Get LLM decisions for uncached pairs
+        if uncached:
+            batch_size = ctx.deps.config.tools.extraction.merge_batch_size
+            for i in range(0, len(uncached), batch_size):
+                await self._process_consolidation_batch_new(
+                    uncached[i : i + batch_size], kind, i // batch_size + 1, ctx
+                )
+
+        # Build rules from cache (now contains all pairs)
+        return self._build_rules_from_cache(unique_pairs, kind, entities, ctx)
+
+    def _build_rules_from_cache(
+        self,
+        pairs: dict[tuple[str, str, str], tuple[str, str]],
+        kind: str,
+        entities: dict[str, list[SpeculatedVariant]],
+        ctx: GraphRunContext[State, Deps],
+    ) -> tuple[dict[tuple[str, str], tuple[str, str]], set[str]]:
+        """Build consolidation rules from cached decisions.
+
+        Parameters:
+            pairs: Map of cache_key → (child, parent)
+            kind: Entity kind
+            entities: Dict of canonical_name → variants
+            ctx: Graph run context
+
+        Returns:
+            Tuple of (rules, new_names)
+        """
+        rules: dict[tuple[str, str], tuple[str, str]] = {}
+        new_names: set[str] = set()
+
+        for cache_key in pairs:
+            if cache_key in ctx.state.agent_merge_cache:
+                target, reasoning = ctx.state.agent_merge_cache[cache_key]
+                ctx.state.merge_cache_hits += 1
+
+                if target:  # merge or rename
+                    child = cache_key[0]
+                    child_norm = normalize_for_comparison(child)
+                    rules[(child_norm, kind)] = (target, reasoning)
+                    if target not in entities:
+                        new_names.add(target)
+                # else: skip - no rule
+            else:
+                ctx.state.merge_cache_misses += 1
+
+        return rules, new_names
+
+    async def _process_consolidation_batch_new(
+        self,
+        batch: list[tuple[str, str]],
+        kind: str,
+        batch_num: int,
+        ctx: GraphRunContext[State, Deps],
+    ) -> None:
+        """Query LLM for entity pair consolidation decisions and cache results.
+
+        Parameters:
+            batch: List of (child_canonical, parent_canonical) pairs
+            kind: Entity kind
+            batch_num: Batch number for logging
+            ctx: Graph run context (cache is populated in ctx.state.agent_merge_cache)
+        """
+        # Build prompt structures
+        pairs_description = []
+        id_to_pair: dict[int, tuple[str, str, str]] = {}  # id → (parent, child, token)
+        token_to_id: dict[str, int] = {}
+
+        for pair_id, (child, parent) in enumerate(batch, start=1):
+            if parent == child:
+                continue
+            token = _generate_token()
+            id_to_pair[pair_id] = (parent, child, token)
+            token_to_id[token] = pair_id
+            pairs_description.append(f"{pair_id}. [{token}] {child!r} → {parent!r}")
+
+        if not pairs_description:
+            return
+
+        # Build and execute prompt
+        prompt = f"""**Research topic:** {ctx.state.topic}
+
+**Target entity types:** {", ".join(ctx.state.target_entity_types)}
+
+**Entity pairs to evaluate:**
+{chr(10).join(pairs_description)}
+
+For each pair, decide the appropriate action (skip, merge, or rename)."""
+
+        agent = get_entity_consolidation_agent(ctx.deps.config)
+        try:
+            with rename_agent(agent, name=f"ConsolidateEntities ({kind}, {batch_num})"):
+                async with ctx.deps.agent_semaphore:
+                    result = await agent.run(prompt, deps=ctx.deps, usage=RunUsage())
+
+            # Process decisions and populate cache
+            for decision in result.output.decisions:
+                resolved = _resolve_pair_from_decision(
+                    decision.pair_id,
+                    decision.pair_token,
+                    id_to_pair,
+                    token_to_id,
+                    ctx.deps.logger,
+                )
+                if resolved is None:
+                    continue
+
+                parent, child = resolved
+                cache_key = (child, parent, kind)
+
+                # Cache decision: None for skip, target for merge/rename
+                if decision.action == "skip":
+                    ctx.state.agent_merge_cache[cache_key] = (None, decision.reasoning)
+                elif decision.action == "merge":
+                    ctx.state.agent_merge_cache[cache_key] = (
+                        parent,
+                        decision.reasoning,
+                    )
+                elif decision.action == "rename" and decision.target:
+                    ctx.state.agent_merge_cache[cache_key] = (
+                        decision.target,
+                        decision.reasoning,
+                    )
+
+        except (TimeoutError, ConnectionError, ValueError) as e:
+            ctx.deps.logger.error(f"Entity consolidation failed: {e}")
 
     async def _get_consolidation_decisions(
         self,
@@ -686,7 +667,7 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
         unique_entities: dict[str, dict[str, set[str]]],
         ctx: GraphRunContext[State, Deps],
     ) -> tuple[dict[tuple[str, str], tuple[str, str]], set[tuple[str, str]]]:
-        """Query LLM for consolidation decisions on entity pairs.
+        """Query LLM for consolidation decisions on entity pairs (LEGACY - will be removed).
 
         Returns:
             Tuple of (rules, new_names) where:
