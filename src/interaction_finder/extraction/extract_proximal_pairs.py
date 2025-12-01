@@ -31,22 +31,21 @@ You will be given:
 3. Use canonical entity names (not aliases) in your output
 4. Each pair connects exactly two entities (binary relationships)
 5. Provide exact quotes supporting each association
-6. May suggest multiple relationship types if text implies different aspects
+6. Suggest multiple relationship types if text implies different aspects (as separate list items)
 
 **Relationship type guidelines:**
-Labels must be SHORT (1-2 words) and GENERAL - reusable for any entity pair, not specific to these entities.
-- GOOD: "regulates", "mutated_in", "treats", "binds"
-- BAD: long descriptive phrases, entity names, or context-specific details
+Each label must be SHORT (1-2 words), a verb phrase, generally applicable across any entity pair.
+- GOOD: ["regulates", "activates"], ["mutated_in"], ["treats"]
+- BAD: ["promotes / enhances"], ["promotes (dysfunction)"], ["increases expression in cells"]
+- Multiple aspects? → Multiple list items: ["promotes", "activates"] NOT ["promotes / activates"]
 
 **Standard relationship types** (prefer these):
-- "regulates" / "upregulates" / "downregulates" - regulatory relationships
-- "activates" / "inhibits" - directional control
-- "interacts_with" - physical or functional interaction
-- "binds" - physical binding
-- "causes" / "prevents" - causal relationships
-- "treats" - therapeutic relationship
-- "mutated_in" - genetic mutation associated with condition
-- "associated_with" - general association (use only if no specific type fits)
+- Regulatory: "regulates", "upregulates", "downregulates"
+- Directional control: "activates", "inhibits"
+- Interaction: "interacts_with", "binds"
+- Causal: "causes", "prevents", "treats"
+- Genetic: "mutated_in"
+- Generic: "associated_with" (use only if no specific type fits)
 
 **Quality standards:**
 - Be conservative: only extract well-supported associations

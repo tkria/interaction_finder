@@ -49,6 +49,11 @@ Your task: For each relationship label, determine:
 - Prefer standard terms: "associated_with" over "linked_to"
 - Prefer verbs: "regulates" over "regulation_of"
 
+**Ensure labels are short verb phrases without specific subjects:**
+Check that each label is a 1-2 word verb phrase, generally applicable. Consolidate to simplified form if needed:
+- "promotes / enhances" → "promotes"
+- "promotes (endothelial_dysfunction)" → "promotes"
+
 **Merge if:**
 - Labels are clear synonyms
 - Same biological relationship at different specificity levels (and general is sufficient)
@@ -159,6 +164,7 @@ For each relationship:
 - `reasoning`: Explain consolidation, polarity, and opposition decisions (30+ chars)
 
 **Important notes:**
+- Consolidated labels MUST be 1-2 words maximum, general and reusable
 - If label is already canonical, consolidated = original
 - Multiple originals can map to same consolidated label
 - Polarity applies to the consolidated label

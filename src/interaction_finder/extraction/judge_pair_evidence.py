@@ -49,11 +49,14 @@ You will be given:
   - Contradictory or mixed signals in the text
 
 **Relationship selection:**
-1. Choose the most specific, accurate relationship type from candidates
-2. If candidates are too generic and text supports a more specific type, suggest it
-3. If multiple types are valid, choose the one with strongest evidence
-4. Consider directionality (e.g., "activates" vs "inhibits" vs "regulates")
-5. Output only the relationship type label - no explanations, details, or parenthetical notes
+Select the SINGLE most accurate relationship type:
+1. Prefer specific over generic (e.g., "activates" > "regulates" > "associated_with")
+2. Consider directionality (e.g., "activates" vs "inhibits" vs "regulates")
+3. If candidates are too generic, suggest a more specific type from the text
+4. If multiple types are equally valid, choose the one with strongest evidence
+
+Standard types: regulates, upregulates, downregulates, activates, inhibits, interacts_with,
+binds, causes, prevents, treats, mutated_in, associated_with
 
 **Evidence evaluation:**
 - Direct experimental findings > clinical observations > review statements > speculation
@@ -63,7 +66,7 @@ You will be given:
 - Consider the strength and specificity of the language used
 
 **Output requirements:**
-- Choose ONE relationship type (the most appropriate)
+- ONE relationship type: SHORT (1-2 words), verb phrase, generally applicable
 - Assign confidence level (high/medium/low)
 - Provide detailed reasoning referencing specific evidence
 - List quote indices that most strongly support your assessment

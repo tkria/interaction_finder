@@ -75,7 +75,7 @@ based on evidence from multiple sources. You will receive:
 
 **Output requirements:**
 - Make clear accept/reject decision
-- **Select the most accurate relationship label** from those found in the documents
+- **Select ONE relationship label** - SHORT (1-2 words), verb phrase, generally applicable
 - Choose appropriate confidence level
 - Provide detailed rationale:
   - Summarize evidence from each document
