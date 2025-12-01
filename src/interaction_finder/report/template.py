@@ -87,16 +87,21 @@ def _render_pair_cards(pairs: list[dict[str, Any]]) -> str:
         pair_conf = pair.get("confidence", "low")
         conf_key = pair_conf if pair_conf in {"high", "medium", "low"} else "low"
 
-        # Build polarity badges
-        polarity_badges = []
+        # Build compact polarity pill with counts
         polarity_summary = pair.get("polarity_summary", {})
+        polarity_counts = []
         for polarity in ("positive", "negative", "neutral"):
             info = polarity_summary.get(polarity)
-            if info and info.get("count"):
-                label = polarity_label[polarity]
-                badge = f'<span class="polarity-badge polarity-{polarity}">{label}×{info["count"]}</span>'
-                polarity_badges.append(badge)
-        polarity_html = "".join(polarity_badges) if polarity_badges else ""
+            count = info.get("count", 0) if info else 0
+            if count > 0:
+                polarity_counts.append(
+                    f'<span class="polarity-count polarity-{polarity}">{count}</span>'
+                )
+        polarity_html = (
+            f'<span class="polarity-pill">{"".join(polarity_counts)}</span>'
+            if polarity_counts
+            else ""
+        )
 
         summary_html = f"""
             <div class="pair-summary">

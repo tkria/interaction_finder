@@ -374,19 +374,35 @@ header {
     font-size: 0.75rem;
 }
 
+.polarity-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.15rem;
+}
+
+.polarity-count {
+    padding: 0.1rem 0.35rem;
+    border-radius: 0.4em;
+    font-weight: 600;
+}
+
 .polarity-badge {
     padding: 0.1rem 0.35rem;
     border-radius: 0.6em;
     font-weight: 600;
 }
+
+.polarity-count.polarity-positive,
 .polarity-badge.polarity-positive {
     background: var(--polarity-positive-bg);
     color: var(--polarity-positive-text);
 }
+.polarity-count.polarity-negative,
 .polarity-badge.polarity-negative {
     background: var(--polarity-negative-bg);
     color: var(--polarity-negative-text);
 }
+.polarity-count.polarity-neutral,
 .polarity-badge.polarity-neutral {
     background: var(--polarity-neutral-bg);
     color: var(--polarity-neutral-text);
