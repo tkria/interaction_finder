@@ -112,6 +112,52 @@ def normalize_for_comparison(text: str) -> str:
     return NormalizedTextMapper.normalize(text)
 
 
+def fold_spelling(text: str) -> str:
+    """Fold UK/US spelling variants (ae→e, oe→e, our→or) for comparison."""
+    # UK/US spelling variants
+    text = text.replace("ae", "e")  # haemorrhagic → hemorrhagic, anaemia → anemia
+    text = text.replace("oe", "e")  # oestrogen → estrogen
+    text = text.replace("our", "or")  # colour → color, behaviour → behavior
+
+    return text
+
+
+def entity_names_match(a: str, b: str) -> bool:
+    """Check if entity names match: normalize → obvious variants → fuzzy + validation."""
+    # Normalize both
+    norm_a = normalize_for_comparison(a)
+    norm_b = normalize_for_comparison(b)
+
+    # Check if identical after normalization
+    if norm_a == norm_b:
+        return True
+
+    # Check if obvious variant (handles spelling + simple variations)
+    if is_obvious_variant(norm_a, norm_b):
+        return True
+
+    # Fuzzy matching with full validation
+    dist = osa_distance(norm_a, norm_b)
+    shorter_len = min(len(norm_a), len(norm_b))
+
+    # Too short for fuzzy matching
+    if shorter_len < 10:
+        return False
+
+    # Calculate thresholds
+    similarity = 1 - dist / shorter_len
+    max_dist = 1 + shorter_len // 10
+
+    # Check if within fuzzy threshold
+    if dist <= max_dist and similarity >= 0.7:
+        # Additional safety: reject number-only differences
+        if _only_short_number_difference(a, b):
+            return False
+        return True
+
+    return False
+
+
 def osa_distance(a: str, b: str) -> int:
     """Calculate Optimal String Alignment (restricted Damerau-Levenshtein) distance.
 
@@ -486,15 +532,21 @@ def extract_all_forms(entity_name: str, aliases: list[str]) -> list[str]:
 
 
 def is_obvious_variant(a: str, b: str) -> bool:
-    """Check if strings are obvious variants (plurals or common spelling differences).
+    """Check if strings are obvious variants (spelling or simple variations).
+
+    Applies spelling folding first, then checks for simple variations
+    like plurals or suffix differences. This handles multiple spelling
+    differences in the same string (e.g., "haemorrhagic behaviour" vs
+    "hemorrhagic behavior").
 
     Detects:
+    - UK/US spelling: ae↔e, oe↔e, our↔or (via fold_spelling)
     - Plural patterns: +s, +es, y→ies
-    - US/UK spelling: ae↔e, our↔or, ise↔ize, re↔er
+    - Suffix variants: ise↔ize, re↔er
 
     Parameters:
-        a: First string (normalized)
-        b: Second string (normalized)
+        a: First string (already normalized with normalize_for_comparison)
+        b: Second string (already normalized with normalize_for_comparison)
 
     Returns:
         True if they match known variant patterns
@@ -504,12 +556,24 @@ def is_obvious_variant(a: str, b: str) -> bool:
         True
         >>> is_obvious_variant("haemorrhagic", "hemorrhagic")
         True
+        >>> is_obvious_variant("haemorrhagic behaviour", "hemorrhagic behavior")
+        True
         >>> is_obvious_variant("colour", "color")
         True
         >>> is_obvious_variant("cat", "dog")
         False
     """
-    shorter, longer = (a, b) if len(a) <= len(b) else (b, a)
+    # Apply spelling folding first (handles multiple spelling differences)
+    spell_a = fold_spelling(a)
+    spell_b = fold_spelling(b)
+
+    # After spelling normalization, they should be equal or simple variants
+    if spell_a == spell_b:
+        return True
+
+    shorter, longer = (
+        (spell_a, spell_b) if len(spell_a) <= len(spell_b) else (spell_b, spell_a)
+    )
 
     # Plural patterns
     if longer == shorter + "s" or longer == shorter + "es":
@@ -517,21 +581,14 @@ def is_obvious_variant(a: str, b: str) -> bool:
     if shorter.endswith("y") and longer == shorter[:-1] + "ies":
         return True
 
-    # US/UK spelling variants (bidirectional)
-    for pattern_from, pattern_to in [("ae", "e"), ("our", "or")]:
-        if pattern_from in a and b == a.replace(pattern_from, pattern_to):
-            return True
-        if pattern_from in b and a == b.replace(pattern_from, pattern_to):
-            return True
-
-    # Suffix variants
-    if a.endswith("ise") and b == a[:-3] + "ize":
+    # Suffix variants (ise/ize, re/er still need bidirectional check)
+    if spell_a.endswith("ise") and spell_b == spell_a[:-3] + "ize":
         return True
-    if b.endswith("ise") and a == b[:-3] + "ize":
+    if spell_b.endswith("ise") and spell_a == spell_b[:-3] + "ize":
         return True
-    if a.endswith("re") and len(a) > 3 and b == a[:-2] + "er":
+    if spell_a.endswith("re") and len(spell_a) > 3 and spell_b == spell_a[:-2] + "er":
         return True
-    if b.endswith("re") and len(b) > 3 and a == b[:-2] + "er":
+    if spell_b.endswith("re") and len(spell_b) > 3 and spell_a == spell_b[:-2] + "er":
         return True
 
     return False

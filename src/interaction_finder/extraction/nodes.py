@@ -383,10 +383,19 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
                 for kind, entities in entities_by_kind.items():
                     candidates = find_consolidation_candidates(entities)
 
-                    # Log contested warnings
-                    for norm_form, affected in candidates.contested_warnings:
-                        ctx.deps.logger.warning(
-                            f"Contested variant '{norm_form}' ({kind}) maps to: {affected}"
+                    # Log contested warnings with full context
+                    for (
+                        norm_form,
+                        canonical_to_variants,
+                    ) in candidates.contested_warnings:
+                        # Build detailed message showing overlapping variants
+                        details = []
+                        for canonical, variant_forms in canonical_to_variants.items():
+                            variants_str = ", ".join(f"'{v}'" for v in variant_forms)
+                            details.append(f"{canonical} ({variants_str})")
+                        details_str = " | ".join(details)
+                        ctx.deps.logger.info(
+                            f"Contested variant normalizes to '{norm_form}' ({kind}): {details_str}"
                         )
 
                     # Process auto-merge decisions

@@ -33,8 +33,8 @@ from interaction_finder.extraction.utils import (
     _expand_slash,
     _is_valid_entity_form,
     is_obvious_variant,
-    _only_short_number_difference,
     osa_distance,
+    entity_names_match,
 )
 
 
@@ -120,7 +120,9 @@ class ConsolidationCandidates:
 
     auto_merge: list[tuple[str, str, str]]  # (child, parent, reasoning)
     agent_review: list[tuple[str, str]]  # (child, parent)
-    contested_warnings: list[tuple[str, set[str]]]  # (form, canonicals)
+    contested_warnings: list[
+        tuple[str, dict[str, list[str]]]
+    ]  # (normalized_form, {canonical: [variant_forms]})
 
 
 # ============================================================================
@@ -296,26 +298,25 @@ def extract_entity_variants(
 
 
 def are_safe_capitalization_variants(names: set[str]) -> bool:
-    """Check if names differ only in capitalization (rejects number-only diffs)."""
+    """Check if names are safe to auto-merge (capitalization or obvious spelling variants).
+
+    Returns True if all names in the set are variants of each other through:
+    - Pure capitalization differences (BRCA1 vs Brca1)
+    - Obvious spelling variants (haemorrhagic vs hemorrhagic)
+    - Or both
+
+    Rejects unsafe cases like number-only differences (SMAD6 vs SMAD7).
+    """
     if len(names) <= 1:
         return True
 
-    # Check 1: All normalize to same form
-    normalized = {normalize_for_comparison(n) for n in names}
-    if len(normalized) != 1:
-        return False
-
-    # Check 2: All identical when lowercased
-    lowercased = {n.lower() for n in names}
-    if len(lowercased) != 1:
-        return False
-
-    # Check 3: Reject number-only differences
     names_list = list(names)
+
+    # Check all pairs match using core matching logic (includes all safety checks)
     for i, n1 in enumerate(names_list):
         for n2 in names_list[i + 1 :]:
-            if _only_short_number_difference(n1, n2):
-                return False  # SMAD6 vs SMAD7 - NOT safe!
+            if not entity_names_match(n1, n2):
+                return False
 
     return True
 
@@ -407,14 +408,22 @@ def find_entity_match(
     for qv in query_variants:
         qv_norm = normalize_for_comparison(qv.form)
         for variant_norm, mapping in variant_map.items():
-            dist = osa_distance(qv_norm, variant_norm)
+            # Skip if too short for fuzzy matching
             shorter_len = min(len(qv_norm), len(variant_norm))
-            if shorter_len == 0:
+            if shorter_len < MIN_LENGTH_FOR_FUZZY:
                 continue
+
+            dist = osa_distance(qv_norm, variant_norm)
             similarity = 1 - dist / shorter_len
 
-            # Only trust "obvious" fuzzy matches (validated)
-            if dist == 1 and is_obvious_variant(qv_norm, variant_norm):
+            # Calculate length-scaled maximum distance
+            max_dist = 1 + shorter_len // 10
+
+            # Accept if within fuzzy threshold
+            if dist <= max_dist and similarity >= MIN_FUZZY_SIMILARITY:
+                # For dist==1, require obvious variant validation
+                if dist == 1 and not is_obvious_variant(qv_norm, variant_norm):
+                    continue
                 scores.append((similarity, dist, mapping, qv))
 
     if not scores:
@@ -480,18 +489,24 @@ def find_consolidation_candidates(
     # Track results
     auto_merge: list[tuple[str, str, str]] = []
     agent_review: list[tuple[str, str]] = []
-    contested_warnings: list[tuple[str, set[str]]] = []
+    contested_warnings: list[tuple[str, dict[str, list[str]]]] = []
 
     # Handle contested variants: check if they're safe capitalization variants
     # If safe, pick best canonical and auto-merge. If not, add to warnings.
     for norm in contested:
-        affected = {
-            canonical
-            for canonical, variants in entities.items()
-            if any(normalize_for_comparison(v.form) == norm for v in variants)
-        }
-        if len(affected) <= 1:
+        # Build mapping of canonical -> variant forms for this contested norm
+        canonical_to_variants: dict[str, list[str]] = {}
+        for canonical, variants in entities.items():
+            matching_variants = [
+                v.form for v in variants if normalize_for_comparison(v.form) == norm
+            ]
+            if matching_variants:
+                canonical_to_variants[canonical] = matching_variants
+
+        if len(canonical_to_variants) <= 1:
             continue
+
+        affected = set(canonical_to_variants.keys())
 
         # Check if these are safe capitalization variants (BRCA1/Brca1/brca1)
         if are_safe_capitalization_variants(affected):
@@ -519,8 +534,8 @@ def find_consolidation_candidates(
                             (canonical, best_canonical, match.auto_reason())
                         )
         else:
-            # Not safe capitalization variants - add warning
-            contested_warnings.append((norm, affected))
+            # Not safe capitalization variants - add warning with full context
+            contested_warnings.append((norm, canonical_to_variants))
 
     # Find potential merges by inverting variant map
     norm_to_canonicals: dict[str, set[str]] = {}
@@ -574,11 +589,8 @@ def find_consolidation_candidates(
         canonical_list = list(entities.keys())
         for i, canon1 in enumerate(canonical_list):
             for canon2 in canonical_list[i + 1 :]:
-                base1 = normalize_for_comparison(canon1)
-                base2 = normalize_for_comparison(canon2)
-                dist = osa_distance(base1, base2)
-                # Fuzzy match: dist=1 and passes obvious variant check
-                if dist == 1 and is_obvious_variant(base1, base2):
+                # Use core matching logic
+                if entity_names_match(canon1, canon2):
                     # Prefer longer name; if same length, alphabetical
                     parent, child = max(
                         (canon1, canon2),
