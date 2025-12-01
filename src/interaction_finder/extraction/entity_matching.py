@@ -160,6 +160,59 @@ def classify_parenthetical(
 # ============================================================================
 
 
+def _generate_acronyms(text: str) -> list[str]:
+    """Generate nested and direct acronyms from entity name.
+
+    Generates both:
+    - Direct acronym (one letter per word)
+    - Expanded acronym (expanding all-caps words into individual letters)
+
+    Only generates if:
+    - 2+ words total
+    - Result not identical to original
+
+    Returns:
+        List of generated acronyms (may be empty)
+
+    Examples:
+        >>> _generate_acronyms("Idiopathic PAH")
+        ['IP', 'IPAH']
+        >>> _generate_acronyms("Pulmonary Arterial Hypertension")
+        ['PAH']
+        >>> _generate_acronyms("PAH")
+        []
+    """
+    words = [w for w in re.split(r"[\s\-]+", text.strip()) if w]
+    if len(words) < 2:
+        return []
+
+    norm_text = normalize_for_comparison(text)
+
+    def letters_from_words(expand_acronyms: bool) -> list[str]:
+        """Extract letters: expand all-caps words if requested."""
+        letters = []
+        for word in words:
+            if expand_acronyms and word.isupper() and len(word) > 1:
+                letters.extend(word)
+            elif word[0].isupper():
+                letters.append(word[0])
+        return letters
+
+    # Generate both expanded (nested) and direct acronyms
+    # Nested comes first (preserves all-caps words in entirety)
+    candidates = [
+        "".join(letters_from_words(expand_acronyms=True)),  # Expanded/Nested
+        "".join(letters_from_words(expand_acronyms=False)),  # Direct
+    ]
+
+    # Filter: unique, different from original, at least 2 letters
+    return [
+        acronym
+        for acronym in dict.fromkeys(candidates)
+        if len(acronym) >= 2 and normalize_for_comparison(acronym) != norm_text
+    ]
+
+
 def extract_entity_variants(
     entity_name: str,
     aliases: list[str] | None = None,
@@ -285,6 +338,24 @@ def extract_entity_variants(
                 alias, aliases=None, _is_alias=True
             )
             variants.extend(alias_variants)
+
+    # Generate acronym variants (only for non-aliases)
+    if not _is_alias:
+        acronyms = _generate_acronyms(entity_name)
+        if acronyms:
+            existing_norms = {normalize_for_comparison(v.form) for v in variants}
+
+            for acronym in acronyms:
+                acronym_norm = normalize_for_comparison(acronym)
+                if acronym_norm not in existing_norms:
+                    variants.append(
+                        SpeculatedVariant(
+                            form=acronym,
+                            speculation=SPEC_BEFORE_PAREN + base_offset,  # Level 1
+                            source="generated_acronym",
+                            is_from_alias=_is_alias,
+                        )
+                    )
 
     # Sort by speculation (stable sort preserves order within level)
     variants.sort(key=lambda v: v.speculation)
@@ -466,6 +537,37 @@ def find_entity_match(
 # ============================================================================
 
 
+def _has_token_overlap(
+    canonical1: str,
+    canonical2: str,
+    entities: dict[str, list[SpeculatedVariant]],
+) -> bool:
+    """Check if tokens from one entity match variants of another.
+
+    Detects patterns like "Idiopathic PAH" where token "PAH" matches
+    a variant/alias of "Pulmonary Arterial Hypertension".
+
+    Returns:
+        True if token overlap detected
+    """
+
+    def get_norms_and_tokens(canonical: str) -> tuple[set[str], set[str]]:
+        """Extract normalized variant forms and tokens for an entity."""
+        norms = {normalize_for_comparison(v.form) for v in entities.get(canonical, [])}
+        tokens = {
+            normalize_for_comparison(t)
+            for t in re.split(r"[\s\-]+", canonical)
+            if len(t) >= 3
+        }
+        return norms, tokens
+
+    norms1, tokens1 = get_norms_and_tokens(canonical1)
+    norms2, tokens2 = get_norms_and_tokens(canonical2)
+
+    # Check if tokens from one match variants of other
+    return bool(tokens1 & norms2 or tokens2 & norms1)
+
+
 def _select_best_canonical(canonical_names: set[str]) -> str:
     """Select best capitalization: prefer mixed-case over all-upper/all-lower."""
     return max(
@@ -600,6 +702,28 @@ def find_consolidation_candidates(
                     auto_merge.append(
                         (child, parent, f"auto:{PENALTY_FUZZY}:original:fuzzy")
                     )
+
+    # Bag-of-words detection pass
+    canonical_list = list(entities.keys())
+    already_handled: set[tuple[str, str]] = set()
+
+    # Track already-handled pairs
+    for child, parent, _ in auto_merge:
+        already_handled.add((child, parent))
+        already_handled.add((parent, child))
+    for child, parent in agent_review:
+        already_handled.add((child, parent))
+        already_handled.add((parent, child))
+
+    # Check remaining pairs
+    for i, canon1 in enumerate(canonical_list):
+        for canon2 in canonical_list[i + 1 :]:
+            pair = (canon1, canon2)
+            if pair in already_handled or (canon2, canon1) in already_handled:
+                continue
+
+            if _has_token_overlap(canon1, canon2, entities):
+                agent_review.append(pair)
 
     return ConsolidationCandidates(
         auto_merge=auto_merge,

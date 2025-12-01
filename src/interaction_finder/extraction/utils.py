@@ -246,14 +246,44 @@ def osa_distance(a: str, b: str) -> int:
 def _expand_slash(text: str) -> list[str]:
     """Expand slash patterns in biological names.
 
-    Handles suffix patterns (GDF1/2 → GDF1, GDF2) and simple alternation
-    (TGF-β/BMP → TGF-β, BMP). Returns original first, then expansions.
+    Handles suffix patterns (GDF1/2 → GDF1, GDF2), prefix patterns
+    (a/b suffix → a suffix, b suffix, a), and simple alternation (TGF-β/BMP).
+
+    Returns deduplicated list (first mentions kept).
 
     Suffix pattern detected when right side is short (≤3 chars) or Roman numerals,
     and left side ends with digits or Roman numerals that form the prefix.
+
+    Prefix pattern detected when slash appears in first token and text has
+    additional words after it.
     """
     if text.count("/") != 1:
         return [text]
+
+    # Check for prefix pattern first: "variant1/variant2 remaining_words"
+    tokens = text.split()
+    if len(tokens) >= 2 and "/" in tokens[0]:
+        slash_token = tokens[0]
+        shared_suffix = " ".join(tokens[1:])
+        variants = slash_token.split("/")
+        if len(variants) == 2:
+            v1, v2 = variants[0].strip(), variants[1].strip()
+            if v1 and v2 and shared_suffix:
+                # Distribution: "a suffix", "b suffix"
+                # Alternation: "a" (not "b" - not a unit in expression)
+                # Deduplicate with dict.fromkeys for order preservation
+                return list(
+                    dict.fromkeys(
+                        [
+                            text,
+                            f"{v1} {shared_suffix}",
+                            f"{v2} {shared_suffix}",
+                            v1,
+                        ]
+                    )
+                )
+
+    # Existing suffix/alternation logic
     left, right = (s.strip() for s in text.split("/"))
     if not left or not right:
         return [text]
