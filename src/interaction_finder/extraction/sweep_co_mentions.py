@@ -698,8 +698,16 @@ Provide supporting quotes for confirmed relationships."""
         )
 
         if match1 is None or match2 is None:
+            # Diagnostic: which entity/entities failed to resolve
+            unresolved = []
+            if match1 is None:
+                unresolved.append(f"first entity '{confirmed.entity1_name}'")
+            if match2 is None:
+                unresolved.append(f"second entity '{confirmed.entity2_name}'")
             deps.logger.warning(
-                f"LLM returned unknown pair: {confirmed.entity1_name} <-> {confirmed.entity2_name}"
+                f"LLM returned unknown pair: {confirmed.entity1_name} <-> {confirmed.entity2_name} "
+                f"({', '.join(unresolved)} unresolvable; "
+                f"expected: {', '.join(sorted(entity_variants.keys()))})"
             )
             continue
 
@@ -709,9 +717,21 @@ Provide supporting quotes for confirmed relationships."""
         # Look up candidate using matched names
         candidate = pair_lookup.get((matched_e1, matched_e2))
         if candidate is None:
-            # Matched names don't form a valid pair (shouldn't happen often)
+            # Diagnostic: show expected pairs involving these entities
+            expected = sorted(
+                {
+                    f"{cp.pair_key.entity1_name} <-> {cp.pair_key.entity2_name}"
+                    for cp in region.candidate_pairs
+                    if matched_e1
+                    in (cp.pair_key.entity1_name, cp.pair_key.entity2_name)
+                    or matched_e2
+                    in (cp.pair_key.entity1_name, cp.pair_key.entity2_name)
+                }
+            )
             deps.logger.warning(
-                f"Matched entities don't form a candidate pair: {matched_e1} <-> {matched_e2}"
+                f"LLM returned unexpected pair: {confirmed.entity1_name} <-> {confirmed.entity2_name} "
+                f"(resolved to {matched_e1} <-> {matched_e2} but not a candidate pair; "
+                f"expected involving these: {', '.join(expected) or 'none'})"
             )
             continue
         # Validate quotes

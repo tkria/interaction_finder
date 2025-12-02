@@ -936,3 +936,279 @@ class TestMergeCoMentionsIntoRegions:
         candidate = result[0].candidate_pairs[0]
         assert candidate.entity1_kind == "entity"
         assert candidate.entity2_kind == "entity"
+
+
+# =============================================================================
+# Test assess_co_mention_region (diagnostic messages)
+# =============================================================================
+
+
+class TestAssessCoMentionRegionDiagnostics:
+    """Tests for diagnostic warning messages in assess_co_mention_region.
+
+    These tests verify that when the LLM returns entity names that can't be
+    matched to candidates, the system provides detailed diagnostic information.
+    """
+
+    @pytest.mark.asyncio
+    async def test_unresolvable_first_entity_warning(
+        self, sample_resource, entity_ref_brca1, entity_ref_tp53, tmp_path
+    ):
+        """Warning includes diagnostic when first entity is unresolvable."""
+        from unittest.mock import AsyncMock, MagicMock
+        from interaction_finder.extraction.sweep_co_mentions import (
+            assess_co_mention_region,
+            ConfirmedPair,
+            RegionAssessmentOut,
+        )
+        from interaction_finder.extraction.deps import Deps
+        from interaction_finder.settings import IfetcherConfig
+
+        # Create region with BRCA1-TP53 candidate pair
+        pair_key = make_entity_pair_key(entity_ref_brca1, entity_ref_tp53)
+        region = CoMentionRegion(
+            resource_id=sample_resource.id,
+            chunk_range=(0, 2),
+            candidate_pairs=[
+                CandidatePair(
+                    pair_key=pair_key, entity1_kind="gene", entity2_kind="gene"
+                )
+            ],
+        )
+
+        # Mock LLM to return pair with unknown first entity
+        mock_agent = MagicMock()
+        mock_result = MagicMock()
+        mock_result.output = RegionAssessmentOut(
+            confirmed_pairs=[
+                ConfirmedPair(
+                    entity1_name="UNKNOWN_GENE",  # Not in candidates
+                    entity2_name="TP53",
+                    relationship="interacts_with",
+                    confidence="high",
+                    supporting_quotes=["Some text"],
+                    reasoning="Test",
+                )
+            ]
+        )
+        mock_agent.run = AsyncMock(return_value=mock_result)
+
+        # Mock config and deps
+        config = IfetcherConfig()
+        deps = Deps(
+            config=config,
+            resource_pool=MagicMock(),
+            agent_semaphore=MagicMock(__aenter__=AsyncMock(), __aexit__=AsyncMock()),
+            progress=None,
+            logger=MagicMock(),
+        )
+
+        # Mock get_region_assessment_agent
+        import interaction_finder.extraction.sweep_co_mentions as sweep_module
+
+        original_getter = sweep_module.get_region_assessment_agent
+        sweep_module.get_region_assessment_agent = lambda _: mock_agent
+
+        try:
+            validated_entities = {
+                "BRCA1": entity_ref_brca1,
+                "TP53": entity_ref_tp53,
+            }
+
+            await assess_co_mention_region(
+                region,
+                sample_resource,
+                topic="test topic",
+                known_relationships=[],
+                config=config,
+                deps=deps,
+                validated_entities=validated_entities,
+            )
+
+            # Check that warning was logged with diagnostic
+            deps.logger.warning.assert_called_once()
+            warning_msg = deps.logger.warning.call_args[0][0]
+            assert "UNKNOWN_GENE" in warning_msg
+            assert "first entity" in warning_msg
+            assert "unresolvable" in warning_msg
+            assert "expected:" in warning_msg
+            assert "BRCA1" in warning_msg
+            assert "TP53" in warning_msg
+
+        finally:
+            sweep_module.get_region_assessment_agent = original_getter
+
+    @pytest.mark.asyncio
+    async def test_unresolvable_second_entity_warning(
+        self, sample_resource, entity_ref_brca1, entity_ref_tp53
+    ):
+        """Warning includes diagnostic when second entity is unresolvable."""
+        from unittest.mock import AsyncMock, MagicMock
+        from interaction_finder.extraction.sweep_co_mentions import (
+            assess_co_mention_region,
+            ConfirmedPair,
+            RegionAssessmentOut,
+        )
+        from interaction_finder.extraction.deps import Deps
+        from interaction_finder.settings import IfetcherConfig
+
+        pair_key = make_entity_pair_key(entity_ref_brca1, entity_ref_tp53)
+        region = CoMentionRegion(
+            resource_id=sample_resource.id,
+            chunk_range=(0, 2),
+            candidate_pairs=[
+                CandidatePair(
+                    pair_key=pair_key, entity1_kind="gene", entity2_kind="gene"
+                )
+            ],
+        )
+
+        mock_agent = MagicMock()
+        mock_result = MagicMock()
+        mock_result.output = RegionAssessmentOut(
+            confirmed_pairs=[
+                ConfirmedPair(
+                    entity1_name="BRCA1",
+                    entity2_name="UNKNOWN_GENE",  # Not in candidates
+                    relationship="interacts_with",
+                    confidence="high",
+                    supporting_quotes=["Some text"],
+                    reasoning="Test",
+                )
+            ]
+        )
+        mock_agent.run = AsyncMock(return_value=mock_result)
+
+        config = IfetcherConfig()
+        deps = Deps(
+            config=config,
+            resource_pool=MagicMock(),
+            agent_semaphore=MagicMock(__aenter__=AsyncMock(), __aexit__=AsyncMock()),
+            progress=None,
+            logger=MagicMock(),
+        )
+
+        import interaction_finder.extraction.sweep_co_mentions as sweep_module
+
+        original_getter = sweep_module.get_region_assessment_agent
+        sweep_module.get_region_assessment_agent = lambda _: mock_agent
+
+        try:
+            validated_entities = {
+                "BRCA1": entity_ref_brca1,
+                "TP53": entity_ref_tp53,
+            }
+
+            await assess_co_mention_region(
+                region,
+                sample_resource,
+                topic="test topic",
+                known_relationships=[],
+                config=config,
+                deps=deps,
+                validated_entities=validated_entities,
+            )
+
+            deps.logger.warning.assert_called_once()
+            warning_msg = deps.logger.warning.call_args[0][0]
+            assert "UNKNOWN_GENE" in warning_msg
+            assert "second entity" in warning_msg
+            assert "unresolvable" in warning_msg
+            assert "expected:" in warning_msg
+
+        finally:
+            sweep_module.get_region_assessment_agent = original_getter
+
+    @pytest.mark.asyncio
+    async def test_unexpected_pair_combination_warning(
+        self,
+        sample_resource,
+        entity_ref_brca1,
+        entity_ref_tp53,
+        entity_ref_breast_cancer,
+    ):
+        """Warning includes expected pairs when resolved entities don't form valid pair."""
+        from unittest.mock import AsyncMock, MagicMock
+        from interaction_finder.extraction.sweep_co_mentions import (
+            assess_co_mention_region,
+            ConfirmedPair,
+            RegionAssessmentOut,
+        )
+        from interaction_finder.extraction.deps import Deps
+        from interaction_finder.settings import IfetcherConfig
+
+        # Create region with BRCA1-TP53 and BRCA1-breast_cancer pairs, but NOT TP53-breast_cancer
+        pair_key1 = make_entity_pair_key(entity_ref_brca1, entity_ref_tp53)
+        pair_key2 = make_entity_pair_key(entity_ref_brca1, entity_ref_breast_cancer)
+        region = CoMentionRegion(
+            resource_id=sample_resource.id,
+            chunk_range=(0, 2),
+            candidate_pairs=[
+                CandidatePair(
+                    pair_key=pair_key1, entity1_kind="gene", entity2_kind="gene"
+                ),
+                CandidatePair(
+                    pair_key=pair_key2, entity1_kind="gene", entity2_kind="disease"
+                ),
+            ],
+        )
+
+        # LLM returns TP53-breast_cancer (both resolvable but not a valid candidate pair)
+        mock_agent = MagicMock()
+        mock_result = MagicMock()
+        mock_result.output = RegionAssessmentOut(
+            confirmed_pairs=[
+                ConfirmedPair(
+                    entity1_name="TP53",
+                    entity2_name="breast cancer",
+                    relationship="associated_with",
+                    confidence="medium",
+                    supporting_quotes=["Some text"],
+                    reasoning="Test",
+                )
+            ]
+        )
+        mock_agent.run = AsyncMock(return_value=mock_result)
+
+        config = IfetcherConfig()
+        deps = Deps(
+            config=config,
+            resource_pool=MagicMock(),
+            agent_semaphore=MagicMock(__aenter__=AsyncMock(), __aexit__=AsyncMock()),
+            progress=None,
+            logger=MagicMock(),
+        )
+
+        import interaction_finder.extraction.sweep_co_mentions as sweep_module
+
+        original_getter = sweep_module.get_region_assessment_agent
+        sweep_module.get_region_assessment_agent = lambda _: mock_agent
+
+        try:
+            validated_entities = {
+                "BRCA1": entity_ref_brca1,
+                "TP53": entity_ref_tp53,
+                "breast cancer": entity_ref_breast_cancer,
+            }
+
+            await assess_co_mention_region(
+                region,
+                sample_resource,
+                topic="test topic",
+                known_relationships=[],
+                config=config,
+                deps=deps,
+                validated_entities=validated_entities,
+            )
+
+            deps.logger.warning.assert_called_once()
+            warning_msg = deps.logger.warning.call_args[0][0]
+            assert "unexpected pair" in warning_msg
+            assert "TP53" in warning_msg
+            assert "breast cancer" in warning_msg
+            assert "expected involving these:" in warning_msg
+            # Should mention the valid pairs involving TP53 and breast cancer
+            assert "BRCA1" in warning_msg  # Both TP53 and breast cancer pair with BRCA1
+
+        finally:
+            sweep_module.get_region_assessment_agent = original_getter
