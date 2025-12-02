@@ -383,55 +383,38 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
                 for kind, entities in entities_by_kind.items():
                     candidates = find_consolidation_candidates(entities)
 
+                    # Helper: format a single variant with spec level and optional source
+                    def fmt_variant(v):
+                        source = (
+                            f":{v.source}"
+                            if v.speculation and v.source != "paren_expansion"
+                            else ""
+                        )
+                        return f"'{v.form}' [{v.speculation}{source}]"
+
                     # Log contested warnings with full context
                     for (
                         norm_form,
                         canonical_to_variants,
                     ) in candidates.contested_warnings:
-                        # Get canonical names for header
                         canonicals = list(canonical_to_variants.keys())
-                        canonical_list = "' and '".join(f"{c}" for c in canonicals)
+                        canonical_list = "' and '".join(canonicals)
 
-                        # Build variant details for each entity
-                        variant_details = []
-                        for canonical, variant_forms in canonical_to_variants.items():
-                            # Get full variant info from entities dict
-                            entity_variants = entities.get(canonical, [])
-                            # Filter to variants matching this normalized form
-                            matching = [
-                                v
-                                for v in entity_variants
-                                if normalize_for_comparison(v.form) == norm_form
-                            ]
-                            # Format: 'form' [spec] or 'form' [spec:source]
-                            variant_strs = []
-                            for v in matching:
-                                if v.speculation == 0:
-                                    variant_strs.append(f"'{v.form}' [{v.speculation}]")
-                                else:
-                                    source_suffix = (
-                                        f":{v.source}"
-                                        if v.source != "paren_expansion"
-                                        else ""
-                                    )
-                                    variant_strs.append(
-                                        f"'{v.form}' [{v.speculation}{source_suffix}]"
-                                    )
-                            variant_details.append(
-                                f"- {canonical}: {', '.join(variant_strs)}"
-                            )
-
-                        # Analyze similarity between canonicals
-                        similarity_type = self._analyze_entity_similarity(canonicals)
-
-                        # Construct message
-                        message_parts = [
-                            f"Contested variant '{norm_form}' from '{canonical_list}' ({kind}):"
+                        # Build variant details: filter and format matching variants
+                        variant_details = [
+                            f"- {canonical}: {', '.join(fmt_variant(v) for v in entities.get(canonical, []) if normalize_for_comparison(v.form) == norm_form)}"
+                            for canonical in canonicals
                         ]
-                        message_parts.extend(variant_details)
-                        message_parts.append(f"- Similarity: {similarity_type}")
 
-                        ctx.deps.logger.info("\n".join(message_parts))
+                        similarity = self._analyze_entity_similarity(canonicals)
+                        message = "\n".join(
+                            [
+                                f"Contested variant '{norm_form}' from '{canonical_list}' ({kind}):",
+                                *variant_details,
+                                f"- Similarity: {similarity}",
+                            ]
+                        )
+                        ctx.deps.logger.info(message)
 
                     # Process auto-merge decisions
                     for child, parent, reasoning in candidates.auto_merge:
