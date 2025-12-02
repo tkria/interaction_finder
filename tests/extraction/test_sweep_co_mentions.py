@@ -1023,15 +1023,18 @@ class TestAssessCoMentionRegionDiagnostics:
                 config=config,
                 deps=deps,
                 validated_entities=validated_entities,
+                region_index=1,
             )
 
-            # Check that warning was logged with diagnostic
+            # Check that warning was logged with combined diagnostic
             deps.logger.warning.assert_called_once()
             warning_msg = deps.logger.warning.call_args[0][0]
+            assert "Region assessment 1" in warning_msg
+            assert "produced 1 unresolvable pair:" in warning_msg
+            assert "Pair #1:" in warning_msg
             assert "UNKNOWN_GENE" in warning_msg
-            assert "first entity" in warning_msg
-            assert "unresolvable" in warning_msg
-            assert "expected:" in warning_msg
+            assert "(unknown!)" in warning_msg
+            assert "Expected entities:" in warning_msg
             assert "BRCA1" in warning_msg
             assert "TP53" in warning_msg
 
@@ -1107,14 +1110,17 @@ class TestAssessCoMentionRegionDiagnostics:
                 config=config,
                 deps=deps,
                 validated_entities=validated_entities,
+                region_index=2,
             )
 
             deps.logger.warning.assert_called_once()
             warning_msg = deps.logger.warning.call_args[0][0]
+            assert "Region assessment 2" in warning_msg
+            assert "produced 1 unresolvable pair:" in warning_msg
+            assert "Pair #1:" in warning_msg
             assert "UNKNOWN_GENE" in warning_msg
-            assert "second entity" in warning_msg
-            assert "unresolvable" in warning_msg
-            assert "expected:" in warning_msg
+            assert "(unknown!)" in warning_msg
+            assert "Expected entities:" in warning_msg
 
         finally:
             sweep_module.get_region_assessment_agent = original_getter
@@ -1199,16 +1205,152 @@ class TestAssessCoMentionRegionDiagnostics:
                 config=config,
                 deps=deps,
                 validated_entities=validated_entities,
+                region_index=3,
             )
 
             deps.logger.warning.assert_called_once()
             warning_msg = deps.logger.warning.call_args[0][0]
-            assert "unexpected pair" in warning_msg
+            assert "Region assessment 3" in warning_msg
+            assert "produced 1 unresolvable pair:" in warning_msg
+            assert "Pair #1:" in warning_msg
+            assert "is not an expected combination" in warning_msg
             assert "TP53" in warning_msg
             assert "breast cancer" in warning_msg
-            assert "expected involving these:" in warning_msg
+            assert "could be associated with:" in warning_msg
             # Should mention the valid pairs involving TP53 and breast cancer
             assert "BRCA1" in warning_msg  # Both TP53 and breast cancer pair with BRCA1
+            assert "Expected entities:" in warning_msg
+
+        finally:
+            sweep_module.get_region_assessment_agent = original_getter
+
+    @pytest.mark.asyncio
+    async def test_multiple_issues_combined_in_single_message(
+        self,
+        sample_resource,
+        entity_ref_brca1,
+        entity_ref_tp53,
+        entity_ref_breast_cancer,
+    ):
+        """Multiple resolution issues are collected and reported in a single warning."""
+        from unittest.mock import AsyncMock, MagicMock
+        from interaction_finder.extraction.sweep_co_mentions import (
+            assess_co_mention_region,
+            ConfirmedPair,
+            RegionAssessmentOut,
+        )
+        from interaction_finder.extraction.deps import Deps
+        from interaction_finder.settings import IfetcherConfig
+
+        # Create region with BRCA1-TP53 and BRCA1-breast_cancer pairs
+        pair_key1 = make_entity_pair_key(entity_ref_brca1, entity_ref_tp53)
+        pair_key2 = make_entity_pair_key(entity_ref_brca1, entity_ref_breast_cancer)
+        region = CoMentionRegion(
+            resource_id=sample_resource.id,
+            chunk_range=(0, 2),
+            candidate_pairs=[
+                CandidatePair(
+                    pair_key=pair_key1, entity1_kind="gene", entity2_kind="gene"
+                ),
+                CandidatePair(
+                    pair_key=pair_key2, entity1_kind="gene", entity2_kind="disease"
+                ),
+            ],
+        )
+
+        # LLM returns three problematic pairs
+        mock_agent = MagicMock()
+        mock_result = MagicMock()
+        mock_result.output = RegionAssessmentOut(
+            confirmed_pairs=[
+                # Pair 1: Unknown first entity
+                ConfirmedPair(
+                    entity1_name="UNKNOWN1",
+                    entity2_name="TP53",
+                    relationship="interacts_with",
+                    confidence="high",
+                    supporting_quotes=["Some text"],
+                    reasoning="Test",
+                ),
+                # Pair 2: Unknown second entity
+                ConfirmedPair(
+                    entity1_name="BRCA1",
+                    entity2_name="UNKNOWN2",
+                    relationship="regulates",
+                    confidence="medium",
+                    supporting_quotes=["Some text"],
+                    reasoning="Test",
+                ),
+                # Pair 3: Invalid combination
+                ConfirmedPair(
+                    entity1_name="TP53",
+                    entity2_name="breast cancer",
+                    relationship="associated_with",
+                    confidence="low",
+                    supporting_quotes=["Some text"],
+                    reasoning="Test",
+                ),
+            ]
+        )
+        mock_agent.run = AsyncMock(return_value=mock_result)
+
+        config = IfetcherConfig()
+        deps = Deps(
+            config=config,
+            resource_pool=MagicMock(),
+            agent_semaphore=MagicMock(__aenter__=AsyncMock(), __aexit__=AsyncMock()),
+            progress=None,
+            logger=MagicMock(),
+        )
+
+        import interaction_finder.extraction.sweep_co_mentions as sweep_module
+
+        original_getter = sweep_module.get_region_assessment_agent
+        sweep_module.get_region_assessment_agent = lambda _: mock_agent
+
+        try:
+            validated_entities = {
+                "BRCA1": entity_ref_brca1,
+                "TP53": entity_ref_tp53,
+                "breast cancer": entity_ref_breast_cancer,
+            }
+
+            await assess_co_mention_region(
+                region,
+                sample_resource,
+                topic="test topic",
+                known_relationships=[],
+                config=config,
+                deps=deps,
+                region_index=4,
+                validated_entities=validated_entities,
+            )
+
+            # Check that a single warning was logged with all issues
+            deps.logger.warning.assert_called_once()
+            warning_msg = deps.logger.warning.call_args[0][0]
+
+            # Check header
+            assert "Region assessment 4" in warning_msg
+            assert "produced 3 unresolvable pairs:" in warning_msg
+
+            # Check all three issues are present
+            assert "Pair #1:" in warning_msg
+            assert "UNKNOWN1" in warning_msg
+            assert "(unknown!)" in warning_msg
+
+            assert "Pair #2:" in warning_msg
+            assert "UNKNOWN2" in warning_msg
+
+            assert "Pair #3:" in warning_msg
+            assert "is not an expected combination" in warning_msg
+            assert "could be associated with:" in warning_msg
+
+            # Check footer with expected entities
+            assert "Expected entities:" in warning_msg
+            assert "BRCA1" in warning_msg
+            assert "TP53" in warning_msg
+            assert "breast cancer" in warning_msg
 
         finally:
             sweep_module.get_region_assessment_agent = original_getter

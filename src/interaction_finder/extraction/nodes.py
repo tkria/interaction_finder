@@ -1801,8 +1801,8 @@ class SweepCoMentionsNode(BaseNode[State, Deps, ExtractionResult]):
             # Collect known relationship types for prompt context
             known_relationships = sorted(ctx.state.relationship_polarities.keys())
 
-            # Step 7: Assess regions concurrently
-            async def assess_region(region):
+            # Step 7: Assess regions concurrently (with 1-based indexing for diagnostics)
+            async def assess_region(region_index: int, region: CoMentionRegion):
                 """Assess all pairs in a region with a single LLM call."""
                 # Note: .work() is called inside assess_co_mention_region after semaphore acquisition
                 try:
@@ -1819,6 +1819,7 @@ class SweepCoMentionsNode(BaseNode[State, Deps, ExtractionResult]):
                         known_relationships=known_relationships,
                         config=ctx.deps.config,
                         deps=ctx.deps,
+                        region_index=region_index,
                         validated_entities=validated_entities,
                     )
                     return (region, assessments)
@@ -1826,8 +1827,10 @@ class SweepCoMentionsNode(BaseNode[State, Deps, ExtractionResult]):
                     # Mark region as done (moves from in-progress to completed)
                     ctx.deps.progress["Regions"].done()
 
-            # Run region assessments with as_completed for live progress
-            tasks = [asyncio.create_task(assess_region(r)) for r in regions]
+            tasks = [
+                asyncio.create_task(assess_region(idx + 1, r))
+                for idx, r in enumerate(regions)
+            ]
             for coro in asyncio.as_completed(tasks):
                 region, assessments = await coro
                 # Update stats: count pairs assessed, not regions

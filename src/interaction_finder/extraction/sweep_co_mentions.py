@@ -588,6 +588,7 @@ async def assess_co_mention_region(
     known_relationships: list[str],
     config: IfetcherConfig,
     deps: Deps,
+    region_index: int,
     validated_entities: dict[str, EntityRef] | None = None,
 ) -> list[PairAssessment]:
     """Assess all candidate pairs in a merged region with a single LLM call.
@@ -599,6 +600,7 @@ async def assess_co_mention_region(
         known_relationships: Relationship types already seen in this extraction
         config: Configuration for LLM agent
         deps: Pipeline dependencies
+        region_index: 1-based region number for diagnostic messages
         validated_entities: Document's validated entities (for reuse if available)
 
     Returns:
@@ -669,27 +671,44 @@ Evaluate candidate entity pairs for associations in this text region.
 # Task
 For each candidate pair, determine if there is evidence of a relationship in the text.
 Provide supporting quotes for confirmed relationships."""
+    # Build agent name and diagnostic prefix with region context
+    agent_name = f"Region assessment {region_index}: {len(region.candidate_pairs)} candidate pairs [{resource.id.url}]"
+    diagnostic_prefix = f"Region assessment {region_index}"
     # Call LLM
     usage = RunUsage()
     agent = get_region_assessment_agent(config)
     try:
-        with rename_agent(
-            agent, name=f"AssessRegion: {len(region.candidate_pairs)} pairs"
-        ):
+        with rename_agent(agent, name=agent_name):
             async with deps.agent_semaphore:
                 # Mark region as in-progress now that we've acquired the semaphore
                 if deps.progress:
                     deps.progress["Regions"].work()
                 result = await agent.run(prompt, deps=deps, usage=usage)
     except (TimeoutError, ConnectionError, ValueError) as e:
-        deps.logger.error(
-            f"Co-mention region assessment failed: {type(e).__name__}: {e}"
-        )
+        deps.logger.error(f"{diagnostic_prefix} failed: {type(e).__name__}: {e}")
         return []
-    # Process confirmed pairs
+
+    # Helper: format entity name with unknown status
+    def format_entity(name: str, match) -> str:
+        return f"'{name}' (unknown!)" if match is None else f"'{name}'"
+
+    # Helper: find expected partners for an entity in candidate pairs
+    def find_partners(entity_name: str) -> list[str]:
+        return sorted(
+            {
+                cp.pair_key.entity2_name
+                if cp.pair_key.entity1_name == entity_name
+                else cp.pair_key.entity1_name
+                for cp in region.candidate_pairs
+                if entity_name in (cp.pair_key.entity1_name, cp.pair_key.entity2_name)
+            }
+        )
+
+    # Process confirmed pairs (collect diagnostics for batch reporting)
     assessments: list[PairAssessment] = []
-    for confirmed in result.output.confirmed_pairs:
-        # Match entity names using fuzzy matching (handles spelling variants, annotations)
+    resolution_issues: list[str] = []
+    for pair_idx, confirmed in enumerate(result.output.confirmed_pairs, start=1):
+        # Match entity names using fuzzy matching
         match1 = find_entity_match(
             confirmed.entity1_name, entity_variants, allow_fuzzy=True
         )
@@ -698,41 +717,31 @@ Provide supporting quotes for confirmed relationships."""
         )
 
         if match1 is None or match2 is None:
-            # Diagnostic: which entity/entities failed to resolve
-            unresolved = []
-            if match1 is None:
-                unresolved.append(f"first entity '{confirmed.entity1_name}'")
-            if match2 is None:
-                unresolved.append(f"second entity '{confirmed.entity2_name}'")
-            deps.logger.warning(
-                f"LLM returned unknown pair: {confirmed.entity1_name} <-> {confirmed.entity2_name} "
-                f"({', '.join(unresolved)} unresolvable; "
-                f"expected: {', '.join(sorted(entity_variants.keys()))})"
+            # Unresolvable entity issue
+            resolution_issues.append(
+                f"- Pair #{pair_idx}: {format_entity(confirmed.entity1_name, match1)} "
+                f"<-> {format_entity(confirmed.entity2_name, match2)}"
             )
             continue
 
-        matched_e1 = match1.canonical
-        matched_e2 = match2.canonical
-
-        # Look up candidate using matched names
+        matched_e1, matched_e2 = match1.canonical, match2.canonical
         candidate = pair_lookup.get((matched_e1, matched_e2))
+
         if candidate is None:
-            # Diagnostic: show expected pairs involving these entities
-            expected = sorted(
-                {
-                    f"{cp.pair_key.entity1_name} <-> {cp.pair_key.entity2_name}"
-                    for cp in region.candidate_pairs
-                    if matched_e1
-                    in (cp.pair_key.entity1_name, cp.pair_key.entity2_name)
-                    or matched_e2
-                    in (cp.pair_key.entity1_name, cp.pair_key.entity2_name)
-                }
-            )
-            deps.logger.warning(
-                f"LLM returned unexpected pair: {confirmed.entity1_name} <-> {confirmed.entity2_name} "
-                f"(resolved to {matched_e1} <-> {matched_e2} but not a candidate pair; "
-                f"expected involving these: {', '.join(expected) or 'none'})"
-            )
+            # Unexpected combination issue
+            parts = [
+                f"- Pair #{pair_idx}: '{confirmed.entity1_name}' <-> '{confirmed.entity2_name}' "
+                f"is not an expected combination"
+            ]
+            for entity, matched in [
+                (confirmed.entity1_name, matched_e1),
+                (confirmed.entity2_name, matched_e2),
+            ]:
+                if partners := find_partners(matched):
+                    parts.append(
+                        f"  '{matched}' could be associated with: {', '.join(partners)}"
+                    )
+            resolution_issues.append("\n".join(parts))
             continue
         # Validate quotes
         validated_quotes = []
@@ -743,7 +752,7 @@ Provide supporting quotes for confirmed relationships."""
                 pass
         if not validated_quotes:
             deps.logger.debug(
-                f"Co-mention assessment for {matched_e1}-{matched_e2} "
+                f"{diagnostic_prefix} pair {matched_e1}-{matched_e2} "
                 "rejected: no valid quotes"
             )
             continue
@@ -782,6 +791,12 @@ Provide supporting quotes for confirmed relationships."""
                 source="sweep",
             )
         )
+    # Emit combined diagnostic message if there were resolution issues
+    if resolution_issues:
+        count = len(resolution_issues)
+        header = f"{diagnostic_prefix} produced {count} unresolvable pair{'s' if count != 1 else ''}:"
+        footer = f"Expected entities: {', '.join(sorted(entity_variants.keys()))}"
+        deps.logger.warning("\n".join([header, *resolution_issues, footer]))
     return assessments
 
 
