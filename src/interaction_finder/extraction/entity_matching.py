@@ -714,16 +714,31 @@ def find_consolidation_candidates(
     for child, parent in agent_review:
         already_handled.add((child, parent))
         already_handled.add((parent, child))
+    # Also track contested entity pairs to avoid re-proposing them
+    for norm_form, canonical_to_variants in contested_warnings:
+        canonicals = list(canonical_to_variants.keys())
+        for i, c1 in enumerate(canonicals):
+            for c2 in canonicals[i + 1 :]:
+                already_handled.add((c1, c2))
+                already_handled.add((c2, c1))
 
     # Check remaining pairs
     for i, canon1 in enumerate(canonical_list):
         for canon2 in canonical_list[i + 1 :]:
-            pair = (canon1, canon2)
-            if pair in already_handled or (canon2, canon1) in already_handled:
+            if (canon1, canon2) in already_handled or (
+                canon2,
+                canon1,
+            ) in already_handled:
                 continue
 
             if _has_token_overlap(canon1, canon2, entities):
-                agent_review.append(pair)
+                # Order as (child, parent): prefer longer name as parent
+                parent, child = max(
+                    (canon1, canon2),
+                    (canon2, canon1),
+                    key=lambda p: (len(p[0]), p[0]),
+                )
+                agent_review.append((child, parent))
 
     return ConsolidationCandidates(
         auto_merge=auto_merge,
