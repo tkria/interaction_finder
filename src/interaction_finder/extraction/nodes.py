@@ -388,15 +388,50 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
                         norm_form,
                         canonical_to_variants,
                     ) in candidates.contested_warnings:
-                        # Build detailed message showing overlapping variants
-                        details = []
+                        # Get canonical names for header
+                        canonicals = list(canonical_to_variants.keys())
+                        canonical_list = "' and '".join(f"{c}" for c in canonicals)
+
+                        # Build variant details for each entity
+                        variant_details = []
                         for canonical, variant_forms in canonical_to_variants.items():
-                            variants_str = ", ".join(f"'{v}'" for v in variant_forms)
-                            details.append(f"{canonical} ({variants_str})")
-                        details_str = " | ".join(details)
-                        ctx.deps.logger.info(
-                            f"Contested variant normalizes to '{norm_form}' ({kind}): {details_str}"
-                        )
+                            # Get full variant info from entities dict
+                            entity_variants = entities.get(canonical, [])
+                            # Filter to variants matching this normalized form
+                            matching = [
+                                v
+                                for v in entity_variants
+                                if normalize_for_comparison(v.form) == norm_form
+                            ]
+                            # Format: 'form' [spec] or 'form' [spec:source]
+                            variant_strs = []
+                            for v in matching:
+                                if v.speculation == 0:
+                                    variant_strs.append(f"'{v.form}' [{v.speculation}]")
+                                else:
+                                    source_suffix = (
+                                        f":{v.source}"
+                                        if v.source != "paren_expansion"
+                                        else ""
+                                    )
+                                    variant_strs.append(
+                                        f"'{v.form}' [{v.speculation}{source_suffix}]"
+                                    )
+                            variant_details.append(
+                                f"- {canonical}: {', '.join(variant_strs)}"
+                            )
+
+                        # Analyze similarity between canonicals
+                        similarity_type = self._analyze_entity_similarity(canonicals)
+
+                        # Construct message
+                        message_parts = [
+                            f"Contested variant '{norm_form}' from '{canonical_list}' ({kind}):"
+                        ]
+                        message_parts.extend(variant_details)
+                        message_parts.append(f"- Similarity: {similarity_type}")
+
+                        ctx.deps.logger.info("\n".join(message_parts))
 
                     # Process auto-merge decisions
                     for child, parent, reasoning in candidates.auto_merge:
@@ -504,6 +539,46 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
                             is_from_alias=False,
                         )
                     ]
+
+    def _analyze_entity_similarity(self, canonicals: list[str]) -> str:
+        """Analyze why entities with the same normalized form are not safe to merge.
+
+        Returns a human-readable description of their relationship.
+        """
+        from interaction_finder.extraction.utils import (
+            normalize_for_comparison,
+            is_obvious_variant,
+            osa_distance,
+        )
+
+        if len(canonicals) < 2:
+            return "single entity"
+
+        # Compare first two (most common case)
+        a, b = canonicals[0], canonicals[1]
+        norm_a = normalize_for_comparison(a)
+        norm_b = normalize_for_comparison(b)
+
+        # Check various types of differences
+        if norm_a == norm_b:
+            # Normalized forms match but originals differ (e.g., BRCA1 vs Brca1)
+            # This was rejected by are_safe_capitalization_variants
+            return "capitalization differs but unsafe (likely different base forms)"
+
+        if is_obvious_variant(norm_a, norm_b):
+            return "obvious variant but unsafe for auto-merge"
+
+        # Check OSA distance for fuzzy similarity
+        dist = osa_distance(norm_a, norm_b)
+        if dist <= 2:
+            return f"similar forms (edit distance {dist}) but not safe to merge"
+
+        # Check for common patterns
+        if a.rstrip("0123456789") == b.rstrip("0123456789"):
+            return "same base with different numbers (e.g., SMAD2 vs SMAD3)"
+
+        # Generic case
+        return f"different base forms ({a} vs {b})"
 
     async def _get_consolidation_decisions_for_kind(
         self,
