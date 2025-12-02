@@ -693,14 +693,14 @@ def find_consolidation_candidates(
             for canon2 in canonical_list[i + 1 :]:
                 # Use core matching logic
                 if entity_names_match(canon1, canon2):
-                    # Prefer longer name; if same length, alphabetical
-                    parent, child = max(
+                    # Prefer shorter/simpler name as canonical (general over specific)
+                    canonical, alias = min(
                         (canon1, canon2),
                         (canon2, canon1),
                         key=lambda p: (len(p[0]), p[0]),
                     )
                     auto_merge.append(
-                        (child, parent, f"auto:{PENALTY_FUZZY}:original:fuzzy")
+                        (alias, canonical, f"auto:{PENALTY_FUZZY}:original:fuzzy")
                     )
 
     # Bag-of-words detection pass
@@ -732,13 +732,13 @@ def find_consolidation_candidates(
                 continue
 
             if _has_token_overlap(canon1, canon2, entities):
-                # Order as (child, parent): prefer longer name as parent
-                parent, child = max(
+                # Order as (alias, canonical): prefer shorter/simpler name as canonical
+                canonical, alias = min(
                     (canon1, canon2),
                     (canon2, canon1),
                     key=lambda p: (len(p[0]), p[0]),
                 )
-                agent_review.append((child, parent))
+                agent_review.append((alias, canonical))
 
     return ConsolidationCandidates(
         auto_merge=auto_merge,
