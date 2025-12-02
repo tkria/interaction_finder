@@ -31,7 +31,6 @@ def _render_pair_cards(pairs: list[dict[str, Any]]) -> str:
     show_kinds = len(all_kinds) > 2 or has_self_pair
 
     cards = []
-    polarity_label = {"positive": "+", "negative": "-", "neutral": "N"}
 
     for idx, pair in enumerate(pairs):
         # Build entity aliases (comma-separated for data-attribute)
@@ -87,15 +86,22 @@ def _render_pair_cards(pairs: list[dict[str, Any]]) -> str:
         pair_conf = pair.get("confidence", "low")
         conf_key = pair_conf if pair_conf in {"high", "medium", "low"} else "low"
 
-        # Build compact polarity pill with counts
+        # Build compact polarity pill with counts and tooltips
         polarity_summary = pair.get("polarity_summary", {})
+        polarity_labels = {
+            "positive": "Positive relationships",
+            "negative": "Negating relationships",
+            "neutral": "Neutral relationships",
+        }
         polarity_counts = []
         for polarity in ("positive", "negative", "neutral"):
             info = polarity_summary.get(polarity)
-            count = info.get("count", 0) if info else 0
-            if count > 0:
+            if info and info.get("count", 0) > 0:
+                count = info["count"]
+                label = polarity_labels[polarity]
                 polarity_counts.append(
-                    f'<span class="polarity-count polarity-{polarity}">{count}</span>'
+                    f'<span class="polarity-count polarity-{polarity}" '
+                    f'data-tooltip="{label}">{count}</span>'
                 )
         polarity_html = (
             f'<span class="polarity-pill">{"".join(polarity_counts)}</span>'

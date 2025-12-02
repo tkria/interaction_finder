@@ -378,11 +378,13 @@ header {
     display: inline-flex;
     align-items: center;
     gap: 0.15rem;
+    border-radius: 0.6em;
+    overflow: hidden;
 }
 
 .polarity-count {
     padding: 0.1rem 0.35rem;
-    border-radius: 0.4em;
+    border-radius: 0.2em;
     font-weight: 600;
 }
 
