@@ -542,10 +542,11 @@ def _has_token_overlap(
     canonical2: str,
     entities: dict[str, list[SpeculatedVariant]],
 ) -> bool:
-    """Check if tokens from one entity match variants of another.
+    """Check if entities share tokens or if tokens match variants.
 
-    Detects patterns like "Idiopathic PAH" where token "PAH" matches
-    a variant/alias of "Pulmonary Arterial Hypertension".
+    Detects patterns like:
+    1. "Idiopathic PAH" where token "PAH" matches a variant of "Pulmonary Arterial Hypertension"
+    2. "Heritable pulmonary arterial hypertension" vs "Pulmonary arterial hypertension" (shared tokens)
 
     Returns:
         True if token overlap detected
@@ -564,8 +565,8 @@ def _has_token_overlap(
     norms1, tokens1 = get_norms_and_tokens(canonical1)
     norms2, tokens2 = get_norms_and_tokens(canonical2)
 
-    # Check if tokens from one match variants of other
-    return bool(tokens1 & norms2 or tokens2 & norms1)
+    # Check if tokens from one match variants of other, or if they share tokens
+    return bool(tokens1 & norms2 or tokens2 & norms1 or tokens1 & tokens2)
 
 
 def _select_best_canonical(canonical_names: set[str]) -> str:
