@@ -1822,6 +1822,7 @@ class SweepCoMentionsNode(BaseNode[State, Deps, ExtractionResult]):
     ) -> "ConsolidateNewRelationshipsNode":
         """Scan for missed co-mentions and assess them."""
         from interaction_finder.extraction.sweep_co_mentions import (
+            CoMentionRegion,
             CoMentionSweepStats,
             assess_co_mention_region,
             build_entity_search_pattern,
