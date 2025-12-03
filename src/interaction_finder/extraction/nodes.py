@@ -494,6 +494,17 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
                         all_rules.update(llm_rules)
                         new_names.update(llm_new_names)
 
+                    # Process agent review groups
+                    if candidates.agent_review_groups:
+                        (
+                            group_rules,
+                            group_new_names,
+                        ) = await self._get_group_consolidation_decisions(
+                            candidates.agent_review_groups, kind, entities, ctx
+                        )
+                        all_rules.update(group_rules)
+                        new_names.update(group_new_names)
+
                 if not all_rules:
                     break  # No more work to do
 
@@ -790,6 +801,168 @@ Only return pairs that should merge or be renamed. Omit pairs that should remain
 
         except (TimeoutError, ConnectionError, ValueError) as e:
             ctx.deps.logger.error(f"Entity consolidation failed: {e}")
+
+    async def _get_group_consolidation_decisions(
+        self,
+        groups: list[set[str]],
+        kind: str,
+        entities: dict[str, list[SpeculatedVariant]],
+        ctx: GraphRunContext[State, Deps],
+    ) -> tuple[dict[tuple[str, str], tuple[str, str]], set[str]]:
+        """Query LLM for group consolidation decisions.
+
+        Args:
+            groups: List of entity groups (each group is a set of entity names)
+            kind: Entity kind
+            entities: Dict of canonical_name → variants
+            ctx: Graph run context
+
+        Returns:
+            Tuple of (rules, new_names) where:
+            - rules maps (norm_member, kind) → (target, reasoning)
+            - new_names is set of new canonical names (for renames)
+        """
+        from interaction_finder.extraction.models import EntityGroupDecisions
+        from interaction_finder.agent_config import agent_getter
+
+        if not groups:
+            return {}, set()
+
+        # Get agent
+        get_agent = agent_getter(
+            "extraction",
+            "entity_group_consolidation",
+            EntityGroupDecisions,
+            Deps,
+            """You are an expert at consolidating biomedical entity names for systematic literature analysis.
+
+You will be given groups of entities that appear related. For each group, decide if all members should merge to a single canonical entity, based on the research topic.
+
+**Decision framework:**
+1. Evaluate each group in the context of the research topic
+2. Ask: Does the topic require distinguishing between these entities?
+3. Apply these principles:
+   - Entities differing only by clinical subtypes or modifiers → merge to parent term
+     (e.g., "Idiopathic/Familial/Heritable [Disease]" → "[Disease]")
+   - Entities representing the same underlying condition → merge
+     (e.g., "tumour" and "tumor" → consistent spelling)
+   - Entities representing genuinely distinct biological phenomena → keep separate
+     (e.g., a disease vs. a measurement; a condition vs. its consequence)
+
+The research topic determines what distinctions matter. If entities are variants of the same concept relevant to the topic, merge them.
+
+If merging, specify the target as:
+- A member number (e.g., "1")
+- A member name (e.g., "Pulmonary arterial hypertension")
+- A new canonical name (e.g., "TGF-β")
+
+Only return groups that should merge. Omit groups that should remain separate.""",
+        )
+        agent = get_agent(ctx.deps.config)
+
+        # Format groups for prompt
+        group_data = []
+        for idx, group in enumerate(groups):
+            members_sorted = sorted(group, key=lambda e: (len(e), e))
+            group_id = _generate_token()
+            group_data.append(
+                {
+                    "group_id": group_id,
+                    "members": [
+                        {"number": i + 1, "name": m}
+                        for i, m in enumerate(members_sorted)
+                    ],
+                }
+            )
+
+        # Build prompt
+        entity_types_str = ", ".join(ctx.state.target_entity_types)
+        groups_text = "\n\n".join(
+            f"## Group {g['group_id']}\nMembers:\n"
+            + "\n".join(f"  {m['number']}. {m['name']}" for m in g["members"])
+            for g in group_data
+        )
+
+        prompt = f"""**Research topic:** {ctx.state.topic}
+**Target entity types:** {entity_types_str}
+
+**Entity groups to consolidate:**
+
+{groups_text}
+
+---
+
+For each group, decide whether to merge all members to a single canonical entity.
+
+Return JSON with groups to merge:
+{{
+  "decisions": [
+    {{"group_id": "...", "target": "...", "reasoning": "..."}}
+  ]
+}}
+
+Omit groups that should remain separate."""
+
+        # Call agent
+        async with ctx.deps.agent_semaphore:
+            result = await agent.run(prompt)
+
+        # Process decisions
+        rules: dict[tuple[str, str], tuple[str, str]] = {}
+        new_names: set[str] = set()
+
+        # Build group_id → members map
+        id_to_members = {
+            g["group_id"]: [m["name"] for m in g["members"]] for g in group_data
+        }
+
+        for decision in result.output.decisions:
+            members = id_to_members.get(decision.group_id)
+            if not members:
+                continue
+
+            # Resolve target
+            target = self._resolve_group_target(decision.target, members, entities)
+
+            # Track new names
+            if target not in entities:
+                new_names.add(target)
+
+            # Create rules for all members except target
+            for member in members:
+                if member != target:
+                    norm = normalize_for_comparison(member)
+                    rules[(norm, kind)] = (
+                        target,
+                        decision.reasoning or f"Group {decision.group_id}",
+                    )
+
+        return rules, new_names
+
+    def _resolve_group_target(
+        self,
+        target_spec: str,
+        members: list[str],
+        entities: dict[str, list[SpeculatedVariant]],
+    ) -> str:
+        """Resolve target from group decision.
+
+        Args:
+            target_spec: Member number ("1"), member name, or new name
+            members: Group members in order
+            entities: All entities (to check existence)
+
+        Returns:
+            Target entity name
+        """
+        # Case 1: Number like "1", "2", etc.
+        if target_spec.isdigit():
+            idx = int(target_spec) - 1
+            if 0 <= idx < len(members):
+                return members[idx]
+
+        # Case 2 & 3: Member name or new name
+        return target_spec
 
     async def _get_consolidation_decisions(
         self,

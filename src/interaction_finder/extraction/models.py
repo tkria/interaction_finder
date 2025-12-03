@@ -238,6 +238,31 @@ class EntityConsolidationDecisions(BaseModel):
     )
 
 
+class EntityGroupDecision(BaseModel):
+    """LLM decision to merge a group of entities to a single canonical form."""
+
+    group_id: str = Field(description="Group ID from prompt")
+    target: str = Field(
+        description=(
+            "Target entity: member number ('1'), member name, or new canonical name"
+        )
+    )
+    reasoning: str = Field(
+        default="", description="Explanation for the consolidation decision"
+    )
+
+
+class EntityGroupDecisions(BaseModel):
+    """LLM output: batch of entity group consolidation decisions.
+
+    Only includes groups that should merge. Groups not included are kept separate.
+    """
+
+    decisions: list[EntityGroupDecision] = Field(
+        description="Groups to merge (omit groups that should remain separate)"
+    )
+
+
 class RelationshipConsolidation(BaseModel):
     """LLM output: combined mapping and polarity classification for one relationship.
 

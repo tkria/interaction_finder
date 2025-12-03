@@ -120,6 +120,9 @@ class ConsolidationCandidates:
 
     auto_merge: list[tuple[str, str, str]]  # (child, parent, reasoning)
     agent_review: list[tuple[str, str]]  # (child, parent)
+    agent_review_groups: list[
+        set[str]
+    ]  # Groups of 2+ related entities for batch review
     contested_warnings: list[
         tuple[str, dict[str, list[str]]]
     ]  # (normalized_form, {canonical: [variant_forms]})
@@ -593,6 +596,92 @@ def _select_best_canonical(canonical_names: set[str]) -> str:
     )
 
 
+def _cluster_by_token_overlap(
+    entity_names: list[str],
+    entities: dict[str, list[SpeculatedVariant]],
+    threshold: float = 0.50,
+) -> list[set[str]]:
+    """Cluster entities using single-linkage on token overlap.
+
+    Uses union-find with token-based blocking to avoid O(n²) comparisons.
+    Only entities sharing at least one token are compared.
+
+    Args:
+        entity_names: Entity canonical names to cluster
+        entities: Full entity variant information
+        threshold: Minimum overlap proportion (0.0-1.0) to link entities
+
+    Returns:
+        List of clusters (each cluster is a set of entity names)
+    """
+    from collections import defaultdict
+
+    # Build token index for blocking
+    def get_tokens(canonical: str) -> set[str]:
+        return {
+            normalize_for_comparison(t)
+            for t in re.split(r"[\s\-]+", canonical)
+            if len(t) >= 3
+        }
+
+    token_to_entities: dict[str, list[str]] = defaultdict(list)
+    for entity in entity_names:
+        for token in get_tokens(entity):
+            token_to_entities[token].append(entity)
+
+    # Union-find for clustering
+    parent = {e: e for e in entity_names}
+
+    def find(x: str) -> str:
+        if parent[x] != x:
+            parent[x] = find(parent[x])  # Path compression
+        return parent[x]
+
+    def union(x: str, y: str) -> None:
+        parent[find(x)] = find(y)
+
+    # Calculate overlap proportion
+    def overlap(e1: str, e2: str) -> float:
+        """Return proportion of smaller entity's tokens that overlap."""
+
+        def get_norms_and_tokens(canonical: str) -> tuple[set[str], set[str]]:
+            norms = {
+                normalize_for_comparison(v.form) for v in entities.get(canonical, [])
+            }
+            return norms, get_tokens(canonical)
+
+        norms1, tokens1 = get_norms_and_tokens(e1)
+        norms2, tokens2 = get_norms_and_tokens(e2)
+
+        variant_overlap = len(tokens1 & norms2) + len(tokens2 & norms1)
+        token_overlap = len(tokens1 & tokens2)
+        total = max(variant_overlap, token_overlap)
+
+        min_count = min(len(tokens1), len(tokens2))
+        return total / min_count if min_count > 0 else 0.0
+
+    # Check pairs that share tokens (blocking)
+    checked: set[tuple[str, str]] = set()
+    for entity_list in token_to_entities.values():
+        for i, e1 in enumerate(entity_list):
+            for e2 in entity_list[i + 1 :]:
+                pair = (min(e1, e2), max(e1, e2))
+                if pair in checked:
+                    continue
+                checked.add(pair)
+
+                if overlap(e1, e2) >= threshold:
+                    union(e1, e2)
+
+    # Build clusters from union-find
+    clusters_dict: dict[str, set[str]] = defaultdict(set)
+    for entity in entity_names:
+        root = find(entity)
+        clusters_dict[root].add(entity)
+
+    return list(clusters_dict.values())
+
+
 def find_consolidation_candidates(
     entities: dict[str, list[SpeculatedVariant]],
 ) -> ConsolidationCandidates:
@@ -715,45 +804,21 @@ def find_consolidation_candidates(
                         (alias, canonical, f"auto:{PENALTY_FUZZY}:original:fuzzy")
                     )
 
-    # Bag-of-words detection pass
-    canonical_list = list(entities.keys())
-    already_handled: set[tuple[str, str]] = set()
+    # Cluster remaining entities by token overlap
+    already_handled = {child for child, parent, _ in auto_merge}
+    already_handled.update({parent for child, parent, _ in auto_merge})
+    for _, canonical_to_variants in contested_warnings:
+        already_handled.update(canonical_to_variants.keys())
 
-    # Track already-handled pairs
-    for child, parent, _ in auto_merge:
-        already_handled.add((child, parent))
-        already_handled.add((parent, child))
-    for child, parent in agent_review:
-        already_handled.add((child, parent))
-        already_handled.add((parent, child))
-    # Also track contested entity pairs to avoid re-proposing them
-    for norm_form, canonical_to_variants in contested_warnings:
-        canonicals = list(canonical_to_variants.keys())
-        for i, c1 in enumerate(canonicals):
-            for c2 in canonicals[i + 1 :]:
-                already_handled.add((c1, c2))
-                already_handled.add((c2, c1))
+    remaining = [e for e in entities.keys() if e not in already_handled]
+    clusters = _cluster_by_token_overlap(remaining, entities, threshold=0.50)
 
-    # Check remaining pairs
-    for i, canon1 in enumerate(canonical_list):
-        for canon2 in canonical_list[i + 1 :]:
-            if (canon1, canon2) in already_handled or (
-                canon2,
-                canon1,
-            ) in already_handled:
-                continue
-
-            if _has_token_overlap(canon1, canon2, entities):
-                # Order as (alias, canonical): prefer shorter/simpler name as canonical
-                canonical, alias = min(
-                    (canon1, canon2),
-                    (canon2, canon1),
-                    key=lambda p: (len(p[0]), p[0]),
-                )
-                agent_review.append((alias, canonical))
+    # Groups of 2+ entities for agent review
+    agent_review_groups = [cluster for cluster in clusters if len(cluster) > 1]
 
     return ConsolidationCandidates(
         auto_merge=auto_merge,
         agent_review=agent_review,
+        agent_review_groups=agent_review_groups,
         contested_warnings=contested_warnings,
     )
