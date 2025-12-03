@@ -139,6 +139,65 @@ def _resolve_pair_from_decision(
     return (canonical_pair, norm_child)
 
 
+async def _save_partial_checkpoint(
+    ctx: GraphRunContext[State, Deps], stage: str
+) -> None:
+    """Save partial checkpoint with current state for resumption.
+
+    Parameters:
+        ctx: Graph context with state and dependencies
+        stage: Name of the stage just completed
+    """
+    if not ctx.deps.checkpoint_path:
+        return
+
+    from pathlib import Path
+
+    from interaction_finder.checkpoint import ExtractionStageData, PipelineCheckpoint
+    from interaction_finder.version import get_version_string
+
+    # Helper to count items in nested dicts
+    def count_nested(d):
+        return sum(len(v) for v in d.values())
+
+    # Build partial checkpoint with resume state
+    checkpoint = PipelineCheckpoint(
+        topic=ctx.state.topic,
+        resources=ctx.deps.resource_pool,
+        created_by=get_version_string(),
+        keywords=ctx.deps.input_checkpoint.keywords,
+        search=ctx.deps.input_checkpoint.search,
+        extraction=ExtractionStageData(
+            target_entity_types=ctx.state.target_entity_types,
+            permitted_pairs={k: list(v) for k, v in ctx.state.permitted_pairs.items()},
+            judgments=[],
+            consolidation_rules=[],
+            metadata=ExtractionMetadata(
+                topic=ctx.state.topic,
+                resource_count=len(ctx.deps.resource_pool.resources),
+                total_entities_found=count_nested(ctx.state.entities_by_resource),
+                entities_after_validation=count_nested(
+                    ctx.state.validated_entities_by_resource
+                ),
+                entities_merged=ctx.state.entities_merged,
+                merge_cache_hits=ctx.state.merge_cache_hits,
+                merge_cache_misses=ctx.state.merge_cache_misses,
+                proximal_sets_found=count_nested(ctx.state.proximal_sets_by_resource),
+                total_pairs_found=0,
+                pairs_accepted=0,
+                pairs_rejected=0,
+                quotes_validated=ctx.state.quotes_validated,
+                quotes_failed=ctx.state.quotes_failed,
+                resume_from=stage,
+                resume_state=ctx.state.to_dict(),
+            ),
+        ),
+    )
+
+    Path(ctx.deps.checkpoint_path).write_text(checkpoint.model_dump_json(indent=2))
+    ctx.deps.logger.info(f"Saved partial checkpoint after {stage}")
+
+
 @dataclass
 class ProcessDocumentsNode(BaseNode[State, Deps, ExtractionResult]):
     """Process all documents concurrently through the per-document pipeline.
@@ -183,6 +242,9 @@ class ProcessDocumentsNode(BaseNode[State, Deps, ExtractionResult]):
             if not ctx.state.validated_entities_by_resource:
                 ctx.deps.logger.warning("No entities extracted from documents")
                 return End(self._empty_result(ctx))
+
+            # Save partial checkpoint after expensive document processing stage
+            await _save_partial_checkpoint(ctx, "process_documents")
 
             return ConsolidateEntitiesNode()
 
@@ -463,6 +525,10 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
                 f"Entity consolidation: {total_rules} rules applied, "
                 f"{ctx.state.entities_merged} entities merged{iterations_suffix}",
             )
+
+            # Save checkpoint after entity consolidation
+            await _save_partial_checkpoint(ctx, "consolidate_entities")
+
             return ConsolidateRelationshipsNode()
 
     def _collect_entity_variants(
@@ -1100,6 +1166,9 @@ class ConsolidateRelationshipsNode(BaseNode[State, Deps, ExtractionResult]):
             # Step 5: Filter irrelevant relationship types (if enabled)
             if ctx.deps.config.tools.extraction.filter_irrelevant_relationships:
                 self._filter_irrelevant_assessments(ctx)
+
+            # Save checkpoint after relationship consolidation
+            await _save_partial_checkpoint(ctx, "consolidate_relationships")
 
             return SweepCoMentionsNode()
 
@@ -1915,6 +1984,10 @@ class SweepCoMentionsNode(BaseNode[State, Deps, ExtractionResult]):
             )
 
             ctx.state.co_mention_sweep_stats = stats
+
+            # Save checkpoint after co-mention sweep
+            await _save_partial_checkpoint(ctx, "sweep_co_mentions")
+
             return ConsolidateNewRelationshipsNode()
 
 
@@ -2048,6 +2121,9 @@ For each new relationship, provide:
             # Filter pairs with only irrelevant relationships (if enabled)
             if ctx.deps.config.tools.extraction.filter_irrelevant_relationships:
                 self._filter_irrelevant_pairs(ctx)
+
+            # Save checkpoint after new relationship consolidation
+            await _save_partial_checkpoint(ctx, "consolidate_new_relationships")
 
             return JudgeCrossDocumentNode()
 

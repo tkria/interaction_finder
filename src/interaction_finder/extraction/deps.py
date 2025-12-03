@@ -7,8 +7,10 @@ and passed to agents via ctx.deps.
 import asyncio
 import logging
 from dataclasses import dataclass
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
+if TYPE_CHECKING:
+    from interaction_finder.checkpoint import PipelineCheckpoint
 
 from interaction_finder.resources import ResourcePool
 from interaction_finder.settings import IfetcherConfig
@@ -53,6 +55,8 @@ class Deps:
         logger: Logger for warnings and debugging
         progress: Optional progress counter for live display
         agent_semaphore: Semaphore to limit concurrent agent calls
+        checkpoint_path: Optional path for saving partial checkpoints
+        input_checkpoint: Input checkpoint to preserve prior stage data
     """
 
     resource_pool: ResourcePool
@@ -60,3 +64,5 @@ class Deps:
     logger: logging.Logger
     progress: ProgressProtocol | None = None
     agent_semaphore: asyncio.Semaphore = None  # type: ignore
+    checkpoint_path: str | None = None
+    input_checkpoint: "PipelineCheckpoint | None" = None

@@ -236,6 +236,7 @@ async def ensure_extraction(
                 target_entity_types=target_entity_types,
                 config=config,
                 progress=extraction_progress,
+                checkpoint_path=checkpoint_path,
             )
 
         # Save checkpoint if path provided (only after running the stage)

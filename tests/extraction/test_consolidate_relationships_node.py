@@ -46,6 +46,8 @@ def mock_deps():
     deps.agent_semaphore = AsyncMock()
     deps.agent_semaphore.__aenter__ = AsyncMock(return_value=None)
     deps.agent_semaphore.__aexit__ = AsyncMock(return_value=None)
+    deps.checkpoint_path = None
+    deps.input_checkpoint = None
     return deps
 
 

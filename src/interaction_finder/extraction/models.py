@@ -448,7 +448,11 @@ class PairJudgment(BaseModel):
 
 
 class ExtractionMetadata(BaseModel):
-    """Summary statistics for extraction run."""
+    """Summary statistics for extraction run.
+
+    When extraction is incomplete, resume_from and resume_state contain
+    checkpoint information for resumption. Both are None when complete.
+    """
 
     topic: str
     resource_count: int
@@ -463,6 +467,31 @@ class ExtractionMetadata(BaseModel):
     pairs_rejected: int
     quotes_validated: int
     quotes_failed: int
+
+    # Resumption fields (both None when extraction complete)
+    resume_from: (
+        Literal[
+            "process_documents",
+            "consolidate_entities",
+            "consolidate_relationships",
+            "sweep_co_mentions",
+            "consolidate_new_relationships",
+        ]
+        | None
+    ) = Field(None, description="Last completed stage (None if complete)")
+    resume_state: dict | None = Field(
+        None, description="Serialized State for resumption"
+    )
+
+    @property
+    def is_complete(self) -> bool:
+        """True if extraction completed successfully."""
+        return self.resume_from is None
+
+    @property
+    def is_resumable(self) -> bool:
+        """True if extraction can be resumed from a checkpoint."""
+        return self.resume_from is not None and self.resume_state is not None
 
 
 class ConsolidationRule(BaseModel):

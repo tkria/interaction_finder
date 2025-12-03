@@ -41,6 +41,8 @@ def mock_deps(mock_config):
             "logger": logging.getLogger("test"),
             "agent_semaphore": asyncio.Semaphore(1),
             "progress": None,
+            "checkpoint_path": None,
+            "input_checkpoint": None,
         },
     )()
     return deps
