@@ -548,8 +548,11 @@ def _has_token_overlap(
     1. "Idiopathic PAH" where token "PAH" matches a variant of "Pulmonary Arterial Hypertension"
     2. "Heritable pulmonary arterial hypertension" vs "Pulmonary arterial hypertension" (shared tokens)
 
+    Requires proportional overlap: at least 50% (rounded down, minimum 1) of the
+    smaller entity's token count must overlap.
+
     Returns:
-        True if token overlap detected
+        True if sufficient token overlap detected
     """
 
     def get_norms_and_tokens(canonical: str) -> tuple[set[str], set[str]]:
@@ -565,8 +568,16 @@ def _has_token_overlap(
     norms1, tokens1 = get_norms_and_tokens(canonical1)
     norms2, tokens2 = get_norms_and_tokens(canonical2)
 
-    # Check if tokens from one match variants of other, or if they share tokens
-    return bool(tokens1 & norms2 or tokens2 & norms1 or tokens1 & tokens2)
+    # Calculate overlap for each check type
+    variant_overlap = len(tokens1 & norms2) + len(tokens2 & norms1)
+    token_overlap = len(tokens1 & tokens2)
+    total_overlap = max(variant_overlap, token_overlap)
+
+    # Require at least 50% (rounded down, min 1) of smaller token count
+    min_token_count = min(len(tokens1), len(tokens2))
+    required_overlap = max(1, min_token_count // 2)
+
+    return total_overlap >= required_overlap
 
 
 def _select_best_canonical(canonical_names: set[str]) -> str:
