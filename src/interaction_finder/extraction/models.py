@@ -242,7 +242,7 @@ class ClusterDecision(BaseModel):
     """LLM judgment on whether a cluster should merge or split.
 
     The LLM makes a simple semantic judgment about cluster quality.
-    Python code handles the algorithmic details of re-clustering.
+    Python code handles the algorithmic details using the merge tree.
     """
 
     group_id: str = Field(description="Cluster ID from prompt")
@@ -251,7 +251,7 @@ class ClusterDecision(BaseModel):
         description=(
             "Decision on this cluster (default: merge):\n"
             "- merge: All members represent the same entity → merge to one target\n"
-            "- split: Cluster mixes unrelated entities → re-cluster with stricter threshold"
+            "- split: Cluster mixes unrelated entities → split at weak points in merge tree"
         ),
     )
     target: str | None = Field(
@@ -259,6 +259,13 @@ class ClusterDecision(BaseModel):
         description=(
             "Required if action='merge': target canonical name.\n"
             "Can be a member number ('1'), member name, or new canonical name."
+        ),
+    )
+    split_into: int | None = Field(
+        default=None,
+        description=(
+            "Optional for action='split': number of sub-clusters to create.\n"
+            "If not specified, splits at the weakest internal link."
         ),
     )
     reasoning: str = Field(description="Explanation for the decision")

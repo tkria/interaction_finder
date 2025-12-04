@@ -434,7 +434,7 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
             total_rules = 0
             iterations_completed = 0
             # Collect entities once, then iteratively find/process merge opportunities
-            entities_by_kind = self._collect_entity_variants(ctx)
+            entities_by_kind, mentions_by_kind = self._collect_entity_variants(ctx)
             for iteration in range(1, max_iterations + 1):
                 iterations_completed = iteration
 
@@ -446,10 +446,13 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
                     ctx.deps.config.tools.extraction.cluster_token_overlap_threshold
                 )
                 for kind, entities in entities_by_kind.items():
+                    mention_counts = mentions_by_kind.get(kind, {})
                     ctx.deps.logger.info(
                         f"Clustering {len(entities)} {kind} entities (threshold={threshold:.2f})"
                     )
-                    candidates = find_consolidation_candidates(entities, threshold)
+                    candidates = find_consolidation_candidates(
+                        entities, threshold, mention_counts
+                    )
 
                     # Log clustering results
                     multi_member_groups = [
@@ -510,13 +513,17 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
                         all_rules.update(llm_rules)
                         new_names.update(llm_new_names)
 
-                    # Process agent review groups
+                    # Process agent review groups with merge trees
                     if candidates.agent_review_groups:
                         (
                             group_rules,
                             group_new_names,
                         ) = await self._get_group_consolidation_decisions(
-                            candidates.agent_review_groups, kind, entities, ctx
+                            candidates.agent_review_groups,
+                            candidates.merge_trees,
+                            kind,
+                            entities,
+                            ctx,
                         )
                         all_rules.update(group_rules)
                         new_names.update(group_new_names)
@@ -560,29 +567,39 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
 
     def _collect_entity_variants(
         self, ctx: GraphRunContext[State, Deps]
-    ) -> dict[str, dict[str, list[SpeculatedVariant]]]:
-        """Collect all entities with their speculated variants.
+    ) -> tuple[
+        dict[str, dict[str, list[SpeculatedVariant]]], dict[str, dict[str, int]]
+    ]:
+        """Collect all entities with their speculated variants and mention counts.
 
         Uses the new extract_entity_variants() system which tracks speculation
         levels for each variant form. This enables automatic merge decisions
         based on confidence thresholds and provides rich provenance.
 
         Returns:
-            {kind: {canonical_name: [SpeculatedVariant, ...]}}
+            Tuple of:
+            - {kind: {canonical_name: [SpeculatedVariant, ...]}}
+            - {kind: {canonical_name: mention_count}}
         """
         entities_by_kind: dict[str, dict[str, list[SpeculatedVariant]]] = {}
+        mentions_by_kind: dict[str, dict[str, int]] = {}
 
         for entities in ctx.state.validated_entities_by_resource.values():
             for entity_name, entity in entities.items():
                 entity_kind = entity.kind
                 if entity_kind not in entities_by_kind:
                     entities_by_kind[entity_kind] = {}
-
+                    mentions_by_kind[entity_kind] = {}
                 # Extract variants with speculation tracking
                 variants = extract_entity_variants(entity_name, entity.aliases())
                 entities_by_kind[entity_kind][entity_name] = variants
+                # Count mentions (accumulate across resources)
+                current = mentions_by_kind[entity_kind].get(entity_name, 0)
+                mentions_by_kind[entity_kind][entity_name] = current + len(
+                    entity.mentions
+                )
 
-        return entities_by_kind
+        return entities_by_kind, mentions_by_kind
 
     def _add_new_names_to_entities(
         self,
@@ -820,21 +837,22 @@ Only return pairs that should merge or be renamed. Omit pairs that should remain
 
     async def _get_group_consolidation_decisions(
         self,
-        groups: list[set[str]],
+        groups: list[frozenset[str]],
+        merge_trees: list,  # List of Cluster objects
         kind: str,
         entities: dict[str, list[SpeculatedVariant]],
         ctx: GraphRunContext[State, Deps],
     ) -> tuple[dict[tuple[str, str], tuple[str, str]], set[str]]:
-        """Query LLM for group consolidation decisions with iterative refinement.
+        """Query LLM for group consolidation decisions using tree-based splitting.
 
-        Iteratively reviews clusters:
-        1. LLM reviews clusters, decides merge/split
-        2. Split clusters are re-clustered with stricter threshold
-        3. New sub-clusters queued for next round
-        4. Repeat until no splits or max rounds reached
+        Uses hierarchical merge trees for surgical splits instead of re-clustering:
+        1. LLM reviews clusters with tree structure context
+        2. Split requests use tree.split_into_n() for precise subdivision
+        3. Repeat until no splits or max rounds reached
 
         Args:
-            groups: List of entity groups (each group is a set of entity names)
+            groups: List of entity groups (each is a frozenset of entity names)
+            merge_trees: Corresponding Cluster trees for each group
             kind: Entity kind
             entities: Dict of canonical_name → variants
             ctx: Graph run context
@@ -846,24 +864,18 @@ Only return pairs that should merge or be renamed. Omit pairs that should remain
         """
         from interaction_finder.extraction.models import ClusterDecisions
         from interaction_finder.agent_config import agent_getter
-        from interaction_finder.extraction.entity_matching import (
-            _cluster_by_token_overlap,
-        )
+        from interaction_finder.extraction.clustering import Cluster
 
         if not groups:
             return {}, set()
 
-        # Configuration for iterative refinement
         max_rounds = ctx.deps.config.tools.extraction.cluster_refinement_max_rounds
-        base_threshold = (
-            ctx.deps.config.tools.extraction.cluster_token_overlap_threshold
-        )
-
-        # Accumulate results across all rounds
         all_rules: dict[tuple[str, str], tuple[str, str]] = {}
         all_new_names: set[str] = set()
-
-        # Get agent (define once, reuse across rounds)
+        # Build map from frozenset → tree for splitting
+        group_to_tree: dict[frozenset[str], Cluster] = {
+            tree.entities: tree for tree in merge_trees
+        }
         get_agent = agent_getter(
             "extraction",
             "entity_group_consolidation",
@@ -891,46 +903,41 @@ If merging, specify the target as:
 - A member name (e.g., "Pulmonary arterial hypertension")
 - A new canonical name (e.g., "TGF-β")
 
-Only return groups that should merge. Omit groups that should remain separate.""",
+If splitting, optionally specify split_into (number of sub-groups) for finer control.
+
+Only return groups that should merge or split. Omit groups that should remain separate.""",
         )
         agent = get_agent(ctx.deps.config)
-
-        # Queue of groups to review (start with initial clusters)
         current_groups = list(groups)
-        current_threshold = base_threshold
 
         for round_num in range(1, max_rounds + 1):
             if not current_groups:
                 break
-
             ctx.deps.logger.info(
                 f"Entity consolidation round {round_num}/{max_rounds}: "
                 f"reviewing {len(current_groups)} groups ({sum(len(g) for g in current_groups)} entities)"
             )
-
             # Format groups for prompt
             group_data = []
-            for idx, group in enumerate(current_groups):
+            for group in current_groups:
                 members_sorted = sorted(group, key=lambda e: (len(e), e))
                 group_id = _generate_token()
                 group_data.append(
                     {
                         "group_id": group_id,
+                        "entities": group,
                         "members": [
                             {"number": i + 1, "name": m}
                             for i, m in enumerate(members_sorted)
                         ],
                     }
                 )
-
-            # Build prompt
             entity_types_str = ", ".join(ctx.state.target_entity_types)
             groups_text = "\n\n".join(
                 f"## Group {g['group_id']}\nMembers:\n"
                 + "\n".join(f"  {m['number']}. {m['name']}" for m in g["members"])
                 for g in group_data
             )
-
             prompt = f"""**Research topic:** {ctx.state.topic}
 **Target entity types:** {entity_types_str}
 
@@ -948,30 +955,24 @@ Return JSON (action defaults to "merge" if omitted):
 {{
   "decisions": [
     {{"group_id": "...", "target": "...", "reasoning": "..."}},
-    {{"group_id": "...", "action": "split", "reasoning": "..."}}
+    {{"group_id": "...", "action": "split", "split_into": 2, "reasoning": "..."}}
   ]
 }}"""
-
-            # Call agent
             async with ctx.deps.agent_semaphore:
                 result = await agent.run(prompt)
-
-            # Build group_id → members map
-            id_to_members = {
-                g["group_id"]: [m["name"] for m in g["members"]] for g in group_data
-            }
-
-            # Process decisions
-            groups_to_split = []
+            id_to_data = {g["group_id"]: g for g in group_data}
+            groups_to_split: list[tuple[frozenset[str], int | None]] = []
             stats = {"merged": 0, "split": 0}
 
             for decision in result.output.decisions:
-                members = id_to_members.get(decision.group_id)
-                if not members:
+                data = id_to_data.get(decision.group_id)
+                if not data:
                     ctx.deps.logger.warning(
                         f"LLM returned unknown group_id '{decision.group_id}', skipping"
                     )
                     continue
+                members = [m["name"] for m in data["members"]]
+                group_entities = data["entities"]
 
                 if decision.action == "merge":
                     if not decision.target:
@@ -979,14 +980,11 @@ Return JSON (action defaults to "merge" if omitted):
                             f"Group {decision.group_id}: merge requires target, skipping"
                         )
                         continue
-
                     target = self._resolve_group_target(
                         decision.target, members, entities
                     )
                     if target not in entities:
                         all_new_names.add(target)
-
-                    # Create merge rules
                     for member in members:
                         if member != target:
                             all_rules[(normalize_for_comparison(member), kind)] = (
@@ -996,44 +994,44 @@ Return JSON (action defaults to "merge" if omitted):
                     stats["merged"] += 1
 
                 elif decision.action == "split":
+                    split_into = decision.split_into
                     ctx.deps.logger.info(
-                        f"  Group {decision.group_id} ({len(members)} members) → split for re-clustering"
+                        f"  Group {decision.group_id} ({len(members)} members) → "
+                        f"split into {split_into or 2} sub-groups"
                     )
-                    groups_to_split.append(set(members))
+                    groups_to_split.append((group_entities, split_into))
                     stats["split"] += 1
 
-            # Log round summary
             ctx.deps.logger.info(
                 f"  Round {round_num} results: {stats['merged']} merged, {stats['split']} split, "
                 f"{len(current_groups) - len(result.output.decisions)} kept separate"
             )
-
-            # Re-cluster groups marked for splitting with stricter threshold
             if not groups_to_split:
-                break  # No splits → done
-
-            current_threshold = min(0.95, current_threshold + 0.20)
-            ctx.deps.logger.info(
-                f"Re-clustering {len(groups_to_split)} split groups with threshold={current_threshold:.2f}"
-            )
-
+                break
+            # Use tree-based splitting
             current_groups = []
-            for group in groups_to_split:
-                group_list = list(group)
-                sub_clusters = _cluster_by_token_overlap(
-                    group_list, entities, threshold=current_threshold
-                )
-                # Only queue non-trivial clusters for next round
-                for cluster in sub_clusters:
-                    if len(cluster) > 1:
-                        current_groups.append(cluster)
+            for group_entities, split_into in groups_to_split:
+                tree = group_to_tree.get(group_entities)
+                if tree is None:
+                    ctx.deps.logger.warning(
+                        f"No merge tree for group {group_entities}, skipping split"
+                    )
+                    continue
+                n = split_into if split_into and split_into > 1 else 2
+                sub_clusters = tree.split_into_n(n)
+                for sub in sub_clusters:
+                    if len(sub) > 1:
+                        current_groups.append(sub)
+                        # Register sub-tree for future splits
+                        if sub not in group_to_tree:
+                            subtree = tree.find_subtree(sub)
+                            if subtree:
+                                group_to_tree[sub] = subtree
 
-        # Log final summary
         ctx.deps.logger.info(
             f"Entity group consolidation complete: {len(all_rules)} merge rules created, "
             f"{len(all_new_names)} new canonical names"
         )
-
         return all_rules, all_new_names
 
     def _resolve_group_target(

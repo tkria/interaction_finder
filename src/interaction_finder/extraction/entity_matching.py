@@ -259,11 +259,12 @@ class ConsolidationCandidates:
     auto_merge: list[tuple[str, str, str]]  # (child, parent, reasoning)
     agent_review: list[tuple[str, str]]  # (child, parent)
     agent_review_groups: list[
-        set[str]
+        frozenset[str]
     ]  # Groups of 2+ related entities for batch review
     contested_warnings: list[
         tuple[str, dict[str, list[str]]]
     ]  # (normalized_form, {canonical: [variant_forms]})
+    merge_trees: list  # List of Cluster trees for surgical splitting (type hint avoided for circular import)
 
 
 # ============================================================================
@@ -734,121 +735,17 @@ def _select_best_canonical(canonical_names: set[str]) -> str:
     )
 
 
-def _cluster_by_token_overlap(
-    entity_names: list[str],
-    entities: dict[str, list[SpeculatedVariant]],
-    threshold: float = 0.50,
-) -> list[set[str]]:
-    """Cluster entities using single-linkage on token overlap.
-
-    Uses union-find with token-based blocking to avoid O(n²) comparisons.
-    Only entities sharing at least one token are compared.
-
-    Args:
-        entity_names: Entity canonical names to cluster
-        entities: Full entity variant information
-        threshold: Minimum overlap proportion (0.0-1.0) to link entities
-
-    Returns:
-        List of clusters (each cluster is a set of entity names)
-    """
-    from collections import defaultdict
-
-    # Build token index for blocking
-    def get_tokens(canonical: str) -> set[str]:
-        """Extract significant tokens, filtering stopwords but keeping acronyms.
-
-        Normalizes tokens then filters:
-        - Keeps tokens ≥2 characters after normalization
-        - Removes English stopwords (e.g., "the", "and", "is")
-        - Preserves biomedical acronyms (e.g., "IL", "ER", "TG")
-        """
-        return {
-            normalized
-            for t in re.split(r"[\s\-]+", canonical)
-            if (normalized := normalize_for_comparison(t))
-            and len(normalized) >= 2
-            and normalized not in _STOPWORDS
-        }
-
-    token_to_entities: dict[str, list[str]] = defaultdict(list)
-    for entity in entity_names:
-        for token in get_tokens(entity):
-            token_to_entities[token].append(entity)
-
-    # Union-find for clustering
-    parent = {e: e for e in entity_names}
-
-    def find(x: str) -> str:
-        if parent[x] != x:
-            parent[x] = find(parent[x])  # Path compression
-        return parent[x]
-
-    def union(x: str, y: str) -> None:
-        parent[find(x)] = find(y)
-
-    # Calculate overlap proportion
-    def overlap(e1: str, e2: str) -> float:
-        """Return proportion of smaller entity's tokens that overlap."""
-
-        def get_norms_and_tokens(canonical: str) -> tuple[set[str], set[str]]:
-            norms = {
-                normalize_for_comparison(v.form) for v in entities.get(canonical, [])
-            }
-            return norms, get_tokens(canonical)
-
-        norms1, tokens1 = get_norms_and_tokens(e1)
-        norms2, tokens2 = get_norms_and_tokens(e2)
-
-        variant_overlap = len(tokens1 & norms2) + len(tokens2 & norms1)
-        token_overlap = len(tokens1 & tokens2)
-        total = max(variant_overlap, token_overlap)
-
-        min_count = min(len(tokens1), len(tokens2))
-        return total / min_count if min_count > 0 else 0.0
-
-    # Check pairs that share tokens (blocking)
-    checked: set[tuple[str, str]] = set()
-    for entity_list in token_to_entities.values():
-        for i, e1 in enumerate(entity_list):
-            for e2 in entity_list[i + 1 :]:
-                pair = (min(e1, e2), max(e1, e2))
-                if pair in checked:
-                    continue
-                checked.add(pair)
-
-                if overlap(e1, e2) >= threshold:
-                    union(e1, e2)
-
-    # Pass 2: Check unclustered singletons for variant-based matches (no blocking)
-    # This catches cases where canonical names don't share tokens but variants do
-    # An entity is a singleton if it's its own root (find(e) == e)
-    singletons = [e for e in entity_names if find(e) == e]
-
-    if len(singletons) > 1:
-        for i, e1 in enumerate(singletons):
-            for e2 in singletons[i + 1 :]:
-                if overlap(e1, e2) >= threshold:
-                    union(e1, e2)
-
-    # Build final clusters from union-find
-    clusters_dict: dict[str, set[str]] = defaultdict(set)
-    for entity in entity_names:
-        root = find(entity)
-        clusters_dict[root].add(entity)
-
-    return list(clusters_dict.values())
-
-
 def find_consolidation_candidates(
     entities: dict[str, list[SpeculatedVariant]],
     cluster_threshold: float = 0.50,
+    mention_counts: dict[str, int] | None = None,
 ) -> ConsolidationCandidates:
     """Find entity pairs for consolidation (auto-merge if ≤ threshold, else agent review).
 
     Args:
         entities: Dict of canonical_name → list of variant forms
         cluster_threshold: Token overlap proportion for clustering (0.0-1.0)
+        mention_counts: Optional dict of entity_name → mention count for IDF weighting
     """
     # Build variant map (excludes contested)
     variant_map, contested = build_variant_map(entities)
@@ -968,15 +865,25 @@ def find_consolidation_candidates(
                         (alias, canonical, f"auto:{PENALTY_FUZZY}:original:fuzzy")
                     )
 
-    # Cluster remaining entities by token overlap
+    # Cluster remaining entities using hierarchical clustering with IDF weighting
+    from interaction_finder.extraction.clustering import cluster_entities
+
     already_handled = {child for child, parent, _ in auto_merge}
     already_handled.update({parent for child, parent, _ in auto_merge})
     for _, canonical_to_variants in contested_warnings:
         already_handled.update(canonical_to_variants.keys())
 
-    remaining = [e for e in entities.keys() if e not in already_handled]
-    clusters = _cluster_by_token_overlap(
-        remaining, entities, threshold=cluster_threshold
+    remaining_entities = {e: entities[e] for e in entities if e not in already_handled}
+    # Filter mention_counts to only remaining entities
+    remaining_mentions = (
+        {e: mention_counts[e] for e in remaining_entities if e in mention_counts}
+        if mention_counts
+        else None
+    )
+    clusters, merge_trees = cluster_entities(
+        remaining_entities,
+        threshold=cluster_threshold,
+        mention_counts=remaining_mentions,
     )
 
     # Groups of 2+ entities for agent review
@@ -987,4 +894,5 @@ def find_consolidation_candidates(
         agent_review=agent_review,
         agent_review_groups=agent_review_groups,
         contested_warnings=contested_warnings,
+        merge_trees=[t for t in merge_trees if len(t.entities) > 1],
     )
