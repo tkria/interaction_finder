@@ -81,6 +81,19 @@ class TestTokenize:
         tokens = tokenize("a b c")
         assert tokens == frozenset()
 
+    def test_slash_splits_tokens(self):
+        """Slashes should split tokens (regression test for PAH clustering bug).
+
+        Bug: tokenize() was splitting on [\s\-]+ but not /, causing
+        "idiopathic/heritable PAH" to become single token "idiopathic heritable".
+        This prevented clustering of entities with slash-separated qualifiers.
+        """
+        tokens = tokenize("idiopathic/heritable PAH")
+        assert "idiopathic" in tokens
+        assert "heritable" in tokens
+        assert "pah" in tokens
+        assert "idiopathic heritable" not in tokens  # Should NOT be single token
+
 
 class TestSpecificity:
     """Test IDF-like specificity scoring."""

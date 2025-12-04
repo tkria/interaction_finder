@@ -102,7 +102,7 @@ def tokenize(text: str) -> frozenset[str]:
     """Extract normalized tokens ≥2 chars, excluding stopwords."""
     return frozenset(
         t
-        for word in re.split(r"[\s\-]+", text)
+        for word in re.split(r"[\s\-/]+", text)
         if (t := normalize_for_comparison(word)) and len(t) >= 2 and t not in _STOPWORDS
     )
 
