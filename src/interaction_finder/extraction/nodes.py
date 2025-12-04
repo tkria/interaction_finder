@@ -1738,12 +1738,8 @@ class JudgeCrossDocumentNode(BaseNode[State, Deps, ExtractionResult]):
             relationships = {a.relationship for a in high_conf}
             if len(relationships) == 1:
                 relationship = high_conf[0].relationship
-                return (
-                    True,
-                    relationship,
-                    f"Multiple high-confidence assessments ({len(high_conf)}) "
-                    f"with consistent relationship '{relationship}' provide strong evidence.",
-                )
+                reasoning = self._build_consensus_reasoning(high_conf, relationship)
+                return (True, relationship, reasoning)
 
             # Check for opposing relationships (if we have opposition data)
             has_opposition = False
@@ -1766,15 +1762,62 @@ class JudgeCrossDocumentNode(BaseNode[State, Deps, ExtractionResult]):
                 most_common_rel = Counter(
                     a.relationship for a in high_conf
                 ).most_common(1)[0][0]
-                relationships_str = ", ".join(f"'{r}'" for r in sorted(relationships))
-                return (
-                    True,
-                    most_common_rel,
-                    f"Multiple high-confidence assessments ({len(high_conf)}) "
-                    f"with compatible relationships ({relationships_str}) provide strong evidence.",
+                reasoning = self._build_consensus_reasoning(
+                    high_conf, most_common_rel, multiple_relationships=True
                 )
+                return (True, most_common_rel, reasoning)
 
         return (False, "", "")
+
+    def _build_consensus_reasoning(
+        self,
+        high_conf_assessments: list[PairAssessment],
+        selected_relationship: str,
+        multiple_relationships: bool = False,
+    ) -> str:
+        """Build detailed reasoning for deterministic consensus cases.
+
+        Generates prose that cites documents and explains the consensus,
+        providing better provenance than generic templates.
+
+        Parameters:
+            high_conf_assessments: High-confidence assessments (≥2)
+            selected_relationship: The relationship to report
+            multiple_relationships: Whether assessments have compatible but different relationships
+
+        Returns:
+            Detailed reasoning text with document citations
+        """
+        # Group assessments by relationship
+        from collections import defaultdict
+
+        by_rel: dict[str, list[PairAssessment]] = defaultdict(list)
+        for a in high_conf_assessments:
+            by_rel[a.relationship].append(a)
+        # Build citation list by relationship
+        citation_parts = []
+        for rel in sorted(by_rel.keys()):
+            rel_assessments = by_rel[rel]
+            doc_ids = [f"[{a.resource_id.id}]" for a in rel_assessments]
+            if rel == selected_relationship or len(by_rel) == 1:
+                # Primary evidence - no annotation needed
+                citation_parts.append(f"{' '.join(doc_ids)}")
+            else:
+                # Compatible alternative relationship - annotate with relationship type
+                citation_parts.append(f"{' '.join(doc_ids)} ('{rel}')")
+        all_citations = " ".join(citation_parts)
+        # Build integrated prose with citations
+        if multiple_relationships:
+            rel_list = ", ".join(f"'{r}'" for r in sorted(by_rel.keys()))
+            return (
+                f"High-confidence consensus across {len(high_conf_assessments)} sources "
+                f"with compatible relationships ({rel_list}), supported by {all_citations}."
+            )
+        else:
+            return (
+                f"High-confidence consensus for '{selected_relationship}' across "
+                f"{len(high_conf_assessments)} sources {all_citations}."
+            )
 
     def _should_investigate(
         self, assessments: list[PairAssessment], opposition_map: dict[str, set[str]]
