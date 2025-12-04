@@ -40,6 +40,7 @@ from interaction_finder.extraction.consolidate_entities import (
     get_entity_consolidation_agent,
 )
 from interaction_finder.extraction.models import (
+    ClusteringMetadata,
     ConsolidationRule,
     EntityPairKey,
     EntityRef,
@@ -188,6 +189,10 @@ async def _save_partial_checkpoint(
                 pairs_rejected=0,
                 quotes_validated=ctx.state.quotes_validated,
                 quotes_failed=ctx.state.quotes_failed,
+                clustering_metadata={
+                    kind: ClusteringMetadata(kind=kind, **info)
+                    for kind, info in ctx.state.clustering_metadata.items()
+                },
                 resume_from=stage,
                 resume_state=ctx.state.to_dict(),
             ),
@@ -453,6 +458,10 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
                     candidates = find_consolidation_candidates(
                         entities, threshold, mention_counts
                     )
+
+                    # Store clustering metadata for debugging/analysis
+                    if candidates.clustering_info:
+                        ctx.state.clustering_metadata[kind] = candidates.clustering_info
 
                     # Log clustering results
                     multi_member_groups = [
@@ -2570,6 +2579,10 @@ class FinalizeNode(BaseNode[State, Deps, ExtractionResult]):
                 pairs_rejected=pairs_rejected,
                 quotes_validated=ctx.state.quotes_validated,
                 quotes_failed=ctx.state.quotes_failed,
+                clustering_metadata={
+                    kind: ClusteringMetadata(kind=kind, **info)
+                    for kind, info in ctx.state.clustering_metadata.items()
+                },
             )
 
             result = ExtractionResult(

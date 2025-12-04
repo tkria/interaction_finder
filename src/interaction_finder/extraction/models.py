@@ -486,6 +486,66 @@ class PairJudgment(BaseModel):
         return list(self.iter_assessments())
 
 
+class ClusteringMetadata(BaseModel):
+    """Metadata about entity clustering for a specific entity kind.
+
+    Captures hierarchical clustering results including token specificity
+    weights, cluster composition, and merge tree structure for debugging
+    and analysis.
+    """
+
+    kind: str = Field(description="Entity kind (e.g., 'gene', 'phenotype')")
+    total_entities: int = Field(
+        description="Total entities of this kind before clustering"
+    )
+    entities_in_clustering: int = Field(
+        description="Entities that participated in clustering (after auto-merge)"
+    )
+    threshold: float = Field(description="Similarity threshold used for clustering")
+
+    # Token specificity weights (IDF-like, for debugging)
+    token_weights: dict[str, float] = Field(
+        default_factory=dict,
+        description="Token -> specificity score (log-scaled IDF)",
+    )
+    weight_range: tuple[float, float] = Field(
+        description="(min_weight, max_weight) across all tokens"
+    )
+
+    # Clustering results
+    clusters_formed: int = Field(description="Number of clusters produced")
+    largest_cluster_size: int = Field(
+        description="Size of largest cluster (for detecting hierarchies)"
+    )
+    multi_entity_clusters: int = Field(
+        description="Clusters with 2+ entities (presented to LLM)"
+    )
+    singleton_clusters: int = Field(
+        description="Clusters with 1 entity (kept separate)"
+    )
+
+    # Cluster composition (for analysis)
+    cluster_sizes: list[int] = Field(
+        description="Size of each cluster, sorted descending"
+    )
+    large_clusters: list[list[str]] = Field(
+        default_factory=list,
+        description="Entity names in clusters with 5+ members (hierarchies)",
+    )
+
+    # Hierarchical cluster structure (merge trees)
+    merge_trees: list[dict] = Field(
+        default_factory=list,
+        description="Hierarchical cluster trees showing merge structure and similarities",
+    )
+
+    # Sample token weights for common terms (debugging aid)
+    sample_weights: dict[str, float] = Field(
+        default_factory=dict,
+        description="Specificity scores for frequent tokens (up to 10)",
+    )
+
+
 class ExtractionMetadata(BaseModel):
     """Summary statistics for extraction run.
 
@@ -506,6 +566,12 @@ class ExtractionMetadata(BaseModel):
     pairs_rejected: int
     quotes_validated: int
     quotes_failed: int
+
+    # Clustering metadata (per entity kind)
+    clustering_metadata: dict[str, ClusteringMetadata] = Field(
+        default_factory=dict,
+        description="Clustering statistics by entity kind for debugging",
+    )
 
     # Resumption fields (both None when extraction complete)
     resume_from: (

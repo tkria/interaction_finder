@@ -265,6 +265,7 @@ class ConsolidationCandidates:
         tuple[str, dict[str, list[str]]]
     ]  # (normalized_form, {canonical: [variant_forms]})
     merge_trees: list  # List of Cluster trees for surgical splitting (type hint avoided for circular import)
+    clustering_info: dict | None = None  # Metadata for debugging (optional)
 
 
 # ============================================================================
@@ -866,7 +867,10 @@ def find_consolidation_candidates(
                     )
 
     # Cluster remaining entities using hierarchical clustering with IDF weighting
-    from interaction_finder.extraction.clustering import cluster_entities
+    from interaction_finder.extraction.clustering import (
+        cluster_entities,
+        compute_token_specificity,
+    )
 
     # Exclude only merge sources (children) - targets (parents) should cluster
     already_handled = {child for child, parent, _ in auto_merge}
@@ -889,10 +893,57 @@ def find_consolidation_candidates(
     # Groups of 2+ entities for agent review
     agent_review_groups = [cluster for cluster in clusters if len(cluster) > 1]
 
+    # Collect clustering metadata for debugging
+    clustering_info = None
+    if remaining_entities:
+        specificity = compute_token_specificity(remaining_entities, remaining_mentions)
+        cluster_sizes = sorted([len(c) for c in clusters], reverse=True)
+        large_clusters = [
+            sorted(list(cluster)) for cluster in clusters if len(cluster) >= 5
+        ]
+
+        # Get top 10 most common tokens by frequency
+        from collections import Counter
+
+        token_freq = Counter()
+        for variants in remaining_entities.values():
+            from interaction_finder.extraction.clustering import tokenize
+
+            for var in variants:
+                token_freq.update(tokenize(var.form))
+
+        sample_weights = {
+            token: specificity.get(token, 0.0)
+            for token, _ in token_freq.most_common(10)
+        }
+
+        clustering_info = {
+            "total_entities": len(entities),
+            "entities_in_clustering": len(remaining_entities),
+            "threshold": cluster_threshold,
+            "token_weights": dict(specificity),  # Full weights for analysis
+            "weight_range": (
+                (min(specificity.values()), max(specificity.values()))
+                if specificity
+                else (0.0, 0.0)
+            ),
+            "clusters_formed": len(clusters),
+            "largest_cluster_size": max(cluster_sizes) if cluster_sizes else 0,
+            "multi_entity_clusters": len(agent_review_groups),
+            "singleton_clusters": sum(1 for c in clusters if len(c) == 1),
+            "cluster_sizes": cluster_sizes,
+            "large_clusters": large_clusters,
+            "merge_trees": [
+                tree.to_dict() for tree in merge_trees if len(tree.entities) > 1
+            ],
+            "sample_weights": sample_weights,
+        }
+
     return ConsolidationCandidates(
         auto_merge=auto_merge,
         agent_review=agent_review,
         agent_review_groups=agent_review_groups,
         contested_warnings=contested_warnings,
         merge_trees=[t for t in merge_trees if len(t.entities) > 1],
+        clustering_info=clustering_info,
     )

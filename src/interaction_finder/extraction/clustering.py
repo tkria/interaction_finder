@@ -35,6 +35,22 @@ class Cluster:
     def is_leaf(self) -> bool:
         return self.left is None
 
+    def to_dict(self) -> dict:
+        """Serialize cluster tree to dict for JSON output."""
+        result = {
+            "entities": sorted(list(self.entities)),
+            "similarity": self.similarity,
+            "is_leaf": self.is_leaf(),
+        }
+        if not self.is_leaf():
+            result["merge_tokens"] = [
+                {"token": token, "weight": weight}
+                for token, weight in self.merge_tokens
+            ]
+            result["left"] = self.left.to_dict()
+            result["right"] = self.right.to_dict()
+        return result
+
     def split(self, threshold: float) -> list[frozenset[str]]:
         """Recursively split at all links below threshold."""
         if self.left is None:

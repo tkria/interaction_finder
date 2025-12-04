@@ -118,6 +118,8 @@ class State:
     )
     # Count of entities merged (for metadata)
     entities_merged: int = 0
+    # Clustering metadata by entity kind (for debugging/analysis)
+    clustering_metadata: dict[str, dict] = field(default_factory=dict)
     # Consolidation rules for provenance: (normalized_name, kind) → (target_canonical, reasoning)
     # Reasoning format: "auto:<speculation>:<source>:<match_kind>" or full LLM reasoning string
     # Examples: "auto:0:original:exact", "auto:1:before_paren:exact", "auto:3:original:fuzzy"
