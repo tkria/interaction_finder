@@ -1453,3 +1453,113 @@ class TestAssessCoMentionRegionDiagnostics:
 
         finally:
             sweep_module.get_region_assessment_agent = original_getter
+
+    @pytest.mark.asyncio
+    async def test_contested_variant_resolution_via_direct_canonical_match(
+        self, sample_resource
+    ):
+        """LLM returning entity name that matches canonical directly despite contested variants.
+
+        Regression test for bug where slash-separated entities like
+        "Heritable/familial PAH" expand to variants that contest with standalone
+        entities like "Familial PAH". When LLM returns "Familial PAH", it should
+        match the standalone entity via direct canonical match, not fail due to
+        contested variant.
+        """
+        from unittest.mock import AsyncMock, MagicMock
+        from interaction_finder.extraction.sweep_co_mentions import (
+            assess_co_mention_region,
+            ConfirmedPair,
+            RegionAssessmentOut,
+        )
+        from interaction_finder.extraction.models import EntityPairKey
+        from interaction_finder.extraction.deps import Deps
+        from interaction_finder.settings import IfetcherConfig
+
+        # Setup: Both standalone and slash-separated entities in candidates
+        # This creates contested variant "familial pulmonary arterial hypertension"
+        pair_keys = [
+            EntityPairKey(
+                entity1_name="BMPR2",
+                entity2_name="Familial pulmonary arterial hypertension",
+            ),
+            EntityPairKey(
+                entity1_name="BMPR2",
+                entity2_name="Heritable/familial pulmonary arterial hypertension",
+            ),
+        ]
+        region = CoMentionRegion(
+            resource_id=sample_resource.id,
+            chunk_range=(0, 2),
+            candidate_pairs=[
+                CandidatePair(
+                    pair_key=pk, entity1_kind="gene", entity2_kind="phenotype"
+                )
+                for pk in pair_keys
+            ],
+        )
+
+        # Mock LLM returns the standalone form (not the slash-separated form)
+        mock_agent = MagicMock()
+        mock_result = MagicMock()
+        mock_result.output = RegionAssessmentOut(
+            confirmed_pairs=[
+                ConfirmedPair(
+                    entity1_name="BMPR2",
+                    entity2_name="Familial pulmonary arterial hypertension",
+                    relationship="associated_with",
+                    confidence="high",
+                    supporting_quotes=[
+                        "BRCA1 and TP53 interact in DNA damage response pathways"
+                    ],
+                    reasoning="Test",
+                )
+            ]
+        )
+        mock_agent.run = AsyncMock(return_value=mock_result)
+
+        # No validated_entities (entities from global aliases only)
+        validated_entities = None
+
+        # Configure mocks
+        config = IfetcherConfig()
+        deps = Deps(
+            config=config,
+            resource_pool=MagicMock(),
+            agent_semaphore=MagicMock(__aenter__=AsyncMock(), __aexit__=AsyncMock()),
+            progress=None,
+            logger=MagicMock(),
+        )
+
+        import interaction_finder.extraction.sweep_co_mentions as sweep_module
+
+        original_getter = sweep_module.get_region_assessment_agent
+        sweep_module.get_region_assessment_agent = lambda _: mock_agent
+
+        try:
+            assessments = await assess_co_mention_region(
+                region,
+                sample_resource,
+                topic="test topic",
+                known_relationships=[],
+                config=config,
+                deps=deps,
+                validated_entities=validated_entities,
+                region_index=1,
+            )
+
+            # Should create assessment via direct canonical match
+            assert len(assessments) == 1
+            assert assessments[0].entity1.canonical == "BMPR2"
+            assert (
+                assessments[0].entity2.canonical
+                == "Familial pulmonary arterial hypertension"
+            )
+            assert assessments[0].relationship == "associated_with"
+            assert assessments[0].source == "sweep"
+
+            # Should NOT have logged warning about unresolvable entities
+            deps.logger.warning.assert_not_called()
+
+        finally:
+            sweep_module.get_region_assessment_agent = original_getter

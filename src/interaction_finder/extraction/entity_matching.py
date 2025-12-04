@@ -587,10 +587,25 @@ def find_entity_match(
     # Build variant map (excludes contested)
     variant_map, _ = build_variant_map(entities)
 
+    # Augment variant map with direct canonical mappings
+    # This handles contested variants: if query matches a canonical exactly,
+    # it should match even if that canonical's variants are contested
+    for canonical, variants in entities.items():
+        canonical_norm = normalize_for_comparison(canonical)
+        # Only add if not already present (avoid overwriting better matches)
+        if canonical_norm not in variant_map:
+            # Use the first variant (SPEC_ORIGINAL) from this entity
+            original_variant = next(
+                (v for v in variants if v.speculation == SPEC_ORIGINAL), variants[0]
+            )
+            variant_map[canonical_norm] = VariantMapping(
+                canonical=canonical, variant=original_variant
+            )
+
     # Extract query variants
     query_variants = extract_entity_variants(query)
 
-    # Stage 1: Try exact matches
+    # Stage 1: Try exact matches (includes direct canonical matches now)
     best_match: EntityMatch | None = None
 
     for qv in query_variants:
