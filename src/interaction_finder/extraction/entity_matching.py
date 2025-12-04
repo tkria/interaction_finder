@@ -49,6 +49,144 @@ SPEC_PRIMARY_CONTENT = 2  # Main content (expansion/alternation)
 SPEC_SECONDARY_CONTENT = 3  # Secondary content
 SPEC_NESTED_EXPANSION = 4  # Nested alternations
 
+# ============================================================================
+# Token Filtering for Clustering
+# ============================================================================
+
+# English stopwords (NLTK list) - filtered from token overlap clustering
+# to avoid spurious matches on common words like "the", "and", etc.
+_STOPWORDS = frozenset(
+    {
+        "i",
+        "me",
+        "my",
+        "myself",
+        "we",
+        "our",
+        "ours",
+        "ourselves",
+        "you",
+        "your",
+        "yours",
+        "yourself",
+        "yourselves",
+        "he",
+        "him",
+        "his",
+        "himself",
+        "she",
+        "her",
+        "hers",
+        "herself",
+        "it",
+        "its",
+        "itself",
+        "they",
+        "them",
+        "their",
+        "theirs",
+        "themselves",
+        "what",
+        "which",
+        "who",
+        "whom",
+        "this",
+        "that",
+        "these",
+        "those",
+        "am",
+        "is",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "being",
+        "have",
+        "has",
+        "had",
+        "having",
+        "do",
+        "does",
+        "did",
+        "doing",
+        "a",
+        "an",
+        "the",
+        "and",
+        "but",
+        "if",
+        "or",
+        "because",
+        "as",
+        "until",
+        "while",
+        "of",
+        "at",
+        "by",
+        "for",
+        "with",
+        "about",
+        "against",
+        "between",
+        "into",
+        "through",
+        "during",
+        "before",
+        "after",
+        "above",
+        "below",
+        "to",
+        "from",
+        "up",
+        "down",
+        "in",
+        "out",
+        "on",
+        "off",
+        "over",
+        "under",
+        "again",
+        "further",
+        "then",
+        "once",
+        "here",
+        "there",
+        "when",
+        "where",
+        "why",
+        "how",
+        "all",
+        "any",
+        "both",
+        "each",
+        "few",
+        "more",
+        "most",
+        "other",
+        "some",
+        "such",
+        "no",
+        "nor",
+        "not",
+        "only",
+        "own",
+        "same",
+        "so",
+        "than",
+        "too",
+        "very",
+        "s",
+        "t",
+        "can",
+        "will",
+        "just",
+        "don",
+        "should",
+        "now",
+    }
+)
+
 # Match quality penalties (added to variant speculation)
 PENALTY_EXACT = 0  # Exact normalized match
 PENALTY_FUZZY = 3  # Fuzzy match (validated)
@@ -618,10 +756,19 @@ def _cluster_by_token_overlap(
 
     # Build token index for blocking
     def get_tokens(canonical: str) -> set[str]:
+        """Extract significant tokens, filtering stopwords but keeping acronyms.
+
+        Normalizes tokens then filters:
+        - Keeps tokens ≥2 characters after normalization
+        - Removes English stopwords (e.g., "the", "and", "is")
+        - Preserves biomedical acronyms (e.g., "IL", "ER", "TG")
+        """
         return {
-            normalize_for_comparison(t)
+            normalized
             for t in re.split(r"[\s\-]+", canonical)
-            if len(t) >= 3
+            if (normalized := normalize_for_comparison(t))
+            and len(normalized) >= 2
+            and normalized not in _STOPWORDS
         }
 
     token_to_entities: dict[str, list[str]] = defaultdict(list)
@@ -673,7 +820,18 @@ def _cluster_by_token_overlap(
                 if overlap(e1, e2) >= threshold:
                     union(e1, e2)
 
-    # Build clusters from union-find
+    # Pass 2: Check unclustered singletons for variant-based matches (no blocking)
+    # This catches cases where canonical names don't share tokens but variants do
+    # An entity is a singleton if it's its own root (find(e) == e)
+    singletons = [e for e in entity_names if find(e) == e]
+
+    if len(singletons) > 1:
+        for i, e1 in enumerate(singletons):
+            for e2 in singletons[i + 1 :]:
+                if overlap(e1, e2) >= threshold:
+                    union(e1, e2)
+
+    # Build final clusters from union-find
     clusters_dict: dict[str, set[str]] = defaultdict(set)
     for entity in entity_names:
         root = find(entity)
@@ -684,8 +842,14 @@ def _cluster_by_token_overlap(
 
 def find_consolidation_candidates(
     entities: dict[str, list[SpeculatedVariant]],
+    cluster_threshold: float = 0.50,
 ) -> ConsolidationCandidates:
-    """Find entity pairs for consolidation (auto-merge if ≤ threshold, else agent review)."""
+    """Find entity pairs for consolidation (auto-merge if ≤ threshold, else agent review).
+
+    Args:
+        entities: Dict of canonical_name → list of variant forms
+        cluster_threshold: Token overlap proportion for clustering (0.0-1.0)
+    """
     # Build variant map (excludes contested)
     variant_map, contested = build_variant_map(entities)
 
@@ -811,7 +975,9 @@ def find_consolidation_candidates(
         already_handled.update(canonical_to_variants.keys())
 
     remaining = [e for e in entities.keys() if e not in already_handled]
-    clusters = _cluster_by_token_overlap(remaining, entities, threshold=0.50)
+    clusters = _cluster_by_token_overlap(
+        remaining, entities, threshold=cluster_threshold
+    )
 
     # Groups of 2+ entities for agent review
     agent_review_groups = [cluster for cluster in clusters if len(cluster) > 1]

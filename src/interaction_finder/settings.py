@@ -290,6 +290,18 @@ class IfetcherConfig(BaseModel):
                 le=10,
                 description="Maximum iterations for entity rename re-evaluation loop",
             )
+            cluster_token_overlap_threshold: float = Field(
+                0.50,
+                ge=0.0,
+                le=1.0,
+                description="Minimum token overlap proportion for clustering entities (0.0-1.0)",
+            )
+            cluster_refinement_max_rounds: int = Field(
+                3,
+                ge=1,
+                le=5,
+                description="Maximum rounds of iterative cluster refinement via LLM review",
+            )
             filter_irrelevant_relationships: bool = Field(
                 True,
                 description="Filter relationship types deemed irrelevant to research topic",

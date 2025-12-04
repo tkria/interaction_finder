@@ -938,3 +938,69 @@ class TestEdgeCases:
         # (exact deduplication behavior depends on implementation,
         # but we shouldn't have 3+ of the same alias)
         assert p53_count <= 2  # Some duplicates acceptable across mentions
+
+
+class TestIterativeRefinementModel:
+    """Test the ClusterDecision model and split action."""
+
+    def test_cluster_decision_split_action(self):
+        """Test that ClusterDecision accepts split action."""
+        from interaction_finder.extraction.models import ClusterDecision
+
+        decision = ClusterDecision(
+            group_id="test123",
+            action="split",
+            reasoning="Mixes disease and measurement"
+        )
+        assert decision.group_id == "test123"
+        assert decision.action == "split"
+        assert decision.target is None
+        assert decision.reasoning == "Mixes disease and measurement"
+
+    def test_cluster_decision_merge_action_explicit(self):
+        """Test that ClusterDecision accepts explicit merge action."""
+        from interaction_finder.extraction.models import ClusterDecision
+
+        decision = ClusterDecision(
+            group_id="test456",
+            action="merge",
+            target="PAH",
+            reasoning="All variants of PAH"
+        )
+        assert decision.action == "merge"
+        assert decision.target == "PAH"
+
+    def test_cluster_decision_merge_action_default(self):
+        """Test that action defaults to merge when omitted."""
+        from interaction_finder.extraction.models import ClusterDecision
+
+        decision = ClusterDecision(
+            group_id="test789",
+            target="Hypertension",
+            reasoning="All same condition"
+        )
+        assert decision.action == "merge"  # Should default to merge
+        assert decision.target == "Hypertension"
+
+    def test_cluster_decisions_batch(self):
+        """Test that ClusterDecisions can hold multiple decisions."""
+        from interaction_finder.extraction.models import ClusterDecisions, ClusterDecision
+
+        decisions = ClusterDecisions(
+            decisions=[
+                ClusterDecision(
+                    group_id="g1",
+                    action="merge",
+                    target="PAH",
+                    reasoning="PAH variants"
+                ),
+                ClusterDecision(
+                    group_id="g2",
+                    action="split",
+                    reasoning="Mixes unrelated"
+                ),
+            ]
+        )
+        assert len(decisions.decisions) == 2
+        assert decisions.decisions[0].action == "merge"
+        assert decisions.decisions[1].action == "split"

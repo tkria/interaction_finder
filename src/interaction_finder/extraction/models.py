@@ -238,29 +238,36 @@ class EntityConsolidationDecisions(BaseModel):
     )
 
 
-class EntityGroupDecision(BaseModel):
-    """LLM decision to merge a group of entities to a single canonical form."""
+class ClusterDecision(BaseModel):
+    """LLM judgment on whether a cluster should merge or split.
 
-    group_id: str = Field(description="Group ID from prompt")
-    target: str = Field(
-        description=(
-            "Target entity: member number ('1'), member name, or new canonical name"
-        )
-    )
-    reasoning: str = Field(
-        default="", description="Explanation for the consolidation decision"
-    )
-
-
-class EntityGroupDecisions(BaseModel):
-    """LLM output: batch of entity group consolidation decisions.
-
-    Only includes groups that should merge. Groups not included are kept separate.
+    The LLM makes a simple semantic judgment about cluster quality.
+    Python code handles the algorithmic details of re-clustering.
     """
 
-    decisions: list[EntityGroupDecision] = Field(
-        description="Groups to merge (omit groups that should remain separate)"
+    group_id: str = Field(description="Cluster ID from prompt")
+    action: Literal["merge", "split"] = Field(
+        default="merge",
+        description=(
+            "Decision on this cluster (default: merge):\n"
+            "- merge: All members represent the same entity → merge to one target\n"
+            "- split: Cluster mixes unrelated entities → re-cluster with stricter threshold"
+        ),
     )
+    target: str | None = Field(
+        default=None,
+        description=(
+            "Required if action='merge': target canonical name.\n"
+            "Can be a member number ('1'), member name, or new canonical name."
+        ),
+    )
+    reasoning: str = Field(description="Explanation for the decision")
+
+
+class ClusterDecisions(BaseModel):
+    """LLM output: batch of cluster quality judgments."""
+
+    decisions: list[ClusterDecision] = Field(description="Decision for each cluster")
 
 
 class RelationshipConsolidation(BaseModel):
