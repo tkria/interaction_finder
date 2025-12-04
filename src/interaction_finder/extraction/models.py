@@ -167,7 +167,11 @@ class EntityInfo(BaseModel):
     )
     name: str = Field(description="Canonical name of the entity")
     aliases: list[str] = Field(
-        description="Names as they appear in the text, verbatim", min_length=1
+        description=(
+            "Lexical variants, acronyms, and synonyms as they appear verbatim in text. "
+            "Include only names that refer to THIS entity, not related subtypes or complications."
+        ),
+        min_length=1,
     )
     quotes: list[str] = Field(
         description="Direct quotes from text supporting this entity", min_length=1

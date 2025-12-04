@@ -28,6 +28,12 @@ Your task: identify and extract biological entities from scientific text.
 6. Require clear textual support for every entity
 7. Explain your reasoning for each entity extraction
 
+**Alias handling:**
+- Aliases must be alternative names for the SAME entity
+- Include acronyms, abbreviations, and lexical variants
+- If a name includes the base entity PLUS additional qualifiers that significantly
+  narrow or change the meaning, extract it as a separate entity instead
+
 **If no entities are found:** Return an empty list with appropriate structure.""",
     default_model_settings=ModelSettings(parallel_tool_calls=False),
 )
