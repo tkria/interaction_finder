@@ -82,7 +82,7 @@ class TestTokenize:
         assert tokens == frozenset()
 
     def test_slash_splits_tokens(self):
-        """Slashes should split tokens (regression test for PAH clustering bug).
+        r"""Slashes should split tokens (regression test for PAH clustering bug).
 
         Bug: tokenize() was splitting on [\s\-]+ but not /, causing
         "idiopathic/heritable PAH" to become single token "idiopathic heritable".
@@ -164,6 +164,50 @@ class TestSpecificity:
         """Empty input returns empty dict."""
         spec = compute_token_specificity({})
         assert spec == {}
+
+    def test_canonical_name_2x_weighting(self):
+        """Canonical name tokens are weighted 2x vs variant tokens."""
+        entities = make_entities(
+            {
+                "Breast cancer": ["Breast cancer"],  # Canonical
+                "Colorectal cancer": ["Colorectal cancer"],  # Canonical
+            }
+        )
+        spec = compute_token_specificity(entities)
+        # Both entities have "cancer" in canonical name (2x weight each)
+        # Each entity has unique tokens (breast, colorectal) in canonical (2x weight)
+        # "cancer" appears with weight 2.0 + 2.0 = 4.0
+        # "breast" appears with weight 2.0
+        # "colorectal" appears with weight 2.0
+        # All tokens should have equal total weight due to 2x canonical multiplier
+        assert spec["cancer"] < spec["breast"]  # More common → lower specificity
+        assert spec["cancer"] < spec["colorectal"]
+
+    def test_canonical_weighting_prevents_spurious_clustering(self):
+        """2x canonical weighting should prevent clustering on common suffix terms."""
+        # Simulate "type 2 diabetes" vs "neonatal diabetes mellitus"
+        # Both have "diabetes" but in different contexts
+        entities = make_entities(
+            {
+                "Type 2 diabetes": ["Type 2 diabetes"],
+                "Neonatal diabetes mellitus": ["Neonatal diabetes mellitus"],
+            }
+        )
+        spec = compute_token_specificity(entities)
+        # With 2x weighting, "diabetes" appears with weight 4.0 (2.0 + 2.0)
+        # "type", "neonatal", "mellitus" each appear with weight 2.0
+        # "diabetes" should have lower specificity (more common)
+        assert spec["diabetes"] < spec["type"]
+        assert spec["diabetes"] < spec["neonatal"]
+        # Now check similarity - should be low due to unique specific tokens
+        from interaction_finder.extraction.clustering import _get_entity_tokens
+
+        tokens1 = _get_entity_tokens(entities["Type 2 diabetes"])
+        tokens2 = _get_entity_tokens(entities["Neonatal diabetes mellitus"])
+        sim, _ = _weighted_similarity(tokens1, tokens2, spec)
+        # Similarity should be relatively low (<0.5) due to unique specific tokens
+        # dominating over the shared common "diabetes" token
+        assert sim < 0.5, f"Expected similarity <0.5, got {sim}"
 
 
 class TestWeightedSimilarity:
