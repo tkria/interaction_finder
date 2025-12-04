@@ -635,17 +635,14 @@ async def assess_co_mention_region(
         all_entity_names.add(pk.entity2_name)
 
     # Build variant map for fuzzy matching
+    # Include all candidate entities, using aliases from validated_entities when available
     entity_variants = {}
-    if validated_entities:
-        for name in all_entity_names:
-            if name in validated_entities:
-                entity_ref = validated_entities[name]
-                entity_variants[name] = extract_entity_variants(
-                    name, entity_ref.aliases()
-                )
-    else:
-        # Fallback: use entity names without aliases
-        for name in all_entity_names:
+    for name in all_entity_names:
+        if validated_entities and name in validated_entities:
+            entity_ref = validated_entities[name]
+            entity_variants[name] = extract_entity_variants(name, entity_ref.aliases())
+        else:
+            # Fallback for entities from global aliases not in this document
             entity_variants[name] = extract_entity_variants(name, None)
 
     # Build relationships section
@@ -795,7 +792,7 @@ Provide supporting quotes for confirmed relationships."""
     if resolution_issues:
         count = len(resolution_issues)
         header = f"{diagnostic_prefix} produced {count} unresolvable pair{'s' if count != 1 else ''}:"
-        footer = f"Expected entities: {', '.join(sorted(entity_variants.keys()))}"
+        footer = f"Expected entities: {', '.join(sorted(all_entity_names))}"
         deps.logger.warning("\n".join([header, *resolution_issues, footer]))
     return assessments
 

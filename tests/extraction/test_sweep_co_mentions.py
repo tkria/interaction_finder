@@ -1354,3 +1354,102 @@ class TestAssessCoMentionRegionDiagnostics:
 
         finally:
             sweep_module.get_region_assessment_agent = original_getter
+
+    @pytest.mark.asyncio
+    async def test_entity_from_global_aliases_not_in_validated_entities(
+        self, sample_resource, entity_ref_brca1
+    ):
+        """Entity in candidate pairs but not in validated_entities should still resolve.
+
+        Regression test for bug where entities from global aliases (seen in other
+        documents) were included in candidate_pairs but not in validated_entities
+        for the current document, causing fuzzy matching to fail.
+        """
+        from unittest.mock import AsyncMock, MagicMock
+        from interaction_finder.extraction.sweep_co_mentions import (
+            assess_co_mention_region,
+            ConfirmedPair,
+            RegionAssessmentOut,
+        )
+        from interaction_finder.extraction.models import EntityPairKey
+        from interaction_finder.extraction.deps import Deps
+        from interaction_finder.settings import IfetcherConfig
+
+        # TGFB1 is in candidate pairs (from global aliases across all documents)
+        # but NOT in this document's validated_entities
+        pair_key = EntityPairKey(entity1_name="TGFB1", entity2_name="BRCA1")
+        region = CoMentionRegion(
+            resource_id=sample_resource.id,
+            chunk_range=(0, 2),
+            candidate_pairs=[
+                CandidatePair(
+                    pair_key=pair_key, entity1_kind="gene", entity2_kind="gene"
+                )
+            ],
+        )
+
+        # Mock LLM returns the global-alias entity
+        # Use a quote that actually exists in sample_resource
+        mock_agent = MagicMock()
+        mock_result = MagicMock()
+        mock_result.output = RegionAssessmentOut(
+            confirmed_pairs=[
+                ConfirmedPair(
+                    entity1_name="TGFB1",  # From global aliases, not in validated_entities
+                    entity2_name="BRCA1",
+                    relationship="interacts_with",
+                    confidence="high",
+                    supporting_quotes=[
+                        "BRCA1 and TP53 interact in DNA damage response pathways"
+                    ],
+                    reasoning="Test",
+                )
+            ]
+        )
+        mock_agent.run = AsyncMock(return_value=mock_result)
+
+        # validated_entities only has BRCA1, not TGFB1
+        validated_entities = {
+            "BRCA1": entity_ref_brca1,
+            # TGFB1 NOT included - came from global aliases
+        }
+
+        # Configure mocks
+        config = IfetcherConfig()
+        deps = Deps(
+            config=config,
+            resource_pool=MagicMock(),
+            agent_semaphore=MagicMock(__aenter__=AsyncMock(), __aexit__=AsyncMock()),
+            progress=None,
+            logger=MagicMock(),
+        )
+
+        import interaction_finder.extraction.sweep_co_mentions as sweep_module
+
+        original_getter = sweep_module.get_region_assessment_agent
+        sweep_module.get_region_assessment_agent = lambda _: mock_agent
+
+        try:
+            assessments = await assess_co_mention_region(
+                region,
+                sample_resource,
+                topic="test topic",
+                known_relationships=[],
+                config=config,
+                deps=deps,
+                validated_entities=validated_entities,
+                region_index=1,
+            )
+
+            # Should create assessment, not warning
+            assert len(assessments) == 1
+            assert assessments[0].entity1.canonical == "TGFB1"
+            assert assessments[0].entity2.canonical == "BRCA1"
+            assert assessments[0].relationship == "interacts_with"
+            assert assessments[0].source == "sweep"
+
+            # Should NOT have logged warning about unresolvable entities
+            deps.logger.warning.assert_not_called()
+
+        finally:
+            sweep_module.get_region_assessment_agent = original_getter
