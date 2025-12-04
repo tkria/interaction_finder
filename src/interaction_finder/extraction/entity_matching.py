@@ -868,8 +868,8 @@ def find_consolidation_candidates(
     # Cluster remaining entities using hierarchical clustering with IDF weighting
     from interaction_finder.extraction.clustering import cluster_entities
 
+    # Exclude only merge sources (children) - targets (parents) should cluster
     already_handled = {child for child, parent, _ in auto_merge}
-    already_handled.update({parent for child, parent, _ in auto_merge})
     for _, canonical_to_variants in contested_warnings:
         already_handled.update(canonical_to_variants.keys())
 
