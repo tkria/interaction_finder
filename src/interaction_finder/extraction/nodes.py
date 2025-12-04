@@ -1788,35 +1788,57 @@ class JudgeCrossDocumentNode(BaseNode[State, Deps, ExtractionResult]):
         Returns:
             Detailed reasoning text with document citations
         """
-        # Group assessments by relationship
+        # Group assessments by relationship, tracking unique documents per relationship
         from collections import defaultdict
 
-        by_rel: dict[str, list[PairAssessment]] = defaultdict(list)
+        by_rel: dict[str, set[str]] = defaultdict(set)
         for a in high_conf_assessments:
-            by_rel[a.relationship].append(a)
-        # Build citation list by relationship
-        citation_parts = []
-        for rel in sorted(by_rel.keys()):
-            rel_assessments = by_rel[rel]
-            doc_ids = [f"[{a.resource_id.id}]" for a in rel_assessments]
-            if rel == selected_relationship or len(by_rel) == 1:
-                # Primary evidence - no annotation needed
-                citation_parts.append(f"{' '.join(doc_ids)}")
-            else:
-                # Compatible alternative relationship - annotate with relationship type
-                citation_parts.append(f"{' '.join(doc_ids)} ('{rel}')")
-        all_citations = " ".join(citation_parts)
-        # Build integrated prose with citations
+            by_rel[a.relationship].add(a.resource_id.id)
+        # Build structured reasoning with header and grouped citations
         if multiple_relationships:
             rel_list = ", ".join(f"'{r}'" for r in sorted(by_rel.keys()))
-            return (
+            lines = [
                 f"High-confidence consensus across {len(high_conf_assessments)} sources "
-                f"with compatible relationships ({rel_list}), supported by {all_citations}."
-            )
+                f"with compatible relationships.\n"
+            ]
+            # Find documents that appear in multiple relationship groups
+            all_docs = set()
+            for docs in by_rel.values():
+                all_docs.update(docs)
+            doc_rels: dict[str, set[str]] = defaultdict(set)
+            for rel, docs in by_rel.items():
+                for doc in docs:
+                    doc_rels[doc].add(rel)
+            # Group documents by their relationship set
+            rel_groups: dict[frozenset[str], list[str]] = defaultdict(list)
+            for doc, rels in doc_rels.items():
+                rel_groups[frozenset(rels)].append(doc)
+            # Build citation lines for each relationship group
+            for rel_set in sorted(
+                rel_groups.keys(), key=lambda rs: (-len(rs), sorted(rs))
+            ):
+                docs = sorted(rel_groups[rel_set])
+                doc_citations = " ".join(f"[{doc}]" for doc in docs)
+                if len(rel_set) == 1:
+                    rel_name = next(iter(rel_set))
+                    lines.append(
+                        f"Found {len(docs)} document{'s' if len(docs) != 1 else ''} "
+                        f"that support{'s' if len(docs) == 1 else ''} the relationship '{rel_name}': {doc_citations}"
+                    )
+                else:
+                    rel_list_local = ", ".join(f"'{r}'" for r in sorted(rel_set))
+                    lines.append(
+                        f"Found {len(docs)} document{'s' if len(docs) != 1 else ''} "
+                        f"that support{'s' if len(docs) == 1 else ''} the relationships {rel_list_local}: {doc_citations}"
+                    )
+            return "\n".join(lines) + "."
         else:
+            # Single relationship case - simpler format
+            doc_ids = sorted(by_rel[selected_relationship])
+            doc_citations = " ".join(f"[{doc}]" for doc in doc_ids)
             return (
                 f"High-confidence consensus for '{selected_relationship}' across "
-                f"{len(high_conf_assessments)} sources {all_citations}."
+                f"{len(doc_ids)} source{'s' if len(doc_ids) != 1 else ''}: {doc_citations}."
             )
 
     def _should_investigate(
