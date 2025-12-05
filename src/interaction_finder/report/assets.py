@@ -379,13 +379,14 @@ header {
     align-items: center;
     gap: 0.15rem;
     border-radius: 0.6em;
-    overflow: hidden;
 }
 
 .polarity-count {
     padding: 0.1rem 0.35rem;
-    border-radius: 0.2em;
+    border-radius: 0.5em;
+    font-size: 0.85em;
     font-weight: 600;
+    border-bottom: none !important;
 }
 
 .polarity-badge {
