@@ -955,21 +955,13 @@ Only return groups that need action (merge/exclude/split). Omit groups that shou
 
 ---
 
-Return JSON (action defaults to "merge" if omitted). Omit groups that should stay separate.
+Omit groups that should stay separate. Action defaults to "merge" if omitted.
 
 Examples:
-- Merge: {{"group_id": "...", "target": "1", "reasoning": "All are PAH subtypes"}}
-- Exclude: {{"group_id": "...", "action": "exclude", "target": "5", "reasoning": "Member 5 (TAPSE) is a measurement, not a disease"}}
-- Split: {{"group_id": "...", "action": "split", "reasoning": "Mixes diseases and measurements"}}
-
-Format:
-{{
-  "decisions": [
-    {{"group_id": "...", "target": "...", "reasoning": "..."}},
-    {{"group_id": "...", "action": "exclude", "target": "...", "reasoning": "..."}},
-    {{"group_id": "...", "action": "split", "reasoning": "..."}}
-  ]
-}}"""
+- Merge: group_id="abc", target="1", reasoning="All are PAH subtypes"
+- Exclude: group_id="def", action="exclude", target="5", reasoning="Member 5 (TAPSE) is a measurement"
+- Split: group_id="ghi", action="split", reasoning="Mixes diseases and measurements"
+"""
             async with ctx.deps.agent_semaphore:
                 result = await agent.run(prompt)
             id_to_data = {g["group_id"]: g for g in group_data}
