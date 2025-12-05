@@ -781,8 +781,9 @@ def find_consolidation_candidates(
     variant_merges: list[tuple[str, str]] = []
     fuzzy_merges: list[tuple[str, str]] = []
 
-    # Handle contested variants: check if they're safe capitalization variants
-    # If safe, pick best canonical and auto-merge. If not, add to warnings.
+    # Phase 1: Handle contested variants
+    # Check if they're safe capitalization variants. If safe, auto-merge.
+    # If not, add to warnings (will be excluded from auto-merge).
     for norm in contested:
         # Build mapping of canonical -> variant forms for this contested norm
         canonical_to_variants: dict[str, list[str]] = {}
@@ -828,7 +829,20 @@ def find_consolidation_candidates(
             # Not safe capitalization variants - add warning with full context
             contested_warnings.append((norm, canonical_to_variants))
 
-    # Find potential merges by inverting variant map
+    # Log Phase 1 results
+    if logger and cap_merges:
+        logger.info(
+            f"  Phase 1 (contested variants): {len(cap_merges)} safe capitalization auto-merges "
+            f"(e.g., '{cap_merges[0][0]}' → '{cap_merges[0][1]}')",
+            extra={
+                "merges": [{"source": s, "target": t} for s, t in cap_merges],
+                "phase": "contested_variants",
+                "merge_type": "capitalization",
+            },
+        )
+
+    # Phase 2: Auto-merge via uncontested variants
+    # Only process variants that map to a single canonical (not contested)
     norm_to_canonicals: dict[str, set[str]] = {}
     for canonical, variants in entities.items():
         for sv in variants:
@@ -876,7 +890,19 @@ def find_consolidation_candidates(
                 if canonical != mapping.canonical:
                     agent_review.append((canonical, mapping.canonical))
 
-    # Check for fuzzy spelling variants (tumor/tumour) between remaining entities
+    # Log Phase 2 results
+    if logger and variant_merges:
+        logger.info(
+            f"  Phase 2 (uncontested variants): {len(variant_merges)} auto-merges "
+            f"(e.g., '{variant_merges[0][0]}' → '{variant_merges[0][1]}')",
+            extra={
+                "merges": [{"source": s, "target": t} for s, t in variant_merges],
+                "phase": "uncontested_variants",
+                "merge_type": "variant",
+            },
+        )
+
+    # Phase 3: Auto-merge fuzzy spelling variants (tumor/tumour)
     if PENALTY_FUZZY <= AUTO_MERGE_THRESHOLD:
         canonical_list = list(entities.keys())
         for i, canon1 in enumerate(canonical_list):
@@ -898,6 +924,18 @@ def find_consolidation_candidates(
                         )
                     )
                     fuzzy_merges.append((alias, canonical))
+
+    # Log Phase 3 results
+    if logger and fuzzy_merges:
+        logger.info(
+            f"  Phase 3 (fuzzy spelling): {len(fuzzy_merges)} auto-merges "
+            f"(e.g., '{fuzzy_merges[0][0]}' → '{fuzzy_merges[0][1]}')",
+            extra={
+                "merges": [{"source": s, "target": t} for s, t in fuzzy_merges],
+                "phase": "fuzzy_spelling",
+                "merge_type": "fuzzy",
+            },
+        )
 
     # Cluster remaining entities using hierarchical clustering with IDF weighting
     from interaction_finder.extraction.clustering import (
@@ -972,33 +1010,20 @@ def find_consolidation_candidates(
             "sample_weights": sample_weights,
         }
 
-    # Log batched auto-merge decisions
+    # Auto-merge summary logging (after all phases complete)
     if logger:
-        if cap_merges:
+        total_auto_merges = len(auto_merge)
+        if total_auto_merges > 0:
             logger.info(
-                f"  Auto-merge (capitalization): {len(cap_merges)} merges "
-                f"(e.g., '{cap_merges[0][0]}' → '{cap_merges[0][1]}')",
+                f"  Total auto-merges: {total_auto_merges} "
+                f"({len(cap_merges)} capitalization, {len(variant_merges)} variant, {len(fuzzy_merges)} fuzzy)",
                 extra={
-                    "merges": [{"source": s, "target": t} for s, t in cap_merges],
-                    "merge_type": "capitalization",
-                },
-            )
-        if variant_merges:
-            logger.info(
-                f"  Auto-merge (variant): {len(variant_merges)} merges "
-                f"(e.g., '{variant_merges[0][0]}' → '{variant_merges[0][1]}')",
-                extra={
-                    "merges": [{"source": s, "target": t} for s, t in variant_merges],
-                    "merge_type": "variant",
-                },
-            )
-        if fuzzy_merges:
-            logger.info(
-                f"  Auto-merge (fuzzy): {len(fuzzy_merges)} merges "
-                f"(e.g., '{fuzzy_merges[0][0]}' → '{fuzzy_merges[0][1]}')",
-                extra={
-                    "merges": [{"source": s, "target": t} for s, t in fuzzy_merges],
-                    "merge_type": "fuzzy",
+                    "total_auto_merges": total_auto_merges,
+                    "by_type": {
+                        "capitalization": len(cap_merges),
+                        "variant": len(variant_merges),
+                        "fuzzy": len(fuzzy_merges),
+                    },
                 },
             )
 
