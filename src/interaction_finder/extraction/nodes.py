@@ -902,20 +902,18 @@ You will be given groups of entities that appear related. For each group, decide
      (e.g., "Idiopathic/Familial/Heritable [Disease]" → "[Disease]")
    - Entities representing the same underlying condition → merge
      (e.g., "tumour" and "tumor" → consistent spelling)
+   - One entity clearly doesn't belong → exclude it (measurements mixed with diseases, etc.)
    - Entities representing genuinely distinct biological phenomena → keep separate
-     (e.g., a disease vs. a measurement; a condition vs. its consequence)
+     (e.g., different diseases, different genes)
 
 The research topic determines what distinctions matter. If entities are variants of the same concept relevant to the topic, merge them.
 
-If merging, specify the target as:
-- A member number (e.g., "1")
-- A member name (e.g., "Pulmonary arterial hypertension")
-- A new canonical name (e.g., "TGF-β")
+**Actions:**
+- **merge**: All members represent the same entity → specify target (member number, name, or new name)
+- **exclude**: One specific member doesn't belong → specify which one to remove (member number or name)
+- **split**: Cluster mixes unrelated entities but can't identify which → system splits at weakest link
 
-If splitting, the system will automatically split at the weakest link in the hierarchical
-merge tree and re-review the sub-groups in the next round.
-
-Only return groups that should merge or split. Omit groups that should remain separate.""",
+Only return groups that need action (merge/exclude/split). Omit groups that should remain separate.""",
         )
         agent = get_agent(ctx.deps.config)
         current_groups = list(groups)
@@ -957,14 +955,18 @@ Only return groups that should merge or split. Omit groups that should remain se
 
 ---
 
-For groups that should merge, provide the target. For groups that mix unrelated entities, mark as "split".
+Return JSON (action defaults to "merge" if omitted). Omit groups that should stay separate.
 
-Omit groups where members should stay separate.
+Examples:
+- Merge: {{"group_id": "...", "target": "1", "reasoning": "All are PAH subtypes"}}
+- Exclude: {{"group_id": "...", "action": "exclude", "target": "5", "reasoning": "Member 5 (TAPSE) is a measurement, not a disease"}}
+- Split: {{"group_id": "...", "action": "split", "reasoning": "Mixes diseases and measurements"}}
 
-Return JSON (action defaults to "merge" if omitted):
+Format:
 {{
   "decisions": [
     {{"group_id": "...", "target": "...", "reasoning": "..."}},
+    {{"group_id": "...", "action": "exclude", "target": "...", "reasoning": "..."}},
     {{"group_id": "...", "action": "split", "reasoning": "..."}}
   ]
 }}"""
@@ -972,7 +974,10 @@ Return JSON (action defaults to "merge" if omitted):
                 result = await agent.run(prompt)
             id_to_data = {g["group_id"]: g for g in group_data}
             groups_to_split: list[tuple[frozenset[str], int | None]] = []
-            stats = {"merged": 0, "split": 0}
+            groups_to_exclude: list[
+                tuple[frozenset[str], str]
+            ] = []  # (group, member_to_exclude)
+            stats = {"merged": 0, "split": 0, "excluded": 0}
 
             for decision in result.output.decisions:
                 data = id_to_data.get(decision.group_id)
@@ -1011,11 +1016,34 @@ Return JSON (action defaults to "merge" if omitted):
                     groups_to_split.append((group_entities, None))
                     stats["split"] += 1
 
+                elif decision.action == "exclude":
+                    if not decision.target:
+                        ctx.deps.logger.warning(
+                            f"Group {decision.group_id}: exclude requires target, skipping"
+                        )
+                        continue
+                    # Resolve member to exclude (could be number or name)
+                    member_to_exclude = self._resolve_group_target(
+                        decision.target, members, entities
+                    )
+                    if member_to_exclude not in members:
+                        ctx.deps.logger.warning(
+                            f"Group {decision.group_id}: member '{decision.target}' not found, skipping"
+                        )
+                        continue
+                    ctx.deps.logger.info(
+                        f"  Group {decision.group_id} ({len(members)} members) → "
+                        f"exclude '{member_to_exclude}'"
+                    )
+                    groups_to_exclude.append((group_entities, member_to_exclude))
+                    stats["excluded"] += 1
+
             ctx.deps.logger.info(
-                f"  Round {round_num} results: {stats['merged']} merged, {stats['split']} split, "
+                f"  Round {round_num} results: {stats['merged']} merged, "
+                f"{stats['split']} split, {stats['excluded']} excluded, "
                 f"{len(current_groups) - len(result.output.decisions)} kept separate"
             )
-            if not groups_to_split:
+            if not groups_to_split and not groups_to_exclude:
                 break
             # Use tree-based splitting
             current_groups = []
@@ -1036,6 +1064,21 @@ Return JSON (action defaults to "merge" if omitted):
                             subtree = tree.find_subtree(sub)
                             if subtree:
                                 group_to_tree[sub] = subtree
+
+            # Handle exclusions
+            for group_entities, member_to_exclude in groups_to_exclude:
+                # Remove the excluded member from the group
+                remaining = group_entities - {member_to_exclude}
+                # If 2+ members remain, add back for next round review
+                if len(remaining) > 1:
+                    current_groups.append(remaining)
+                    # Try to preserve tree structure for remaining entities
+                    tree = group_to_tree.get(group_entities)
+                    if tree:
+                        subtree = tree.find_subtree(remaining)
+                        if subtree:
+                            group_to_tree[remaining] = subtree
+                # Excluded member becomes singleton (not added back to current_groups)
 
         ctx.deps.logger.info(
             f"Entity group consolidation complete: {len(all_rules)} merge rules created, "

@@ -950,7 +950,7 @@ class TestIterativeRefinementModel:
         decision = ClusterDecision(
             group_id="test123",
             action="split",
-            reasoning="Mixes disease and measurement"
+            reasoning="Mixes disease and measurement",
         )
         assert decision.group_id == "test123"
         assert decision.action == "split"
@@ -965,7 +965,7 @@ class TestIterativeRefinementModel:
             group_id="test456",
             action="merge",
             target="PAH",
-            reasoning="All variants of PAH"
+            reasoning="All variants of PAH",
         )
         assert decision.action == "merge"
         assert decision.target == "PAH"
@@ -975,16 +975,32 @@ class TestIterativeRefinementModel:
         from interaction_finder.extraction.models import ClusterDecision
 
         decision = ClusterDecision(
-            group_id="test789",
-            target="Hypertension",
-            reasoning="All same condition"
+            group_id="test789", target="Hypertension", reasoning="All same condition"
         )
         assert decision.action == "merge"  # Should default to merge
         assert decision.target == "Hypertension"
 
+    def test_cluster_decision_exclude_action(self):
+        """Test that ClusterDecision accepts exclude action."""
+        from interaction_finder.extraction.models import ClusterDecision
+
+        decision = ClusterDecision(
+            group_id="test999",
+            action="exclude",
+            target="5",
+            reasoning="Member 5 is a measurement, not a disease",
+        )
+        assert decision.group_id == "test999"
+        assert decision.action == "exclude"
+        assert decision.target == "5"
+        assert decision.reasoning == "Member 5 is a measurement, not a disease"
+
     def test_cluster_decisions_batch(self):
         """Test that ClusterDecisions can hold multiple decisions."""
-        from interaction_finder.extraction.models import ClusterDecisions, ClusterDecision
+        from interaction_finder.extraction.models import (
+            ClusterDecisions,
+            ClusterDecision,
+        )
 
         decisions = ClusterDecisions(
             decisions=[
@@ -992,15 +1008,20 @@ class TestIterativeRefinementModel:
                     group_id="g1",
                     action="merge",
                     target="PAH",
-                    reasoning="PAH variants"
+                    reasoning="PAH variants",
                 ),
                 ClusterDecision(
-                    group_id="g2",
-                    action="split",
-                    reasoning="Mixes unrelated"
+                    group_id="g2", action="split", reasoning="Mixes unrelated"
+                ),
+                ClusterDecision(
+                    group_id="g3",
+                    action="exclude",
+                    target="Lower TAPSE",
+                    reasoning="TAPSE is a measurement",
                 ),
             ]
         )
-        assert len(decisions.decisions) == 2
+        assert len(decisions.decisions) == 3
         assert decisions.decisions[0].action == "merge"
         assert decisions.decisions[1].action == "split"
+        assert decisions.decisions[2].action == "exclude"

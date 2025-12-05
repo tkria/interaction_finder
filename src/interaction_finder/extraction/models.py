@@ -243,26 +243,29 @@ class EntityConsolidationDecisions(BaseModel):
 
 
 class ClusterDecision(BaseModel):
-    """LLM judgment on whether a cluster should merge or split.
+    """LLM judgment on whether a cluster should merge, split, or exclude a member.
 
     The LLM makes a simple semantic judgment about cluster quality.
     Python code handles the algorithmic details using the merge tree.
     """
 
     group_id: str = Field(description="Cluster ID from prompt")
-    action: Literal["merge", "split"] = Field(
+    action: Literal["merge", "split", "exclude"] = Field(
         default="merge",
         description=(
             "Decision on this cluster (default: merge):\n"
-            "- merge: All members represent the same entity → merge to one target\n"
-            "- split: Cluster mixes unrelated entities → will split at weakest link in merge tree"
+            "- merge: All members represent the same entity → merge to target\n"
+            "- split: Cluster mixes unrelated entities → split at weakest link\n"
+            "- exclude: One specific member doesn't belong → remove it from cluster"
         ),
     )
     target: str | None = Field(
         default=None,
         description=(
-            "Required if action='merge': target canonical name.\n"
-            "Can be a member number ('1'), member name, or new canonical name."
+            "Meaning depends on action:\n"
+            "- merge: target canonical name (member number, name, or new name)\n"
+            "- exclude: member to remove (member number or name)\n"
+            "- split: not used (omit this field)"
         ),
     )
     reasoning: str = Field(description="Explanation for the decision")
