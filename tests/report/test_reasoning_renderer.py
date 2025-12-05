@@ -755,6 +755,27 @@ class TestLinkifyCitations:
         assert '<span class="doc-link"' not in result
         assert "[1_aaaaaaaa, 2_bbbbbbbb]" in result
 
+    def test_pre_assigned_labels(self):
+        """Pre-assigned doc_labels should be used instead of auto-assignment."""
+        html = "First [1_aaaaaaaa], then [2_bbbbbbbb], then [3_cccccccc]."
+        doc_idx_map = {"1_aaaaaaaa": 5, "2_bbbbbbbb": 3, "3_cccccccc": 7}
+        # Pre-assign labels in non-sequential order
+        doc_labels = {5: "C", 3: "A", 7: "B"}
+        result = _linkify_citations(html, doc_idx_map, doc_labels)
+        # Should use pre-assigned labels, not auto-assignment order
+        assert ">Document&nbsp;C</span>" in result  # doc_idx 5 -> C
+        assert ">Document&nbsp;A</span>" in result  # doc_idx 3 -> A
+        assert ">Document&nbsp;B</span>" in result  # doc_idx 7 -> B
+        assert result.count('<span class="doc-link"') == 3
+
+    def test_pre_assigned_labels_missing_fallback(self):
+        """When doc_labels is provided but label missing, should use '?'."""
+        html = "Found in [1_aaaaaaaa]."
+        doc_idx_map = {"1_aaaaaaaa": 5}
+        doc_labels = {3: "A"}  # Label for doc_idx 3, but citation references 5
+        result = _linkify_citations(html, doc_idx_map, doc_labels)
+        assert ">Document&nbsp;?</span>" in result  # Fallback for missing label
+
 
 class TestReasoningTemplateWithCitations:
     """Tests for citation linkification in reasoning templates."""

@@ -192,6 +192,7 @@ class ReasoningTemplateRenderer:
         pair_idx: int,
         quote_id_map: dict[tuple[int, tuple], str],
         doc_idx_map: dict[str, int] | None = None,
+        doc_labels: dict[int, str] | None = None,
     ):
         """Initialize renderer for a specific pair.
 
@@ -200,11 +201,13 @@ class ReasoningTemplateRenderer:
             pair_idx: Index of this pair in the full pairs array
             quote_id_map: Mapping of (doc_idx, quote_key) -> quote_id
             doc_idx_map: Mapping of resource_id -> doc_idx for citation linking
+            doc_labels: Pre-assigned mapping from doc_idx to alphabetic label (A, B, ...)
         """
         self.pair = pair
         self.pair_idx = pair_idx
         self.quote_id_map = quote_id_map
         self.doc_idx_map = doc_idx_map
+        self.doc_labels = doc_labels
         # Build entity search terms
         self.entity1_terms = [pair["entity1"]["name"]] + pair["entity1"]["aliases"]
         self.entity2_terms = [pair["entity2"]["name"]] + pair["entity2"]["aliases"]
@@ -227,7 +230,7 @@ class ReasoningTemplateRenderer:
         # Highlight entities in reasoning text, then linkify document citations
         highlighted_reasoning = self.highlighter.highlight(pair["reasoning"])
         highlighted_reasoning = _linkify_citations(
-            highlighted_reasoning, self.doc_idx_map
+            highlighted_reasoning, self.doc_idx_map, self.doc_labels
         )
 
         # Build entity aliases sections
@@ -509,6 +512,7 @@ def render_all_reasoning_templates(
     pairs: list[dict[str, Any]],
     quote_id_map: dict[tuple[int, tuple], str],
     doc_idx_map: dict[str, int] | None = None,
+    pair_doc_labels: dict[int, dict[int, str]] | None = None,
 ) -> dict[str, dict[str, str]]:
     """Render all reasoning templates for all pairs.
 
@@ -516,6 +520,7 @@ def render_all_reasoning_templates(
         pairs: List of pair dictionaries (with document_groups)
         quote_id_map: Mapping of (doc_idx, quote_key) -> quote_id
         doc_idx_map: Mapping of resource_id -> doc_idx for citation linking
+        pair_doc_labels: Per-pair document labels mapping pair_idx -> (doc_idx -> label)
 
     Returns:
         Nested dict mapping pair_idx -> template_type -> HTML
@@ -523,7 +528,11 @@ def render_all_reasoning_templates(
     """
     templates: dict[str, dict[str, str]] = {}
     for pair_idx, pair in enumerate(pairs):
-        renderer = ReasoningTemplateRenderer(pair, pair_idx, quote_id_map, doc_idx_map)
+        # Get doc labels for this pair (in display order)
+        doc_labels = pair_doc_labels.get(pair_idx) if pair_doc_labels else None
+        renderer = ReasoningTemplateRenderer(
+            pair, pair_idx, quote_id_map, doc_idx_map, doc_labels
+        )
 
         pair_templates: dict[str, str] = {}
 
@@ -602,30 +611,41 @@ def _index_to_alpha_label(idx: int) -> str:
     return "".join(reversed(result))
 
 
-def _linkify_citations(html: str, doc_idx_map: dict[str, int] | None = None) -> str:
-    """Convert document citations to clickable spans with local A-Z labels.
+def _linkify_citations(
+    html: str,
+    doc_idx_map: dict[str, int] | None = None,
+    doc_labels: dict[int, str] | None = None,
+) -> str:
+    """Convert document citations to clickable spans with A-Z labels.
 
     Handles single citations [1_abc12345] and multi-citations like
     [1_abc12345, 2_def67890] or [1_abc12345; 2_def67890].
-
-    Documents are assigned sequential labels (A, B, C, ...) based on first
-    appearance in the text, providing consistent local references.
 
     Args:
         html: HTML text potentially containing citations
         doc_idx_map: Optional mapping from resource_id (e.g., "1_abc12345") to doc_idx.
                      If provided, only citations present in the map are linked.
+        doc_labels: Optional pre-assigned mapping from doc_idx to alphabetic label.
+                    If not provided, labels are assigned based on first appearance.
 
     Returns:
         HTML with citations converted to clickable spans (space-separated, no brackets)
     """
-    # Track doc_idx -> label mapping, assigned in order of first appearance
-    doc_labels: dict[int, str] = {}
+    # Use pre-assigned labels if provided, otherwise assign on first appearance
+    if doc_labels is None:
+        doc_labels = {}
+        next_label_idx = 0
 
-    def get_label(doc_idx: int) -> str:
-        if doc_idx not in doc_labels:
-            doc_labels[doc_idx] = _index_to_alpha_label(len(doc_labels))
-        return doc_labels[doc_idx]
+        def get_label(doc_idx: int) -> str:
+            nonlocal next_label_idx
+            if doc_idx not in doc_labels:
+                doc_labels[doc_idx] = _index_to_alpha_label(next_label_idx)
+                next_label_idx += 1
+            return doc_labels[doc_idx]
+    else:
+
+        def get_label(doc_idx: int) -> str:
+            return doc_labels.get(doc_idx, "?")
 
     # Create link spans
     def make_link(resource_id: str) -> str | None:

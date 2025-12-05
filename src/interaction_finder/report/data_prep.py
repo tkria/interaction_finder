@@ -19,7 +19,10 @@ from rich.progress import (
 from interaction_finder.checkpoint import PipelineCheckpoint
 from interaction_finder.report.html_renderer import DocumentQuoteEntry
 from interaction_finder.report.parallel_renderer import render_documents_parallel
-from interaction_finder.report.reasoning_renderer import render_all_reasoning_templates
+from interaction_finder.report.reasoning_renderer import (
+    render_all_reasoning_templates,
+    _index_to_alpha_label,
+)
 
 POLARITY_ORDER = ("positive", "negative", "neutral", "irrelevant")
 CONFIDENCE_ORDER = {"high": 3, "medium": 2, "low": 1}
@@ -325,6 +328,16 @@ def prepare_report_data(
             pair["assessments"], doc_idx_map, indexed_docs
         )
 
+    # Assign alphabetic labels (A, B, C, ...) to documents based on display order
+    # Labels are per-pair to match the visual accordion order
+    pair_doc_labels: dict[int, dict[int, str]] = {}
+    for pair_idx, pair in enumerate(pairs):
+        doc_labels = {}
+        for display_idx, doc_group in enumerate(pair["document_groups"]):
+            doc_idx = doc_group["doc_idx"]
+            doc_labels[doc_idx] = _index_to_alpha_label(display_idx)
+        pair_doc_labels[pair_idx] = doc_labels
+
     # Build document rendering data structures
     # doc_idx -> [DocumentQuoteEntry]
     doc_to_quotes: dict[int, list[DocumentQuoteEntry]] = defaultdict(list)
@@ -401,9 +414,9 @@ def prepare_report_data(
             progress_callback=None,
         )
 
-    # Generate reasoning templates for all pairs
+    # Generate reasoning templates for all pairs (with display-order labels)
     reasoning_templates = render_all_reasoning_templates(
-        pairs, quote_id_map, doc_idx_map
+        pairs, quote_id_map, doc_idx_map, pair_doc_labels
     )
 
     return pairs, document_html, reasoning_templates, indexed_docs

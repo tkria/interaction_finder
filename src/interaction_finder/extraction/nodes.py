@@ -1905,6 +1905,25 @@ class JudgeCrossDocumentNode(BaseNode[State, Deps, ExtractionResult]):
         # All other cases need investigation
         return True
 
+    def _sort_assessments_by_date(
+        self,
+        assessments: list[PairAssessment],
+        ctx: GraphRunContext[State, Deps],
+    ) -> list[PairAssessment]:
+        """Sort assessments by publication date (newest first), then quote count.
+
+        Ensures documents are presented to the LLM in the same order they'll appear
+        in the report, making citations consistent with visual display order.
+        """
+
+        def sort_key(a: PairAssessment) -> tuple:
+            resource = ctx.deps.resource_pool.get(a.resource_id)
+            date = resource.publication_date if resource else ""
+            # Empty dates sort last; newer dates first; more quotes first
+            return (date or "", -len(a.quotes))
+
+        return sorted(assessments, key=sort_key, reverse=True)
+
     def _build_contentious_prompt(
         self,
         pair_key: EntityPairKey,
@@ -1918,8 +1937,10 @@ class JudgeCrossDocumentNode(BaseNode[State, Deps, ExtractionResult]):
             """Format a list of assessments with document evidence."""
             if not assessments:
                 return ""
+            # Sort by publication date (newest first) for consistent display order
+            sorted_assessments = self._sort_assessments_by_date(assessments, ctx)
             sections = [f"## {label.title()} Evidence\n"]
-            for assessment in assessments:
+            for assessment in sorted_assessments:
                 resource = ctx.deps.resource_pool.get(assessment.resource_id)
                 if not resource:
                     continue
@@ -1987,8 +2008,10 @@ Provide: accepted (true/false), relationship (selected from above), confidence (
 
         # Combine all assessments (one polarity category will dominate)
         all_assessments = spread.positive + spread.negative + spread.neutral
+        # Sort by publication date (newest first) for consistent display order
+        sorted_assessments = self._sort_assessments_by_date(all_assessments, ctx)
         document_sections = []
-        for assessment in all_assessments:
+        for assessment in sorted_assessments:
             resource = ctx.deps.resource_pool.get(assessment.resource_id)
             if not resource:
                 continue
