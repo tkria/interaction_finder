@@ -758,6 +758,7 @@ def find_consolidation_candidates(
     entities: dict[str, list[SpeculatedVariant]],
     cluster_threshold: float = 0.50,
     mention_counts: dict[str, int] | None = None,
+    logger=None,
 ) -> ConsolidationCandidates:
     """Find entity pairs for consolidation (auto-merge if ≤ threshold, else agent review).
 
@@ -765,6 +766,7 @@ def find_consolidation_candidates(
         entities: Dict of canonical_name → list of variant forms
         cluster_threshold: Token overlap proportion for clustering (0.0-1.0)
         mention_counts: Optional dict of entity_name → mention count for IDF weighting
+        logger: Optional logger for INFO-level merge decisions
     """
     # Build variant map (excludes contested)
     variant_map, contested = build_variant_map(entities)
@@ -773,6 +775,11 @@ def find_consolidation_candidates(
     auto_merge: list[tuple[str, str, str]] = []
     agent_review: list[tuple[str, str]] = []
     contested_warnings: list[tuple[str, dict[str, list[str]]]] = []
+
+    # Collect merge decisions for batched logging
+    cap_merges: list[tuple[str, str]] = []
+    variant_merges: list[tuple[str, str]] = []
+    fuzzy_merges: list[tuple[str, str]] = []
 
     # Handle contested variants: check if they're safe capitalization variants
     # If safe, pick best canonical and auto-merge. If not, add to warnings.
@@ -816,6 +823,7 @@ def find_consolidation_candidates(
                         auto_merge.append(
                             (canonical, best_canonical, match.auto_reason())
                         )
+                        cap_merges.append((canonical, best_canonical))
         else:
             # Not safe capitalization variants - add warning with full context
             contested_warnings.append((norm, canonical_to_variants))
@@ -861,6 +869,7 @@ def find_consolidation_candidates(
                     auto_merge.append(
                         (canonical, mapping.canonical, match.auto_reason())
                     )
+                    variant_merges.append((canonical, mapping.canonical))
         else:
             # Above threshold - agent review
             for canonical in canonicals:
@@ -888,6 +897,7 @@ def find_consolidation_candidates(
                             f"auto:{PENALTY_FUZZY}:original:fuzzy(dist={dist})",
                         )
                     )
+                    fuzzy_merges.append((alias, canonical))
 
     # Cluster remaining entities using hierarchical clustering with IDF weighting
     from interaction_finder.extraction.clustering import (
@@ -961,6 +971,24 @@ def find_consolidation_candidates(
             ],
             "sample_weights": sample_weights,
         }
+
+    # Log batched auto-merge decisions
+    if logger:
+        if cap_merges:
+            logger.info(
+                f"  Auto-merge (capitalization): {len(cap_merges)} merges "
+                f"(e.g., '{cap_merges[0][0]}' → '{cap_merges[0][1]}')"
+            )
+        if variant_merges:
+            logger.info(
+                f"  Auto-merge (variant): {len(variant_merges)} merges "
+                f"(e.g., '{variant_merges[0][0]}' → '{variant_merges[0][1]}')"
+            )
+        if fuzzy_merges:
+            logger.info(
+                f"  Auto-merge (fuzzy): {len(fuzzy_merges)} merges "
+                f"(e.g., '{fuzzy_merges[0][0]}' → '{fuzzy_merges[0][1]}')"
+            )
 
     return ConsolidationCandidates(
         auto_merge=auto_merge,

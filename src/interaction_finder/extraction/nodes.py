@@ -456,7 +456,7 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
                         f"Clustering {len(entities)} {kind} entities (threshold={threshold:.2f})"
                     )
                     candidates = find_consolidation_candidates(
-                        entities, threshold, mention_counts
+                        entities, threshold, mention_counts, ctx.deps.logger
                     )
 
                     # Store clustering metadata for debugging/analysis
