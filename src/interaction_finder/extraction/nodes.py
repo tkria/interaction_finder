@@ -973,10 +973,8 @@ Format:
             async with ctx.deps.agent_semaphore:
                 result = await agent.run(prompt)
             id_to_data = {g["group_id"]: g for g in group_data}
-            groups_to_split: list[tuple[frozenset[str], int | None]] = []
-            groups_to_exclude: list[
-                tuple[frozenset[str], str]
-            ] = []  # (group, member_to_exclude)
+            groups_to_split: list[frozenset[str]] = []
+            groups_to_exclude: list[tuple[frozenset[str], str]] = []
             stats = {"merged": 0, "split": 0, "excluded": 0}
 
             for decision in result.output.decisions:
@@ -1013,7 +1011,7 @@ Format:
                         f"  Group {decision.group_id} ({len(members)} members) → "
                         f"split at weakest link (binary split)"
                     )
-                    groups_to_split.append((group_entities, None))
+                    groups_to_split.append(group_entities)
                     stats["split"] += 1
 
                 elif decision.action == "exclude":
@@ -1047,15 +1045,14 @@ Format:
                 break
             # Use tree-based splitting
             current_groups = []
-            for group_entities, split_into in groups_to_split:
+            for group_entities in groups_to_split:
                 tree = group_to_tree.get(group_entities)
                 if tree is None:
                     ctx.deps.logger.warning(
                         f"No merge tree for group {group_entities}, skipping split"
                     )
                     continue
-                n = split_into if split_into and split_into > 1 else 2
-                sub_clusters = tree.split_into_n(n)
+                sub_clusters = tree.split_into_n(2)  # Always binary split
                 for sub in sub_clusters:
                     if len(sub) > 1:
                         current_groups.append(sub)
