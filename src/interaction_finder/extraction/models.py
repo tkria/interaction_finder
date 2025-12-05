@@ -255,7 +255,7 @@ class ClusterDecision(BaseModel):
         description=(
             "Decision on this cluster (default: merge):\n"
             "- merge: All members represent the same entity → merge to one target\n"
-            "- split: Cluster mixes unrelated entities → split at weak points in merge tree"
+            "- split: Cluster mixes unrelated entities → will split at weakest link in merge tree"
         ),
     )
     target: str | None = Field(
@@ -263,13 +263,6 @@ class ClusterDecision(BaseModel):
         description=(
             "Required if action='merge': target canonical name.\n"
             "Can be a member number ('1'), member name, or new canonical name."
-        ),
-    )
-    split_into: int | None = Field(
-        default=None,
-        description=(
-            "Optional for action='split': number of sub-clusters to create.\n"
-            "If not specified, splits at the weakest internal link."
         ),
     )
     reasoning: str = Field(description="Explanation for the decision")

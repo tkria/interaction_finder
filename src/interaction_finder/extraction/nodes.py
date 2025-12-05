@@ -912,7 +912,8 @@ If merging, specify the target as:
 - A member name (e.g., "Pulmonary arterial hypertension")
 - A new canonical name (e.g., "TGF-β")
 
-If splitting, optionally specify split_into (number of sub-groups) for finer control.
+If splitting, the system will automatically split at the weakest link in the hierarchical
+merge tree and re-review the sub-groups in the next round.
 
 Only return groups that should merge or split. Omit groups that should remain separate.""",
         )
@@ -964,7 +965,7 @@ Return JSON (action defaults to "merge" if omitted):
 {{
   "decisions": [
     {{"group_id": "...", "target": "...", "reasoning": "..."}},
-    {{"group_id": "...", "action": "split", "split_into": 2, "reasoning": "..."}}
+    {{"group_id": "...", "action": "split", "reasoning": "..."}}
   ]
 }}"""
             async with ctx.deps.agent_semaphore:
@@ -1003,12 +1004,11 @@ Return JSON (action defaults to "merge" if omitted):
                     stats["merged"] += 1
 
                 elif decision.action == "split":
-                    split_into = decision.split_into
                     ctx.deps.logger.info(
                         f"  Group {decision.group_id} ({len(members)} members) → "
-                        f"split into {split_into or 2} sub-groups"
+                        f"split at weakest link (binary split)"
                     )
-                    groups_to_split.append((group_entities, split_into))
+                    groups_to_split.append((group_entities, None))
                     stats["split"] += 1
 
             ctx.deps.logger.info(
