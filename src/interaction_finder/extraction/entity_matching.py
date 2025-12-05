@@ -977,17 +977,29 @@ def find_consolidation_candidates(
         if cap_merges:
             logger.info(
                 f"  Auto-merge (capitalization): {len(cap_merges)} merges "
-                f"(e.g., '{cap_merges[0][0]}' → '{cap_merges[0][1]}')"
+                f"(e.g., '{cap_merges[0][0]}' → '{cap_merges[0][1]}')",
+                extra={
+                    "merges": [{"source": s, "target": t} for s, t in cap_merges],
+                    "merge_type": "capitalization",
+                },
             )
         if variant_merges:
             logger.info(
                 f"  Auto-merge (variant): {len(variant_merges)} merges "
-                f"(e.g., '{variant_merges[0][0]}' → '{variant_merges[0][1]}')"
+                f"(e.g., '{variant_merges[0][0]}' → '{variant_merges[0][1]}')",
+                extra={
+                    "merges": [{"source": s, "target": t} for s, t in variant_merges],
+                    "merge_type": "variant",
+                },
             )
         if fuzzy_merges:
             logger.info(
                 f"  Auto-merge (fuzzy): {len(fuzzy_merges)} merges "
-                f"(e.g., '{fuzzy_merges[0][0]}' → '{fuzzy_merges[0][1]}')"
+                f"(e.g., '{fuzzy_merges[0][0]}' → '{fuzzy_merges[0][1]}')",
+                extra={
+                    "merges": [{"source": s, "target": t} for s, t in fuzzy_merges],
+                    "merge_type": "fuzzy",
+                },
             )
 
     return ConsolidationCandidates(

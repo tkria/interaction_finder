@@ -482,29 +482,44 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
                         )
                         return f"'{v.form}' [{v.speculation}{source}]"
 
-                    # Log contested warnings with full context
-                    for (
-                        norm_form,
-                        canonical_to_variants,
-                    ) in candidates.contested_warnings:
-                        canonicals = list(canonical_to_variants.keys())
-                        canonical_list = "' and '".join(canonicals)
-
-                        # Build variant details: filter and format matching variants
-                        variant_details = [
-                            f"- {canonical}: {', '.join(fmt_variant(v) for v in entities.get(canonical, []) if normalize_for_comparison(v.form) == norm_form)}"
-                            for canonical in canonicals
-                        ]
-
-                        similarity = self._analyze_entity_similarity(canonicals)
-                        message = "\n".join(
-                            [
-                                f"Contested variant '{norm_form}' from '{canonical_list}' ({kind}):",
-                                *variant_details,
-                                f"- Similarity: {similarity}",
+                    # Log contested warnings with full context (batched)
+                    if candidates.contested_warnings:
+                        contested_lines = [f"Contested variants for {kind}:"]
+                        structured_data = []
+                        for (
+                            norm_form,
+                            canonical_to_variants,
+                        ) in candidates.contested_warnings:
+                            canonicals = list(canonical_to_variants.keys())
+                            canonical_list = "' and '".join(canonicals)
+                            # Build variant details
+                            variant_details = [
+                                f"    - {canonical}: {', '.join(fmt_variant(v) for v in entities.get(canonical, []) if normalize_for_comparison(v.form) == norm_form)}"
+                                for canonical in canonicals
                             ]
+                            similarity = self._analyze_entity_similarity(canonicals)
+                            contested_lines.extend(
+                                [
+                                    f"  '{norm_form}' from '{canonical_list}':",
+                                    *variant_details,
+                                    f"    - Similarity: {similarity}",
+                                ]
+                            )
+                            # Build structured data for Logfire
+                            structured_data.append(
+                                {
+                                    "normalized_form": norm_form,
+                                    "entities": canonicals,
+                                    "similarity": similarity,
+                                }
+                            )
+                        ctx.deps.logger.info(
+                            "\n".join(contested_lines),
+                            extra={
+                                "contested_variants": structured_data,
+                                "entity_kind": kind,
+                            },
                         )
-                        ctx.deps.logger.info(message)
 
                     # Process auto-merge decisions
                     for child, parent, reasoning in candidates.auto_merge:
