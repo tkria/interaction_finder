@@ -165,8 +165,8 @@ class TestSpecificity:
         spec = compute_token_specificity({})
         assert spec == {}
 
-    def test_canonical_name_2x_weighting(self):
-        """Canonical name tokens are weighted 2x vs variant tokens."""
+    def test_canonical_name_half_weighting(self):
+        """Canonical name tokens are weighted 0.5x vs variant tokens."""
         entities = make_entities(
             {
                 "Breast cancer": ["Breast cancer"],  # Canonical
@@ -174,40 +174,49 @@ class TestSpecificity:
             }
         )
         spec = compute_token_specificity(entities)
-        # Both entities have "cancer" in canonical name (2x weight each)
-        # Each entity has unique tokens (breast, colorectal) in canonical (2x weight)
-        # "cancer" appears with weight 2.0 + 2.0 = 4.0
-        # "breast" appears with weight 2.0
-        # "colorectal" appears with weight 2.0
-        # All tokens should have equal total weight due to 2x canonical multiplier
+        # Both entities have "cancer" in canonical name (0.5x weight each)
+        # Each entity has unique tokens (breast, colorectal) in canonical (0.5x weight)
+        # "cancer" appears with weight 0.5 + 0.5 = 1.0
+        # "breast" appears with weight 0.5
+        # "colorectal" appears with weight 0.5
+        # "cancer" is more common → lower specificity
         assert spec["cancer"] < spec["breast"]  # More common → lower specificity
         assert spec["cancer"] < spec["colorectal"]
 
-    def test_canonical_weighting_prevents_spurious_clustering(self):
-        """2x canonical weighting should prevent clustering on common suffix terms."""
-        # Simulate "type 2 diabetes" vs "neonatal diabetes mellitus"
-        # Both have "diabetes" but in different contexts
+    def test_canonical_weighting_enables_variant_clustering(self):
+        """0.5x canonical weighting strengthens clustering on shared canonical terms."""
+        # Simulate PAH variants that should cluster together
+        # Both share "pulmonary arterial hypertension" in canonical names
         entities = make_entities(
             {
-                "Type 2 diabetes": ["Type 2 diabetes"],
-                "Neonatal diabetes mellitus": ["Neonatal diabetes mellitus"],
+                "Familial pulmonary arterial hypertension": [
+                    "Familial pulmonary arterial hypertension"
+                ],
+                "Heritable pulmonary arterial hypertension": [
+                    "Heritable pulmonary arterial hypertension"
+                ],
             }
         )
         spec = compute_token_specificity(entities)
-        # With 2x weighting, "diabetes" appears with weight 4.0 (2.0 + 2.0)
-        # "type", "neonatal", "mellitus" each appear with weight 2.0
-        # "diabetes" should have lower specificity (more common)
-        assert spec["diabetes"] < spec["type"]
-        assert spec["diabetes"] < spec["neonatal"]
-        # Now check similarity - should be low due to unique specific tokens
+        # With 0.5x weighting, shared canonical tokens have higher specificity
+        # "pulmonary", "arterial", "hypertension" appear with weight 0.5 + 0.5 = 1.0
+        # "familial", "heritable" appear with weight 0.5 each
+        # Shared tokens should have lower specificity (more common)
+        assert spec["pulmonary"] < spec["familial"]
+        assert spec["arterial"] < spec["heritable"]
+        # Now check similarity - should be high due to shared canonical terms
         from interaction_finder.extraction.clustering import _get_entity_tokens
 
-        tokens1 = _get_entity_tokens(entities["Type 2 diabetes"])
-        tokens2 = _get_entity_tokens(entities["Neonatal diabetes mellitus"])
+        tokens1 = _get_entity_tokens(
+            entities["Familial pulmonary arterial hypertension"]
+        )
+        tokens2 = _get_entity_tokens(
+            entities["Heritable pulmonary arterial hypertension"]
+        )
         sim, _ = _weighted_similarity(tokens1, tokens2, spec)
-        # Similarity should be relatively low (<0.5) due to unique specific tokens
-        # dominating over the shared common "diabetes" token
-        assert sim < 0.5, f"Expected similarity <0.5, got {sim}"
+        # Similarity should be high (>0.5) due to shared canonical terms
+        # dominating over unique modifiers
+        assert sim > 0.5, f"Expected similarity >0.5, got {sim}"
 
 
 class TestWeightedSimilarity:

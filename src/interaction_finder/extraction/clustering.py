@@ -114,13 +114,15 @@ def compute_token_specificity(
     """Compute IDF-like specificity scores weighted by mentions and speculation.
 
     For each token, accumulates: mentions × 1/(speculation + 1) × multiplier
-    where multiplier is 2.0 for canonical name tokens, 1.0 for variant tokens.
+    where multiplier is 0.5 for canonical name tokens, 1.0 for variant tokens.
     Then converts to specificity: log(total_weight / token_weight)
 
     Higher score = more specific (rare), lower score = more common.
 
-    Canonical name tokens are weighted 2x to prioritize entity core identity
-    over variant modifiers, preventing spurious clustering on common terms.
+    Canonical name tokens receive 0.5x weight, giving them higher specificity
+    and making them MORE influential in similarity calculations. This ensures
+    entities cluster strongly on shared canonical terms (e.g., PAH variants
+    cluster on "pulmonary arterial hypertension").
 
     Args:
         entities: Dict of canonical_name → list of SpeculatedVariant
@@ -140,11 +142,12 @@ def compute_token_specificity(
         entity_tokens: dict[str, float] = {}
         for var in variants:
             base_weight = mentions / (var.speculation + 1)
-            # 2x weight for canonical name tokens, 1x for variant tokens
+            # 0.5x weight for canonical name tokens, 1x for variant tokens
+            # This makes canonical tokens MORE influential (higher specificity)
             is_canonical = normalize_for_comparison(
                 var.form
             ) == normalize_for_comparison(name)
-            multiplier = 2.0 if is_canonical else 1.0
+            multiplier = 0.5 if is_canonical else 1.0
             weight = base_weight * multiplier
             for token in tokenize(var.form):
                 entity_tokens[token] = max(entity_tokens.get(token, 0.0), weight)
