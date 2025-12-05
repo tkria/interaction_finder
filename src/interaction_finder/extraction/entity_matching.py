@@ -529,7 +529,8 @@ def are_safe_capitalization_variants(names: set[str]) -> bool:
     # Check all pairs match using core matching logic (includes all safety checks)
     for i, n1 in enumerate(names_list):
         for n2 in names_list[i + 1 :]:
-            if not entity_names_match(n1, n2):
+            matched, _ = entity_names_match(n1, n2)
+            if not matched:
                 return False
 
     return True
@@ -871,8 +872,9 @@ def find_consolidation_candidates(
         canonical_list = list(entities.keys())
         for i, canon1 in enumerate(canonical_list):
             for canon2 in canonical_list[i + 1 :]:
-                # Use core matching logic
-                if entity_names_match(canon1, canon2):
+                # Use core matching logic with distance info for diagnostics
+                matched, dist = entity_names_match(canon1, canon2)
+                if matched:
                     # Prefer shorter/simpler name as canonical (general over specific)
                     canonical, alias = min(
                         (canon1, canon2),
@@ -880,7 +882,11 @@ def find_consolidation_candidates(
                         key=lambda p: (len(p[0]), p[0]),
                     )
                     auto_merge.append(
-                        (alias, canonical, f"auto:{PENALTY_FUZZY}:original:fuzzy")
+                        (
+                            alias,
+                            canonical,
+                            f"auto:{PENALTY_FUZZY}:original:fuzzy(dist={dist})",
+                        )
                     )
 
     # Cluster remaining entities using hierarchical clustering with IDF weighting

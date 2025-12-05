@@ -122,19 +122,31 @@ def fold_spelling(text: str) -> str:
     return text
 
 
-def entity_names_match(a: str, b: str) -> bool:
-    """Check if entity names match: normalize → obvious variants → fuzzy + validation."""
+def entity_names_match(a: str, b: str) -> tuple[bool, int]:
+    """Check if entity names match: normalize → obvious variants → fuzzy + validation.
+
+    Args:
+        a: First entity name
+        b: Second entity name
+
+    Returns:
+        Tuple of (matched, edit_distance) where:
+        - matched: True if entities match
+        - edit_distance: OSA distance between normalized forms (0 for exact match)
+    """
     # Normalize both
     norm_a = normalize_for_comparison(a)
     norm_b = normalize_for_comparison(b)
 
     # Check if identical after normalization
     if norm_a == norm_b:
-        return True
+        return (True, 0)
 
     # Check if obvious variant (handles spelling + simple variations)
     if is_obvious_variant(norm_a, norm_b):
-        return True
+        # Calculate distance for diagnostic purposes
+        dist = osa_distance(norm_a, norm_b)
+        return (True, dist)
 
     # Fuzzy matching with full validation
     dist = osa_distance(norm_a, norm_b)
@@ -142,7 +154,7 @@ def entity_names_match(a: str, b: str) -> bool:
 
     # Too short for fuzzy matching
     if shorter_len < 10:
-        return False
+        return (False, dist)
 
     # Calculate thresholds
     similarity = 1 - dist / shorter_len
@@ -152,10 +164,10 @@ def entity_names_match(a: str, b: str) -> bool:
     if dist <= max_dist and similarity >= 0.7:
         # Additional safety: reject number-only differences
         if _only_short_number_difference(a, b):
-            return False
-        return True
+            return (False, dist)
+        return (True, dist)
 
-    return False
+    return (False, dist)
 
 
 def osa_distance(a: str, b: str) -> int:
