@@ -573,6 +573,7 @@ def is_obvious_variant(a: str, b: str) -> bool:
     - UK/US spelling: ae↔e, oe↔e, our↔or (via fold_spelling)
     - Plural patterns: +s, +es, y→ies
     - Suffix variants: ise↔ize, re↔er
+    - Hyphenation/spacing: venoocular ↔ veno ocular, alphabetagamma ↔ alpha beta gamma
 
     Parameters:
         a: First string (already normalized with normalize_for_comparison)
@@ -590,6 +591,8 @@ def is_obvious_variant(a: str, b: str) -> bool:
         True
         >>> is_obvious_variant("colour", "color")
         True
+        >>> is_obvious_variant("venoocular", "veno ocular")
+        True
         >>> is_obvious_variant("cat", "dog")
         False
     """
@@ -599,6 +602,13 @@ def is_obvious_variant(a: str, b: str) -> bool:
 
     # After spelling normalization, they should be equal or simple variants
     if spell_a == spell_b:
+        return True
+
+    # Check for hyphenation/spacing differences: remove all whitespace and compare
+    # This handles "veno ocular" ↔ "venoocular" and "alpha beta gamma" ↔ "alphabetagamma"
+    dehyphen_a = spell_a.replace(" ", "")
+    dehyphen_b = spell_b.replace(" ", "")
+    if dehyphen_a == dehyphen_b and dehyphen_a:  # Non-empty after removing spaces
         return True
 
     shorter, longer = (

@@ -637,13 +637,15 @@ def find_entity_match(
     for qv in query_variants:
         qv_norm = normalize_for_comparison(qv.form)
         for variant_norm, mapping in variant_map.items():
-            # Skip if too short for fuzzy matching
             shorter_len = min(len(qv_norm), len(variant_norm))
-            if shorter_len < MIN_LENGTH_FOR_FUZZY:
-                continue
-
             dist = osa_distance(qv_norm, variant_norm)
             similarity = 1 - dist / shorter_len
+
+            # For obvious variants (spelling/hyphenation), allow shorter strings
+            # Otherwise require minimum length for fuzzy matching
+            if not is_obvious_variant(qv_norm, variant_norm):
+                if shorter_len < MIN_LENGTH_FOR_FUZZY:
+                    continue
 
             # Calculate length-scaled maximum distance
             max_dist = 1 + shorter_len // 10

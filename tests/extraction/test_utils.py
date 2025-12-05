@@ -175,6 +175,43 @@ class TestNormalizeForComparison:
         assert normalized.islower() or not normalized.isalpha()
 
 
+class TestIsObviousVariant:
+    """Tests for is_obvious_variant function."""
+
+    def test_spelling_variants(self):
+        """UK/US spelling variants should be recognized."""
+        from interaction_finder.extraction.utils import is_obvious_variant
+
+        # Inputs already normalized (as per function contract)
+        assert is_obvious_variant("haemorrhagic", "hemorrhagic")
+        assert is_obvious_variant("oestrogen", "estrogen")
+        assert is_obvious_variant("colour", "color")
+
+    def test_plural_variants(self):
+        """Plural patterns should be recognized."""
+        from interaction_finder.extraction.utils import is_obvious_variant
+
+        assert is_obvious_variant("gene", "genes")
+        assert is_obvious_variant("box", "boxes")
+        assert is_obvious_variant("entity", "entities")
+
+    def test_hyphenation_variants(self):
+        """Hyphenation/spacing differences should be recognized."""
+        from interaction_finder.extraction.utils import is_obvious_variant
+
+        # Normalized forms (hyphens become spaces during normalization)
+        assert is_obvious_variant("venoocular", "veno ocular")
+        assert is_obvious_variant("alphabetagamma", "alpha beta gamma")
+        assert is_obvious_variant("tgf beta", "tgfbeta")
+
+    def test_not_obvious_variants(self):
+        """Completely different strings should not be recognized."""
+        from interaction_finder.extraction.utils import is_obvious_variant
+
+        assert not is_obvious_variant("brca1", "tp53")
+        assert not is_obvious_variant("gene", "protein")
+
+
 class TestFindSubstringEntities:
     """Tests for find_substring_entities function."""
 

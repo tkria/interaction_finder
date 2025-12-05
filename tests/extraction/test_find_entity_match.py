@@ -128,6 +128,55 @@ class TestFuzzyMatch:
 
         assert match is None
 
+    def test_fuzzy_match_hyphenation_variant(self):
+        """Hyphenation differences should match as obvious variants."""
+        entities = {
+            "Venoocular disease": extract_entity_variants("Venoocular disease", None),
+        }
+
+        # Query with hyphen should match
+        match = find_entity_match("Veno-ocular disease", entities, allow_fuzzy=True)
+
+        assert match is not None
+        assert match.canonical == "Venoocular disease"
+        assert match.match_penalty == 3  # PENALTY_FUZZY
+
+    def test_fuzzy_match_short_hyphenation_variant(self):
+        """Short hyphenated terms should match when they're obvious variants."""
+        entities = {
+            "alphaSMA": extract_entity_variants("alphaSMA", None),
+        }
+
+        # Query with hyphen (8 chars, below MIN_LENGTH_FOR_FUZZY=10)
+        # Should still match because it's an obvious variant
+        match = find_entity_match("alpha-SMA", entities, allow_fuzzy=True)
+
+        assert match is not None
+        assert match.canonical == "alphaSMA"
+        assert match.match_penalty == 3  # PENALTY_FUZZY
+
+    def test_fuzzy_match_multiple_hyphens(self):
+        """Multiple hyphenation differences should match."""
+        entities = {
+            "alphabetagamma": extract_entity_variants("alphabetagamma", None),
+        }
+
+        match = find_entity_match("alpha-beta-gamma", entities, allow_fuzzy=True)
+
+        assert match is not None
+        assert match.canonical == "alphabetagamma"
+
+    def test_hyphenation_without_fuzzy_fails(self):
+        """Hyphenation differences should not match with fuzzy disabled."""
+        entities = {
+            "Venoocular disease": extract_entity_variants("Venoocular disease", None),
+        }
+
+        # Should not match with fuzzy disabled
+        match = find_entity_match("Veno-ocular disease", entities, allow_fuzzy=False)
+
+        assert match is None
+
 
 class TestNoMatch:
     """Test cases where no match should be found."""
