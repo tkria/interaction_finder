@@ -109,3 +109,85 @@ def test_merge_targets_participate_in_clustering():
     assert len(actual_siblings) >= 2, (
         f"Expected at least 2 PAH siblings in cluster, got {len(actual_siblings)}"
     )
+
+
+def test_contested_variants_dont_prevent_clustering():
+    """Entities with contested variant forms should still cluster on other tokens.
+
+    Regression test for bug where entities with contested variants were excluded
+    from clustering entirely, even though they could cluster based on other
+    non-contested tokens.
+
+    Example: "Pulmonary Arterial Hypertension" with alias "PAH" and
+    "Heritable pulmonary arterial hypertension" with alias "heritable PAH" create
+    a contested variant situation (both map to normalized "pah"). However, they
+    should still cluster based on shared tokens: pulmonary, arterial, hypertension.
+
+    Bug history: entity_matching.py line 910-911 added all entities from
+    contested_warnings to already_handled, preventing them from participating
+    in hierarchical clustering.
+    """
+    # Create entities with contested variant "PAH"
+    entities = {
+        "Pulmonary Arterial Hypertension": [
+            SpeculatedVariant(
+                "Pulmonary Arterial Hypertension", SPEC_ORIGINAL, "original"
+            ),
+            SpeculatedVariant("PAH", SPEC_ORIGINAL, "original"),
+        ],
+        "Heritable pulmonary arterial hypertension": [
+            SpeculatedVariant(
+                "Heritable pulmonary arterial hypertension", SPEC_ORIGINAL, "original"
+            ),
+            SpeculatedVariant("HPAH", SPEC_ORIGINAL, "original"),
+            SpeculatedVariant("heritable PAH", SPEC_ORIGINAL, "original"),
+        ],
+        "Familial pulmonary arterial hypertension": [
+            SpeculatedVariant(
+                "Familial pulmonary arterial hypertension", SPEC_ORIGINAL, "original"
+            ),
+            SpeculatedVariant("FPAH", SPEC_ORIGINAL, "original"),
+            SpeculatedVariant("familial PAH", SPEC_ORIGINAL, "original"),
+        ],
+    }
+
+    candidates = find_consolidation_candidates(entities, cluster_threshold=0.30)
+
+    # The key assertion: entities should cluster together based on shared tokens
+    # (pulmonary, arterial, hypertension) even if they have contested variants
+    # Note: In this specific case, "PAH" might not be contested because it only
+    # maps to one canonical ("Pulmonary Arterial Hypertension"), while
+    # "heritable PAH" and "familial PAH" are full phrases that are distinct.
+    # The important thing is that clustering should happen regardless.
+    assert len(candidates.agent_review_groups) > 0, (
+        "Expected entities to participate in clustering and form groups. "
+        "With the fix, entities are not excluded even if they have potential "
+        "contested variants."
+    )
+
+    # Find groups containing PAH-related entities
+    pah_entities = {
+        "Pulmonary Arterial Hypertension",
+        "Heritable pulmonary arterial hypertension",
+        "Familial pulmonary arterial hypertension",
+    }
+
+    pah_groups = [
+        group
+        for group in candidates.agent_review_groups
+        if any(e in group for e in pah_entities)
+    ]
+
+    assert len(pah_groups) >= 1, (
+        "Expected PAH-related entities to form at least one cluster group. "
+        "Contested variants should not prevent clustering on shared tokens."
+    )
+
+    # The group should contain multiple PAH-related entities
+    pah_group = pah_groups[0]
+    pah_in_group = pah_group & pah_entities
+    assert len(pah_in_group) >= 2, (
+        f"Expected at least 2 PAH-related entities to cluster together, "
+        f"got {len(pah_in_group)}: {pah_in_group}. "
+        "They share 'pulmonary', 'arterial', 'hypertension' tokens."
+    )

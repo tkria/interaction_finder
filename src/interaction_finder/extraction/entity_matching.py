@@ -905,10 +905,10 @@ def find_consolidation_candidates(
         compute_token_specificity,
     )
 
-    # Exclude only merge sources (children) - targets (parents) should cluster
+    # Exclude only merge sources (children) from clustering
+    # Contested variants don't prevent canonicals from clustering - they can still
+    # cluster based on other non-contested tokens
     already_handled = {child for child, parent, _ in auto_merge}
-    for _, canonical_to_variants in contested_warnings:
-        already_handled.update(canonical_to_variants.keys())
 
     remaining_entities = {e: entities[e] for e in entities if e not in already_handled}
     # Filter mention_counts to only remaining entities

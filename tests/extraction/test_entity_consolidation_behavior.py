@@ -1025,3 +1025,91 @@ class TestIterativeRefinementModel:
         assert decisions.decisions[0].action == "merge"
         assert decisions.decisions[1].action == "split"
         assert decisions.decisions[2].action == "exclude"
+
+
+class TestContestedVariantClustering:
+    """Test that contested variants don't prevent entities from clustering."""
+
+    @pytest.mark.asyncio
+    async def test_contested_variant_entities_still_cluster(self, mock_deps):
+        """Entities with contested variant forms should still cluster based on other tokens.
+
+        Regression test for bug where entities with contested variants were excluded
+        from clustering entirely, even though they could cluster on other shared tokens.
+        """
+        state = State(
+            topic="test",
+            target_entity_types=["phenotype"],
+            permitted_pairs=build_permitted_pairs(["phenotype"]),
+        )
+
+        resource1 = ResourceId(url="http://doc1.com", id="doc1")
+        resource2 = ResourceId(url="http://doc2.com", id="doc2")
+        resource3 = ResourceId(url="http://doc3.com", id="doc3")
+
+        # Three entities that share tokens but have a contested variant:
+        # - "Pulmonary Arterial Hypertension" has alias "PAH"
+        # - "Heritable pulmonary arterial hypertension" has alias "HPAH" and "heritable PAH"
+        # - "Familial pulmonary arterial hypertension" has alias "familial PAH"
+        #
+        # The variant "PAH" becomes contested (maps to both main PAH and heritable PAH)
+        # But they should still cluster on shared tokens: pulmonary, arterial, hypertension
+        state.validated_entities_by_resource[resource1] = ref_map(
+            {
+                "Pulmonary Arterial Hypertension": EntityMention(
+                    kind="phenotype",
+                    name="Pulmonary Arterial Hypertension",
+                    aliases=["PAH"],
+                    quotes=[],
+                    reasoning="Doc1",
+                )
+            }
+        )
+
+        state.validated_entities_by_resource[resource2] = ref_map(
+            {
+                "Heritable pulmonary arterial hypertension": EntityMention(
+                    kind="phenotype",
+                    name="Heritable pulmonary arterial hypertension",
+                    aliases=["HPAH", "heritable PAH"],
+                    quotes=[],
+                    reasoning="Doc2",
+                )
+            }
+        )
+
+        state.validated_entities_by_resource[resource3] = ref_map(
+            {
+                "Familial pulmonary arterial hypertension": EntityMention(
+                    kind="phenotype",
+                    name="Familial pulmonary arterial hypertension",
+                    aliases=["familial PAH", "FPAH"],
+                    quotes=[],
+                    reasoning="Doc3",
+                )
+            }
+        )
+
+        node = ConsolidateEntitiesNode()
+        ctx = GraphRunContext(state=state, deps=mock_deps)
+
+        await node.run(ctx)
+
+        # Check clustering metadata was generated
+        assert "phenotype" in ctx.state.clustering_metadata
+
+        # The entities should have been included in clustering despite contested variants
+        clustering_info = ctx.state.clustering_metadata["phenotype"]
+        entities_in_clustering = clustering_info["entities_in_clustering"]
+
+        # At least 2 should be in clustering (possibly all 3 if none auto-merged)
+        assert entities_in_clustering >= 2, (
+            "Entities with contested variants should still be included in clustering"
+        )
+
+        # Check that we have clustering results (not all singletons)
+        # They should cluster together based on shared tokens
+        multi_entity_clusters = clustering_info.get("multi_entity_clusters", 0)
+        assert multi_entity_clusters > 0, (
+            "PAH-related entities should cluster together on shared tokens"
+        )
