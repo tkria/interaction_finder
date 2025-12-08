@@ -1105,3 +1105,282 @@ class TestContestedVariantClustering:
         assert len(multi_entity_clusters) > 0, (
             "PAH-related entities should cluster together on shared tokens"
         )
+
+
+class TestMultipleClusterDecisions:
+    """Test handling of multiple LLM decisions for the same cluster.
+
+    These tests directly test the decision processing logic by calling
+    _get_group_consolidation_decisions with mocked agent responses.
+    """
+
+    @pytest.mark.asyncio
+    async def test_multiple_excludes_same_group(self, mock_deps):
+        """Multiple exclude decisions on same group should all be applied."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from interaction_finder.extraction.models import (
+            ClusterDecision,
+            ClusterDecisions,
+        )
+        from interaction_finder.extraction.clustering import Cluster
+
+        state = State(
+            topic="test",
+            target_entity_types=["phenotype"],
+            permitted_pairs=build_permitted_pairs(["phenotype"]),
+        )
+        # Create minimal state for the method
+        node = ConsolidateEntitiesNode()
+        ctx = GraphRunContext(state=state, deps=mock_deps)
+        # Create test groups and entities
+        group = frozenset(["Disease A", "Disease B", "Measurement X", "Measurement Y"])
+        entities = {
+            name: []
+            for name in group  # Empty variant lists (not needed for this test)
+        }
+        # Create a simple merge tree for the group
+        merge_tree = Cluster(entities=group, similarity=0.8)
+
+        def make_mock_result(prompt):
+            import re
+
+            match = re.search(r"## Group (\w+)", prompt)
+            if match:
+                group_id = match.group(1)
+                # Return two exclude decisions for same group
+                return MagicMock(
+                    output=ClusterDecisions(
+                        decisions=[
+                            ClusterDecision(
+                                group_id=group_id,
+                                action="exclude",
+                                target="Measurement X",
+                                reasoning="X is a measurement",
+                            ),
+                            ClusterDecision(
+                                group_id=group_id,
+                                action="exclude",
+                                target="Measurement Y",
+                                reasoning="Y is a measurement",
+                            ),
+                        ]
+                    )
+                )
+            return MagicMock(output=ClusterDecisions(decisions=[]))
+
+        mock_agent = MagicMock()
+        mock_agent.run = AsyncMock(side_effect=make_mock_result)
+
+        with patch("interaction_finder.agent_config.agent_getter") as mock_getter:
+            mock_getter.return_value = lambda config: mock_agent
+            rules, new_names = await node._get_group_consolidation_decisions(
+                [group], [merge_tree], "phenotype", entities, ctx
+            )
+
+        # Both measurements excluded, only diseases remain
+        # With excludes-only, remaining group goes to next round (no merge rules created)
+        # Key assertion: no merge rules should include excluded members
+        for (norm_name, kind), (target, reason) in rules.items():
+            assert "measurement" not in norm_name.lower()
+
+    @pytest.mark.asyncio
+    async def test_exclude_plus_merge(self, mock_deps):
+        """Exclude + merge on same group: exclude first, then merge remainder."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from interaction_finder.extraction.models import (
+            ClusterDecision,
+            ClusterDecisions,
+        )
+        from interaction_finder.extraction.clustering import Cluster
+
+        state = State(
+            topic="test",
+            target_entity_types=["phenotype"],
+            permitted_pairs=build_permitted_pairs(["phenotype"]),
+        )
+        node = ConsolidateEntitiesNode()
+        ctx = GraphRunContext(state=state, deps=mock_deps)
+        # 3 entities: 2 diseases + 1 measurement
+        group = frozenset(
+            ["Hypertension Type A", "Hypertension Type B", "Blood Pressure"]
+        )
+        entities = {name: [] for name in group}
+        merge_tree = Cluster(entities=group, similarity=0.8)
+
+        def make_mock_result(prompt):
+            import re
+
+            match = re.search(r"## Group (\w+)", prompt)
+            if match:
+                group_id = match.group(1)
+                # Exclude measurement, merge the two diseases
+                return MagicMock(
+                    output=ClusterDecisions(
+                        decisions=[
+                            ClusterDecision(
+                                group_id=group_id,
+                                action="exclude",
+                                target="Blood Pressure",
+                                reasoning="Blood Pressure is a measurement",
+                            ),
+                            ClusterDecision(
+                                group_id=group_id,
+                                action="merge",
+                                target="Hypertension",  # New canonical name
+                                reasoning="Both are hypertension subtypes",
+                            ),
+                        ]
+                    )
+                )
+            return MagicMock(output=ClusterDecisions(decisions=[]))
+
+        mock_agent = MagicMock()
+        mock_agent.run = AsyncMock(side_effect=make_mock_result)
+
+        with patch("interaction_finder.agent_config.agent_getter") as mock_getter:
+            mock_getter.return_value = lambda config: mock_agent
+            rules, new_names = await node._get_group_consolidation_decisions(
+                [group], [merge_tree], "phenotype", entities, ctx
+            )
+
+        # Should have merge rules for the hypertension types (not Blood Pressure)
+        merged_sources = {norm_name for (norm_name, kind) in rules.keys()}
+        # Blood Pressure should NOT be in merge rules (it was excluded)
+        assert "blood pressure" not in merged_sources
+        # New name should be registered
+        assert "Hypertension" in new_names
+
+    @pytest.mark.asyncio
+    async def test_merge_plus_split_rejected(self, mock_deps):
+        """Merge + split on same group should be rejected as contradictory."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from interaction_finder.extraction.models import (
+            ClusterDecision,
+            ClusterDecisions,
+        )
+        from interaction_finder.extraction.clustering import Cluster
+
+        state = State(
+            topic="test",
+            target_entity_types=["phenotype"],
+            permitted_pairs=build_permitted_pairs(["phenotype"]),
+        )
+        node = ConsolidateEntitiesNode()
+        ctx = GraphRunContext(state=state, deps=mock_deps)
+        group = frozenset(["Entity A", "Entity B"])
+        entities = {name: [] for name in group}
+        merge_tree = Cluster(entities=group, similarity=0.8)
+
+        def make_mock_result(prompt):
+            import re
+
+            match = re.search(r"## Group (\w+)", prompt)
+            if match:
+                group_id = match.group(1)
+                # Contradictory: both merge AND split
+                return MagicMock(
+                    output=ClusterDecisions(
+                        decisions=[
+                            ClusterDecision(
+                                group_id=group_id,
+                                action="merge",
+                                target="Entity A",
+                                reasoning="Same entity",
+                            ),
+                            ClusterDecision(
+                                group_id=group_id,
+                                action="split",
+                                reasoning="Different entities",
+                            ),
+                        ]
+                    )
+                )
+            return MagicMock(output=ClusterDecisions(decisions=[]))
+
+        mock_agent = MagicMock()
+        mock_agent.run = AsyncMock(side_effect=make_mock_result)
+
+        with patch("interaction_finder.agent_config.agent_getter") as mock_getter:
+            mock_getter.return_value = lambda config: mock_agent
+            rules, new_names = await node._get_group_consolidation_decisions(
+                [group], [merge_tree], "phenotype", entities, ctx
+            )
+
+        # Should be rejected - no merge rules created
+        assert len(rules) == 0
+
+    @pytest.mark.asyncio
+    async def test_exclude_plus_split(self, mock_deps):
+        """Exclude + split on same group: exclude first, then split remainder."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from interaction_finder.extraction.models import (
+            ClusterDecision,
+            ClusterDecisions,
+        )
+        from interaction_finder.extraction.clustering import Cluster
+
+        state = State(
+            topic="test",
+            target_entity_types=["phenotype"],
+            permitted_pairs=build_permitted_pairs(["phenotype"]),
+        )
+        node = ConsolidateEntitiesNode()
+        ctx = GraphRunContext(state=state, deps=mock_deps)
+        # 4 entities: will exclude 1, then split remaining 3
+        group = frozenset(
+            ["Disease Alpha", "Disease Beta", "Disease Gamma", "Unrelated Thing"]
+        )
+        entities = {name: [] for name in group}
+        # Create a tree structure for splitting
+        left = Cluster(
+            entities=frozenset(["Disease Alpha", "Disease Beta"]), similarity=0.9
+        )
+        right = Cluster(
+            entities=frozenset(["Disease Gamma", "Unrelated Thing"]), similarity=0.7
+        )
+        merge_tree = Cluster(entities=group, left=left, right=right, similarity=0.5)
+        call_count = 0
+
+        def make_mock_result(prompt):
+            nonlocal call_count
+            call_count += 1
+            import re
+
+            match = re.search(r"## Group (\w+)", prompt)
+            if match and call_count == 1:
+                group_id = match.group(1)
+                # First round: exclude + split
+                return MagicMock(
+                    output=ClusterDecisions(
+                        decisions=[
+                            ClusterDecision(
+                                group_id=group_id,
+                                action="exclude",
+                                target="Unrelated Thing",
+                                reasoning="Doesn't belong",
+                            ),
+                            ClusterDecision(
+                                group_id=group_id,
+                                action="split",
+                                reasoning="Remaining diseases should be split",
+                            ),
+                        ]
+                    )
+                )
+            # Subsequent rounds: no more decisions
+            return MagicMock(output=ClusterDecisions(decisions=[]))
+
+        mock_agent = MagicMock()
+        mock_agent.run = AsyncMock(side_effect=make_mock_result)
+
+        with patch("interaction_finder.agent_config.agent_getter") as mock_getter:
+            mock_getter.return_value = lambda config: mock_agent
+            rules, new_names = await node._get_group_consolidation_decisions(
+                [group], [merge_tree], "phenotype", entities, ctx
+            )
+
+        # Exclude + split should not create merge rules
+        # (split divides the group, doesn't merge)
+        # Unrelated Thing should NOT appear in any merge rules
+        merged_sources = {norm_name for (norm_name, kind) in rules.keys()}
+        assert "unrelated thing" not in merged_sources

@@ -40,6 +40,7 @@ from interaction_finder.extraction.consolidate_entities import (
     get_entity_consolidation_agent,
 )
 from interaction_finder.extraction.models import (
+    ClusterDecision,
     ConsolidatedData,
     EntityKindMerges,
     EntityMergeRule,
@@ -972,109 +973,115 @@ Examples:
             async with ctx.deps.agent_semaphore:
                 result = await agent.run(prompt)
             id_to_data = {g["group_id"]: g for g in group_data}
-            groups_to_split: list[frozenset[str]] = []
-            groups_to_exclude: list[tuple[frozenset[str], str]] = []
-            stats = {"merged": 0, "split": 0, "excluded": 0}
-
+            # Collect decisions by group_id to handle multiple decisions per group
+            decisions_by_group: dict[str, list[ClusterDecision]] = {}
             for decision in result.output.decisions:
-                data = id_to_data.get(decision.group_id)
-                if not data:
+                if decision.group_id not in id_to_data:
                     ctx.deps.logger.warning(
                         f"LLM returned unknown group_id '{decision.group_id}', skipping"
                     )
                     continue
+                decisions_by_group.setdefault(decision.group_id, []).append(decision)
+            # Process each group's decisions together
+            groups_needing_review: list[frozenset[str]] = []
+            stats = {"merged": 0, "split": 0, "excluded": 0}
+            for group_id, decisions in decisions_by_group.items():
+                data = id_to_data[group_id]
                 members = [m["name"] for m in data["members"]]
-                group_entities = data["entities"]
-
-                if decision.action == "merge":
-                    if not decision.target:
+                group_entities: frozenset[str] = data["entities"]
+                # Separate decision types
+                excludes = [d for d in decisions if d.action == "exclude"]
+                merges = [d for d in decisions if d.action == "merge"]
+                splits = [d for d in decisions if d.action == "split"]
+                # Validate: merge + split is contradictory
+                if merges and splits:
+                    ctx.deps.logger.warning(
+                        f"Group {group_id}: merge and split are contradictory, skipping"
+                    )
+                    continue
+                # Apply excludes first to get remaining members
+                remaining = set(members)
+                excluded_names = []
+                for exc in excludes:
+                    if not exc.target:
+                        continue
+                    member = self._resolve_group_target(exc.target, members, entities)
+                    if member in remaining:
+                        remaining.discard(member)
+                        excluded_names.append(member)
+                        stats["excluded"] += 1
+                if excluded_names:
+                    ctx.deps.logger.info(
+                        f"  Group {group_id}: excluded {excluded_names}"
+                    )
+                # If nothing left to process, done with this group
+                if len(remaining) <= 1:
+                    continue
+                remaining_entities = frozenset(remaining)
+                # Now apply merge or split to the remainder
+                if merges:
+                    merge = merges[0]  # Use first merge decision
+                    if not merge.target:
                         ctx.deps.logger.warning(
-                            f"Group {decision.group_id}: merge requires target, skipping"
+                            f"Group {group_id}: merge requires target, skipping"
                         )
                         continue
                     target = self._resolve_group_target(
-                        decision.target, members, entities
+                        merge.target, list(remaining), entities
                     )
                     if target not in entities:
                         all_new_names.add(target)
-                    for member in members:
+                    for member in remaining:
                         if member != target:
                             all_rules[(normalize_for_comparison(member), kind)] = (
                                 target,
-                                decision.reasoning or f"Group {decision.group_id}",
+                                merge.reasoning or f"Group {group_id}",
                             )
                     stats["merged"] += 1
-
-                elif decision.action == "split":
+                elif splits:
                     ctx.deps.logger.info(
-                        f"  Group {decision.group_id} ({len(members)} members) → "
-                        f"split at weakest link (binary split)"
+                        f"  Group {group_id} ({len(remaining)} members) → "
+                        f"split at weakest link"
                     )
-                    groups_to_split.append(group_entities)
+                    # Split the remaining entities using tree
+                    tree = group_to_tree.get(group_entities)
+                    if excluded_names and tree:
+                        # Find subtree for remaining entities
+                        tree = tree.find_subtree(remaining_entities)
+                    if tree is None:
+                        tree = group_to_tree.get(remaining_entities)
+                    if tree is None:
+                        ctx.deps.logger.warning(
+                            f"No merge tree for group {group_id}, skipping split"
+                        )
+                        continue
+                    sub_clusters = tree.split_into_n(2)
+                    for sub in sub_clusters:
+                        if len(sub) > 1:
+                            groups_needing_review.append(sub)
+                            if sub not in group_to_tree:
+                                subtree = tree.find_subtree(sub)
+                                if subtree:
+                                    group_to_tree[sub] = subtree
                     stats["split"] += 1
-
-                elif decision.action == "exclude":
-                    if not decision.target:
-                        ctx.deps.logger.warning(
-                            f"Group {decision.group_id}: exclude requires target, skipping"
-                        )
-                        continue
-                    # Resolve member to exclude (could be number or name)
-                    member_to_exclude = self._resolve_group_target(
-                        decision.target, members, entities
-                    )
-                    if member_to_exclude not in members:
-                        ctx.deps.logger.warning(
-                            f"Group {decision.group_id}: member '{decision.target}' not found, skipping"
-                        )
-                        continue
-                    ctx.deps.logger.info(
-                        f"  Group {decision.group_id} ({len(members)} members) → "
-                        f"exclude '{member_to_exclude}'"
-                    )
-                    groups_to_exclude.append((group_entities, member_to_exclude))
-                    stats["excluded"] += 1
-
+                elif excludes:
+                    # Excludes only: queue remaining for next round review
+                    groups_needing_review.append(remaining_entities)
+                    tree = group_to_tree.get(group_entities)
+                    if tree:
+                        subtree = tree.find_subtree(remaining_entities)
+                        if subtree:
+                            group_to_tree[remaining_entities] = subtree
+            # Count groups kept separate (no decisions returned)
+            groups_with_decisions = len(decisions_by_group)
             ctx.deps.logger.info(
                 f"  Round {round_num} results: {stats['merged']} merged, "
                 f"{stats['split']} split, {stats['excluded']} excluded, "
-                f"{len(current_groups) - len(result.output.decisions)} kept separate"
+                f"{len(current_groups) - groups_with_decisions} kept separate"
             )
-            if not groups_to_split and not groups_to_exclude:
+            if not groups_needing_review:
                 break
-            # Use tree-based splitting
-            current_groups = []
-            for group_entities in groups_to_split:
-                tree = group_to_tree.get(group_entities)
-                if tree is None:
-                    ctx.deps.logger.warning(
-                        f"No merge tree for group {group_entities}, skipping split"
-                    )
-                    continue
-                sub_clusters = tree.split_into_n(2)  # Always binary split
-                for sub in sub_clusters:
-                    if len(sub) > 1:
-                        current_groups.append(sub)
-                        # Register sub-tree for future splits
-                        if sub not in group_to_tree:
-                            subtree = tree.find_subtree(sub)
-                            if subtree:
-                                group_to_tree[sub] = subtree
-
-            # Handle exclusions
-            for group_entities, member_to_exclude in groups_to_exclude:
-                # Remove the excluded member from the group
-                remaining = group_entities - {member_to_exclude}
-                # If 2+ members remain, add back for next round review
-                if len(remaining) > 1:
-                    current_groups.append(remaining)
-                    # Try to preserve tree structure for remaining entities
-                    tree = group_to_tree.get(group_entities)
-                    if tree:
-                        subtree = tree.find_subtree(remaining)
-                        if subtree:
-                            group_to_tree[remaining] = subtree
-                # Excluded member becomes singleton (not added back to current_groups)
+            current_groups = groups_needing_review
 
         ctx.deps.logger.info(
             f"Entity group consolidation complete: {len(all_rules)} merge rules created, "
