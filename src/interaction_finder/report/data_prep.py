@@ -17,6 +17,10 @@ from rich.progress import (
 )
 
 from interaction_finder.checkpoint import PipelineCheckpoint
+from interaction_finder.extraction.utils import (
+    are_relationships_opposed,
+    opposition_map_from_consolidations,
+)
 from interaction_finder.report.html_renderer import DocumentQuoteEntry
 from interaction_finder.report.parallel_renderer import render_documents_parallel
 from interaction_finder.report.reasoning_renderer import (
@@ -54,6 +58,17 @@ def _iter_assessments_with_polarity(judgment):
             yield assessment, polarity
 
 
+def _build_opposition_map(checkpoint: PipelineCheckpoint) -> dict[str, set[str]]:
+    """Build opposition map from consolidated relationships.
+
+    Falls back to empty map for old checkpoints without consolidated data.
+    """
+    consolidated = getattr(checkpoint.extraction, "consolidated", None)
+    if not consolidated:
+        return {}
+    return opposition_map_from_consolidations(consolidated.relationships)
+
+
 def _has_opposing_relationships(
     assessments_data: list[dict[str, Any]],
     opposition_map: dict[str, set[str]],
@@ -70,7 +85,6 @@ def _has_opposing_relationships(
     if not opposition_map or len(assessments_data) < 2:
         return False
     from itertools import combinations
-    from interaction_finder.extraction.utils import are_relationships_opposed
 
     relationships = [a["relationship"] for a in assessments_data]
     return any(
@@ -274,12 +288,8 @@ def prepare_report_data(
         if judgments_override is not None
         else checkpoint.extraction.judgments
     )
-
-    # Build opposition map from checkpoint (convert list values to sets)
-    opposition_map: dict[str, set[str]] = {
-        k: set(v) for k, v in checkpoint.extraction.relationship_oppositions.items()
-    }
-
+    # Build opposition map from consolidated relationships (or empty for old checkpoints)
+    opposition_map = _build_opposition_map(checkpoint)
     pair_entries: list[tuple[tuple[str, str], Any, dict[str, Any]]] = []
     for judgment in judgments:
         key = _pair_key(judgment.entity1.name, judgment.entity2.name)

@@ -1095,21 +1095,13 @@ class TestContestedVariantClustering:
 
         await node.run(ctx)
 
-        # Check clustering metadata was generated
-        assert "phenotype" in ctx.state.clustering_metadata
-
+        # Check that clusters were recorded in consolidated data for phenotype kind
+        phenotype_merges = ctx.state.consolidated.entities.merges.get("phenotype")
+        assert phenotype_merges is not None, "phenotype merges should be recorded"
+        clusters = phenotype_merges.clusters
         # The entities should have been included in clustering despite contested variants
-        clustering_info = ctx.state.clustering_metadata["phenotype"]
-        entities_in_clustering = clustering_info["entities_in_clustering"]
-
-        # At least 2 should be in clustering (possibly all 3 if none auto-merged)
-        assert entities_in_clustering >= 2, (
-            "Entities with contested variants should still be included in clustering"
-        )
-
-        # Check that we have clustering results (not all singletons)
-        # They should cluster together based on shared tokens
-        multi_entity_clusters = clustering_info.get("multi_entity_clusters", 0)
-        assert multi_entity_clusters > 0, (
+        # Check that we have at least one multi-entity cluster
+        multi_entity_clusters = [c for c in clusters if len(c) > 1]
+        assert len(multi_entity_clusters) > 0, (
             "PAH-related entities should cluster together on shared tokens"
         )

@@ -40,8 +40,9 @@ from interaction_finder.extraction.consolidate_entities import (
     get_entity_consolidation_agent,
 )
 from interaction_finder.extraction.models import (
-    ClusteringMetadata,
-    ConsolidationRule,
+    ConsolidatedData,
+    EntityKindMerges,
+    EntityMergeRule,
     EntityPairKey,
     EntityRef,
     ExtractionMetadata,
@@ -60,12 +61,17 @@ from interaction_finder.extraction.entity_matching import (
 )
 from interaction_finder.extraction.utils import (
     adjust_heading_levels,
+    are_relationships_opposed,
+    build_pair_spread,
     collect_relevant_text_for_quotes,
     extract_all_forms,
     extract_document_citations,
     identify_proximal_sets,
+    is_obvious_variant,
     make_entity_pair_key,
     normalize_for_comparison,
+    opposition_map_from_consolidations,
+    osa_distance,
     validate_document_citations,
 )
 from interaction_finder.logging import logfire
@@ -78,16 +84,6 @@ _TOKEN_CHARS = string.ascii_letters + string.digits
 def _generate_token(length: int = 4) -> str:
     """Generate a random alphanumeric token for pair verification."""
     return "".join(secrets.choice(_TOKEN_CHARS) for _ in range(length))
-
-
-def _convert_consolidation_rules(
-    state_rules: dict[tuple[str, str], tuple[str, str]],
-) -> list[ConsolidationRule]:
-    """Convert state consolidation rules to serializable ConsolidationRule objects."""
-    return [
-        ConsolidationRule(source=source, kind=kind, target=target, reasoning=reasoning)
-        for (source, kind), (target, reasoning) in state_rules.items()
-    ]
 
 
 def _resolve_pair_from_decision(
@@ -172,7 +168,7 @@ async def _save_partial_checkpoint(
             target_entity_types=ctx.state.target_entity_types,
             permitted_pairs={k: list(v) for k, v in ctx.state.permitted_pairs.items()},
             judgments=[],
-            consolidation_rules=[],
+            consolidated=ctx.state.consolidated,
             metadata=ExtractionMetadata(
                 topic=ctx.state.topic,
                 resource_count=len(ctx.deps.resource_pool.resources),
@@ -189,10 +185,6 @@ async def _save_partial_checkpoint(
                 pairs_rejected=0,
                 quotes_validated=ctx.state.quotes_validated,
                 quotes_failed=ctx.state.quotes_failed,
-                clustering_metadata={
-                    kind: ClusteringMetadata(kind=kind, **info)
-                    for kind, info in ctx.state.clustering_metadata.items()
-                },
                 resume_from=stage,
                 resume_state=ctx.state.to_dict(),
             ),
@@ -276,7 +268,6 @@ class ProcessDocumentsNode(BaseNode[State, Deps, ExtractionResult]):
                 quotes_validated=0,
                 quotes_failed=0,
             ),
-            consolidation_rules=[],
         )
 
     async def _process_document(
@@ -435,6 +426,11 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
         with logfire.span("ConsolidateEntitiesNode"):
             if ctx.deps.progress:
                 ctx.deps.progress.set_status("Consolidating entities")
+            # Capture initial entity state BEFORE any consolidation (once only)
+            if not ctx.state.consolidated.entities.initial:
+                ctx.state.consolidated.entities.initial = _snapshot_entity_counts(
+                    ctx.state
+                )
             max_iterations = ctx.deps.config.tools.extraction.max_rename_iterations
             total_rules = 0
             iterations_completed = 0
@@ -458,11 +454,13 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
                     candidates = find_consolidation_candidates(
                         entities, threshold, mention_counts, ctx.deps.logger
                     )
-
-                    # Store clustering metadata for debugging/analysis
-                    if candidates.clustering_info:
-                        ctx.state.clustering_metadata[kind] = candidates.clustering_info
-
+                    # Track clusters presented to LLM in consolidated data
+                    if candidates.agent_review_groups:
+                        kind_merges = ctx.state.consolidated.entities.merges.setdefault(
+                            kind, EntityKindMerges()
+                        )
+                        for cluster in candidates.agent_review_groups:
+                            kind_merges.clusters.append(list(cluster))
                     # Log clustering results
                     multi_member_groups = [
                         g for g in candidates.agent_review_groups if len(g) > 1
@@ -662,12 +660,6 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
 
         Returns a human-readable description of their relationship.
         """
-        from interaction_finder.extraction.utils import (
-            normalize_for_comparison,
-            is_obvious_variant,
-            osa_distance,
-        )
-
         if len(canonicals) < 2:
             return "single entity"
 
@@ -1315,12 +1307,20 @@ For each pair, decide the appropriate action (skip, merge, or rename)."""
         or a canonical name (for rename). Rules should be transitively resolved
         before calling.
 
-        Also stores rules in state.consolidation_rules for provenance tracking.
+        Stores rules directly in consolidated.entities.merges for provenance.
         """
         if not rules:
             return
-        # Store rules for provenance (includes reasoning)
-        ctx.state.consolidation_rules.update(rules)
+        # Store rules directly in consolidated structure, categorized by type and kind
+        for (norm_name, kind), (target, reasoning) in rules.items():
+            rule = EntityMergeRule(source=norm_name, target=target, reasoning=reasoning)
+            kind_merges = ctx.state.consolidated.entities.merges.setdefault(
+                kind, EntityKindMerges()
+            )
+            if reasoning.startswith("auto:"):
+                kind_merges.automatic.append(rule)
+            else:
+                kind_merges.llm_decided.append(rule)
         target_by_norm_and_kind: dict[tuple[str, str], str] = {}
         for (_norm, kind), (target, _) in rules.items():
             target_key = (normalize_for_comparison(target), kind)
@@ -1472,19 +1472,13 @@ class ConsolidateRelationshipsNode(BaseNode[State, Deps, ExtractionResult]):
                 unique_relationships, ctx, log_missing=True
             )
 
-            # Step 4b: Build and store opposition mappings
-            from interaction_finder.extraction.utils import (
-                build_relationship_opposition_map,
-            )
-
-            ctx.state.relationship_oppositions = build_relationship_opposition_map(
-                consolidations, unique_relationships
-            )
+            # Step 4b: Store relationship consolidations in unified structure
+            if consolidations:
+                ctx.state.consolidated.relationships.extend(consolidations)
 
             ctx.deps.logger.info(
                 f"Relationship consolidation: {len(consolidations)} relationships processed, "
-                f"{ctx.state.relationships_merged} assessments updated, "
-                f"{len(ctx.state.relationship_oppositions)} relationships with opposites"
+                f"{ctx.state.relationships_merged} assessments updated"
             )
 
             # Step 5: Filter irrelevant relationship types (if enabled)
@@ -1563,8 +1557,6 @@ For each relationship, provide:
 
         Updates assessment.relationship in place when consolidation changes the label.
         """
-        from interaction_finder.extraction.utils import normalize_for_comparison
-
         # Build mapping: normalized_original → consolidated_label
         consolidation_map: dict[str, str] = {}
         for cons in consolidations:
@@ -1636,11 +1628,6 @@ For each relationship, provide:
 
         Uses the stored polarity mappings to identify and remove irrelevant assessments.
         """
-        from interaction_finder.extraction.utils import (
-            build_pair_spread,
-            make_entity_pair_key,
-        )
-
         # Group assessments by pair
         grouped: dict[EntityPairKey, list[PairAssessment]] = defaultdict(list)
         for assessments in ctx.state.pair_assessments_by_resource.values():
@@ -1725,6 +1712,12 @@ class JudgeCrossDocumentNode(BaseNode[State, Deps, ExtractionResult]):
     4. Store in state
     """
 
+    def _build_opposition_map(
+        self, ctx: GraphRunContext[State, Deps]
+    ) -> dict[str, set[str]]:
+        """Build opposition map from consolidated relationships."""
+        return opposition_map_from_consolidations(ctx.state.consolidated.relationships)
+
     async def run(self, ctx: GraphRunContext[State, Deps]) -> "FinalizeNode":
         """Judge all unique pairs across documents."""
         with logfire.span("JudgeCrossDocumentNode"):
@@ -1732,7 +1725,8 @@ class JudgeCrossDocumentNode(BaseNode[State, Deps, ExtractionResult]):
             if ctx.deps.progress:
                 ctx.deps.progress["Unique pairs"].activate()
                 ctx.deps.progress.set_status("Cross-document validation")
-
+            # Build opposition map once from consolidated relationships
+            opposition_map = self._build_opposition_map(ctx)
             # Group assessments by entity pair
             assessments_by_pair: dict[EntityPairKey, list[PairAssessment]] = (
                 defaultdict(list)
@@ -1754,7 +1748,9 @@ class JudgeCrossDocumentNode(BaseNode[State, Deps, ExtractionResult]):
             # Judge each pair (counter updates happen inside _judge_pair for tight scoping)
             tasks = []
             for pair_key, assessments in assessments_by_pair.items():
-                tasks.append(self._judge_pair(pair_key, assessments, ctx))
+                tasks.append(
+                    self._judge_pair(pair_key, assessments, ctx, opposition_map)
+                )
 
             # Run all judgments in parallel
             if tasks:
@@ -1792,9 +1788,6 @@ class JudgeCrossDocumentNode(BaseNode[State, Deps, ExtractionResult]):
             has_opposition = False
             if opposition_map:
                 from itertools import combinations
-                from interaction_finder.extraction.utils import (
-                    are_relationships_opposed,
-                )
 
                 has_opposition = any(
                     are_relationships_opposed(rel1, rel2, opposition_map)
@@ -2053,36 +2046,25 @@ Provide: accepted (true/false), relationship (selected label), confidence (high/
         self,
         assessments: list[PairAssessment],
         spread: PairSpread,
-        ctx: GraphRunContext[State, Deps],
+        opposition_map: dict[str, set[str]],
     ) -> bool:
         """Detect if a pair has contradictory evidence requiring special handling.
 
         A pair is contentious if either:
         1. It has both positive AND negative polarity assessments
         2. It has opposing relationships (e.g., "activates" vs "inhibits")
-
-        Parameters:
-            assessments: All assessments for this pair
-            spread: Assessments grouped by polarity
-            ctx: Graph context with opposition mapping
-
-        Returns:
-            True if pair is contentious, False otherwise
         """
         # Check 1: Contradictory polarity (positive + negative)
         if spread.positive and spread.negative:
             return True
-
         # Check 2: Opposing relationships
-        if not ctx.state.relationship_oppositions:
+        if not opposition_map:
             return False
-
         from itertools import combinations
-        from interaction_finder.extraction.utils import are_relationships_opposed
 
         relationships = [a.relationship for a in assessments]
         return any(
-            are_relationships_opposed(rel1, rel2, ctx.state.relationship_oppositions)
+            are_relationships_opposed(rel1, rel2, opposition_map)
             for rel1, rel2 in combinations(relationships, 2)
         )
 
@@ -2091,17 +2073,16 @@ Provide: accepted (true/false), relationship (selected label), confidence (high/
         pair_key: EntityPairKey,
         assessments: list[PairAssessment],
         ctx: GraphRunContext[State, Deps],
+        opposition_map: dict[str, set[str]],
     ) -> tuple[EntityPairKey, PairJudgment]:
         """Make final judgment on a single pair."""
         try:
-            from interaction_finder.extraction.utils import build_pair_spread
-
             # Build PairSpread by polarity
             spread = build_pair_spread(assessments, ctx.state.relationship_polarities)
 
             # Try deterministic accept
             can_accept, relationship, reasoning = self._can_accept_deterministically(
-                assessments, ctx.state.relationship_oppositions
+                assessments, opposition_map
             )
             if can_accept:
                 # Create judgment without LLM call (no semaphore needed)
@@ -2131,7 +2112,9 @@ Provide: accepted (true/false), relationship (selected label), confidence (high/
             # Collect valid document IDs from all assessments for citation validation
             valid_doc_ids = {a.resource_id.id for a in assessments}
             # Detect contentious pairs (positive + negative polarity OR opposing relationships)
-            is_contentious = self._is_contentious_pair(assessments, spread, ctx)
+            is_contentious = self._is_contentious_pair(
+                assessments, spread, opposition_map
+            )
 
             if is_contentious:
                 prompt = self._build_contentious_prompt(pair_key, spread, ctx)
@@ -2565,29 +2548,14 @@ For each relationship, provide:
         consolidations: list[RelationshipConsolidation],
         ctx: GraphRunContext[State, Deps],
     ) -> None:
-        """Apply relationship consolidations, store polarities, and update oppositions."""
-        from interaction_finder.extraction.utils import (
-            build_relationship_opposition_map,
-        )
-
+        """Apply relationship consolidations and store polarities."""
         # Store polarities
         for cons in consolidations:
             ctx.state.relationship_polarities[cons.original] = cons.polarity
             ctx.state.relationship_polarities[cons.consolidated] = cons.polarity
-
-        # Update opposition map with new relationships
-        # Collect all known relationships (existing + new)
-        all_relationships = set(ctx.state.relationship_polarities.keys())
-        new_oppositions = build_relationship_opposition_map(
-            consolidations, all_relationships
-        )
-        # Merge new oppositions into existing map
-        for rel, opps in new_oppositions.items():
-            if rel in ctx.state.relationship_oppositions:
-                ctx.state.relationship_oppositions[rel].update(opps)
-            else:
-                ctx.state.relationship_oppositions[rel] = opps
-
+        # Append to unified consolidated structure
+        if consolidations:
+            ctx.state.consolidated.relationships.extend(consolidations)
         # Apply consolidation if label changed
         for cons in consolidations:
             if cons.original != cons.consolidated:
@@ -2607,8 +2575,6 @@ For each relationship, provide:
         but only processes pairs that had new sweep assessments. Creates
         pre-rejected judgments for pairs where ALL assessments are irrelevant.
         """
-        from interaction_finder.extraction.utils import build_pair_spread
-
         # Group all assessments by pair (including sweep-added ones)
         grouped: dict[EntityPairKey, list[PairAssessment]] = defaultdict(list)
         for assessments in ctx.state.pair_assessments_by_resource.values():
@@ -2675,9 +2641,29 @@ For each relationship, provide:
             )
 
 
+def _snapshot_entity_counts(state: State) -> dict[str, dict[str, int]]:
+    """Capture entity mention counts as {kind: {name: count}}.
+
+    Shared helper for capturing entity state at different pipeline stages.
+    """
+    snapshot: dict[str, dict[str, int]] = {}
+    for entities in state.validated_entities_by_resource.values():
+        for name, ref in entities.items():
+            if ref.kind not in snapshot:
+                snapshot[ref.kind] = {}
+            snapshot[ref.kind][name] = snapshot[ref.kind].get(name, 0) + len(
+                ref.mentions
+            )
+    return snapshot
+
+
 @dataclass
 class FinalizeNode(BaseNode[State, Deps, ExtractionResult]):
     """Build final output with all judgments and metadata."""
+
+    def _finalize_consolidated(self, ctx: GraphRunContext[State, Deps]) -> None:
+        """Finalize consolidated data: set final entity counts."""
+        ctx.state.consolidated.entities.final = _snapshot_entity_counts(ctx.state)
 
     async def run(self, ctx: GraphRunContext[State, Deps]) -> End[ExtractionResult]:
         """Gather all judgments and build final result."""
@@ -2714,12 +2700,9 @@ class FinalizeNode(BaseNode[State, Deps, ExtractionResult]):
                 pairs_rejected=pairs_rejected,
                 quotes_validated=ctx.state.quotes_validated,
                 quotes_failed=ctx.state.quotes_failed,
-                clustering_metadata={
-                    kind: ClusteringMetadata(kind=kind, **info)
-                    for kind, info in ctx.state.clustering_metadata.items()
-                },
             )
-
+            # Finalize consolidated data: set final counts and categorize merges
+            self._finalize_consolidated(ctx)
             result = ExtractionResult(
                 topic=ctx.state.topic,
                 target_entity_types=ctx.state.target_entity_types,
@@ -2729,10 +2712,7 @@ class FinalizeNode(BaseNode[State, Deps, ExtractionResult]):
                 resources=ctx.deps.resource_pool,
                 judgments=all_judgments,
                 metadata=metadata,
-                consolidation_rules=_convert_consolidation_rules(
-                    ctx.state.consolidation_rules
-                ),
-                relationship_oppositions=ctx.state.relationship_oppositions,
+                consolidated=ctx.state.consolidated,
             )
 
             return End(result)

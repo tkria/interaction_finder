@@ -19,11 +19,18 @@ from interaction_finder.version import get_version_string
 
 if TYPE_CHECKING:
     from interaction_finder.extraction.models import (
-        ConsolidationRule,
+        ConsolidatedData,
         EntityRef,
         ExtractionMetadata,
         PairJudgment,
     )
+
+
+def _get_consolidated_data_default():
+    """Deferred import to avoid circular dependency."""
+    from interaction_finder.extraction.models import ConsolidatedData
+
+    return ConsolidatedData()
 
 
 def _needs_rehydration(judgments: list[dict]) -> bool:
@@ -230,13 +237,9 @@ class ExtractionStageData(BaseModel):
         description="All pair judgments (accepted and rejected)"
     )
     metadata: "ExtractionMetadata" = Field(description="Extraction statistics")
-    consolidation_rules: list["ConsolidationRule"] = Field(
-        default_factory=list,
-        description="Entity consolidation rules applied during extraction",
-    )
-    relationship_oppositions: dict[str, list[str]] = Field(
-        default_factory=dict,
-        description="Mapping of relationships to their semantic opposites",
+    consolidated: "ConsolidatedData" = Field(
+        default_factory=_get_consolidated_data_default,
+        description="Unified consolidation provenance for entities and relationships",
     )
 
     @model_serializer(mode="wrap")
@@ -356,7 +359,7 @@ def _rebuild_models():
     forward references used during TYPE_CHECKING.
     """
     from interaction_finder.extraction.models import (
-        ConsolidationRule,
+        ConsolidatedData,
         EntityRef,
         ExtractionMetadata,
         PairJudgment,

@@ -996,6 +996,22 @@ def build_relationship_opposition_map(
     return result
 
 
+def opposition_map_from_consolidations(
+    consolidations: list,  # list[RelationshipConsolidation]
+) -> dict[str, set[str]]:
+    """Build opposition map directly from relationship consolidations.
+
+    Convenience wrapper around build_relationship_opposition_map that extracts
+    the relationship set automatically from the consolidations.
+    """
+    if not consolidations:
+        return {}
+    all_rels = {c.original for c in consolidations} | {
+        c.consolidated for c in consolidations
+    }
+    return build_relationship_opposition_map(consolidations, all_rels)
+
+
 def are_relationships_opposed(
     rel1: str, rel2: str, opposition_map: dict[str, set[str]]
 ) -> bool:

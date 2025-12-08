@@ -73,6 +73,8 @@ def test_extraction_metadata_with_resume_data():
 
 def test_state_serialization_roundtrip():
     """Test that State can be serialized and deserialized correctly."""
+    from interaction_finder.extraction.models import RelationshipConsolidation
+
     # Create a minimal state
     pool = ResourcePool()
     state = State(
@@ -86,7 +88,15 @@ def test_state_serialization_roundtrip():
     state.quotes_validated = 10
     state.quotes_failed = 2
     state.relationship_polarities = {"activates": "positive"}
-    state.relationship_oppositions = {"activates": {"inhibits"}}
+    state.consolidated.relationships.append(
+        RelationshipConsolidation(
+            original="activates",
+            consolidated="activates",
+            polarity="positive",
+            opposites=["inhibits"],
+            reasoning="Test consolidation reasoning with sufficient length",
+        )
+    )
 
     # Serialize
     state_dict = state.to_dict()
@@ -96,7 +106,8 @@ def test_state_serialization_roundtrip():
     assert state_dict["entities_merged"] == 5
     assert state_dict["quotes_validated"] == 10
     assert state_dict["relationship_polarities"] == {"activates": "positive"}
-    assert state_dict["relationship_oppositions"] == {"activates": ["inhibits"]}
+    assert "consolidated" in state_dict
+    assert len(state_dict["consolidated"]["relationships"]) == 1
 
     # Deserialize
     restored_state = State.from_dict(
@@ -111,7 +122,8 @@ def test_state_serialization_roundtrip():
     assert restored_state.entities_merged == 5
     assert restored_state.quotes_validated == 10
     assert restored_state.relationship_polarities == {"activates": "positive"}
-    assert restored_state.relationship_oppositions == {"activates": {"inhibits"}}
+    assert len(restored_state.consolidated.relationships) == 1
+    assert restored_state.consolidated.relationships[0].opposites == ["inhibits"]
 
 
 def test_state_serialization_preserves_structure():
@@ -141,9 +153,8 @@ def test_state_serialization_preserves_structure():
     assert "proximal_sets_by_resource" in state_dict
     assert "pair_assessments_by_resource" in state_dict
     assert "pair_judgments" in state_dict
-    assert "consolidation_rules" in state_dict
     assert "agent_merge_cache" in state_dict
-    assert "relationship_oppositions" in state_dict
+    assert "consolidated" in state_dict
 
     # Deserialize
     restored_state = State.from_dict(
@@ -169,23 +180,18 @@ def test_state_serialization_with_tuple_keys():
         permitted_pairs={"gene": {"gene"}},
     )
 
-    # Add consolidation rules (tuple keys)
-    state.consolidation_rules = {
-        ("brca1", "gene"): ("BRCA1", "auto:0:original:exact"),
-        ("brca-1", "gene"): ("BRCA1", "auto:1:hyphen:fuzzy"),
-    }
-
     # Add agent merge cache (tuple keys)
     state.agent_merge_cache = {
         ("BRCA1", "BRCA-1", "gene"): ("BRCA1", "merge into canonical"),
+        ("TP53", "p53", "gene"): ("TP53", "standard nomenclature"),
     }
 
     # Serialize
     state_dict = state.to_dict()
 
     # Check tuple keys converted to strings
-    assert "brca1|gene" in state_dict["consolidation_rules"]
     assert "BRCA1|BRCA-1|gene" in state_dict["agent_merge_cache"]
+    assert "TP53|p53|gene" in state_dict["agent_merge_cache"]
 
     # Deserialize
     restored_state = State.from_dict(
@@ -197,12 +203,11 @@ def test_state_serialization_with_tuple_keys():
     )
 
     # Verify restoration
-    assert ("brca1", "gene") in restored_state.consolidation_rules
-    assert restored_state.consolidation_rules[("brca1", "gene")] == (
-        "BRCA1",
-        "auto:0:original:exact",
-    )
     assert ("BRCA1", "BRCA-1", "gene") in restored_state.agent_merge_cache
+    assert restored_state.agent_merge_cache[("BRCA1", "BRCA-1", "gene")] == (
+        "BRCA1",
+        "merge into canonical",
+    )
 
 
 def test_state_serialization_empty_collections():

@@ -9,10 +9,10 @@ Pipeline flow:
    - Validate kinds → validated_entities_by_resource
    - Identify proximal sets → proximal_sets_by_resource
    - Extract & assess pairs → pair_assessments_by_resource
-2. ConsolidateEntitiesNode → entities_merged, consolidation_rules (global merging + pair reference updates)
-3. ConsolidateRelationshipsNode → relationship_mappings, relationship_polarities
+2. ConsolidateEntitiesNode → entities_merged, consolidated.entities (global merging + pair reference updates)
+3. ConsolidateRelationshipsNode → relationship_mappings, relationship_polarities, consolidated.relationships
 4. SweepCoMentionsNode → co_mention_sweep_stats (additional assessments added to pair_assessments_by_resource)
-5. ConsolidateNewRelationshipsNode → extends relationship_polarities for new labels
+5. ConsolidateNewRelationshipsNode → extends relationship_polarities and consolidated.relationships
 6. JudgeCrossDocumentNode → pair_judgments
 7. FinalizeNode → ExtractionResult
 """
@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     from interaction_finder.resources import ResourcePool
 
 from interaction_finder.extraction.models import (
+    ConsolidatedData,
     EntityMention,
     EntityPairKey,
     EntityRef,
@@ -42,9 +43,8 @@ _SERIALIZATION_REGISTRY: dict[str, tuple[str, type | None]] = {
     "proximal_sets_by_resource": ("by_resource", list[ProximalEntitySet]),
     "pair_assessments_by_resource": ("by_resource", list[PairAssessment]),
     "pair_judgments": ("pair_key", PairJudgment),
-    "consolidation_rules": ("tuple_key", None),
     "agent_merge_cache": ("tuple_key", None),
-    "relationship_oppositions": ("set_value", None),
+    "consolidated": ("pydantic_model", ConsolidatedData),
 }
 
 
@@ -118,14 +118,8 @@ class State:
     )
     # Count of entities merged (for metadata)
     entities_merged: int = 0
-    # Clustering metadata by entity kind (for debugging/analysis)
-    clustering_metadata: dict[str, dict] = field(default_factory=dict)
-    # Consolidation rules for provenance: (normalized_name, kind) → (target_canonical, reasoning)
-    # Reasoning format: "auto:<speculation>:<source>:<match_kind>" or full LLM reasoning string
-    # Examples: "auto:0:original:exact", "auto:1:before_paren:exact", "auto:3:original:fuzzy"
-    consolidation_rules: dict[tuple[str, str], tuple[str, str]] = field(
-        default_factory=dict
-    )
+    # Unified consolidation provenance - built incrementally during pipeline
+    consolidated: ConsolidatedData = field(default_factory=ConsolidatedData)
     # Within-run cache for LLM merge decisions: (child_canonical, parent_canonical, kind) → (target, reasoning)
     # target is None for "skip", parent for "merge", or custom name for "rename"
     # Prevents redundant LLM calls when same pair appears across multiple documents
@@ -153,8 +147,6 @@ class State:
     relationship_mappings: dict[str, str] = field(default_factory=dict)
     # Mapping from relationship label to polarity (positive/negative/neutral/irrelevant)
     relationship_polarities: dict[str, str] = field(default_factory=dict)
-    # Mapping from normalized relationship to set of normalized opposing relationships
-    relationship_oppositions: dict[str, set[str]] = field(default_factory=dict)
     # Count of assessments with updated relationship labels
     relationships_merged: int = 0
 
@@ -214,9 +206,9 @@ class State:
                 result[fld.name] = {
                     "|".join(str(x) for x in k): v for k, v in value.items()
                 }
-            elif handler_type == "set_value":
-                # dict[K, set[V]] → dict[K, list[V]]
-                result[fld.name] = {k: list(v) for k, v in value.items()}
+            elif handler_type == "pydantic_model":
+                # Pydantic model → JSON dict
+                result[fld.name] = value.model_dump(mode="json")
 
         return result
 
@@ -301,9 +293,8 @@ class State:
                 value = {tuple(k.split("|")): v for k, v in value_data.items()}
                 setattr(state, fld.name, value)
 
-            elif handler_type == "set_value":
-                # dict[K, list[V]] → dict[K, set[V]]
-                value = {k: set(v) for k, v in value_data.items()}
-                setattr(state, fld.name, value)
+            elif handler_type == "pydantic_model":
+                # JSON dict → Pydantic model
+                setattr(state, fld.name, inner_type.model_validate(value_data))
 
         return state

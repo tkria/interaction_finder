@@ -312,6 +312,79 @@ class RelationshipConsolidations(BaseModel):
     )
 
 
+# =============================================================================
+# Consolidation provenance models
+# =============================================================================
+
+
+class EntityMergeRule(BaseModel):
+    """Single entity merge with provenance.
+
+    Records how one entity name was mapped to another during consolidation,
+    including the reasoning (automatic rule or LLM decision). The entity kind
+    is implicit from the parent container.
+    """
+
+    source: str = Field(description="Original normalized entity name")
+    target: str = Field(description="Target canonical name after consolidation")
+    reasoning: str = Field(
+        description="Reason for merge: 'auto:cap', 'auto:fuzzy', etc. or LLM reasoning"
+    )
+
+
+class EntityKindMerges(BaseModel):
+    """Entity merge operations for a single entity kind.
+
+    Separates automatic merges (rule-based) from LLM-decided merges,
+    and tracks which entity clusters were presented for LLM review.
+    """
+
+    automatic: list[EntityMergeRule] = Field(
+        default_factory=list,
+        description="Merges from automatic rules (capitalization, fuzzy match, etc.)",
+    )
+    clusters: list[list[str]] = Field(
+        default_factory=list,
+        description="Entity clusters presented to LLM for review",
+    )
+    llm_decided: list[EntityMergeRule] = Field(
+        default_factory=list,
+        description="Merges decided by LLM after cluster review",
+    )
+
+
+class EntityConsolidation(BaseModel):
+    """Complete entity consolidation provenance.
+
+    Tracks entity counts before and after consolidation, plus all merge
+    operations that occurred. All fields are grouped by entity kind.
+    """
+
+    initial: dict[str, dict[str, int]] = Field(
+        default_factory=dict,
+        description="Entity mention counts before consolidation: {kind: {name: count}}",
+    )
+    merges: dict[str, EntityKindMerges] = Field(
+        default_factory=dict,
+        description="Merge operations by entity kind: {kind: EntityKindMerges}",
+    )
+    final: dict[str, dict[str, int]] = Field(
+        default_factory=dict,
+        description="Entity mention counts after consolidation: {kind: {name: count}}",
+    )
+
+
+class ConsolidatedData(BaseModel):
+    """Unified consolidation provenance for entities and relationships.
+
+    Primary authoritative source for all consolidation decisions made during
+    the extraction pipeline. Built incrementally as each consolidation node runs.
+    """
+
+    entities: EntityConsolidation = Field(default_factory=EntityConsolidation)
+    relationships: list[RelationshipConsolidation] = Field(default_factory=list)
+
+
 class ProximalPairInfo(BaseModel):
     """LLM output for a single pair extracted from a proximal region."""
 
@@ -486,66 +559,6 @@ class PairJudgment(BaseModel):
         return list(self.iter_assessments())
 
 
-class ClusteringMetadata(BaseModel):
-    """Metadata about entity clustering for a specific entity kind.
-
-    Captures hierarchical clustering results including token specificity
-    weights, cluster composition, and merge tree structure for debugging
-    and analysis.
-    """
-
-    kind: str = Field(description="Entity kind (e.g., 'gene', 'phenotype')")
-    total_entities: int = Field(
-        description="Total entities of this kind before clustering"
-    )
-    entities_in_clustering: int = Field(
-        description="Entities that participated in clustering (after auto-merge)"
-    )
-    threshold: float = Field(description="Similarity threshold used for clustering")
-
-    # Token specificity weights (IDF-like, for debugging)
-    token_weights: dict[str, float] = Field(
-        default_factory=dict,
-        description="Token -> specificity score (log-scaled IDF)",
-    )
-    weight_range: tuple[float, float] = Field(
-        description="(min_weight, max_weight) across all tokens"
-    )
-
-    # Clustering results
-    clusters_formed: int = Field(description="Number of clusters produced")
-    largest_cluster_size: int = Field(
-        description="Size of largest cluster (for detecting hierarchies)"
-    )
-    multi_entity_clusters: int = Field(
-        description="Clusters with 2+ entities (presented to LLM)"
-    )
-    singleton_clusters: int = Field(
-        description="Clusters with 1 entity (kept separate)"
-    )
-
-    # Cluster composition (for analysis)
-    cluster_sizes: list[int] = Field(
-        description="Size of each cluster, sorted descending"
-    )
-    large_clusters: list[list[str]] = Field(
-        default_factory=list,
-        description="Entity names in clusters with 5+ members (hierarchies)",
-    )
-
-    # Hierarchical cluster structure (merge trees)
-    merge_trees: list[dict] = Field(
-        default_factory=list,
-        description="Hierarchical cluster trees showing merge structure and similarities",
-    )
-
-    # Sample token weights for common terms (debugging aid)
-    sample_weights: dict[str, float] = Field(
-        default_factory=dict,
-        description="Specificity scores for frequent tokens (up to 10)",
-    )
-
-
 class ExtractionMetadata(BaseModel):
     """Summary statistics for extraction run.
 
@@ -566,13 +579,6 @@ class ExtractionMetadata(BaseModel):
     pairs_rejected: int
     quotes_validated: int
     quotes_failed: int
-
-    # Clustering metadata (per entity kind)
-    clustering_metadata: dict[str, ClusteringMetadata] = Field(
-        default_factory=dict,
-        description="Clustering statistics by entity kind for debugging",
-    )
-
     # Resumption fields (both None when extraction complete)
     resume_from: (
         Literal[
@@ -599,20 +605,6 @@ class ExtractionMetadata(BaseModel):
         return self.resume_from is not None and self.resume_state is not None
 
 
-class ConsolidationRule(BaseModel):
-    """Single entity consolidation rule for provenance tracking.
-
-    Records how one entity name was mapped to another during consolidation.
-    """
-
-    source: str = Field(description="Original normalized entity name")
-    kind: str = Field(description="Entity kind (e.g., 'gene', 'phenotype')")
-    target: str = Field(description="Target canonical name after consolidation")
-    reasoning: str = Field(
-        description="Reason for consolidation: 'auto:cap', 'auto:fuzzy', 'cached', or LLM reasoning"
-    )
-
-
 class ExtractionResult(BaseModel):
     """Final pipeline output.
 
@@ -635,13 +627,9 @@ class ExtractionResult(BaseModel):
         description="All pair judgments (accepted and rejected)"
     )
     metadata: ExtractionMetadata = Field(description="Extraction statistics")
-    consolidation_rules: list[ConsolidationRule] = Field(
-        default_factory=list,
-        description="Entity consolidation rules applied during extraction",
-    )
-    relationship_oppositions: dict[str, set[str]] = Field(
-        default_factory=dict,
-        description="Mapping of relationships to their semantic opposites",
+    consolidated: ConsolidatedData = Field(
+        default_factory=ConsolidatedData,
+        description="Unified consolidation provenance for entities and relationships",
     )
 
     @model_serializer(mode="wrap")
