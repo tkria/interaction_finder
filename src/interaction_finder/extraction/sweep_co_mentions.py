@@ -94,6 +94,9 @@ class CoMentionSweepStats:
     assessed: int = 0
     relationships_found: int = 0
     no_relationship_claim: int = 0
+    # New pair discovery
+    new_pairs_discovered: int = 0
+    new_pairs_assessed: int = 0
 
 
 @dataclass
@@ -590,8 +593,9 @@ async def assess_co_mention_region(
     deps: Deps,
     region_index: int,
     validated_entities: dict[str, EntityRef] | None = None,
-) -> list[PairAssessment]:
-    """Assess all candidate pairs in a merged region with a single LLM call.
+    permitted_pairs: dict[str, set[str]] | None = None,
+) -> tuple[list[PairAssessment], list[tuple]]:
+    """Assess candidate pairs and discover new pairs in a merged region.
 
     Parameters:
         region: Merged region with multiple candidate pairs
@@ -601,13 +605,16 @@ async def assess_co_mention_region(
         config: Configuration for LLM agent
         deps: Pipeline dependencies
         region_index: 1-based region number for diagnostic messages
-        validated_entities: Document's validated entities (for reuse if available)
+        validated_entities: Document's validated entities (enables new pair discovery)
+        permitted_pairs: Allowed entity kind pairings (enables new pair discovery)
 
     Returns:
-        List of PairAssessment for confirmed relationships (may be empty)
+        (assessments, new_pairs) where:
+        - assessments: PairAssessment for known candidate pairs
+        - new_pairs: Raw (e1, e2, rel_types, quotes) tuples for newly discovered pairs
     """
     if not region.candidate_pairs:
-        return []
+        return ([], [])
     # Build text region from chunk range with padding
     padding = config.tools.extraction.region_padding_chunks
     start_chunk = max(0, region.chunk_range[0] - padding)
@@ -619,11 +626,11 @@ async def assess_co_mention_region(
             text_parts.append(chunk_text)
     text_region = "\n".join(text_parts)
     if not text_region.strip():
-        return []
+        return ([], [])
     # Build candidate pairs list for prompt and lookup structures
     pairs_list = []
     pair_lookup: dict[tuple[str, str], CandidatePair] = {}
-    all_entity_names: set[str] = set()
+    candidate_entity_names: set[str] = set()
     for candidate in region.candidate_pairs:
         pk = candidate.pair_key
         pairs_list.append(
@@ -631,20 +638,24 @@ async def assess_co_mention_region(
         )
         pair_lookup[(pk.entity1_name, pk.entity2_name)] = candidate
         pair_lookup[(pk.entity2_name, pk.entity1_name)] = candidate
-        all_entity_names.add(pk.entity1_name)
-        all_entity_names.add(pk.entity2_name)
-
+        candidate_entity_names.add(pk.entity1_name)
+        candidate_entity_names.add(pk.entity2_name)
     # Build variant map for fuzzy matching
-    # Include all candidate entities, using aliases from validated_entities when available
-    entity_variants = {}
-    for name in all_entity_names:
-        if validated_entities and name in validated_entities:
-            entity_ref = validated_entities[name]
+    # When discovery enabled, include all validated entities; otherwise just candidates
+    discovery_enabled = validated_entities is not None and permitted_pairs is not None
+    entity_variants: dict[str, set[str]] = {}
+    if discovery_enabled:
+        for name, entity_ref in validated_entities.items():
             entity_variants[name] = extract_entity_variants(name, entity_ref.aliases())
-        else:
-            # Fallback for entities from global aliases not in this document
-            entity_variants[name] = extract_entity_variants(name, None)
-
+    else:
+        for name in candidate_entity_names:
+            if validated_entities and name in validated_entities:
+                entity_ref = validated_entities[name]
+                entity_variants[name] = extract_entity_variants(
+                    name, entity_ref.aliases()
+                )
+            else:
+                entity_variants[name] = extract_entity_variants(name, None)
     # Build relationships section
     if known_relationships:
         relationships_section = (
@@ -659,7 +670,7 @@ Evaluate candidate entity pairs for associations in this text region.
 
 **Topic:** {topic}
 
-**Candidate pairs to evaluate:**
+**Candidate pairs to check:**
 {chr(10).join(pairs_list)}
 {relationships_section}
 # Document Extract
@@ -683,26 +694,10 @@ Provide supporting quotes for confirmed relationships."""
                 result = await agent.run(prompt, deps=deps, usage=usage)
     except (TimeoutError, ConnectionError, ValueError) as e:
         deps.logger.error(f"{diagnostic_prefix} failed: {type(e).__name__}: {e}")
-        return []
-
-    # Helper: format entity name with unknown status
-    def format_entity(name: str, match) -> str:
-        return f"'{name}' (unknown!)" if match is None else f"'{name}'"
-
-    # Helper: find expected partners for an entity in candidate pairs
-    def find_partners(entity_name: str) -> list[str]:
-        return sorted(
-            {
-                cp.pair_key.entity2_name
-                if cp.pair_key.entity1_name == entity_name
-                else cp.pair_key.entity1_name
-                for cp in region.candidate_pairs
-                if entity_name in (cp.pair_key.entity1_name, cp.pair_key.entity2_name)
-            }
-        )
-
-    # Process confirmed pairs (collect diagnostics for batch reporting)
+        return ([], [])
+    # Process confirmed pairs
     assessments: list[PairAssessment] = []
+    new_pairs: list[tuple] = []
     resolution_issues: list[str] = []
     for pair_idx, confirmed in enumerate(result.output.confirmed_pairs, start=1):
         # Match entity names using fuzzy matching
@@ -712,35 +707,15 @@ Provide supporting quotes for confirmed relationships."""
         match2 = find_entity_match(
             confirmed.entity2_name, entity_variants, allow_fuzzy=True
         )
-
         if match1 is None or match2 is None:
-            # Unresolvable entity issue
             resolution_issues.append(
-                f"- Pair #{pair_idx}: {format_entity(confirmed.entity1_name, match1)} "
-                f"<-> {format_entity(confirmed.entity2_name, match2)}"
+                f"- Pair #{pair_idx}: '{confirmed.entity1_name}' "
+                f"{'(unknown!)' if match1 is None else ''} <-> "
+                f"'{confirmed.entity2_name}' {'(unknown!)' if match2 is None else ''}"
             )
             continue
-
         matched_e1, matched_e2 = match1.canonical, match2.canonical
-        candidate = pair_lookup.get((matched_e1, matched_e2))
-
-        if candidate is None:
-            # Unexpected combination issue
-            parts = [
-                f"- Pair #{pair_idx}: '{confirmed.entity1_name}' <-> '{confirmed.entity2_name}' "
-                f"is not an expected combination"
-            ]
-            for entity, matched in [
-                (confirmed.entity1_name, matched_e1),
-                (confirmed.entity2_name, matched_e2),
-            ]:
-                if partners := find_partners(matched):
-                    parts.append(
-                        f"  '{matched}' could be associated with: {', '.join(partners)}"
-                    )
-            resolution_issues.append("\n".join(parts))
-            continue
-        # Validate quotes
+        # Validate quotes first (needed for both known and new pairs)
         validated_quotes = []
         for quote_str in confirmed.supporting_quotes:
             try:
@@ -753,48 +728,92 @@ Provide supporting quotes for confirmed relationships."""
                 "rejected: no valid quotes"
             )
             continue
-        # Get or create EntityRef objects (preserve original mentions)
-        if validated_entities and matched_e1 in validated_entities:
-            entity1_ref = validated_entities[matched_e1]
-        else:
-            mention1 = create_minimal_entity_mention(
-                canonical_name=matched_e1,
-                kind=candidate.entity1_kind,
-                matched_form=confirmed.entity1_name.lower(),
-                quotes=validated_quotes,
-                reasoning=confirmed.reasoning,
+        # Check if this is a known candidate pair
+        candidate = pair_lookup.get((matched_e1, matched_e2))
+        if candidate is not None:
+            # Known pair - create assessment directly
+            entity1_ref = (
+                validated_entities[matched_e1]
+                if validated_entities and matched_e1 in validated_entities
+                else EntityRef(
+                    canonical=matched_e1,
+                    mentions=[
+                        create_minimal_entity_mention(
+                            matched_e1,
+                            candidate.entity1_kind,
+                            confirmed.entity1_name.lower(),
+                            validated_quotes,
+                            confirmed.reasoning,
+                        )
+                    ],
+                )
             )
-            entity1_ref = EntityRef(canonical=mention1.name, mentions=[mention1])
-        if validated_entities and matched_e2 in validated_entities:
-            entity2_ref = validated_entities[matched_e2]
-        else:
-            mention2 = create_minimal_entity_mention(
-                canonical_name=matched_e2,
-                kind=candidate.entity2_kind,
-                matched_form=confirmed.entity2_name.lower(),
-                quotes=validated_quotes,
-                reasoning=confirmed.reasoning,
+            entity2_ref = (
+                validated_entities[matched_e2]
+                if validated_entities and matched_e2 in validated_entities
+                else EntityRef(
+                    canonical=matched_e2,
+                    mentions=[
+                        create_minimal_entity_mention(
+                            matched_e2,
+                            candidate.entity2_kind,
+                            confirmed.entity2_name.lower(),
+                            validated_quotes,
+                            confirmed.reasoning,
+                        )
+                    ],
+                )
             )
-            entity2_ref = EntityRef(canonical=mention2.name, mentions=[mention2])
-        assessments.append(
-            PairAssessment(
-                resource_id=region.resource_id,
-                entity1=entity1_ref,
-                entity2=entity2_ref,
-                relationship=confirmed.relationship,
-                quotes=validated_quotes,
-                confidence=confirmed.confidence,
-                reasoning=confirmed.reasoning,
-                source="sweep",
+            assessments.append(
+                PairAssessment(
+                    resource_id=region.resource_id,
+                    entity1=entity1_ref,
+                    entity2=entity2_ref,
+                    relationship=confirmed.relationship,
+                    quotes=validated_quotes,
+                    confidence=confirmed.confidence,
+                    reasoning=confirmed.reasoning,
+                    source="sweep",
+                )
             )
+            continue
+        # New pair - check if discovery is enabled and pair is valid
+        if not discovery_enabled:
+            resolution_issues.append(
+                f"- Pair #{pair_idx}: '{matched_e1}' <-> '{matched_e2}' "
+                "not in candidate list (discovery disabled)"
+            )
+            continue
+        # Verify both entities exist in validated_entities
+        if matched_e1 not in validated_entities or matched_e2 not in validated_entities:
+            resolution_issues.append(
+                f"- Pair #{pair_idx}: '{matched_e1}' <-> '{matched_e2}' "
+                "contains entity not in document"
+            )
+            continue
+        # Verify pair kinds are permitted
+        e1_kind = validated_entities[matched_e1].kind
+        e2_kind = validated_entities[matched_e2].kind
+        if e2_kind not in permitted_pairs.get(e1_kind, set()):
+            resolution_issues.append(
+                f"- Pair #{pair_idx}: '{matched_e1}' ({e1_kind}) <-> "
+                f"'{matched_e2}' ({e2_kind}) not a permitted pair type"
+            )
+            continue
+        # Valid new pair - add to raw pairs for standard assessment
+        new_pairs.append(
+            (matched_e1, matched_e2, [confirmed.relationship], validated_quotes)
         )
-    # Emit combined diagnostic message if there were resolution issues
+        deps.logger.debug(
+            f"{diagnostic_prefix} discovered new pair: {matched_e1} <-> {matched_e2}"
+        )
+    # Log resolution issues if any
     if resolution_issues:
-        count = len(resolution_issues)
-        header = f"{diagnostic_prefix} produced {count} unresolvable pair{'s' if count != 1 else ''}:"
-        footer = f"Expected entities: {', '.join(sorted(all_entity_names))}"
-        deps.logger.warning("\n".join([header, *resolution_issues, footer]))
-    return assessments
+        deps.logger.debug(
+            f"{diagnostic_prefix} skipped {len(resolution_issues)} pairs:\n"
+            + "\n".join(resolution_issues)
+        )
+    return (assessments, new_pairs)
 
 
 # =============================================================================

@@ -1015,7 +1015,7 @@ class TestAssessCoMentionRegionDiagnostics:
                 "TP53": entity_ref_tp53,
             }
 
-            await assess_co_mention_region(
+            assessments, new_pairs = await assess_co_mention_region(
                 region,
                 sample_resource,
                 topic="test topic",
@@ -1025,18 +1025,16 @@ class TestAssessCoMentionRegionDiagnostics:
                 validated_entities=validated_entities,
                 region_index=1,
             )
-
-            # Check that warning was logged with combined diagnostic
-            deps.logger.warning.assert_called_once()
-            warning_msg = deps.logger.warning.call_args[0][0]
-            assert "Region assessment 1" in warning_msg
-            assert "produced 1 unresolvable pair:" in warning_msg
-            assert "Pair #1:" in warning_msg
-            assert "UNKNOWN_GENE" in warning_msg
-            assert "(unknown!)" in warning_msg
-            assert "Expected entities:" in warning_msg
-            assert "BRCA1" in warning_msg
-            assert "TP53" in warning_msg
+            # No assessments or new pairs for unresolvable entities
+            assert len(assessments) == 0
+            assert len(new_pairs) == 0
+            # Check that debug was logged with diagnostic
+            deps.logger.debug.assert_called()
+            debug_msg = deps.logger.debug.call_args[0][0]
+            assert "Region assessment 1" in debug_msg
+            assert "Pair #1:" in debug_msg
+            assert "UNKNOWN_GENE" in debug_msg
+            assert "(unknown!)" in debug_msg
 
         finally:
             sweep_module.get_region_assessment_agent = original_getter
@@ -1102,7 +1100,7 @@ class TestAssessCoMentionRegionDiagnostics:
                 "TP53": entity_ref_tp53,
             }
 
-            await assess_co_mention_region(
+            assessments, new_pairs = await assess_co_mention_region(
                 region,
                 sample_resource,
                 topic="test topic",
@@ -1112,15 +1110,16 @@ class TestAssessCoMentionRegionDiagnostics:
                 validated_entities=validated_entities,
                 region_index=2,
             )
-
-            deps.logger.warning.assert_called_once()
-            warning_msg = deps.logger.warning.call_args[0][0]
-            assert "Region assessment 2" in warning_msg
-            assert "produced 1 unresolvable pair:" in warning_msg
-            assert "Pair #1:" in warning_msg
-            assert "UNKNOWN_GENE" in warning_msg
-            assert "(unknown!)" in warning_msg
-            assert "Expected entities:" in warning_msg
+            # No assessments or new pairs for unresolvable entities
+            assert len(assessments) == 0
+            assert len(new_pairs) == 0
+            # Check that debug was logged with diagnostic
+            deps.logger.debug.assert_called()
+            debug_msg = deps.logger.debug.call_args[0][0]
+            assert "Region assessment 2" in debug_msg
+            assert "Pair #1:" in debug_msg
+            assert "UNKNOWN_GENE" in debug_msg
+            assert "(unknown!)" in debug_msg
 
         finally:
             sweep_module.get_region_assessment_agent = original_getter
@@ -1197,7 +1196,7 @@ class TestAssessCoMentionRegionDiagnostics:
                 "breast cancer": entity_ref_breast_cancer,
             }
 
-            await assess_co_mention_region(
+            assessments, new_pairs = await assess_co_mention_region(
                 region,
                 sample_resource,
                 topic="test topic",
@@ -1207,19 +1206,20 @@ class TestAssessCoMentionRegionDiagnostics:
                 validated_entities=validated_entities,
                 region_index=3,
             )
-
-            deps.logger.warning.assert_called_once()
-            warning_msg = deps.logger.warning.call_args[0][0]
-            assert "Region assessment 3" in warning_msg
-            assert "produced 1 unresolvable pair:" in warning_msg
-            assert "Pair #1:" in warning_msg
-            assert "is not an expected combination" in warning_msg
-            assert "TP53" in warning_msg
-            assert "breast cancer" in warning_msg
-            assert "could be associated with:" in warning_msg
-            # Should mention the valid pairs involving TP53 and breast cancer
-            assert "BRCA1" in warning_msg  # Both TP53 and breast cancer pair with BRCA1
-            assert "Expected entities:" in warning_msg
+            # No assessments for unexpected pair without discovery enabled
+            # (permitted_pairs not provided)
+            # The pair resolves but fails quote validation (mock quote doesn't match text)
+            assert len(assessments) == 0
+            assert len(new_pairs) == 0
+            # Check that debug was logged (either for quote rejection or skipped pairs)
+            deps.logger.debug.assert_called()
+            debug_msg = deps.logger.debug.call_args[0][0]
+            assert "Region assessment 3" in debug_msg
+            # The pair is rejected due to quote validation failure
+            assert (
+                "rejected: no valid quotes" in debug_msg
+                or "not in candidate list" in debug_msg
+            )
 
         finally:
             sweep_module.get_region_assessment_agent = original_getter
@@ -1315,7 +1315,7 @@ class TestAssessCoMentionRegionDiagnostics:
                 "breast cancer": entity_ref_breast_cancer,
             }
 
-            await assess_co_mention_region(
+            assessments, new_pairs = await assess_co_mention_region(
                 region,
                 sample_resource,
                 topic="test topic",
@@ -1325,32 +1325,25 @@ class TestAssessCoMentionRegionDiagnostics:
                 region_index=4,
                 validated_entities=validated_entities,
             )
-
-            # Check that a single warning was logged with all issues
-            deps.logger.warning.assert_called_once()
-            warning_msg = deps.logger.warning.call_args[0][0]
-
-            # Check header
-            assert "Region assessment 4" in warning_msg
-            assert "produced 3 unresolvable pairs:" in warning_msg
-
-            # Check all three issues are present
-            assert "Pair #1:" in warning_msg
-            assert "UNKNOWN1" in warning_msg
-            assert "(unknown!)" in warning_msg
-
-            assert "Pair #2:" in warning_msg
-            assert "UNKNOWN2" in warning_msg
-
-            assert "Pair #3:" in warning_msg
-            assert "is not an expected combination" in warning_msg
-            assert "could be associated with:" in warning_msg
-
-            # Check footer with expected entities
-            assert "Expected entities:" in warning_msg
-            assert "BRCA1" in warning_msg
-            assert "TP53" in warning_msg
-            assert "breast cancer" in warning_msg
+            # No assessments or new pairs for all problematic pairs
+            assert len(assessments) == 0
+            assert len(new_pairs) == 0
+            # Check that debug was logged - pair #3 fails quote validation separately
+            # from the entity resolution issues for pairs #1 and #2
+            deps.logger.debug.assert_called()
+            # Get all debug messages
+            debug_calls = [call[0][0] for call in deps.logger.debug.call_args_list]
+            combined_debug = "\n".join(debug_calls)
+            assert "Region assessment 4" in combined_debug
+            # Pairs #1 and #2 fail entity resolution
+            assert "UNKNOWN1" in combined_debug
+            assert "(unknown!)" in combined_debug
+            assert "UNKNOWN2" in combined_debug
+            # Pair #3 (TP53-breast cancer) fails quote validation
+            assert (
+                "rejected: no valid quotes" in combined_debug
+                or "skipped" in combined_debug
+            )
 
         finally:
             sweep_module.get_region_assessment_agent = original_getter
@@ -1430,7 +1423,7 @@ class TestAssessCoMentionRegionDiagnostics:
         sweep_module.get_region_assessment_agent = lambda _: mock_agent
 
         try:
-            assessments = await assess_co_mention_region(
+            assessments, new_pairs = await assess_co_mention_region(
                 region,
                 sample_resource,
                 topic="test topic",
@@ -1441,15 +1434,13 @@ class TestAssessCoMentionRegionDiagnostics:
                 region_index=1,
             )
 
-            # Should create assessment, not warning
+            # Should create assessment for known candidate pair
             assert len(assessments) == 1
+            assert len(new_pairs) == 0
             assert assessments[0].entity1.canonical == "TGFB1"
             assert assessments[0].entity2.canonical == "BRCA1"
             assert assessments[0].relationship == "interacts_with"
             assert assessments[0].source == "sweep"
-
-            # Should NOT have logged warning about unresolvable entities
-            deps.logger.warning.assert_not_called()
 
         finally:
             sweep_module.get_region_assessment_agent = original_getter
@@ -1537,7 +1528,7 @@ class TestAssessCoMentionRegionDiagnostics:
         sweep_module.get_region_assessment_agent = lambda _: mock_agent
 
         try:
-            assessments = await assess_co_mention_region(
+            assessments, new_pairs = await assess_co_mention_region(
                 region,
                 sample_resource,
                 topic="test topic",
@@ -1550,6 +1541,7 @@ class TestAssessCoMentionRegionDiagnostics:
 
             # Should create assessment via direct canonical match
             assert len(assessments) == 1
+            assert len(new_pairs) == 0
             assert assessments[0].entity1.canonical == "BMPR2"
             assert (
                 assessments[0].entity2.canonical
@@ -1558,8 +1550,211 @@ class TestAssessCoMentionRegionDiagnostics:
             assert assessments[0].relationship == "associated_with"
             assert assessments[0].source == "sweep"
 
-            # Should NOT have logged warning about unresolvable entities
-            deps.logger.warning.assert_not_called()
+        finally:
+            sweep_module.get_region_assessment_agent = original_getter
+
+    @pytest.mark.asyncio
+    async def test_new_pair_discovery_with_permitted_pairs(
+        self,
+        sample_resource,
+        entity_ref_brca1,
+        entity_ref_tp53,
+        entity_ref_breast_cancer,
+    ):
+        """New pairs are discovered when permitted_pairs is provided.
+
+        When the LLM returns a pair not in the candidate list, but the entities
+        exist in validated_entities and the pair kinds are permitted, the pair
+        should be added to new_pairs for standard assessment.
+        """
+        from unittest.mock import AsyncMock, MagicMock
+        from interaction_finder.extraction.sweep_co_mentions import (
+            assess_co_mention_region,
+            ConfirmedPair,
+            RegionAssessmentOut,
+        )
+        from interaction_finder.extraction.deps import Deps
+        from interaction_finder.settings import IfetcherConfig
+
+        # Create region with BRCA1-TP53 candidate pair
+        pair_key = make_entity_pair_key(entity_ref_brca1, entity_ref_tp53)
+        region = CoMentionRegion(
+            resource_id=sample_resource.id,
+            chunk_range=(0, 2),
+            candidate_pairs=[
+                CandidatePair(
+                    pair_key=pair_key, entity1_kind="gene", entity2_kind="gene"
+                )
+            ],
+        )
+
+        # LLM returns TP53-breast cancer (NOT a candidate, but entities exist)
+        mock_agent = MagicMock()
+        mock_result = MagicMock()
+        mock_result.output = RegionAssessmentOut(
+            confirmed_pairs=[
+                ConfirmedPair(
+                    entity1_name="TP53",
+                    entity2_name="breast cancer",
+                    relationship="associated_with",
+                    confidence="medium",
+                    # Use a quote that exists in sample_resource
+                    supporting_quotes=[
+                        "BRCA1 is a tumor suppressor gene associated with breast cancer"
+                    ],
+                    reasoning="Test",
+                )
+            ]
+        )
+        mock_agent.run = AsyncMock(return_value=mock_result)
+
+        config = IfetcherConfig()
+        deps = Deps(
+            config=config,
+            resource_pool=MagicMock(),
+            agent_semaphore=MagicMock(__aenter__=AsyncMock(), __aexit__=AsyncMock()),
+            progress=None,
+            logger=MagicMock(),
+        )
+
+        import interaction_finder.extraction.sweep_co_mentions as sweep_module
+
+        original_getter = sweep_module.get_region_assessment_agent
+        sweep_module.get_region_assessment_agent = lambda _: mock_agent
+
+        try:
+            validated_entities = {
+                "BRCA1": entity_ref_brca1,
+                "TP53": entity_ref_tp53,
+                "breast cancer": entity_ref_breast_cancer,
+            }
+            # Enable discovery by providing permitted_pairs
+            permitted_pairs = {
+                "gene": {"gene", "disease"},
+                "disease": {"gene"},
+            }
+
+            assessments, new_pairs = await assess_co_mention_region(
+                region,
+                sample_resource,
+                topic="test topic",
+                known_relationships=[],
+                config=config,
+                deps=deps,
+                validated_entities=validated_entities,
+                permitted_pairs=permitted_pairs,
+                region_index=1,
+            )
+
+            # No direct assessments (TP53-breast cancer wasn't a candidate)
+            assert len(assessments) == 0
+            # New pair should be discovered
+            assert len(new_pairs) == 1
+            e1, e2, rel_types, quotes = new_pairs[0]
+            assert e1 == "TP53"
+            assert e2 == "breast cancer"
+            assert "associated_with" in rel_types
+            assert len(quotes) == 1  # Validated quote
+
+        finally:
+            sweep_module.get_region_assessment_agent = original_getter
+
+    @pytest.mark.asyncio
+    async def test_new_pair_rejected_when_kinds_not_permitted(
+        self,
+        sample_resource,
+        entity_ref_brca1,
+        entity_ref_tp53,
+        entity_ref_breast_cancer,
+    ):
+        """New pairs are rejected when entity kinds are not permitted.
+
+        Even with discovery enabled, pairs must have permitted kind combinations.
+        """
+        from unittest.mock import AsyncMock, MagicMock
+        from interaction_finder.extraction.sweep_co_mentions import (
+            assess_co_mention_region,
+            ConfirmedPair,
+            RegionAssessmentOut,
+        )
+        from interaction_finder.extraction.deps import Deps
+        from interaction_finder.settings import IfetcherConfig
+
+        pair_key = make_entity_pair_key(entity_ref_brca1, entity_ref_tp53)
+        region = CoMentionRegion(
+            resource_id=sample_resource.id,
+            chunk_range=(0, 2),
+            candidate_pairs=[
+                CandidatePair(
+                    pair_key=pair_key, entity1_kind="gene", entity2_kind="gene"
+                )
+            ],
+        )
+
+        # LLM returns TP53-breast cancer
+        mock_agent = MagicMock()
+        mock_result = MagicMock()
+        mock_result.output = RegionAssessmentOut(
+            confirmed_pairs=[
+                ConfirmedPair(
+                    entity1_name="TP53",
+                    entity2_name="breast cancer",
+                    relationship="associated_with",
+                    confidence="medium",
+                    supporting_quotes=[
+                        "BRCA1 is a tumor suppressor gene associated with breast cancer"
+                    ],
+                    reasoning="Test",
+                )
+            ]
+        )
+        mock_agent.run = AsyncMock(return_value=mock_result)
+
+        config = IfetcherConfig()
+        deps = Deps(
+            config=config,
+            resource_pool=MagicMock(),
+            agent_semaphore=MagicMock(__aenter__=AsyncMock(), __aexit__=AsyncMock()),
+            progress=None,
+            logger=MagicMock(),
+        )
+
+        import interaction_finder.extraction.sweep_co_mentions as sweep_module
+
+        original_getter = sweep_module.get_region_assessment_agent
+        sweep_module.get_region_assessment_agent = lambda _: mock_agent
+
+        try:
+            validated_entities = {
+                "BRCA1": entity_ref_brca1,
+                "TP53": entity_ref_tp53,
+                "breast cancer": entity_ref_breast_cancer,
+            }
+            # Only gene-gene pairs permitted (no gene-disease)
+            permitted_pairs = {
+                "gene": {"gene"},  # disease NOT allowed
+            }
+
+            assessments, new_pairs = await assess_co_mention_region(
+                region,
+                sample_resource,
+                topic="test topic",
+                known_relationships=[],
+                config=config,
+                deps=deps,
+                validated_entities=validated_entities,
+                permitted_pairs=permitted_pairs,
+                region_index=1,
+            )
+
+            # No assessments or new pairs (kind not permitted)
+            assert len(assessments) == 0
+            assert len(new_pairs) == 0
+            # Check debug log mentions the rejected pair
+            deps.logger.debug.assert_called()
+            debug_calls = [call[0][0] for call in deps.logger.debug.call_args_list]
+            combined_debug = "\n".join(debug_calls)
+            assert "not a permitted pair type" in combined_debug
 
         finally:
             sweep_module.get_region_assessment_agent = original_getter

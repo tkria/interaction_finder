@@ -76,7 +76,7 @@ from interaction_finder.extraction.utils import (
     validate_document_citations,
 )
 from interaction_finder.logging import logfire
-from interaction_finder.resources import Resource
+from interaction_finder.resources import Resource, ResourceId
 
 # Characters for generating verification tokens (alphanumeric, mixed case)
 _TOKEN_CHARS = string.ascii_letters + string.digits
@@ -2330,6 +2330,8 @@ class SweepCoMentionsNode(BaseNode[State, Deps, ExtractionResult]):
 
             # Collect known relationship types for prompt context
             known_relationships = sorted(ctx.state.relationship_polarities.keys())
+            # Accumulate new pairs by resource for deduplication and batch assessment
+            new_pairs_by_resource: dict[ResourceId, list[tuple]] = defaultdict(list)
 
             # Step 7: Assess regions concurrently (with 1-based indexing for diagnostics)
             async def assess_region(region_index: int, region: CoMentionRegion):
@@ -2338,11 +2340,11 @@ class SweepCoMentionsNode(BaseNode[State, Deps, ExtractionResult]):
                 try:
                     resource = ctx.deps.resource_pool.get(region.resource_id)
                     if resource is None:
-                        return (region, [])
+                        return (region, [], [])
                     validated_entities = ctx.state.validated_entities_by_resource.get(
                         region.resource_id, {}
                     )
-                    assessments = await assess_co_mention_region(
+                    assessments, new_pairs = await assess_co_mention_region(
                         region,
                         resource,
                         topic=ctx.state.topic,
@@ -2351,8 +2353,9 @@ class SweepCoMentionsNode(BaseNode[State, Deps, ExtractionResult]):
                         deps=ctx.deps,
                         region_index=region_index,
                         validated_entities=validated_entities,
+                        permitted_pairs=ctx.state.permitted_pairs,
                     )
-                    return (region, assessments)
+                    return (region, assessments, new_pairs)
                 finally:
                     # Mark region as done (moves from in-progress to completed)
                     ctx.deps.progress["Regions"].done()
@@ -2362,13 +2365,14 @@ class SweepCoMentionsNode(BaseNode[State, Deps, ExtractionResult]):
                 for idx, r in enumerate(regions)
             ]
             for coro in asyncio.as_completed(tasks):
-                region, assessments = await coro
+                region, assessments, new_pairs = await coro
                 # Update stats: count pairs assessed, not regions
                 stats.assessed += len(region.candidate_pairs)
                 stats.relationships_found += len(assessments)
                 stats.no_relationship_claim += len(region.candidate_pairs) - len(
                     assessments
                 )
+                stats.new_pairs_discovered += len(new_pairs)
                 ctx.deps.progress["Pairs added"].completed = stats.relationships_found
                 ctx.deps.progress["Pairs added"].total = stats.assessed
                 # Add assessments to state
@@ -2378,13 +2382,45 @@ class SweepCoMentionsNode(BaseNode[State, Deps, ExtractionResult]):
                     ctx.state.pair_assessments_by_resource[region.resource_id].append(
                         assessment
                     )
+                # Accumulate new pairs for later assessment
+                new_pairs_by_resource[region.resource_id].extend(new_pairs)
             # Mark sweep phase complete
             ctx.deps.progress["Regions"].complete()
             ctx.deps.progress["Pairs added"].complete()
             ctx.deps.logger.info(
                 f"Co-mention sweep assessed {stats.assessed} pairs in {stats.regions_created} regions, "
-                f"found {stats.relationships_found} relationships"
+                f"found {stats.relationships_found} relationships, "
+                f"discovered {stats.new_pairs_discovered} new pairs"
             )
+            # Step 8: Convert discovered pairs to assessments
+            # (already have validated quotes and relationships from sweep)
+            for resource_id, raw_pairs in new_pairs_by_resource.items():
+                entities = ctx.state.validated_entities_by_resource.get(resource_id, {})
+                for e1_name, e2_name, rel_types, quotes in raw_pairs:
+                    entity1, entity2 = entities.get(e1_name), entities.get(e2_name)
+                    if entity1 is None or entity2 is None:
+                        continue
+                    if resource_id not in ctx.state.pair_assessments_by_resource:
+                        ctx.state.pair_assessments_by_resource[resource_id] = []
+                    ctx.state.pair_assessments_by_resource[resource_id].append(
+                        PairAssessment(
+                            resource_id=resource_id,
+                            entity1=entity1,
+                            entity2=entity2,
+                            relationship=rel_types[0]
+                            if rel_types
+                            else "associated_with",
+                            quotes=quotes,
+                            confidence="medium",
+                            reasoning="Discovered during co-mention sweep",
+                            source="sweep",
+                        )
+                    )
+                    stats.new_pairs_assessed += 1
+            if stats.new_pairs_assessed > 0:
+                ctx.deps.logger.info(
+                    f"Added {stats.new_pairs_assessed} newly discovered pairs"
+                )
 
             ctx.state.co_mention_sweep_stats = stats
 
