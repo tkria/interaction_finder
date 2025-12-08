@@ -234,6 +234,10 @@ class ExtractionStageData(BaseModel):
         default_factory=list,
         description="Entity consolidation rules applied during extraction",
     )
+    relationship_oppositions: dict[str, list[str]] = Field(
+        default_factory=dict,
+        description="Mapping of relationships to their semantic opposites",
+    )
 
     @model_serializer(mode="wrap")
     def _serialize(self, serializer, info):

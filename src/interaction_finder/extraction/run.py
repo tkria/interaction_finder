@@ -145,5 +145,9 @@ async def run_extraction(
                 judgments=result.output.judgments,
                 metadata=result.output.metadata,
                 consolidation_rules=result.output.consolidation_rules,
+                relationship_oppositions={
+                    k: list(v)
+                    for k, v in result.output.relationship_oppositions.items()
+                },
             ),
         )

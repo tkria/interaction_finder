@@ -2732,6 +2732,7 @@ class FinalizeNode(BaseNode[State, Deps, ExtractionResult]):
                 consolidation_rules=_convert_consolidation_rules(
                     ctx.state.consolidation_rules
                 ),
+                relationship_oppositions=ctx.state.relationship_oppositions,
             )
 
             return End(result)

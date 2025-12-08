@@ -54,25 +54,48 @@ def _iter_assessments_with_polarity(judgment):
             yield assessment, polarity
 
 
-def _build_pair_entry(judgment, resource_pool) -> dict[str, Any]:
-    """Convert a PairJudgment into the lightweight dict used by the report."""
+def _has_opposing_relationships(
+    assessments_data: list[dict[str, Any]],
+    opposition_map: dict[str, set[str]],
+) -> bool:
+    """Check if any assessments have opposing relationships.
 
+    Args:
+        assessments_data: List of assessment dicts with "relationship" keys
+        opposition_map: Mapping of relationships to their semantic opposites
+
+    Returns:
+        True if any pair of relationships are opposed
+    """
+    if not opposition_map or len(assessments_data) < 2:
+        return False
+    from itertools import combinations
+    from interaction_finder.extraction.utils import are_relationships_opposed
+
+    relationships = [a["relationship"] for a in assessments_data]
+    return any(
+        are_relationships_opposed(rel1, rel2, opposition_map)
+        for rel1, rel2 in combinations(relationships, 2)
+    )
+
+
+def _build_pair_entry(
+    judgment, resource_pool, opposition_map: dict[str, set[str]]
+) -> dict[str, Any]:
+    """Convert a PairJudgment into the lightweight dict used by the report."""
     doc_ids: set[str] = set()
     total_quotes = 0
     polarity_counts = {polarity: 0 for polarity in POLARITY_ORDER}
     polarity_best_conf = {polarity: None for polarity in POLARITY_ORDER}
     assessments: list[dict[str, Any]] = []
-
     for assessment, polarity in _iter_assessments_with_polarity(judgment):
         doc_ids.add(assessment.resource_id.id)
         total_quotes += len(assessment.quotes)
         polarity_counts[polarity] += 1
         confidence = assessment.confidence
-
         resource = resource_pool.get(assessment.resource_id)
         if resource is None:
             continue
-
         quote_data = [
             {
                 "text": quote.query_text,
@@ -81,7 +104,6 @@ def _build_pair_entry(judgment, resource_pool) -> dict[str, Any]:
             }
             for quote in assessment.quotes
         ]
-
         assessments.append(
             {
                 "resource_id": assessment.resource_id.id,
@@ -94,14 +116,12 @@ def _build_pair_entry(judgment, resource_pool) -> dict[str, Any]:
                 "polarity": polarity,
             }
         )
-
         if confidence:
             current = polarity_best_conf[polarity]
             current_rank = CONFIDENCE_ORDER.get(current, -1) if current else -1
             new_rank = CONFIDENCE_ORDER.get(confidence, -1)
             if new_rank > current_rank:
                 polarity_best_conf[polarity] = confidence
-
     return {
         "entity1": {
             "name": judgment.entity1.name,
@@ -128,9 +148,7 @@ def _build_pair_entry(judgment, resource_pool) -> dict[str, Any]:
             }
             for polarity in POLARITY_ORDER
         },
-        "contentious": bool(
-            polarity_counts["positive"] and polarity_counts["negative"]
-        ),
+        "contentious": _has_opposing_relationships(assessments, opposition_map),
     }
 
 
@@ -257,10 +275,15 @@ def prepare_report_data(
         else checkpoint.extraction.judgments
     )
 
+    # Build opposition map from checkpoint (convert list values to sets)
+    opposition_map: dict[str, set[str]] = {
+        k: set(v) for k, v in checkpoint.extraction.relationship_oppositions.items()
+    }
+
     pair_entries: list[tuple[tuple[str, str], Any, dict[str, Any]]] = []
     for judgment in judgments:
         key = _pair_key(judgment.entity1.name, judgment.entity2.name)
-        pair_data = _build_pair_entry(judgment, checkpoint.resources)
+        pair_data = _build_pair_entry(judgment, checkpoint.resources, opposition_map)
         pair_entries.append((key, judgment, pair_data))
 
     pairs = [entry[2] for entry in pair_entries]
