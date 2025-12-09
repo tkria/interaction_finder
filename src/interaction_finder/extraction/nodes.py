@@ -28,8 +28,8 @@ from pydantic_graph import BaseNode, End, GraphRunContext
 from interaction_finder.agent_utils import rename_agent
 from interaction_finder.extraction.deps import Deps
 from interaction_finder.extraction.document_pipeline import (
+    analyze_document,
     assess_document_pairs,
-    extract_document_entities,
     extract_document_pairs,
     validate_entity_kinds,
 )
@@ -218,6 +218,10 @@ async def _save_partial_checkpoint(
             permitted_pairs={k: list(v) for k, v in ctx.state.permitted_pairs.items()},
             judgments=[],
             consolidated=ctx.state.consolidated,
+            paper_quality={
+                rid.url: assessment
+                for rid, assessment in ctx.state.paper_quality.items()
+            },
             metadata=ExtractionMetadata(
                 topic=ctx.state.topic,
                 resource_count=len(ctx.deps.resource_pool.resources),
@@ -328,24 +332,27 @@ class ProcessDocumentsNode(BaseNode[State, Deps, ExtractionResult]):
             url=resource.id.url,
         ):
             try:
-                # Stage 1: Extract entities with quote validation
-                # Note: .work() is called inside extract_document_entities after semaphore acquisition
+                # Stage 1: Analyze document (quality assessment + entity extraction)
+                # Combined into single LLM call - quality assessed first, then entities
+                # Note: .work() is called inside analyze_document after semaphore acquisition
                 (
                     entities,
+                    quality_assessment,
                     quotes_validated,
                     quotes_failed,
-                ) = await extract_document_entities(
+                ) = await analyze_document(
                     resource,
                     ctx.state.topic,
                     ctx.state.target_entity_types,
                     ctx.deps.config,
                     ctx.deps,
                 )
-
+                # Store paper quality assessment (even if entity extraction found nothing)
+                if quality_assessment is not None:
+                    ctx.state.paper_quality[resource.id] = quality_assessment
                 # Update quote counters
                 ctx.state.quotes_validated += quotes_validated
                 ctx.state.quotes_failed += quotes_failed
-
                 if not entities:
                     return  # No entities found in this document
 
@@ -2848,6 +2855,11 @@ class FinalizeNode(BaseNode[State, Deps, ExtractionResult]):
             )
             # Finalize consolidated data: set final counts and categorize merges
             self._finalize_consolidated(ctx)
+            # Convert paper_quality keys from ResourceId to URL strings
+            paper_quality_by_url = {
+                rid.url: assessment
+                for rid, assessment in ctx.state.paper_quality.items()
+            }
             result = ExtractionResult(
                 topic=ctx.state.topic,
                 target_entity_types=ctx.state.target_entity_types,
@@ -2859,6 +2871,7 @@ class FinalizeNode(BaseNode[State, Deps, ExtractionResult]):
                 metadata=metadata,
                 consolidated=ctx.state.consolidated,
                 entities=ctx.state.global_entities,
+                paper_quality=paper_quality_by_url,
             )
 
             return End(result)

@@ -190,9 +190,31 @@ class EntityInfo(BaseModel):
 
 
 class EntityExtractionOut(BaseModel):
-    """LLM output: all entities found in document."""
+    """LLM output: all entities found in document (legacy, use DocumentAnalysisOut)."""
 
     entities: list[EntityInfo] = Field(description="Entities found in document")
+
+
+class DocumentAnalysisOut(BaseModel):
+    """Combined paper quality assessment and entity extraction.
+
+    Field order is intentional: quality assessment comes first to ensure
+    the model evaluates the paper holistically before extracting entities.
+    This provides context for extraction and catches low-quality papers early.
+
+    The quality assessment acts as a "reading comprehension" pass, forcing
+    the model to engage with methodology, data, and claims before identifying
+    entities relevant to the research topic.
+    """
+
+    # === Quality assessment (first: establishes paper understanding) ===
+    paper_quality: "PaperQualityAssessment" = Field(
+        description="Assessment of paper quality using seven-dimension rubric (complete this BEFORE extracting entities)"
+    )
+    # === Entity extraction (last: informed by quality assessment) ===
+    entities: list[EntityInfo] = Field(
+        description="Entities found in document (may be empty if paper has no relevant entities)"
+    )
 
 
 class EntityConsolidationDecision(BaseModel):
@@ -283,6 +305,102 @@ class ClusterDecisions(BaseModel):
     """LLM output: batch of cluster quality judgments."""
 
     decisions: list[ClusterDecision] = Field(description="Decision for each cluster")
+
+
+# =============================================================================
+# Paper quality assessment models
+# =============================================================================
+
+
+class QualityDimensionScore(BaseModel):
+    """Score and justification for a single paper quality dimension.
+
+    Each dimension is scored 0-3 with specific anchors defined in the
+    field descriptions of PaperQualityAssessment.
+    """
+
+    score: Literal[0, 1, 2, 3]
+    justification: str = Field(
+        min_length=10,
+        description="Brief explanation supporting this score",
+    )
+
+
+class PaperQualityAssessment(BaseModel):
+    """LLM assessment of scientific paper quality for screening.
+
+    Seven-dimension rubric based on metascience findings about what reliably
+    distinguishes credible from unreliable research. Each dimension scored 0-3,
+    yielding overall score 0-21.
+
+    Interpretation:
+        0-6:   EXCLUDE - serious methodological opacity, inconsistency, or misconduct indicators
+        7-12:  CAUTION - usable with care; methods/data incomplete; claims may be overstated
+        13-17: ACCEPTABLE - reasonably described, coherent, methodologically sound
+        18-21: HIGH TRUST - strong rigour, transparency, and methodological completeness
+    """
+
+    method_clarity: QualityDimensionScore = Field(
+        description="""Methodological clarity and completeness.
+        Does the paper describe its methods in enough detail to understand or reproduce the study?
+        0: Methods vague, missing, or implausible; key steps omitted
+        1: Methods described superficially; major gaps; cannot follow workflow
+        2: Mostly clear methods with some missing specifics (parameters, versions, QC)
+        3: Detailed, coherent, reproducible description of all major steps"""
+    )
+    data_provenance: QualityDimensionScore = Field(
+        description="""Data provenance and quality transparency.
+        Are data sources, samples, and QC processes described clearly and plausibly?
+        0: Data source unclear or contradictory; no samples/QC described
+        1: Basic data information present but major missing details (selection criteria, QC)
+        2: Adequate provenance with minor omissions; QC described briefly
+        3: High-quality provenance: source, selection, processing, QC all explicit"""
+    )
+    statistical_rigour: QualityDimensionScore = Field(
+        description="""Statistical and analytical rigour.
+        Does the paper use appropriate statistics, uncertainty measures, and validation?
+        0: No statistical methods; no uncertainty; inappropriate or missing analyses
+        1: Some statistical terms used but incomplete/incorrect; no multiplicity correction
+        2: Reasonable statistical analysis; uncertainty reported; some weaknesses
+        3: Strong statistical practice with appropriate tests, uncertainty, validation, correction"""
+    )
+    internal_consistency: QualityDimensionScore = Field(
+        description="""Internal consistency and logical coherence.
+        Do the methods, results, and claims align without contradictions?
+        0: Clear contradictions (sample counts change; results contradict methods; impossible values)
+        1: Several inconsistencies or unclear relationships between methods and conclusions
+        2: Logical structure overall with minor discrepancies
+        3: Fully consistent and coherent narrative"""
+    )
+    plausibility: QualityDimensionScore = Field(
+        description="""Plausibility and claim moderation.
+        Are claims proportional to evidence, and are effect sizes plausible?
+        0: Implausible or exaggerated claims ("perfect accuracy", "complete validation")
+        1: Some overstated conclusions or causal language unsupported by evidence
+        2: Mostly appropriate claims with occasional overreach
+        3: Claims are cautious, evidence-based, and appropriately qualified"""
+    )
+    reproducibility_signals: QualityDimensionScore = Field(
+        description="""Reproducibility signals.
+        Does the paper provide artefacts or descriptions supporting independent verification?
+        0: No code, data, supplement, or versioning information
+        1: Mentions data or code vaguely but provides no real access or detail
+        2: Some reproducibility material (partial code, supplement), though incomplete
+        3: Strong reproducibility support: code, data, parameters, pipelines clearly available"""
+    )
+    integrity_indicators: QualityDimensionScore = Field(
+        description="""Indicators of misleading practices or low integrity.
+        Does the paper show symptoms associated with fraudulent, predatory, or weak work?
+        0: Strong indicators (contradictory data, impossible results, boilerplate, irrelevant citations)
+        1: Some suspicious patterns but not definitive
+        2: No obvious integrity concerns; normal scientific structure
+        3: Paper demonstrates care, transparency, and integrity; no red flags"""
+    )
+
+    @property
+    def overall_score(self) -> int:
+        """Sum of all dimension scores (0-21)."""
+        return sum(getattr(self, f).score for f in type(self).model_fields)
 
 
 class RelationshipConsolidation(BaseModel):
@@ -729,6 +847,10 @@ class ExtractionResult(BaseModel):
     entities: dict[str, EntityRef] = Field(
         default_factory=dict,
         description="Global entity index with aggregated mentions from all resources",
+    )
+    paper_quality: dict[str, PaperQualityAssessment] = Field(
+        default_factory=dict,
+        description="Paper quality assessments keyed by resource URL",
     )
 
     @model_serializer(mode="wrap")

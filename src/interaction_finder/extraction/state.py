@@ -31,6 +31,7 @@ from interaction_finder.extraction.models import (
     EntityRef,
     PairAssessment,
     PairJudgment,
+    PaperQualityAssessment,
     ProximalEntitySet,
 )
 from interaction_finder.resources import ResourceId
@@ -46,6 +47,7 @@ _SERIALIZATION_REGISTRY: dict[str, tuple[str, type | None]] = {
     "pair_judgments": ("pair_key", PairJudgment),
     "agent_merge_cache": ("tuple_key", None),
     "consolidated": ("pydantic_model", ConsolidatedData),
+    "paper_quality": ("by_resource", PaperQualityAssessment),
 }
 
 
@@ -161,6 +163,12 @@ class State:
     # === Stage 6: Cross-Document Judgment ===
     # Final judgments for each unique entity pair across all documents
     pair_judgments: dict[EntityPairKey, PairJudgment] = field(default_factory=dict)
+
+    # === Paper Quality Assessment (populated during entity extraction) ===
+    # Quality assessment for each processed resource, keyed by ResourceId
+    paper_quality: dict[ResourceId, PaperQualityAssessment] = field(
+        default_factory=dict
+    )
 
     # === Metrics (populated throughout) ===
     quotes_validated: int = 0

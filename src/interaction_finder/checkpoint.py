@@ -23,6 +23,7 @@ if TYPE_CHECKING:
         EntityRef,
         ExtractionMetadata,
         PairJudgment,
+        PaperQualityAssessment,
     )
 
 
@@ -241,6 +242,10 @@ class ExtractionStageData(BaseModel):
         default_factory=_get_consolidated_data_default,
         description="Unified consolidation provenance for entities and relationships",
     )
+    paper_quality: dict[str, "PaperQualityAssessment"] = Field(
+        default_factory=dict,
+        description="Paper quality assessments keyed by resource URL",
+    )
 
     @model_serializer(mode="wrap")
     def _serialize(self, serializer, info):
@@ -363,6 +368,7 @@ def _rebuild_models():
         EntityRef,
         ExtractionMetadata,
         PairJudgment,
+        PaperQualityAssessment,
     )
 
     ExtractionStageData.model_rebuild()

@@ -1,8 +1,8 @@
 """Per-document processing pipeline functions.
 
 Pure functions for processing a single document through the extraction pipeline:
-entity extraction → validation → proximal set identification → pair extraction →
-pair assessment.
+document analysis (quality + entities) → validation → proximal set identification →
+pair extraction → pair assessment.
 
 These functions are extracted from the original node implementations to enable
 concurrent per-document processing while maintaining clean separation of concerns.
@@ -14,7 +14,7 @@ from pydantic_ai.usage import RunUsage
 
 from interaction_finder.agent_utils import rename_agent
 from interaction_finder.extraction.deps import Deps
-from interaction_finder.extraction.extract import get_entity_extractor_agent
+from interaction_finder.extraction.extract import get_document_analysis_agent
 from interaction_finder.extraction.extract_proximal_pairs import get_proximal_pair_agent
 from interaction_finder.extraction.judge_pair_evidence import get_pair_judge_agent
 from interaction_finder.extraction.models import (
@@ -22,6 +22,7 @@ from interaction_finder.extraction.models import (
     EntityPairKey,
     EntityRef,
     PairAssessment,
+    PaperQualityAssessment,
     ProximalEntitySet,
 )
 from interaction_finder.extraction.entity_matching import (
@@ -40,136 +41,104 @@ from interaction_finder.resources import QuoteValidationError, Resource
 from interaction_finder.settings import IfetcherConfig
 
 
-# Entity extraction and validation
+# Document analysis (combined quality assessment + entity extraction)
 
 
-async def extract_document_entities(
+def _process_entity_extractions(
+    entity_infos: list,
+    resource: Resource,
+) -> tuple[dict[str, EntityMention], int, int]:
+    """Convert LLM entity output to validated EntityMentions.
+
+    Groups entities by normalized name (to merge case variants like "PAH"/"pah"),
+    validates quotes against the source document, and returns the processed entities.
+
+    Returns:
+        (entities_dict, quotes_validated, quotes_failed)
+    """
+    # Group by normalized name to merge case variants
+    by_normalized: dict[str, list] = {}
+    for info in entity_infos:
+        key = normalize_for_comparison(strip_kind_annotation(info.name))
+        by_normalized.setdefault(key, []).append(info)
+    # Convert each group to EntityMention with validated quotes
+    entities = {}
+    validated, failed = 0, 0
+    for infos in by_normalized.values():
+        # Validate quotes from all instances
+        quotes = []
+        for info in infos:
+            for q in info.quotes:
+                try:
+                    quotes.append(resource.quote(q))
+                    validated += 1
+                except QuoteValidationError:
+                    failed += 1
+        if not quotes:
+            continue  # Skip entities with no valid quotes
+        # Use first entity's name (preserves original casing)
+        canonical = strip_kind_annotation(infos[0].name)
+        # Collect unique aliases
+        seen = {normalize_for_comparison(canonical)}
+        aliases = []
+        for info in infos:
+            for name in [strip_kind_annotation(info.name)] + info.aliases:
+                norm = normalize_for_comparison(name)
+                if norm not in seen and name != canonical:
+                    aliases.append(name)
+                    seen.add(norm)
+        entities[canonical] = EntityMention(
+            kind=infos[0].kind,
+            name=canonical,
+            aliases=aliases,
+            quotes=quotes,
+            reasoning=" | ".join(i.reasoning for i in infos),
+        )
+    return entities, validated, failed
+
+
+async def analyze_document(
     resource: Resource,
     topic: str,
     target_entity_types: list[str],
     config: IfetcherConfig,
     deps: Deps,
-) -> tuple[dict[str, EntityMention], int, int]:
-    """Extract entities from a single document with quote validation.
+) -> tuple[dict[str, EntityMention], PaperQualityAssessment | None, int, int]:
+    """Analyze a document: assess quality and extract entities in a single pass.
 
-    Parameters:
-        resource: Document to process
-        topic: Research topic context
-        target_entity_types: Entity kinds to extract (e.g., ["gene", "disease"])
-        config: Configuration for LLM agents
-        deps: Pipeline dependencies (logger, etc.)
-
-    Returns:
-        (entities, quotes_validated, quotes_failed) where:
-        - entities: Dict of {canonical_name: EntityMention} with validated quotes
-        - quotes_validated: Count of successfully validated quotes
-        - quotes_failed: Count of quotes that failed validation
+    Returns (entities, paper_quality, quotes_validated, quotes_failed).
     """
-    usage = RunUsage()
-    # Build extraction prompt
-    entity_types_str = ", ".join(target_entity_types)
     document_text = adjust_heading_levels(resource.text[:15000], target_min_level=2)
-    prompt = f"""# Context
-Extract entities relevant to: {topic}
-
-**Target entity types:** {entity_types_str}
-
-# Document Extract
+    prompt = f"""# Document
 **Title:** {resource.title}
 
 {document_text}
 
-# Output
+# Task
+1. First, assess paper quality using the seven-dimension rubric
+2. Then, extract entities relevant to: {topic}
+
+**Target entity types:** {", ".join(target_entity_types)}
+
 For each entity of the specified types relevant to the topic, provide:
 - Canonical name
 - All verbatim name variants from text
 - Supporting quotes
 - Reasoning for inclusion"""
-
-    # Call entity extractor LLM agent
-    agent = get_entity_extractor_agent(config)
+    agent = get_document_analysis_agent(config)
     try:
-        with rename_agent(
-            agent, name=f"ExtractDocumentEntities: {resource.title[:60]}"
-        ):
+        with rename_agent(agent, name=f"AnalyzeDocument: {resource.title[:60]}"):
             async with deps.agent_semaphore:
-                # Mark document as in-progress now that we've acquired the semaphore
                 if deps.progress:
                     deps.progress["Processed"].work()
-                result = await agent.run(prompt, deps=deps, usage=usage)
+                result = await agent.run(prompt, deps=deps, usage=RunUsage())
     except (TimeoutError, ConnectionError, ValueError) as e:
-        deps.logger.error(
-            f"Entity extraction failed for {resource.id.url}: {type(e).__name__}: {e}"
-        )
-        return ({}, 0, 0)
-
-    # Convert LLM output to EntityMention objects with validated ResourceQuotes
-    # Group by normalized name to merge case variants (e.g., "PAH" and "pah")
-    entities_by_normalized_name: dict[str, list] = {}
-    for entity_info in result.output.entities:
-        # Normalize: strip kind annotation, then apply text normalization
-        normalized_name = normalize_for_comparison(
-            strip_kind_annotation(entity_info.name)
-        )
-        if normalized_name not in entities_by_normalized_name:
-            entities_by_normalized_name[normalized_name] = []
-        entities_by_normalized_name[normalized_name].append(entity_info)
-
-    # Convert and merge each normalized entity group
-    entities_dict = {}
-    quotes_validated = 0
-    quotes_failed = 0
-
-    for normalized_name, entity_infos in entities_by_normalized_name.items():
-        # Validate all quotes from all instances of this entity
-        all_quotes = []
-        for entity_info in entity_infos:
-            for quote_str in entity_info.quotes:
-                try:
-                    quote = resource.quote(quote_str)
-                    all_quotes.append(quote)
-                    quotes_validated += 1
-                except QuoteValidationError:
-                    quotes_failed += 1
-
-        if all_quotes:  # Only store entity if we have at least one valid quote
-            # Use first entity's name (after stripping kind) as canonical name
-            # This preserves original casing (e.g., "BRCA1" not "brca1")
-            canonical_name = strip_kind_annotation(entity_infos[0].name)
-
-            # Collect all alternative names as aliases
-            all_aliases = []
-            seen_aliases_normalized = set()
-            for entity_info in entity_infos:
-                # Add original name as alias if it differs from canonical
-                stripped_name = strip_kind_annotation(entity_info.name)
-                if stripped_name != canonical_name:
-                    name_normalized = normalize_for_comparison(stripped_name)
-                    if name_normalized not in seen_aliases_normalized:
-                        all_aliases.append(stripped_name)
-                        seen_aliases_normalized.add(name_normalized)
-                # Add all aliases from this entity
-                for alias in entity_info.aliases:
-                    alias_normalized = normalize_for_comparison(alias)
-                    if alias_normalized not in seen_aliases_normalized:
-                        all_aliases.append(alias)
-                        seen_aliases_normalized.add(alias_normalized)
-
-            # Merge reasoning from all instances
-            merged_reasoning = " | ".join(
-                entity_info.reasoning for entity_info in entity_infos
-            )
-
-            # Store entity with canonical name
-            entities_dict[canonical_name] = EntityMention(
-                kind=entity_infos[0].kind,
-                name=canonical_name,
-                aliases=all_aliases,
-                quotes=all_quotes,
-                reasoning=merged_reasoning,
-            )
-
-    return (entities_dict, quotes_validated, quotes_failed)
+        deps.logger.error(f"Document analysis failed for {resource.id.url}: {e}")
+        return {}, None, 0, 0
+    entities, validated, failed = _process_entity_extractions(
+        result.output.entities, resource
+    )
+    return entities, result.output.paper_quality, validated, failed
 
 
 def validate_entity_kinds(

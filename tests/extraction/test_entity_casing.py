@@ -12,10 +12,29 @@ import pytest
 from pydantic_ai.usage import RunUsage
 from pydantic_graph import GraphRunContext
 
-from interaction_finder.extraction.document_pipeline import extract_document_entities
-from interaction_finder.extraction.models import EntityExtractionOut, EntityInfo
+from interaction_finder.extraction.document_pipeline import analyze_document
+from interaction_finder.extraction.models import (
+    DocumentAnalysisOut,
+    EntityInfo,
+    PaperQualityAssessment,
+    QualityDimensionScore,
+)
 from interaction_finder.extraction.utils import build_permitted_pairs
 from interaction_finder.resources import Resource, ResourceId, ResourcePool
+
+
+def _make_quality_assessment() -> PaperQualityAssessment:
+    """Create a default paper quality assessment for tests."""
+    dim = QualityDimensionScore(score=2, justification="Standard quality for testing.")
+    return PaperQualityAssessment(
+        method_clarity=dim,
+        data_provenance=dim,
+        statistical_rigour=dim,
+        internal_consistency=dim,
+        plausibility=dim,
+        reproducibility_signals=dim,
+        integrity_indicators=dim,
+    )
 
 
 def create_mock_agent_with_override(run_return_value):
@@ -51,7 +70,8 @@ class TestEntityCasing:
         """Entity names should preserve uppercase (e.g., BRCA1, not brca1)."""
         # Mock LLM response with uppercase gene name
         mock_result = MagicMock()
-        mock_result.output = EntityExtractionOut(
+        mock_result.output = DocumentAnalysisOut(
+            paper_quality=_make_quality_assessment(),
             entities=[
                 EntityInfo(
                     kind="gene",
@@ -60,19 +80,19 @@ class TestEntityCasing:
                     quotes=["BRCA1 is a tumor suppressor gene"],
                     reasoning="BRCA1 is a well-known breast cancer susceptibility gene",
                 )
-            ]
+            ],
         )
         mock_agent = create_mock_agent_with_override(mock_result)
 
         # Patch the agent getter
         import interaction_finder.extraction.document_pipeline as pipeline_module
 
-        original_getter = pipeline_module.get_entity_extractor_agent
-        pipeline_module.get_entity_extractor_agent = lambda config: mock_agent
+        original_getter = pipeline_module.get_document_analysis_agent
+        pipeline_module.get_document_analysis_agent = lambda config: mock_agent
 
         try:
             resource = list(mock_deps.resource_pool.resources)[0]
-            entities, _, _ = await extract_document_entities(
+            entities, quality, _, _ = await analyze_document(
                 resource,
                 "breast cancer genetics",
                 ["gene"],
@@ -91,15 +111,19 @@ class TestEntityCasing:
             assert entity.name == "BRCA1"
             assert entity.name != "brca1"
 
+            # Quality assessment should be returned
+            assert quality is not None
+
         finally:
-            pipeline_module.get_entity_extractor_agent = original_getter
+            pipeline_module.get_document_analysis_agent = original_getter
 
     @pytest.mark.asyncio
     async def test_preserves_mixed_case_disease_names(self, mock_deps):
         """Disease names with mixed case should be preserved."""
         # Mock LLM response
         mock_result = MagicMock()
-        mock_result.output = EntityExtractionOut(
+        mock_result.output = DocumentAnalysisOut(
+            paper_quality=_make_quality_assessment(),
             entities=[
                 EntityInfo(
                     kind="disease",
@@ -108,18 +132,18 @@ class TestEntityCasing:
                     quotes=["BRCA1 is a tumor suppressor gene"],  # Use valid quote
                     reasoning="Neurodegenerative disease",
                 )
-            ]
+            ],
         )
         mock_agent = create_mock_agent_with_override(mock_result)
 
         import interaction_finder.extraction.document_pipeline as pipeline_module
 
-        original_getter = pipeline_module.get_entity_extractor_agent
-        pipeline_module.get_entity_extractor_agent = lambda config: mock_agent
+        original_getter = pipeline_module.get_document_analysis_agent
+        pipeline_module.get_document_analysis_agent = lambda config: mock_agent
 
         try:
             resource = list(mock_deps.resource_pool.resources)[0]
-            entities, _, _ = await extract_document_entities(
+            entities, _, _, _ = await analyze_document(
                 resource,
                 "cardiovascular diseases",
                 ["disease"],
@@ -134,14 +158,15 @@ class TestEntityCasing:
             assert entity.name != "alzheimer's disease"
 
         finally:
-            pipeline_module.get_entity_extractor_agent = original_getter
+            pipeline_module.get_document_analysis_agent = original_getter
 
     @pytest.mark.asyncio
     async def test_groups_case_variants_by_normalization(self, mock_deps):
         """Entities differing only in case should be grouped together."""
         # Mock LLM response
         mock_result = MagicMock()
-        mock_result.output = EntityExtractionOut(
+        mock_result.output = DocumentAnalysisOut(
+            paper_quality=_make_quality_assessment(),
             entities=[
                 EntityInfo(
                     kind="gene",
@@ -164,18 +189,18 @@ class TestEntityCasing:
                     quotes=["BRCA1 is a tumor suppressor gene"],
                     reasoning="Third mention with mixed case variant",
                 ),
-            ]
+            ],
         )
         mock_agent = create_mock_agent_with_override(mock_result)
 
         import interaction_finder.extraction.document_pipeline as pipeline_module
 
-        original_getter = pipeline_module.get_entity_extractor_agent
-        pipeline_module.get_entity_extractor_agent = lambda config: mock_agent
+        original_getter = pipeline_module.get_document_analysis_agent
+        pipeline_module.get_document_analysis_agent = lambda config: mock_agent
 
         try:
             resource = list(mock_deps.resource_pool.resources)[0]
-            entities, _, _ = await extract_document_entities(
+            entities, _, _, _ = await analyze_document(
                 resource,
                 "genetics",
                 ["gene"],
@@ -200,14 +225,15 @@ class TestEntityCasing:
             assert "Third mention" in entity.reasoning
 
         finally:
-            pipeline_module.get_entity_extractor_agent = original_getter
+            pipeline_module.get_document_analysis_agent = original_getter
 
     @pytest.mark.asyncio
     async def test_preserves_casing_in_acronyms(self, mock_deps):
         """Acronyms should preserve their specific casing."""
         # Mock LLM response
         mock_result = MagicMock()
-        mock_result.output = EntityExtractionOut(
+        mock_result.output = DocumentAnalysisOut(
+            paper_quality=_make_quality_assessment(),
             entities=[
                 EntityInfo(
                     kind="disease",
@@ -216,18 +242,18 @@ class TestEntityCasing:
                     quotes=["BRCA1 is a tumor suppressor gene"],  # Use valid quote
                     reasoning="Pulmonary arterial hypertension acronym",
                 )
-            ]
+            ],
         )
         mock_agent = create_mock_agent_with_override(mock_result)
 
         import interaction_finder.extraction.document_pipeline as pipeline_module
 
-        original_getter = pipeline_module.get_entity_extractor_agent
-        pipeline_module.get_entity_extractor_agent = lambda config: mock_agent
+        original_getter = pipeline_module.get_document_analysis_agent
+        pipeline_module.get_document_analysis_agent = lambda config: mock_agent
 
         try:
             resource = list(mock_deps.resource_pool.resources)[0]
-            entities, _, _ = await extract_document_entities(
+            entities, _, _, _ = await analyze_document(
                 resource,
                 "hypertension",
                 ["disease"],
@@ -242,4 +268,4 @@ class TestEntityCasing:
             assert entity.name != "pah"
 
         finally:
-            pipeline_module.get_entity_extractor_agent = original_getter
+            pipeline_module.get_document_analysis_agent = original_getter

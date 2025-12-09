@@ -145,5 +145,6 @@ async def run_extraction(
                 judgments=result.output.judgments,
                 metadata=result.output.metadata,
                 consolidated=result.output.consolidated,
+                paper_quality=result.output.paper_quality,
             ),
         )
