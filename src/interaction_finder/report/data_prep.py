@@ -29,7 +29,6 @@ from interaction_finder.report.reasoning_renderer import (
 )
 
 POLARITY_ORDER = ("positive", "negative", "neutral", "irrelevant")
-CONFIDENCE_ORDER = {"high": 3, "medium": 2, "low": 1}
 
 
 def _quote_key_for_id(
@@ -100,13 +99,13 @@ def _build_pair_entry(
     doc_ids: set[str] = set()
     total_quotes = 0
     polarity_counts = {polarity: 0 for polarity in POLARITY_ORDER}
-    polarity_best_conf = {polarity: None for polarity in POLARITY_ORDER}
+    polarity_best_level = {polarity: 0 for polarity in POLARITY_ORDER}
     assessments: list[dict[str, Any]] = []
     for assessment, polarity in _iter_assessments_with_polarity(judgment):
         doc_ids.add(assessment.resource_id.id)
         total_quotes += len(assessment.quotes)
         polarity_counts[polarity] += 1
-        confidence = assessment.confidence
+        evidence = assessment.evidence
         resource = resource_pool.get(assessment.resource_id)
         if resource is None:
             continue
@@ -123,19 +122,18 @@ def _build_pair_entry(
                 "resource_id": assessment.resource_id.id,
                 "title": resource.title or "Untitled",
                 "url": resource.id.url,
-                "confidence": assessment.confidence,
+                "overall": evidence.overall,
+                "label": evidence.label,
                 "reasoning": assessment.reasoning,
                 "relationship": assessment.relationship,
                 "quotes": quote_data,
                 "polarity": polarity,
             }
         )
-        if confidence:
-            current = polarity_best_conf[polarity]
-            current_rank = CONFIDENCE_ORDER.get(current, -1) if current else -1
-            new_rank = CONFIDENCE_ORDER.get(confidence, -1)
-            if new_rank > current_rank:
-                polarity_best_conf[polarity] = confidence
+        if evidence.overall > polarity_best_level[polarity]:
+            polarity_best_level[polarity] = evidence.overall
+    # Get judgment-level evidence
+    evidence = judgment.evidence
     return {
         "entity1": {
             "name": judgment.entity1.name,
@@ -148,7 +146,8 @@ def _build_pair_entry(
             "aliases": judgment.entity2.aliases,
         },
         "relationship": judgment.relationship,
-        "confidence": judgment.confidence,
+        "overall": evidence.overall,
+        "label": evidence.label,
         "accepted": judgment.accepted,
         "reasoning": judgment.reasoning,
         "doc_count": len(doc_ids),
@@ -158,7 +157,7 @@ def _build_pair_entry(
         "polarity_summary": {
             polarity: {
                 "count": polarity_counts[polarity],
-                "confidence": polarity_best_conf[polarity],
+                "overall": polarity_best_level[polarity],
             }
             for polarity in POLARITY_ORDER
         },
@@ -298,17 +297,15 @@ def prepare_report_data(
 
     pairs = [entry[2] for entry in pair_entries]
 
-    # Sort pairs by: accepted status > confidence > doc count > lexicographic
-    confidence_order = {"high": 0, "medium": 1, "low": 2}
-
+    # Sort pairs by: accepted status > evidence level > doc count > lexicographic
     def pair_sort_key(pair):
         # Primary: accepted status (accepted first)
-        # Secondary: confidence level (high > medium > low)
+        # Secondary: evidence level (higher is better, so negate)
         # Tertiary: number of supporting documents (more is better, so negate)
         # Quaternary: entity names lexicographically
         return (
             not pair["accepted"],  # False (accepted) sorts before True (rejected)
-            confidence_order.get(pair["confidence"], 3),
+            -pair["overall"],  # Negate to sort descending (9 first)
             -pair["doc_count"],  # Negate to sort descending
             pair["entity1"]["name"].lower(),
             pair["entity2"]["name"].lower(),

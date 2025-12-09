@@ -20,6 +20,7 @@ from interaction_finder.extraction.models import (
 from interaction_finder.extraction.state import State
 from interaction_finder.resources import ResourceId, ResourcePool
 from interaction_finder.settings import IfetcherConfig
+from tests.extraction.conftest import make_evidence
 
 
 @pytest.fixture
@@ -96,7 +97,7 @@ def test_pair_assessments_see_entity_renames_via_shared_references(mock_deps):
         entity2=EntityRef(canonical=brca_entity.name, mentions=[brca_entity]),
         relationship="interacts_with",
         quotes=[],
-        confidence="high",
+        evidence=make_evidence(8),
         reasoning="Test",
     )
 
@@ -169,7 +170,7 @@ def test_pair_assessments_see_entity_merges_via_shared_references(mock_deps):
         entity2=EntityRef(canonical=brca_parent.name, mentions=[brca_parent]),
         relationship="self_reference",
         quotes=[],
-        confidence="high",
+        evidence=make_evidence(8),
         reasoning="Test",
     )
 

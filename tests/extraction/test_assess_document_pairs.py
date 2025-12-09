@@ -9,10 +9,22 @@ from interaction_finder.extraction.document_pipeline import assess_document_pair
 from interaction_finder.extraction.models import (
     EntityMention,
     EntityRef,
+    EvidenceQuality,
     PairEvidenceJudgment,
 )
 from interaction_finder.extraction.progress import create_extraction_progress
 from interaction_finder.resources import ResourcePool, ResourceQuote
+
+
+def make_evidence(level: int = 7) -> EvidenceQuality:
+    """Create a default EvidenceQuality for testing."""
+    return EvidenceQuality(
+        directness="explicit",
+        source_type="primary",
+        specificity="associative",
+        language="definitive",
+        overall=level,
+    )
 
 
 def make_entity_ref(name: str, kind: str) -> EntityRef:
@@ -100,7 +112,13 @@ class TestAssessDocumentPairsDeduplication:
         ]
         judgment = PairEvidenceJudgment(
             relationship="interacts_with",
-            confidence="high",
+            evidence=EvidenceQuality(
+                directness="explicit",
+                source_type="primary",
+                specificity="mechanistic",
+                language="definitive",
+                overall=8,
+            ),
             reasoning="Strong evidence of interaction between these genes.",
             supporting_quote_ids=[0],
         )
@@ -138,7 +156,7 @@ class TestAssessDocumentPairsDeduplication:
         ]
         judgment = PairEvidenceJudgment(
             relationship="associated_with",
-            confidence="medium",
+            evidence=make_evidence(6),
             reasoning="Evidence supports association between entities.",
             supporting_quote_ids=[0],
         )
@@ -181,7 +199,7 @@ class TestAssessDocumentPairsDeduplication:
             result = MagicMock()
             result.output = PairEvidenceJudgment(
                 relationship="interacts_with",
-                confidence="high",
+                evidence=make_evidence(8),
                 reasoning="Evidence supports interaction between these genes.",
                 supporting_quote_ids=[0],
             )
@@ -236,7 +254,7 @@ class TestAssessDocumentPairsProgress:
         initial_total = progress["Pairs assessed"].total
         judgment = PairEvidenceJudgment(
             relationship="associated_with",
-            confidence="medium",
+            evidence=make_evidence(6),
             reasoning="Evidence supports association between these entities.",
             supporting_quote_ids=[0],
         )

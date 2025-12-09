@@ -410,7 +410,7 @@ async def assess_single_pair(
         deps: Pipeline dependencies
 
     Returns:
-        PairAssessment with confidence and reasoning, or None on error
+        PairAssessment with evidence quality and reasoning, or None on error
     """
     usage = RunUsage()
 
@@ -444,7 +444,7 @@ Assess evidence for an entity association.
 
 # Output
 - Select the most appropriate relationship type (from candidates or propose a more specific one)
-- Assign a confidence level (high/medium/low)
+- Assess evidence quality factors and overall level
 - Explain your reasoning"""
 
     # Call pair judge LLM agent
@@ -482,7 +482,7 @@ Assess evidence for an entity association.
         entity2=entity2,
         relationship=result.output.relationship,
         quotes=referenced_quotes if referenced_quotes else quotes,
-        confidence=result.output.confidence,
+        evidence=result.output.evidence,
         reasoning=result.output.reasoning,
     )
 
@@ -510,7 +510,7 @@ async def assess_document_pairs(
         deps: Pipeline dependencies
 
     Returns:
-        List of PairAssessment objects with confidence and reasoning
+        List of PairAssessment objects with evidence quality and reasoning
     """
     # Deduplicate pairs by canonical entity pair key
     # Same pair may appear in multiple proximal sets

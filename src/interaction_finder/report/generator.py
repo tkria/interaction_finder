@@ -14,15 +14,12 @@ from interaction_finder.extraction.models import PairJudgment
 from interaction_finder.report.data_prep import prepare_report_data
 from interaction_finder.report.template import render_template
 
-CONFIDENCE_LEVELS = ["low", "medium", "high"]
-
 
 def _normalize_filters(filter_spec: dict[str, str]) -> dict[str, Any]:
     normalized: dict[str, Any] = {}
     for key, raw_value in filter_spec.items():
         key_lower = key.lower()
         value = raw_value.strip()
-
         if key_lower == "accepted":
             val = value.lower()
             mapping = {
@@ -37,34 +34,37 @@ def _normalize_filters(filter_spec: dict[str, str]) -> dict[str, Any]:
                     "Invalid accepted filter value. Use 'yes', 'no', or 'any'."
                 )
             normalized["accepted"] = mapping[val]
-        elif key_lower == "confidence":
-            normalized["confidence"] = _parse_confidence_filter(value)
+        elif key_lower == "evidence":
+            normalized["evidence_min"] = _parse_evidence_filter(value)
         else:
             raise ValueError(
-                f"Unsupported filter '{key}'. Supported: accepted, confidence."
+                f"Unsupported filter '{key}'. Supported: accepted, evidence."
             )
     return normalized
 
 
-def _parse_confidence_filter(value: str) -> set[str]:
+def _parse_evidence_filter(value: str) -> int:
+    """Parse evidence filter value like '7', '7+', or 'any'.
+
+    Returns minimum evidence level (1-9). 'any' returns 1.
+    """
     val = value.strip().lower()
     if val == "any":
-        return set(CONFIDENCE_LEVELS)
-
+        return 1
+    # Handle '7+' syntax (minimum level)
     if val.endswith("+"):
-        base = val[:-1]
-        if base not in CONFIDENCE_LEVELS:
+        val = val[:-1]
+    try:
+        level = int(val)
+        if not 1 <= level <= 9:
             raise ValueError(
-                "Invalid confidence filter. Use 'high', 'medium', 'low', or 'medium+'."
+                "Invalid evidence filter. Use a number 1-9 (e.g., '7' or '7+')."
             )
-        start_index = CONFIDENCE_LEVELS.index(base)
-        return set(CONFIDENCE_LEVELS[start_index:])
-
-    if val not in CONFIDENCE_LEVELS:
+        return level
+    except ValueError:
         raise ValueError(
-            "Invalid confidence filter. Use 'high', 'medium', 'low', or 'medium+'."
+            "Invalid evidence filter. Use a number 1-9 (e.g., '7' or '7+')."
         )
-    return {val}
 
 
 def _apply_filters(
@@ -73,22 +73,17 @@ def _apply_filters(
 ) -> list[PairJudgment]:
     if not filters:
         return list(judgments)
-
     accepted_filter = filters.get("accepted")
-    confidence_filter: set[str] | None = filters.get("confidence")
-
+    evidence_min: int | None = filters.get("evidence_min")
     filtered: list[PairJudgment] = []
     for judgment in judgments:
         if accepted_filter == "yes" and not judgment.accepted:
             continue
         if accepted_filter == "no" and judgment.accepted:
             continue
-
-        if confidence_filter and judgment.confidence.lower() not in confidence_filter:
+        if evidence_min and judgment.evidence.overall < evidence_min:
             continue
-
         filtered.append(judgment)
-
     return filtered
 
 

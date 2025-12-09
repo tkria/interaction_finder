@@ -246,7 +246,7 @@ class ReasoningTemplateRenderer:
         </div>
         <div class="reasoning-title">Overall Assessment</div>
         <div class="reasoning-content">
-            <strong>Confidence:</strong> <span class="confidence-{_escape_html(pair["confidence"])}">{_escape_html(pair["confidence"])}</span>
+            <strong>Evidence:</strong> <span class="evidence-badge evidence-{pair["overall"]}">{_escape_html(pair["label"])}</span>
             <p>{highlighted_reasoning}</p>
         </div>
         <div class="entity-details-section">
@@ -301,7 +301,8 @@ class ReasoningTemplateRenderer:
 
         def render_assessment(idx: int, assess: dict[str, Any]) -> str:
             polarity = assess.get("polarity", "")
-            confidence = assess.get("confidence", "low")
+            overall = assess.get("overall", 1)
+            label = assess.get("label", "None")
             source_line = render_source_line(assess)
             return f"""
         <div class="assessment-section open">
@@ -309,7 +310,7 @@ class ReasoningTemplateRenderer:
                 <span class="assessment-label"><span class="assess-num-badge">{idx + 1}</span>&nbsp;{_format_relationship(assess["relationship"])}</span>
                 <span class="pc-pill">
                     <span class="{_escape_html(polarity)}">{_escape_html(polarity_map.get(polarity, polarity))}</span>
-                    <span class="confidence-{_escape_html(confidence)}">{_escape_html(confidence)}</span>
+                    <span class="evidence-{overall}">{_escape_html(label)}</span>
                 </span>
             </div>
             <div class="assessment-content">
@@ -318,7 +319,7 @@ class ReasoningTemplateRenderer:
         </div>"""
 
         def render_single_assessment(assess: dict[str, Any]) -> str:
-            """Render single assessment in a box without polarity/confidence badge."""
+            """Render single assessment in a box without polarity/evidence badge."""
             source_line = render_source_line(assess)
             return f"""
         <div class="assessment-section open">

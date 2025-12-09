@@ -22,6 +22,7 @@ from interaction_finder.extraction.models import (
     SimpleEntity,
 )
 from interaction_finder.resources import ResourcePool, ResourceQuote
+from tests.extraction.conftest import make_evidence
 
 
 class TestEntityInfo:
@@ -309,11 +310,12 @@ class TestPairJudgment:
             relationship="associated_with",
             spread=PairSpread(),
             accepted=True,
-            confidence="high",
+            evidence=make_evidence(8),
+            decision_confidence=0.9,
             reasoning="Multiple strong sources with consistent evidence support acceptance.",
         )
         assert judgment.accepted is True
-        assert judgment.confidence == "high"
+        assert judgment.evidence.overall == 8
         assert judgment.entity1.name == "BRCA1"
         assert judgment.entity2.name == "breast cancer"
 
@@ -327,11 +329,12 @@ class TestPairJudgment:
             relationship="associated_with",
             spread=PairSpread(),
             accepted=False,
-            confidence="low",
+            evidence=make_evidence(3),
+            decision_confidence=0.85,
             reasoning="Evidence is weak or contradictory, leading to rejection.",
         )
         assert judgment.accepted is False
-        assert judgment.confidence == "low"
+        assert judgment.evidence.overall == 3
 
     def test_assessments_property_flattens_spread(self):
         """Test backward-compatible assessments property."""
@@ -361,7 +364,7 @@ class TestPairJudgment:
             entity2=EntityRef(canonical=entity2.name, mentions=[entity2]),
             relationship="increases_risk_of",
             quotes=[],
-            confidence="high",
+            evidence=make_evidence(8),
             reasoning="support",
         )
         refuting = PairAssessment(
@@ -370,7 +373,7 @@ class TestPairJudgment:
             entity2=EntityRef(canonical=entity2.name, mentions=[entity2]),
             relationship="protects_against",
             quotes=[],
-            confidence="medium",
+            evidence=make_evidence(6),
             reasoning="refute",
         )
 
@@ -381,7 +384,8 @@ class TestPairJudgment:
             relationship="increases_risk_of",
             spread=spread,
             accepted=True,
-            confidence="high",
+            evidence=make_evidence(8),
+            decision_confidence=0.85,
             reasoning="test",
         )
 
@@ -432,7 +436,7 @@ class TestPairSpread:
             entity2=EntityRef(canonical=entity2.name, mentions=[entity2]),
             relationship="increases_risk_of",
             quotes=[],
-            confidence="high",
+            evidence=make_evidence(8),
             reasoning="test",
         )
 
@@ -472,7 +476,7 @@ class TestPairSpread:
             entity2=EntityRef(canonical=entity2.name, mentions=[entity2]),
             relationship="increases_risk_of",
             quotes=[],
-            confidence="high",
+            evidence=make_evidence(8),
             reasoning="supporting evidence",
         )
 
@@ -482,7 +486,7 @@ class TestPairSpread:
             entity2=EntityRef(canonical=entity2.name, mentions=[entity2]),
             relationship="protects_against",
             quotes=[],
-            confidence="medium",
+            evidence=make_evidence(6),
             reasoning="refuting evidence",
         )
 
@@ -535,7 +539,7 @@ class TestPairSpread:
                 entity2=entity2_ref,
                 relationship="increases_risk_of",
                 quotes=[],
-                confidence="high",
+                evidence=make_evidence(8),
                 reasoning="supporting",
             ),
             "refuting": PairAssessment(
@@ -544,7 +548,7 @@ class TestPairSpread:
                 entity2=entity2_ref,
                 relationship="protects_against",
                 quotes=[],
-                confidence="high",
+                evidence=make_evidence(8),
                 reasoning="refuting",
             ),
             "neutral": PairAssessment(
@@ -553,7 +557,7 @@ class TestPairSpread:
                 entity2=entity2_ref,
                 relationship="regulates",
                 quotes=[],
-                confidence="medium",
+                evidence=make_evidence(6),
                 reasoning="neutral",
             ),
             "irrelevant": PairAssessment(
@@ -562,7 +566,7 @@ class TestPairSpread:
                 entity2=entity2_ref,
                 relationship="spatial_colocalization",
                 quotes=[],
-                confidence="low",
+                evidence=make_evidence(3),
                 reasoning="irrelevant",
             ),
         }
@@ -620,7 +624,7 @@ class TestPairJudgmentSerialization:
             entity2=EntityRef(canonical=entity2.name, mentions=[entity2]),
             relationship="increases_risk_of",
             quotes=[],
-            confidence="high",
+            evidence=make_evidence(8),
             reasoning="test",
         )
 
@@ -632,10 +636,10 @@ class TestPairJudgmentSerialization:
             relationship="increases_risk_of",
             spread=spread,
             accepted=True,
-            confidence="high",
+            evidence=make_evidence(8),
+            decision_confidence=0.9,
             reasoning="Strong supporting evidence",
         )
-
         # Serialize
         judgment_dict = judgment.model_dump()
         assert "spread" in judgment_dict
@@ -680,7 +684,7 @@ class TestPairJudgmentSerialization:
             entity2=entity2_ref,
             relationship="increases_risk_of",
             quotes=[],
-            confidence="high",
+            evidence=make_evidence(8),
             reasoning="supporting",
         )
 
@@ -690,21 +694,21 @@ class TestPairJudgmentSerialization:
             entity2=entity2_ref,
             relationship="protects_against",
             quotes=[],
-            confidence="medium",
+            evidence=make_evidence(6),
             reasoning="refuting",
         )
 
         spread = PairSpread(
             positive=[supporting_assessment], negative=[refuting_assessment]
         )
-
         judgment = PairJudgment(
             entity1=SimpleEntity(name="BRCA1", kind="gene", aliases=["BRCA1"]),
             entity2=SimpleEntity(name="cancer", kind="disease", aliases=["cancer"]),
             relationship="increases_risk_of",
             spread=spread,
             accepted=True,
-            confidence="medium",
+            evidence=make_evidence(6),
+            decision_confidence=0.7,
             reasoning="Mixed evidence, supporting evidence stronger",
         )
 
@@ -766,7 +770,7 @@ class TestExtractionResultRehydration:
             entity2=EntityRef(canonical=entity2.name, mentions=[entity2]),
             relationship="increases_risk_of",
             quotes=[make_quote("pair quote")],
-            confidence="high",
+            evidence=make_evidence(8),
             reasoning="supporting evidence",
         )
 
@@ -776,10 +780,10 @@ class TestExtractionResultRehydration:
             relationship="increases_risk_of",
             spread=PairSpread(positive=[assessment]),
             accepted=True,
-            confidence="high",
+            evidence=make_evidence(8),
+            decision_confidence=0.9,
             reasoning="Strong evidence",
         )
-
         metadata = ExtractionMetadata(
             topic="Topic",
             resource_count=1,
@@ -883,7 +887,7 @@ class TestExtractionResultRehydration:
             entity2=EntityRef(canonical=entity2.name, mentions=[entity2]),
             relationship="increases_risk_of",
             quotes=[make_quote("pair quote")],
-            confidence="high",
+            evidence=make_evidence(8),
             reasoning="supporting evidence",
         )
 
@@ -893,10 +897,10 @@ class TestExtractionResultRehydration:
             relationship="increases_risk_of",
             spread=PairSpread(positive=[assessment]),
             accepted=True,
-            confidence="high",
+            evidence=make_evidence(8),
+            decision_confidence=0.9,
             reasoning="Strong evidence",
         )
-
         metadata = ExtractionMetadata(
             topic="Topic",
             resource_count=1,

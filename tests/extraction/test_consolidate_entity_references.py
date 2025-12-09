@@ -22,6 +22,7 @@ from interaction_finder.extraction.nodes import ConsolidateEntitiesNode
 from interaction_finder.extraction.state import State
 from interaction_finder.extraction.utils import build_permitted_pairs
 from interaction_finder.resources import ResourceId, ResourcePool
+from tests.extraction.conftest import make_evidence
 
 
 def ref_map(data: dict[str, EntityMention]) -> dict[str, EntityRef]:
@@ -56,7 +57,11 @@ class TestUpdateEntityInAssessment:
 
     def _make_assessment(self) -> PairAssessment:
         entity1 = EntityMention(
-            kind="gene", name="BRCA", aliases=["BRCA-1"], quotes=[], reasoning="Original"
+            kind="gene",
+            name="BRCA",
+            aliases=["BRCA-1"],
+            quotes=[],
+            reasoning="Original",
         )
         entity2 = EntityMention(
             kind="disease",
@@ -71,7 +76,7 @@ class TestUpdateEntityInAssessment:
             entity2=EntityRef(canonical=entity2.name, mentions=[entity2]),
             relationship="associated_with",
             quotes=[],
-            confidence="high",
+            evidence=make_evidence(8),
             reasoning="Test",
         )
 
@@ -118,6 +123,7 @@ class TestUpdateEntityInAssessment:
         assert updated.entity2.canonical == "Neoplasm"
         assert updated.entity2.mentions[0].name == "Cancer"
         assert updated.entity2.mentions[0].aliases == ["CA"]
+
 
 class TestUpdatePairEntityReferences:
     """Test _update_pair_entity_references method."""
@@ -180,7 +186,7 @@ class TestUpdatePairEntityReferences:
                 ),
                 relationship="associated_with",
                 quotes=[],
-                confidence="high",
+                evidence=make_evidence(8),
                 reasoning="Test",
             )
         ]
@@ -213,7 +219,11 @@ class TestUpdatePairEntityReferences:
         state.validated_entities_by_resource[resource_id] = ref_map(
             {
                 "BRCA1": EntityMention(
-                    kind="gene", name="BRCA1", aliases=[], quotes=[], reasoning="Original"
+                    kind="gene",
+                    name="BRCA1",
+                    aliases=[],
+                    quotes=[],
+                    reasoning="Original",
                 )
             }
         )
@@ -238,7 +248,7 @@ class TestUpdatePairEntityReferences:
             entity2=EntityRef(canonical=entity2.name, mentions=[entity2]),
             relationship="interacts_with",
             quotes=[],
-            confidence="medium",
+            evidence=make_evidence(6),
             reasoning="Test",
         )
 
@@ -275,7 +285,11 @@ class TestUpdatePairEntityReferences:
                     kind="gene", name="BRCA1", aliases=[], quotes=[], reasoning="Merged"
                 ),
                 "TP53": EntityMention(
-                    kind="gene", name="TP53", aliases=[], quotes=[], reasoning="Original"
+                    kind="gene",
+                    name="TP53",
+                    aliases=[],
+                    quotes=[],
+                    reasoning="Original",
                 ),
             }
         )
@@ -309,7 +323,7 @@ class TestUpdatePairEntityReferences:
                 ),
                 relationship="interacts_with",
                 quotes=[],
-                confidence="high",
+                evidence=make_evidence(8),
                 reasoning="Test",
             )
         ]
@@ -352,7 +366,11 @@ class TestUpdatePairEntityReferences:
                     reasoning="Original",
                 ),
                 "TP53": EntityMention(
-                    kind="gene", name="TP53", aliases=[], quotes=[], reasoning="Original"
+                    kind="gene",
+                    name="TP53",
+                    aliases=[],
+                    quotes=[],
+                    reasoning="Original",
                 ),
             }
         )
@@ -386,7 +404,7 @@ class TestUpdatePairEntityReferences:
                 ),
                 relationship="associated_with",
                 quotes=[],
-                confidence="high",
+                evidence=make_evidence(8),
                 reasoning="Test 1",
             ),
             PairAssessment(
@@ -417,7 +435,7 @@ class TestUpdatePairEntityReferences:
                 ),
                 relationship="interacts_with",
                 quotes=[],
-                confidence="medium",
+                evidence=make_evidence(6),
                 reasoning="Test 2",
             ),
         ]
@@ -490,7 +508,7 @@ class TestUpdatePairEntityReferences:
                     ),
                     relationship="self_reference",
                     quotes=[],
-                    confidence="low",
+                    evidence=make_evidence(3),
                     reasoning="Test",
                 )
             ]

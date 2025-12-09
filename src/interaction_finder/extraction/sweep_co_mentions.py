@@ -25,6 +25,7 @@ from interaction_finder.extraction.models import (
     EntityMention,
     EntityPairKey,
     EntityRef,
+    EvidenceQuality,
     PairAssessment,
 )
 from interaction_finder.extraction.entity_matching import (
@@ -472,8 +473,8 @@ class ConfirmedPair(BaseModel):
     relationship: str = Field(
         description="Relationship type (e.g., 'activates', 'inhibits', 'associated_with')"
     )
-    confidence: Literal["high", "medium", "low"] = Field(
-        description="Confidence in the relationship claim"
+    evidence: EvidenceQuality = Field(
+        description="Structured assessment of evidence quality"
     )
     supporting_quotes: list[str] = Field(
         description="Exact verbatim quotes from text supporting this relationship"
@@ -773,7 +774,7 @@ Provide supporting quotes for confirmed relationships."""
                     entity2=entity2_ref,
                     relationship=confirmed.relationship,
                     quotes=validated_quotes,
-                    confidence=confirmed.confidence,
+                    evidence=confirmed.evidence,
                     reasoning=confirmed.reasoning,
                     source="sweep",
                 )

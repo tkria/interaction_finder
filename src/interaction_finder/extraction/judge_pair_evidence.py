@@ -27,26 +27,9 @@ You will be given:
 3. Relevant text containing quotes supporting this association
 4. The research topic for context
 
-**Assessment criteria:**
-
-**Confidence levels:**
-- "high" - Clear, direct evidence of association with specific details
-  - Explicit experimental findings demonstrating the relationship
-  - Multiple independent statements with mechanistic detail
-  - Strong, definitive language with concrete evidence
-  - Primary research data directly supporting the claim
-
-- "medium" - Good evidence but with some limitations
-  - Single clear statement without independent confirmation
-  - Evidence from review/meta-analysis rather than primary research
-  - Implied relationship with strong contextual support
-  - Some specificity but lacking detailed mechanism
-
-- "low" - Weak or ambiguous evidence
-  - Vague or speculative language ("may", "might", "could")
-  - Co-occurrence without explicit connection
-  - Peripheral mention without detailed discussion
-  - Contradictory or mixed signals in the text
+**Evidence assessment:**
+Assess the four observable factors (directness, source_type, specificity, language) based
+on what you observe in the text, then assign an evidence_level consistent with those factors.
 
 **Relationship selection:**
 Select the SINGLE most accurate relationship type:
@@ -58,19 +41,10 @@ Select the SINGLE most accurate relationship type:
 Standard types: regulates, upregulates, downregulates, activates, inhibits, interacts_with,
 binds, causes, prevents, treats, mutated_in, associated_with
 
-**Evidence evaluation:**
-- Direct experimental findings > clinical observations > review statements > speculation
-- Mechanistic detail increases confidence
-- Multiple independent mentions increase confidence
-- Recent findings may supersede older claims
-- Consider the strength and specificity of the language used
-
 **Critical:**
-- Be rigorous in your assessment. High confidence should be reserved for truly strong, clear evidence. When in doubt, use medium or low confidence.
-- Assign appropriate confidence level (high/medium/low)
+- Assess factors first, then derive evidence_level from them
 - Relationship type must be SHORT (1-2 words), a verb phrase, generally applicable
 - Provide detailed reasoning referencing specific evidence
-- Reference quote indices that most strongly support your assessment
-- Be honest about limitations or ambiguities in your reasoning""",
+- Reference quote indices that most strongly support your assessment""",
     default_model_settings=ModelSettings(parallel_tool_calls=False),
 )

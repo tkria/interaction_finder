@@ -28,6 +28,7 @@ from interaction_finder.report import generate_report
 from interaction_finder.report.data_prep import prepare_report_data
 from interaction_finder.report.template import render_template
 from interaction_finder.resources import ResourcePool, ResourceQuote
+from tests.extraction.conftest import make_evidence
 
 
 def create_test_checkpoint(
@@ -96,7 +97,7 @@ def create_test_checkpoint(
                 entity2=entity2_ref,
                 relationship="associated_with",
                 quotes=[quote],
-                confidence="high",
+                evidence=make_evidence(8),
                 reasoning=f"Test assessment {doc_idx}",
             )
             assessments.append(assessment)
@@ -117,7 +118,8 @@ def create_test_checkpoint(
             relationship="associated_with",
             spread=spread,
             accepted=True,
-            confidence="high",
+            evidence=make_evidence(8),
+            decision_confidence=0.9,
             reasoning=f"Test judgment {pair_idx}",
         )
         judgments.append(judgment)

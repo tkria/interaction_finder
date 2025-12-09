@@ -35,10 +35,16 @@ REPORT_CSS = """
     --rejected-border: var(--pico-color-red-600);
     --contentious-border: var(--pico-color-amber-100);
 
-    /* Confidence badge colors */
-    --confidence-high-bg: var(--pico-color-green-600);
-    --confidence-medium-bg: var(--pico-color-pumpkin-400);
-    --confidence-low-bg: var(--pico-color-red-600);
+    /* Evidence level badge colors (1-9 scale: red→indigo gradient) */
+    --evidence-1-bg: var(--pico-color-red-500);
+    --evidence-2-bg: var(--pico-color-orange-500);
+    --evidence-3-bg: var(--pico-color-pumpkin-500);
+    --evidence-4-bg: var(--pico-color-amber-500);
+    --evidence-5-bg: var(--pico-color-yellow-500);
+    --evidence-6-bg: var(--pico-color-green-500);
+    --evidence-7-bg: var(--pico-color-jade-500);
+    --evidence-8-bg: var(--pico-color-cyan-500);
+    --evidence-9-bg: var(--pico-color-indigo-500);
 
     /* Quote colors */
     --quote-bg: var(--pico-color-zinc-100);
@@ -83,9 +89,16 @@ REPORT_CSS = """
     --rejected-bg: var(--pico-color-red-950);
     --rejected-border: var(--pico-color-red-400);
     --contentious-border: var(--pico-color-amber-300);
-    --confidence-high-bg: var(--pico-color-green-400);
-    --confidence-medium-bg: var(--pico-color-pumpkin-600);
-    --confidence-low-bg: var(--pico-color-red-400);
+    /* Evidence level badge colors (1-9 scale: red→indigo gradient, dark mode) */
+    --evidence-1-bg: var(--pico-color-red-400);
+    --evidence-2-bg: var(--pico-color-orange-400);
+    --evidence-3-bg: var(--pico-color-pumpkin-400);
+    --evidence-4-bg: var(--pico-color-amber-400);
+    --evidence-5-bg: var(--pico-color-yellow-400);
+    --evidence-6-bg: var(--pico-color-green-400);
+    --evidence-7-bg: var(--pico-color-jade-400);
+    --evidence-8-bg: var(--pico-color-cyan-400);
+    --evidence-9-bg: var(--pico-color-indigo-400);
     --quote-bg: var(--pico-color-zinc-750);
     --quote-border: var(--pico-color-zinc-600);
     --quote-emphasis-bg: var(--pico-color-amber-800);
@@ -122,9 +135,16 @@ REPORT_CSS = """
     --rejected-bg: var(--pico-color-red-950);
     --rejected-border: var(--pico-color-red-400);
     --contentious-border: var(--pico-color-amber-300);
-    --confidence-high-bg: var(--pico-color-green-400);
-    --confidence-medium-bg: var(--pico-color-pumpkin-600);
-    --confidence-low-bg: var(--pico-color-red-400);
+    /* Evidence level badge colors (1-9 scale: red→indigo gradient, dark mode) */
+    --evidence-1-bg: var(--pico-color-red-400);
+    --evidence-2-bg: var(--pico-color-orange-400);
+    --evidence-3-bg: var(--pico-color-pumpkin-400);
+    --evidence-4-bg: var(--pico-color-amber-400);
+    --evidence-5-bg: var(--pico-color-yellow-400);
+    --evidence-6-bg: var(--pico-color-green-400);
+    --evidence-7-bg: var(--pico-color-jade-400);
+    --evidence-8-bg: var(--pico-color-cyan-400);
+    --evidence-9-bg: var(--pico-color-indigo-400);
     --quote-bg: var(--pico-color-zinc-750);
     --quote-border: var(--pico-color-zinc-600);
     --quote-emphasis-bg: var(--pico-color-amber-800);
@@ -411,16 +431,22 @@ header {
     color: var(--polarity-neutral-text);
 }
 
-.confidence-badge {
+.evidence-badge {
     padding: 0.1rem 0.35rem;
     border-radius: 3px;
     font-weight: 600;
     color: white;
     margin-left: auto;
 }
-.confidence-badge.confidence-high { background: var(--confidence-high-bg); }
-.confidence-badge.confidence-medium { background: var(--confidence-medium-bg); }
-.confidence-badge.confidence-low { background: var(--confidence-low-bg); }
+.evidence-badge.evidence-1 { background: var(--evidence-1-bg); }
+.evidence-badge.evidence-2 { background: var(--evidence-2-bg); }
+.evidence-badge.evidence-3 { background: var(--evidence-3-bg); }
+.evidence-badge.evidence-4 { background: var(--evidence-4-bg); }
+.evidence-badge.evidence-5 { background: var(--evidence-5-bg); }
+.evidence-badge.evidence-6 { background: var(--evidence-6-bg); }
+.evidence-badge.evidence-7 { background: var(--evidence-7-bg); }
+.evidence-badge.evidence-8 { background: var(--evidence-8-bg); }
+.evidence-badge.evidence-9 { background: var(--evidence-9-bg); }
 
 .pc-pill {
     display: inline-flex;
@@ -456,19 +482,16 @@ header {
     background: var(--polarity-neutral-bg);
     color: var(--polarity-neutral-text);
 }
-/* Confidence styling */
-.pc-pill > .confidence-high {
-    background: var(--confidence-high-bg);
-    color: white;
-}
-.pc-pill > .confidence-medium {
-    background: var(--confidence-medium-bg);
-    color: white;
-}
-.pc-pill > .confidence-low {
-    background: var(--confidence-low-bg);
-    color: white;
-}
+/* Evidence level styling */
+.pc-pill > .evidence-1 { background: var(--evidence-1-bg); color: white; }
+.pc-pill > .evidence-2 { background: var(--evidence-2-bg); color: white; }
+.pc-pill > .evidence-3 { background: var(--evidence-3-bg); color: white; }
+.pc-pill > .evidence-4 { background: var(--evidence-4-bg); color: white; }
+.pc-pill > .evidence-5 { background: var(--evidence-5-bg); color: white; }
+.pc-pill > .evidence-6 { background: var(--evidence-6-bg); color: white; }
+.pc-pill > .evidence-7 { background: var(--evidence-7-bg); color: white; }
+.pc-pill > .evidence-8 { background: var(--evidence-8-bg); color: white; }
+.pc-pill > .evidence-9 { background: var(--evidence-9-bg); color: white; }
 
 .pair-counts {
     color: var(--pico-muted-color);

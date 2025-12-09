@@ -26,6 +26,7 @@ from interaction_finder.extraction.utils import (
     strip_kind_annotation,
 )
 from interaction_finder.resources import ResourcePool
+from tests.extraction.conftest import make_evidence
 
 
 class TestBuildPermittedPairs:
@@ -741,7 +742,7 @@ class TestBuildPairSpread:
                 entity2=self.entity2_ref,
                 relationship="increases_risk_of",
                 quotes=[],
-                confidence="high",
+                evidence=make_evidence(8),
                 reasoning="test",
             ),
             PairAssessment(
@@ -750,7 +751,7 @@ class TestBuildPairSpread:
                 entity2=self.entity2_ref,
                 relationship="protects_against",
                 quotes=[],
-                confidence="medium",
+                evidence=make_evidence(6),
                 reasoning="test",
             ),
             PairAssessment(
@@ -759,7 +760,7 @@ class TestBuildPairSpread:
                 entity2=self.entity2_ref,
                 relationship="regulates",
                 quotes=[],
-                confidence="low",
+                evidence=make_evidence(3),
                 reasoning="test",
             ),
         ]
@@ -789,7 +790,7 @@ class TestBuildPairSpread:
                 entity2=self.entity2_ref,
                 relationship="increases_risk_of",
                 quotes=[],
-                confidence="high",
+                evidence=make_evidence(8),
                 reasoning="test",
             ),
             PairAssessment(
@@ -798,7 +799,7 @@ class TestBuildPairSpread:
                 entity2=self.entity2_ref,
                 relationship="causes",
                 quotes=[],
-                confidence="high",
+                evidence=make_evidence(8),
                 reasoning="test",
             ),
             PairAssessment(
@@ -807,7 +808,7 @@ class TestBuildPairSpread:
                 entity2=self.entity2_ref,
                 relationship="associated_with",
                 quotes=[],
-                confidence="medium",
+                evidence=make_evidence(6),
                 reasoning="test",
             ),
         ]
@@ -841,7 +842,7 @@ class TestBuildPairSpread:
                 entity2=self.entity2_ref,
                 relationship="unknown_relationship",
                 quotes=[],
-                confidence="high",
+                evidence=make_evidence(8),
                 reasoning="test",
             ),
         ]
@@ -863,7 +864,7 @@ class TestBuildPairSpread:
                 entity2=self.entity2_ref,
                 relationship="increases_risk_of",
                 quotes=[],
-                confidence="high",
+                evidence=make_evidence(8),
                 reasoning="test",
             ),
             PairAssessment(
@@ -872,7 +873,7 @@ class TestBuildPairSpread:
                 entity2=self.entity2_ref,
                 relationship="protects_against",
                 quotes=[],
-                confidence="high",
+                evidence=make_evidence(8),
                 reasoning="test",
             ),
         ]

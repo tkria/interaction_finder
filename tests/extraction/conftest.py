@@ -4,11 +4,31 @@ import logging
 
 import pytest
 
-from interaction_finder.extraction.models import EntityMention, EntityRef
+from interaction_finder.extraction.models import (
+    EntityMention,
+    EntityRef,
+    EvidenceQuality,
+)
 from interaction_finder.resources import ResourcePool
 from tests.conftest_helpers import skip_unless_tainted
 
 pytest_collection_modifyitems = skip_unless_tainted("extraction")
+
+
+def make_evidence(level: int = 7) -> EvidenceQuality:
+    """Create a default EvidenceQuality for testing.
+
+    Args:
+        level: Overall evidence level (1-9). Default 7 corresponds to "high".
+               Mapping: 8-9=high, 5-7=medium, 1-4=low
+    """
+    return EvidenceQuality(
+        directness="explicit",
+        source_type="primary",
+        specificity="associative",
+        language="definitive",
+        overall=level,
+    )
 
 
 def make_entity_ref(entity: EntityMention) -> EntityRef:

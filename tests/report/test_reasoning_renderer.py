@@ -315,7 +315,7 @@ class TestReasoningTemplateRenderer:
             "entity1": {"name": "BRCA1", "kind": "gene", "aliases": ["BRCA1"]},
             "entity2": {"name": "Cancer", "kind": "disease", "aliases": ["Cancer"]},
             "relationship": "associated_with",
-            "confidence": "high",
+            "overall": 8, "label": "Strong",
             "reasoning": "Strong evidence shows BRCA1 increases Cancer risk.",
             "assessments": [],
         }
@@ -327,7 +327,7 @@ class TestReasoningTemplateRenderer:
         assert "BRCA1" in result
         assert "Cancer" in result
         assert "associated with" in result  # Relationship is formatted with space
-        assert "high" in result
+        assert "Strong" in result
 
         # Should have highlighted reasoning
         assert '<span class="entity-highlight entity1"' in result
@@ -347,7 +347,7 @@ class TestReasoningTemplateRenderer:
                 "aliases": ["PAH"],
             },
             "relationship": "associated_with",
-            "confidence": "medium",
+            "overall": 6, "label": "Moderate",
             "reasoning": "SOX17 mutations are found in PAH patients. Multiple SOX17 variants cause PAH.",
             "assessments": [],
         }
@@ -374,7 +374,7 @@ def test_render_all_reasoning_templates():
             "entity1": {"name": "BRCA1", "kind": "gene", "aliases": ["BRCA1"]},
             "entity2": {"name": "Cancer", "kind": "disease", "aliases": ["Cancer"]},
             "relationship": "causes",
-            "confidence": "high",
+            "overall": 8, "label": "Strong",
             "reasoning": "BRCA1 causes Cancer",
             "assessments": [
                 {
@@ -382,7 +382,7 @@ def test_render_all_reasoning_templates():
                     "doc_idx": 0,
                     "title": "Study 1",
                     "relationship": "causes",
-                    "confidence": "high",
+                    "overall": 8, "label": "Strong",
                     "reasoning": "Evidence from study",
                     "quotes": [],
                 }
@@ -396,7 +396,7 @@ def test_render_all_reasoning_templates():
                             "doc_idx": 0,
                             "title": "Study 1",
                             "relationship": "causes",
-                            "confidence": "high",
+                            "overall": 8, "label": "Strong",
                             "reasoning": "Evidence from study",
                             "quotes": [],
                         }
@@ -410,7 +410,7 @@ def test_render_all_reasoning_templates():
             "entity1": {"name": "TP53", "kind": "gene", "aliases": ["TP53"]},
             "entity2": {"name": "Cancer", "kind": "disease", "aliases": ["Cancer"]},
             "relationship": "prevents",
-            "confidence": "high",
+            "overall": 8, "label": "Strong",
             "reasoning": "TP53 prevents Cancer",
             "assessments": [],
             "document_groups": [],
@@ -459,7 +459,7 @@ def test_quote_deduplication_in_document_groups():
         "entity1": {"name": "BRCA1", "kind": "gene", "aliases": ["BRCA1"]},
         "entity2": {"name": "Cancer", "kind": "disease", "aliases": ["Cancer"]},
         "relationship": "associated_with",
-        "confidence": "high",
+        "overall": 8, "label": "Strong",
         "reasoning": "Multiple lines of evidence",
         "assessments": [],
         "document_groups": [
@@ -471,7 +471,7 @@ def test_quote_deduplication_in_document_groups():
                         "doc_idx": 0,
                         "title": "Study 1",
                         "relationship": "increases_risk_of",
-                        "confidence": "high",
+                        "overall": 8, "label": "Strong",
                         "reasoning": "First assessment reasoning",
                         "quotes": [shared_quote, unique_quote1],
                     },
@@ -480,7 +480,7 @@ def test_quote_deduplication_in_document_groups():
                         "doc_idx": 0,
                         "title": "Study 1",
                         "relationship": "causes",
-                        "confidence": "medium",
+                        "overall": 6, "label": "Moderate",
                         "reasoning": "Second assessment reasoning",
                         "quotes": [shared_quote, unique_quote2],
                     },
@@ -565,7 +565,7 @@ def test_quote_navigation_uses_correct_ids():
         "entity1": {"name": "GeneX", "kind": "gene", "aliases": []},
         "entity2": {"name": "DiseaseY", "kind": "disease", "aliases": []},
         "relationship": "associated_with",
-        "confidence": "high",
+        "overall": 8, "label": "Strong",
         "reasoning": "Evidence text",
         "assessments": [],
         "document_groups": [
@@ -577,7 +577,7 @@ def test_quote_navigation_uses_correct_ids():
                         "doc_idx": 0,
                         "title": "Study",
                         "relationship": "associated_with",
-                        "confidence": "high",
+                        "overall": 8, "label": "Strong",
                         "reasoning": "Reasoning",
                         "polarity": "positive",
                         "quotes": [quote_pair1],
@@ -786,7 +786,7 @@ class TestReasoningTemplateWithCitations:
             "entity1": {"name": "BRCA1", "kind": "gene", "aliases": []},
             "entity2": {"name": "Cancer", "kind": "disease", "aliases": []},
             "relationship": "associated_with",
-            "confidence": "high",
+            "overall": 8, "label": "Strong",
             "reasoning": "Evidence from [1_abc12345] supports this association.",
             "assessments": [],
         }
@@ -803,7 +803,7 @@ class TestReasoningTemplateWithCitations:
             "entity1": {"name": "BRCA1", "kind": "gene", "aliases": []},
             "entity2": {"name": "Cancer", "kind": "disease", "aliases": []},
             "relationship": "associated_with",
-            "confidence": "high",
+            "overall": 8, "label": "Strong",
             "reasoning": "BRCA1 causes Cancer per [1_abc12345].",
             "assessments": [],
         }

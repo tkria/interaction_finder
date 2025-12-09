@@ -12,7 +12,7 @@ to enable proper JSON serialization via model_dump().
 """
 
 from dataclasses import dataclass
-from typing import Iterable, Literal, NamedTuple
+from typing import ClassVar, Iterable, Literal, NamedTuple
 
 from pydantic import BaseModel, ConfigDict, Field, model_serializer, model_validator
 from pydantic.functional_validators import SkipValidation
@@ -418,41 +418,123 @@ class ProximalPairExtraction(BaseModel):
     )
 
 
+class EvidenceQuality(BaseModel):
+    """Assessment of evidence strength based on observable properties.
+
+    Structured decomposition of evidence quality into observable factors,
+    with a probability-anchored overall score. Used for both per-document
+    and cross-document assessments.
+    """
+
+    directness: Literal["explicit", "implied", "tangential"] = Field(
+        description="""How directly does the source state the relationship?
+        explicit: Directly states the relationship ("X causes Y", "X regulates Y")
+        implied: Relationship can be inferred but is not directly stated
+        tangential: Entities mentioned but relationship is peripheral or unclear"""
+    )
+    source_type: Literal["primary", "review", "other"] = Field(
+        description="""What type of source is this evidence from?
+        primary: Original experimental or clinical research reporting new findings
+        review: Systematic review, meta-analysis, or narrative review of existing work
+        other: Commentary, editorial, hypothesis paper, or unclear provenance"""
+    )
+    specificity: Literal["mechanistic", "associative", "vague"] = Field(
+        description="""How specific is the evidence about the relationship?
+        mechanistic: Describes pathway, mechanism, or causal chain explaining how/why
+        associative: Reports statistical association, correlation, or co-occurrence with data
+        vague: General statement without specific data or mechanistic detail"""
+    )
+    language: Literal["definitive", "hedged", "speculative"] = Field(
+        description="""How certain is the language used in the source?
+        definitive: Asserted as established fact ("causes", "is required for", "we found")
+        hedged: Qualified but positive ("may contribute", "is associated with", "suggests")
+        speculative: Uncertain ("might", "could potentially", "remains to be determined")"""
+    )
+    overall: Literal[1, 2, 3, 4, 5, 6, 7, 8, 9] = Field(
+        description="""Based on the factors above, what is the probability that this
+        relationship is real and accurately represented in the source?
+        1 - <5%:  Evidence contradicts or argues against the relationship
+        2 - ~10%: No meaningful support; entities co-occur but relationship unsupported
+        3 - ~20%: Speculative only; vague language ("might", "could potentially")
+        4 - ~35%: Implied or hedged; suggestive but relationship not directly stated
+        5 - ~50%: Associative evidence; correlation or co-occurrence without mechanism
+        6 - ~65%: Explicitly stated but qualified (hedged language OR review/secondary source)
+        7 - ~80%: Explicit + clear from credible source; minor limitations only
+        8 - ~90%: Explicit + specific + definitive language; strong support
+        9 - >95%: Mechanistic detail from primary research with definitive language
+        The level should be consistent with the factors above. When uncertain
+        between adjacent levels, prefer the lower one."""
+    )
+
+    # Level descriptors for display
+    _LABELS: ClassVar[dict[int, str]] = {
+        1: "None",
+        2: "Minimal",
+        3: "Tenuous",
+        4: "Weak",
+        5: "Limited",
+        6: "Moderate",
+        7: "Good",
+        8: "Strong",
+        9: "Robust",
+    }
+
+    @property
+    def label(self) -> str:
+        """Human-readable label for the evidence level."""
+        return self._LABELS.get(self.overall, "Unknown")
+
+
 class PairEvidenceJudgment(BaseModel):
     """LLM assessment of pair evidence in a single document.
 
     Evaluates the strength of evidence and selects the most appropriate
     relationship type from candidates.
+
+    Field order is intentional: reasoning and quote selection come first
+    to encourage the model to analyze evidence before committing to
+    quality assessments.
     """
 
+    supporting_quote_ids: list[int] = Field(
+        description="Indices (0-based) of quotes that support this assessment"
+    )
+    reasoning: str = Field(
+        min_length=30,
+        description="Explanation of evidence assessment and relationship choice",
+    )
     relationship: str = Field(
         description="Selected relationship type (from candidates or new)"
     )
-    confidence: Literal["high", "medium", "low"] = Field(
-        description="Confidence in this pair's validity based on evidence"
-    )
-    reasoning: str = Field(
-        min_length=30, description="Explanation of confidence and relationship choice"
-    )
-    supporting_quote_ids: list[int] = Field(
-        description="Indices (0-based) of quotes that support this assessment"
+    evidence: EvidenceQuality = Field(
+        description="Structured assessment of evidence quality"
     )
 
 
 class CrossDocumentJudgment(BaseModel):
-    """LLM final judgment synthesizing evidence across all documents."""
+    """LLM final judgment synthesizing evidence across all documents.
 
-    accepted: bool = Field(
-        description="Whether to accept this pair as a valid association"
+    Field order is intentional: reasoning comes first to encourage the model
+    to think through the evidence before committing to assessments. This
+    improves calibration of confidence estimates (Becker & Soatto, 2024).
+    """
+
+    reasoning: str = Field(
+        min_length=50, description="Detailed explanation of the decision"
     )
     relationship: str = Field(
         description="Selected final relationship type (most accurate overall)"
     )
-    confidence: Literal["high", "medium", "low"] = Field(
-        description="Confidence level in this judgment"
+    evidence: EvidenceQuality = Field(
+        description="Synthesized evidence quality across all documents"
     )
-    reasoning: str = Field(
-        min_length=50, description="Detailed explanation of the decision"
+    accepted: bool = Field(
+        description="Whether to accept this pair as a valid association"
+    )
+    decision_confidence: float = Field(
+        ge=0.0,
+        le=1.0,
+        description="Probability that this accept/reject decision is correct (0.0-1.0)",
     )
 
 
@@ -477,7 +559,7 @@ class PairAssessment(BaseModel):
     """Evidence assessment for one pair in one document.
 
     This is the core result of per-document pair analysis, containing
-    the selected relationship, confidence level, and supporting evidence.
+    the selected relationship, evidence quality, and supporting evidence.
 
     Attributes:
         resource_id: Which document this assessment is from
@@ -485,8 +567,8 @@ class PairAssessment(BaseModel):
         entity2: Second entity reference (canonical name + original mentions)
         relationship: Selected relationship type
         quotes: Supporting quotes from this document
-        confidence: Qualitative confidence in this association
-        reasoning: Explanation of confidence level
+        evidence: Structured assessment of evidence quality
+        reasoning: Explanation of evidence assessment
         source: How this assessment was discovered ("direct" from initial
             document extraction, "sweep" from co-mention sweep pass)
     """
@@ -496,7 +578,7 @@ class PairAssessment(BaseModel):
     entity2: EntityRef
     relationship: str
     quotes: list[ResourceQuote]
-    confidence: Literal["high", "medium", "low"]
+    evidence: EvidenceQuality
     reasoning: str
     source: Literal["direct", "sweep"] = "direct"
 
@@ -542,8 +624,13 @@ class PairJudgment(BaseModel):
         description="Per-document assessments grouped by relationship polarity"
     )
     accepted: bool = Field(description="Whether this pair is accepted")
-    confidence: Literal["high", "medium", "low"] = Field(
-        description="Confidence in final judgment"
+    evidence: EvidenceQuality = Field(
+        description="Synthesized evidence quality for final judgment"
+    )
+    decision_confidence: float = Field(
+        ge=0.0,
+        le=1.0,
+        description="Probability that this accept/reject decision is correct (0.0-1.0)",
     )
     reasoning: str = Field(description="Explanation of final decision")
 

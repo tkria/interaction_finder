@@ -26,6 +26,7 @@ from interaction_finder.extraction.sweep_co_mentions import (
 )
 from interaction_finder.extraction.utils import make_entity_pair_key
 from interaction_finder.resources import Resource, ResourceId, ResourceQuote
+from tests.extraction.conftest import make_evidence
 
 
 # =============================================================================
@@ -311,7 +312,7 @@ class TestIsCoMentionCovered:
             entity2=entity_ref_breast_cancer,
             relationship="associated_with",
             quotes=[quote],
-            confidence="high",
+            evidence=make_evidence(8),
             reasoning="Test",
         )
         # Positions within the quote span should be covered
@@ -329,7 +330,7 @@ class TestIsCoMentionCovered:
             entity2=entity_ref_breast_cancer,
             relationship="associated_with",
             quotes=[quote],
-            confidence="high",
+            evidence=make_evidence(8),
             reasoning="Test",
         )
         span_start, span_end = quote.spans[0]
@@ -352,7 +353,7 @@ class TestIsCoMentionCovered:
             entity2=entity_ref_breast_cancer,
             relationship="associated_with",
             quotes=[quote1, quote2],
-            confidence="high",
+            evidence=make_evidence(8),
             reasoning="Test",
         )
         # Position in second quote should be covered
@@ -390,7 +391,7 @@ class TestClassifyCoMention:
             entity2=entity_ref_breast_cancer,
             relationship="associated_with",
             quotes=[quote],
-            confidence="high",
+            evidence=make_evidence(8),
             reasoning="Test",
         )
         pair_key = make_entity_pair_key(entity_ref_brca1, entity_ref_breast_cancer)
@@ -412,7 +413,7 @@ class TestClassifyCoMention:
             entity2=entity_ref_breast_cancer,
             relationship="associated_with",
             quotes=[quote],
-            confidence="high",
+            evidence=make_evidence(8),
             reasoning="Test",
         )
         pair_key = make_entity_pair_key(entity_ref_brca1, entity_ref_breast_cancer)
@@ -518,7 +519,7 @@ class TestFindNovelCoMentionsInResource:
             entity2=entity_ref_breast_cancer,
             relationship="associated_with",
             quotes=[quote],
-            confidence="high",
+            evidence=make_evidence(8),
             reasoning="Test",
         )
         pair_key = make_entity_pair_key(entity_ref_brca1, entity_ref_breast_cancer)
@@ -569,7 +570,7 @@ class TestCollectAssessedPairs:
             entity2=entity_ref_tp53,
             relationship="interacts_with",
             quotes=[],
-            confidence="high",
+            evidence=make_evidence(8),
             reasoning="Test",
         )
         assessment2 = PairAssessment(
@@ -578,7 +579,7 @@ class TestCollectAssessedPairs:
             entity2=entity_ref_breast_cancer,
             relationship="associated_with",
             quotes=[],
-            confidence="high",
+            evidence=make_evidence(8),
             reasoning="Test",
         )
         result = collect_assessed_pairs(
@@ -597,7 +598,7 @@ class TestCollectAssessedPairs:
             entity2=entity_ref_tp53,
             relationship="interacts_with",
             quotes=[],
-            confidence="high",
+            evidence=make_evidence(8),
             reasoning="Test",
         )
         assessment2 = PairAssessment(
@@ -606,7 +607,7 @@ class TestCollectAssessedPairs:
             entity2=entity_ref_tp53,
             relationship="regulates",
             quotes=[],
-            confidence="medium",
+            evidence=make_evidence(6),
             reasoning="Test",
         )
         result = collect_assessed_pairs(
@@ -985,7 +986,7 @@ class TestAssessCoMentionRegionDiagnostics:
                     entity1_name="UNKNOWN_GENE",  # Not in candidates
                     entity2_name="TP53",
                     relationship="interacts_with",
-                    confidence="high",
+                    evidence=make_evidence(8),
                     supporting_quotes=["Some text"],
                     reasoning="Test",
                 )
@@ -1072,7 +1073,7 @@ class TestAssessCoMentionRegionDiagnostics:
                     entity1_name="BRCA1",
                     entity2_name="UNKNOWN_GENE",  # Not in candidates
                     relationship="interacts_with",
-                    confidence="high",
+                    evidence=make_evidence(8),
                     supporting_quotes=["Some text"],
                     reasoning="Test",
                 )
@@ -1167,7 +1168,7 @@ class TestAssessCoMentionRegionDiagnostics:
                     entity1_name="TP53",
                     entity2_name="breast cancer",
                     relationship="associated_with",
-                    confidence="medium",
+                    evidence=make_evidence(6),
                     supporting_quotes=["Some text"],
                     reasoning="Test",
                 )
@@ -1268,7 +1269,7 @@ class TestAssessCoMentionRegionDiagnostics:
                     entity1_name="UNKNOWN1",
                     entity2_name="TP53",
                     relationship="interacts_with",
-                    confidence="high",
+                    evidence=make_evidence(8),
                     supporting_quotes=["Some text"],
                     reasoning="Test",
                 ),
@@ -1277,7 +1278,7 @@ class TestAssessCoMentionRegionDiagnostics:
                     entity1_name="BRCA1",
                     entity2_name="UNKNOWN2",
                     relationship="regulates",
-                    confidence="medium",
+                    evidence=make_evidence(6),
                     supporting_quotes=["Some text"],
                     reasoning="Test",
                 ),
@@ -1286,7 +1287,7 @@ class TestAssessCoMentionRegionDiagnostics:
                     entity1_name="TP53",
                     entity2_name="breast cancer",
                     relationship="associated_with",
-                    confidence="low",
+                    evidence=make_evidence(3),
                     supporting_quotes=["Some text"],
                     reasoning="Test",
                 ),
@@ -1391,7 +1392,7 @@ class TestAssessCoMentionRegionDiagnostics:
                     entity1_name="TGFB1",  # From global aliases, not in validated_entities
                     entity2_name="BRCA1",
                     relationship="interacts_with",
-                    confidence="high",
+                    evidence=make_evidence(8),
                     supporting_quotes=[
                         "BRCA1 and TP53 interact in DNA damage response pathways"
                     ],
@@ -1499,7 +1500,7 @@ class TestAssessCoMentionRegionDiagnostics:
                     entity1_name="BMPR2",
                     entity2_name="Familial pulmonary arterial hypertension",
                     relationship="associated_with",
-                    confidence="high",
+                    evidence=make_evidence(8),
                     supporting_quotes=[
                         "BRCA1 and TP53 interact in DNA damage response pathways"
                     ],
@@ -1597,7 +1598,7 @@ class TestAssessCoMentionRegionDiagnostics:
                     entity1_name="TP53",
                     entity2_name="breast cancer",
                     relationship="associated_with",
-                    confidence="medium",
+                    evidence=make_evidence(6),
                     # Use a quote that exists in sample_resource
                     supporting_quotes=[
                         "BRCA1 is a tumor suppressor gene associated with breast cancer"
@@ -1700,7 +1701,7 @@ class TestAssessCoMentionRegionDiagnostics:
                     entity1_name="TP53",
                     entity2_name="breast cancer",
                     relationship="associated_with",
-                    confidence="medium",
+                    evidence=make_evidence(6),
                     supporting_quotes=[
                         "BRCA1 is a tumor suppressor gene associated with breast cancer"
                     ],

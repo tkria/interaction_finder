@@ -23,6 +23,7 @@ from interaction_finder.extraction.nodes import ConsolidateRelationshipsNode
 from interaction_finder.extraction.state import State
 from interaction_finder.extraction.utils import build_permitted_pairs
 from interaction_finder.resources import ResourceId, ResourcePool
+from tests.extraction.conftest import make_evidence
 
 
 def create_mock_agent_with_override(run_return_value):
@@ -87,7 +88,7 @@ class TestCollectUniqueRelationships:
                     entity2=EntityRef(canonical=disease.name, mentions=[disease]),
                     relationship="associated_with",
                     quotes=[],
-                    confidence="high",
+                    evidence=make_evidence(8),
                     reasoning="test",
                 ),
             ],
@@ -158,7 +159,7 @@ class TestCollectUniqueRelationships:
                     entity2=entity2_ref,
                     relationship="associated_with",
                     quotes=[],
-                    confidence="high",
+                    evidence=make_evidence(8),
                     reasoning="test",
                 ),
             ],
@@ -169,7 +170,7 @@ class TestCollectUniqueRelationships:
                     entity2=entity2_ref,
                     relationship="increases_risk_of",
                     quotes=[],
-                    confidence="high",
+                    evidence=make_evidence(8),
                     reasoning="test",
                 ),
                 PairAssessment(
@@ -178,7 +179,7 @@ class TestCollectUniqueRelationships:
                     entity2=entity2_ref,
                     relationship="regulates",
                     quotes=[],
-                    confidence="medium",
+                    evidence=make_evidence(6),
                     reasoning="test",
                 ),
             ],
@@ -250,7 +251,7 @@ class TestUnifiedConsolidationIntegration:
                     entity2=entity2_ref,
                     relationship="linked_to",  # Will be consolidated to "associated_with"
                     quotes=[],
-                    confidence="high",
+                    evidence=make_evidence(8),
                     reasoning="test",
                 ),
             ],
@@ -261,7 +262,7 @@ class TestUnifiedConsolidationIntegration:
                     entity2=entity2_ref,
                     relationship="increases_risk_of",  # Will stay as is
                     quotes=[],
-                    confidence="high",
+                    evidence=make_evidence(8),
                     reasoning="test",
                 ),
                 PairAssessment(
@@ -270,7 +271,7 @@ class TestUnifiedConsolidationIntegration:
                     entity2=entity2_ref,
                     relationship="spatial_colocalization",  # Will be marked irrelevant
                     quotes=[],
-                    confidence="low",
+                    evidence=make_evidence(3),
                     reasoning="test",
                 ),
             ],
@@ -372,7 +373,7 @@ class TestUnifiedConsolidationIntegration:
                     entity2=entity2_ref,
                     relationship="associated_with",
                     quotes=[],
-                    confidence="high",
+                    evidence=make_evidence(8),
                     reasoning="test",
                 ),
             ],
@@ -456,7 +457,7 @@ class TestUnifiedConsolidationIntegration:
                     entity2=entity2_ref,
                     relationship="increases_risk_of",
                     quotes=[],
-                    confidence="high",
+                    evidence=make_evidence(8),
                     reasoning="test",
                 ),
                 PairAssessment(
@@ -465,7 +466,7 @@ class TestUnifiedConsolidationIntegration:
                     entity2=entity2_ref,
                     relationship="spatial_colocalization",
                     quotes=[],
-                    confidence="low",
+                    evidence=make_evidence(3),
                     reasoning="test",
                 ),
             ],
@@ -477,7 +478,7 @@ class TestUnifiedConsolidationIntegration:
                     entity2=entity2_ref,
                     relationship="spatial_colocalization",
                     quotes=[],
-                    confidence="low",
+                    evidence=make_evidence(3),
                     reasoning="test",
                 ),
             ],
@@ -576,7 +577,7 @@ class TestUnifiedConsolidationIntegration:
                     entity2=entity2_ref,
                     relationship="associated_with",
                     quotes=[],
-                    confidence="high",
+                    evidence=make_evidence(8),
                     reasoning="test",
                 ),
             ],

@@ -16,6 +16,7 @@ from interaction_finder.extraction.models import (
 )
 from interaction_finder.report import generate_report
 from interaction_finder.resources import ResourcePool, ResourceQuote
+from tests.extraction.conftest import make_evidence
 
 
 def create_minimal_checkpoint() -> PipelineCheckpoint:
@@ -45,19 +46,19 @@ def create_minimal_checkpoint() -> PipelineCheckpoint:
         entity2=entity_ref,
         relationship="test",
         quotes=[quote],
-        confidence="high",
+        evidence=make_evidence(8),
         reasoning="test",
     )
 
     spread = PairSpread(positive=[assessment])
-
     judgment = PairJudgment(
         entity1=SimpleEntity(name="BRCA1", kind="gene", aliases=["BRCA1"]),
         entity2=SimpleEntity(name="Cancer", kind="disease", aliases=["Cancer"]),
         relationship="associated_with",
         spread=spread,
         accepted=True,
-        confidence="high",
+        evidence=make_evidence(8),
+        decision_confidence=0.9,
         reasoning="test reasoning",
     )
 

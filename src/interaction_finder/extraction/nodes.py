@@ -41,11 +41,12 @@ from interaction_finder.extraction.consolidate_entities import (
 )
 from interaction_finder.extraction.models import (
     ClusterDecision,
-    ConsolidatedData,
     EntityKindMerges,
+    EntityMention,
     EntityMergeRule,
     EntityPairKey,
     EntityRef,
+    EvidenceQuality,
     ExtractionMetadata,
     ExtractionResult,
     PairAssessment,
@@ -142,6 +143,46 @@ def _get_entity_aliases(canonical: str, state: "State") -> list[str]:
     if ref := state.global_entities.get(canonical):
         return ref.aliases()
     return []
+
+
+def _aggregate_evidence(assessments: list[PairAssessment]) -> EvidenceQuality:
+    """Aggregate evidence from multiple assessments into a single EvidenceQuality.
+
+    Uses median for overall level (robust to outliers) and mode for factor values.
+    For even counts, takes the lower of the two middle values (conservative).
+    """
+    from collections import Counter
+    from statistics import median_low
+
+    if not assessments:
+        return EvidenceQuality(
+            directness="tangential",
+            source_type="other",
+            specificity="vague",
+            language="speculative",
+            overall=1,
+        )
+    # Use median evidence level (robust, conservative tie-break)
+    levels = [a.evidence.overall for a in assessments]
+    median_level = median_low(levels)
+    # Use most common factor values
+    directness = Counter(a.evidence.directness for a in assessments).most_common(1)[0][
+        0
+    ]
+    source_type = Counter(a.evidence.source_type for a in assessments).most_common(1)[
+        0
+    ][0]
+    specificity = Counter(a.evidence.specificity for a in assessments).most_common(1)[
+        0
+    ][0]
+    language = Counter(a.evidence.language for a in assessments).most_common(1)[0][0]
+    return EvidenceQuality(
+        directness=directness,
+        source_type=source_type,
+        specificity=specificity,
+        language=language,
+        overall=median_level,
+    )
 
 
 async def _save_partial_checkpoint(
@@ -1691,7 +1732,6 @@ For each relationship, provide:
                     assessments, ctx.state.relationship_polarities
                 )
                 first = assessments[0]
-
                 ctx.state.pair_judgments[pair_key] = PairJudgment(
                     entity1=SimpleEntity(
                         name=first.entity1.canonical,
@@ -1706,14 +1746,14 @@ For each relationship, provide:
                     relationship=first.relationship,
                     spread=spread,
                     accepted=False,
-                    confidence="high",
+                    evidence=_aggregate_evidence(assessments),
+                    decision_confidence=0.95,  # High confidence in rejection decision
                     reasoning=(
                         "All relationship types for this pair were classified as "
                         "irrelevant to the research question"
                     ),
                 )
                 filtered_pairs.add(pair_key)
-
         if filtered_pairs:
             self._remove_assessments_for_pairs(filtered_pairs, ctx)
             ctx.deps.logger.info(
@@ -1808,14 +1848,14 @@ class JudgeCrossDocumentNode(BaseNode[State, Deps, ExtractionResult]):
     ) -> tuple[bool, str, str]:
         """Check if we can accept without LLM call.
 
-        Accepts if there are multiple high-confidence assessments with no
-        opposing relationships among them.
+        Accepts if there are multiple strong-evidence assessments (overall >= 7)
+        with no opposing relationships among them.
 
         Returns:
             (can_accept, relationship, reasoning) or (False, "", "")
         """
-        # Need multiple high-confidence assessments
-        high_conf = [a for a in assessments if a.confidence == "high"]
+        # Need multiple strong-evidence assessments (level 7 = ~80% probability)
+        high_conf = [a for a in assessments if a.evidence.overall >= 7]
 
         if len(high_conf) >= 2:
             # Check if all have same relationship (fast path)
@@ -1877,7 +1917,6 @@ class JudgeCrossDocumentNode(BaseNode[State, Deps, ExtractionResult]):
             by_rel[a.relationship].add(a.resource_id.id)
         # Build structured reasoning with header and grouped citations
         if multiple_relationships:
-            rel_list = ", ".join(f"'{r}'" for r in sorted(by_rel.keys()))
             lines = [
                 f"High-confidence consensus across {len(high_conf_assessments)} sources "
                 f"with compatible relationships.\n"
@@ -1983,8 +2022,10 @@ class JudgeCrossDocumentNode(BaseNode[State, Deps, ExtractionResult]):
                 )
                 adjusted_text = adjust_heading_levels(text, target_min_level=4)
                 doc_id = assessment.resource_id.id
+                ev = assessment.evidence
                 section = f"""### Document extract [{doc_id}]: {resource.title}
-**Relationship:** {assessment.relationship} | **Confidence:** {assessment.confidence}
+**Relationship:** {assessment.relationship} | **Evidence level:** {ev.overall}/9
+**Factors:** {ev.directness}, {ev.source_type}, {ev.specificity}, {ev.language}
 **Reasoning:** {assessment.reasoning}
 
 {adjusted_text}"""
@@ -2054,8 +2095,10 @@ Provide: accepted (true/false), relationship (selected from above), confidence (
             )
             adjusted_text = adjust_heading_levels(text, target_min_level=3)
             doc_id = assessment.resource_id.id
+            ev = assessment.evidence
             section = f"""## Document extract [{doc_id}]: {resource.title}
-**Assessment:** {assessment.confidence} confidence - {assessment.relationship}
+**Assessment:** level {ev.overall}/9 - {assessment.relationship}
+**Factors:** {ev.directness}, {ev.source_type}, {ev.specificity}, {ev.language}
 **Reasoning:** {assessment.reasoning}
 
 {adjusted_text}"""
@@ -2081,7 +2124,7 @@ Make a final judgment on an entity association.
 Synthesize the evidence across documents, considering consistency, quality, and contradictions.
 Select the most accurate relationship overall (from the ones found above).
 
-Provide: accepted (true/false), relationship (selected label), confidence (high/medium/low), and detailed reasoning. Cite documents using their IDs in square brackets (e.g., [1_abc12345]) when referencing specific evidence."""
+Provide: accepted (true/false), relationship (selected label), synthesized evidence quality factors, and detailed reasoning. Cite documents using their IDs in square brackets (e.g., [1_abc12345]) when referencing specific evidence."""
 
     def _is_contentious_pair(
         self,
@@ -2131,6 +2174,11 @@ Provide: accepted (true/false), relationship (selected label), confidence (high/
                 if ctx.deps.progress:
                     ctx.deps.progress["Unique pairs"].work()
                 first_assessment = assessments[0]
+                # Aggregate evidence from strong assessments
+                strong = [a for a in assessments if a.evidence.overall >= 7]
+                evidence = _aggregate_evidence(strong)
+                # High decision confidence for deterministic consensus
+                decision_confidence = 0.95 if len(strong) >= 3 else 0.85
                 judgment = PairJudgment(
                     entity1=SimpleEntity(
                         name=first_assessment.entity1.canonical,
@@ -2149,7 +2197,8 @@ Provide: accepted (true/false), relationship (selected label), confidence (high/
                     relationship=relationship,
                     spread=spread,
                     accepted=True,
-                    confidence="high",
+                    evidence=evidence,
+                    decision_confidence=decision_confidence,
                     reasoning=reasoning,
                 )
                 return (pair_key, judgment)
@@ -2186,7 +2235,7 @@ Provide: accepted (true/false), relationship (selected label), confidence (high/
                 # Mark as in-progress for error case (will be marked done in finally)
                 if ctx.deps.progress:
                     ctx.deps.progress["Unique pairs"].work()
-                # Default to rejection with low confidence
+                # Default to rejection with low decision confidence (error case)
                 first_assessment = assessments[0]
                 return (
                     pair_key,
@@ -2208,7 +2257,8 @@ Provide: accepted (true/false), relationship (selected label), confidence (high/
                         relationship=first_assessment.relationship,
                         spread=spread,
                         accepted=False,
-                        confidence="low",
+                        evidence=_aggregate_evidence(assessments),
+                        decision_confidence=0.3,  # Low confidence due to error
                         reasoning=f"Judgment failed due to error: {e}",
                     ),
                 )
@@ -2240,7 +2290,8 @@ Provide: accepted (true/false), relationship (selected label), confidence (high/
                 relationship=result.output.relationship,
                 spread=spread,
                 accepted=result.output.accepted,
-                confidence=result.output.confidence,
+                evidence=result.output.evidence,
+                decision_confidence=result.output.decision_confidence,
                 reasoning=result.output.reasoning,
             )
             return (pair_key, judgment)
@@ -2457,7 +2508,13 @@ class SweepCoMentionsNode(BaseNode[State, Deps, ExtractionResult]):
                             if rel_types
                             else "associated_with",
                             quotes=quotes,
-                            confidence="medium",
+                            evidence=EvidenceQuality(
+                                directness="implied",
+                                source_type="primary",
+                                specificity="associative",
+                                language="hedged",
+                                overall=5,
+                            ),
                             reasoning="Discovered during co-mention sweep",
                             source="sweep",
                         )
@@ -2689,7 +2746,6 @@ For each relationship, provide:
                     assessments, ctx.state.relationship_polarities
                 )
                 first = assessments[0]
-
                 ctx.state.pair_judgments[pair_key] = PairJudgment(
                     entity1=SimpleEntity(
                         name=first.entity1.canonical,
@@ -2704,14 +2760,14 @@ For each relationship, provide:
                     relationship=first.relationship,
                     spread=spread,
                     accepted=False,
-                    confidence="high",
+                    evidence=_aggregate_evidence(assessments),
+                    decision_confidence=0.95,  # High confidence in rejection decision
                     reasoning=(
                         "All relationship types for this pair were classified as "
                         "irrelevant to the research question"
                     ),
                 )
                 filtered_pairs.add(pair_key)
-
         if filtered_pairs:
             # Remove assessments for filtered pairs
             for resource_id, assessments in list(

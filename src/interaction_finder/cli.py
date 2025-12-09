@@ -1080,7 +1080,7 @@ def extract(
                 console.print(
                     f"    Evidence: {total_quotes} quotes, "
                     f"{len(judgment.assessments)} assessments, "
-                    f"confidence: {judgment.confidence}"
+                    f"quality: {judgment.evidence.label} ({judgment.evidence.overall}/9)"
                 )
             if len(accepted_judgments) > 5:
                 console.print(f"  ... and {len(accepted_judgments) - 5} more")

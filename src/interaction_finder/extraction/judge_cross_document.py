@@ -19,74 +19,55 @@ get_cross_document_judge_agent = agent_getter(
 
 Your task is to make a final judgment on whether an entity-entity association is valid
 based on evidence from multiple sources. You will receive:
-1. Per-document assessments with confidence levels and reasoning
+1. Per-document assessments with evidence quality factors and reasoning
 2. All supporting quotes from all documents
 3. The topic and entity information
 
 **Decision framework:**
+- Accept when overall >= 6 across multiple sources OR single source with level >= 8
+- Accept with caution when overall 5-6 with consistent supporting evidence
+- Reject when overall <= 4 across sources OR contradictory high-level evidence
 
-**Accept with high confidence:**
-- Multiple high-confidence assessments with consistent relationship
-- Strong, convergent evidence from independent sources
-- Clear mechanistic support across documents
-- No significant contradictions
-
-**Accept with medium confidence:**
-- Mix of high and medium confidence, leaning positive
-- Consistent but somewhat limited evidence
-- Single high-confidence source with supportive weaker sources
-- Minor inconsistencies that don't undermine core claim
-
-**Accept with low confidence:**
-- Multiple medium/low confidence assessments with consistent message
-- Suggestive but not definitive evidence
-- Limited independent confirmation
-- Acceptable but notable ambiguities
-
-**Reject with high confidence:**
-- Multiple assessments finding no evidence
-- Strong contradictory evidence
-- Consistent lack of support across documents
-
-**Reject with medium confidence:**
-- Mix of weak/no evidence assessments
-- Contradictory claims that can't be reconciled
-- Evidence present but fundamentally flawed or misinterpreted
-
-**Reject with low confidence:**
-- Insufficient evidence to support claim
-- Highly ambiguous or speculative assertions only
-- Evidence quality too poor to draw conclusions
+**Evidence synthesis:**
+Synthesize the per-document evidence factors into an overall assessment:
+- directness: Use the most direct evidence available across documents
+- source_type: Primary research takes precedence over reviews
+- specificity: Prefer mechanistic over associative when available
+- language: Note if sources use consistent or conflicting certainty
+- overall: Weight by source quality and consistency
 
 **Key considerations:**
 1. **Consistency:** Do sources agree on the relationship nature?
 2. **Independence:** Multiple independent sources vs. citations of same work?
-3. **Quality:** Primary research > meta-analyses > reviews > speculation
+3. **Quality:** Primary research > reviews > commentary
 4. **Mechanism:** Is there explanation of how the relationship works?
-5. **Specificity:** Concrete claims > vague associations
-6. **Contradictions:** How to weigh conflicting evidence?
-7. **Recency:** Have newer findings superseded older claims?
+5. **Contradictions:** How to weigh conflicting evidence?
 
 **Special cases:**
-- Conflicting biological effects (e.g., "activates" vs "inhibits", positive vs negative polarity, or semantically opposing relationships) → investigate carefully, may indicate context-dependent effects, study design differences, or genuine biological complexity
-- Single high-confidence + no other evidence → accept with medium confidence (verify but trust strong source)
-- All low confidence → reject unless evidence is consistently suggestive
-- Mixed confidence with contradictions → examine quotes carefully, decide on balance
+- Conflicting biological effects (e.g., "activates" vs "inhibits") → may indicate
+  context-dependent effects; investigate carefully
+- Single high-level source (8-9) + no other evidence → accept cautiously (level ~7)
+- All low-level (≤4) → reject unless consistently suggestive
 
 **Decision guidance:**
 - Make a clear accept/reject decision
-- Choose appropriate confidence level for your decision
+- Synthesize evidence factors across documents
 - Relationship label must be SHORT (1-2 words), a verb phrase, generally applicable
+- Explain what tipped the balance in your reasoning
 
-**Rationale guidance:**
-- Summarize evidence from each document
-- Explain what tipped the balance
-- Acknowledge contradictions or limitations
-- Reference specific strongest evidence
-- Justify your chosen relationship label
+**Decision probability (decision_confidence):**
+After completing your analysis, estimate the probability that your accept/reject decision
+is correct. Think: "If I made this same decision 100 times on similar evidence, how often
+would I be right?"
 
-**Philosophy:** The goal is to identify genuine biological associations while filtering
-noise. Err on the side of accepting well-supported claims, but reject when evidence
-is poor or contradictory. Quality matters more than quantity. Be scientifically rigorous but not overly conservative.""",
+Calibration anchors:
+- 0.95: Near-certain. Multiple independent high-quality sources agree; no reasonable doubt
+- 0.85: Confident. Strong evidence with minor gaps or limitations
+- 0.75: Probable. Good evidence, but some ambiguity or missing confirmation
+- 0.65: Lean. Evidence points one way but alternative interpretation exists
+- 0.55: Slight lean. Marginal evidence; decision could reasonably go either way
+- 0.50: Coin flip. Genuinely uncertain; evidence is balanced or absent
+
+When uncertain between two probability levels, prefer the lower one.""",
     default_model_settings=ModelSettings(parallel_tool_calls=False),
 )
