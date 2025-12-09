@@ -539,7 +539,10 @@ async def assess_document_pairs(
         # Accumulate relationship types and quotes from all occurrences
         pairs_dict[pair_key]["relationship_candidates"].update(rel_types)
         pairs_dict[pair_key]["quotes"].extend(quotes)
-
+    # Update progress total after deduplication (actual work to be done)
+    if deps.progress:
+        deps.progress["Pairs assessed"].total += len(pairs_dict)
+        deps.progress["Pairs assessed"].activate()
     # Assess each unique pair concurrently
     tasks = [
         assess_single_pair(

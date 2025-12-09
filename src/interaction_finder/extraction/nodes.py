@@ -371,12 +371,9 @@ class ProcessDocumentsNode(BaseNode[State, Deps, ExtractionResult]):
                     return  # No pairs found in proximal sets
 
                 # Stage 5: Deduplicate and assess pairs
-                # Note: .work() and .done() are called per-pair inside assess_single_pair
+                # Note: total, .work() and .done() are updated inside assess_document_pairs
                 if ctx.deps.progress:
-                    ctx.deps.progress["Pairs assessed"].total += len(pairs)
-                    ctx.deps.progress["Pairs assessed"].activate()
                     ctx.deps.progress.set_status("Assessing pairs")
-
                 assessments = await assess_document_pairs(
                     pairs,
                     ctx.state.validated_entities_by_resource[resource.id],
