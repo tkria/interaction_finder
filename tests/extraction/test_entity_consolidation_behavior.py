@@ -1173,7 +1173,7 @@ class TestMultipleClusterDecisions:
 
         with patch("interaction_finder.agent_config.agent_getter") as mock_getter:
             mock_getter.return_value = lambda config: mock_agent
-            rules, new_names = await node._get_group_consolidation_decisions(
+            rules, new_names, _ = await node._get_group_consolidation_decisions(
                 [group], [merge_tree], "phenotype", entities, ctx
             )
 
@@ -1239,7 +1239,7 @@ class TestMultipleClusterDecisions:
 
         with patch("interaction_finder.agent_config.agent_getter") as mock_getter:
             mock_getter.return_value = lambda config: mock_agent
-            rules, new_names = await node._get_group_consolidation_decisions(
+            rules, new_names, _ = await node._get_group_consolidation_decisions(
                 [group], [merge_tree], "phenotype", entities, ctx
             )
 
@@ -1302,7 +1302,7 @@ class TestMultipleClusterDecisions:
 
         with patch("interaction_finder.agent_config.agent_getter") as mock_getter:
             mock_getter.return_value = lambda config: mock_agent
-            rules, new_names = await node._get_group_consolidation_decisions(
+            rules, new_names, _ = await node._get_group_consolidation_decisions(
                 [group], [merge_tree], "phenotype", entities, ctx
             )
 
@@ -1375,7 +1375,7 @@ class TestMultipleClusterDecisions:
 
         with patch("interaction_finder.agent_config.agent_getter") as mock_getter:
             mock_getter.return_value = lambda config: mock_agent
-            rules, new_names = await node._get_group_consolidation_decisions(
+            rules, new_names, _ = await node._get_group_consolidation_decisions(
                 [group], [merge_tree], "phenotype", entities, ctx
             )
 
@@ -1384,3 +1384,92 @@ class TestMultipleClusterDecisions:
         # Unrelated Thing should NOT appear in any merge rules
         merged_sources = {norm_name for (norm_name, kind) in rules.keys()}
         assert "unrelated thing" not in merged_sources
+
+
+class TestResolvedGroupsTracking:
+    """Test that resolved groups are tracked and not re-asked."""
+
+    @pytest.mark.asyncio
+    async def test_returns_kept_separate_as_resolved(self, mock_deps):
+        """Groups kept separate should be returned as resolved."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from interaction_finder.extraction.models import ClusterDecisions
+        from interaction_finder.extraction.clustering import Cluster
+
+        state = State(
+            topic="test",
+            target_entity_types=["gene"],
+            permitted_pairs=build_permitted_pairs(["gene"]),
+        )
+        node = ConsolidateEntitiesNode()
+        ctx = GraphRunContext(state=state, deps=mock_deps)
+        group1 = frozenset(["Gene A", "Gene B"])
+        group2 = frozenset(["Gene X", "Gene Y"])
+        entities = {name: [] for g in [group1, group2] for name in g}
+        merge_tree1 = Cluster(entities=group1, similarity=0.5)
+        merge_tree2 = Cluster(entities=group2, similarity=0.5)
+        # LLM returns no decisions - both groups kept separate
+        mock_agent = MagicMock()
+        mock_agent.run = AsyncMock(
+            return_value=MagicMock(output=ClusterDecisions(decisions=[]))
+        )
+        with patch("interaction_finder.agent_config.agent_getter") as mock_getter:
+            mock_getter.return_value = lambda config: mock_agent
+            rules, new_names, resolved = await node._get_group_consolidation_decisions(
+                [group1, group2], [merge_tree1, merge_tree2], "gene", entities, ctx
+            )
+        assert len(resolved) == 2
+        assert group1 in resolved
+        assert group2 in resolved
+        assert len(rules) == 0
+
+    @pytest.mark.asyncio
+    async def test_merged_groups_not_in_resolved(self, mock_deps):
+        """Groups that were merged should not be in resolved (they're transformed)."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from interaction_finder.extraction.models import (
+            ClusterDecision,
+            ClusterDecisions,
+        )
+        from interaction_finder.extraction.clustering import Cluster
+
+        state = State(
+            topic="test",
+            target_entity_types=["gene"],
+            permitted_pairs=build_permitted_pairs(["gene"]),
+        )
+        node = ConsolidateEntitiesNode()
+        ctx = GraphRunContext(state=state, deps=mock_deps)
+        group = frozenset(["Gene A", "Gene B"])
+        entities = {name: [] for name in group}
+        merge_tree = Cluster(entities=group, similarity=0.8)
+
+        def make_mock_result(prompt):
+            import re
+
+            match = re.search(r"## Group (\w+)", prompt)
+            if match:
+                return MagicMock(
+                    output=ClusterDecisions(
+                        decisions=[
+                            ClusterDecision(
+                                group_id=match.group(1),
+                                action="merge",
+                                target="1",
+                                reasoning="Same gene",
+                            )
+                        ]
+                    )
+                )
+            return MagicMock(output=ClusterDecisions(decisions=[]))
+
+        mock_agent = MagicMock()
+        mock_agent.run = AsyncMock(side_effect=make_mock_result)
+        with patch("interaction_finder.agent_config.agent_getter") as mock_getter:
+            mock_getter.return_value = lambda config: mock_agent
+            rules, new_names, resolved = await node._get_group_consolidation_decisions(
+                [group], [merge_tree], "gene", entities, ctx
+            )
+        # Merged group is not "kept separate" - it was acted upon
+        assert group not in resolved
+        assert len(rules) == 1  # Gene B -> Gene A

@@ -434,6 +434,8 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
             iterations_completed = 0
             # Collect entities once, then iteratively find/process merge opportunities
             entities_by_kind, mentions_by_kind = self._collect_entity_variants(ctx)
+            # Track groups already resolved (kept separate) to avoid re-asking
+            resolved_groups_by_kind: dict[str, set[frozenset[str]]] = {}
             for iteration in range(1, max_iterations + 1):
                 iterations_completed = iteration
 
@@ -452,6 +454,23 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
                     candidates = find_consolidation_candidates(
                         entities, threshold, mention_counts, ctx.deps.logger
                     )
+                    # Filter out groups already resolved in previous iterations
+                    resolved = resolved_groups_by_kind.setdefault(kind, set())
+                    new_groups = [
+                        g for g in candidates.agent_review_groups if g not in resolved
+                    ]
+                    filtered_count = len(candidates.agent_review_groups) - len(
+                        new_groups
+                    )
+                    candidates.agent_review_groups = new_groups
+                    # Also filter merge_trees to match
+                    if filtered_count > 0:
+                        new_group_set = set(new_groups)
+                        candidates.merge_trees = [
+                            t
+                            for t in candidates.merge_trees
+                            if t.entities in new_group_set
+                        ]
                     # Track clusters presented to LLM in consolidated data
                     if candidates.agent_review_groups:
                         kind_merges = ctx.state.consolidated.entities.merges.setdefault(
@@ -463,10 +482,15 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
                     multi_member_groups = [
                         g for g in candidates.agent_review_groups if len(g) > 1
                     ]
+                    skip_info = (
+                        f" ({filtered_count} already resolved)"
+                        if filtered_count
+                        else ""
+                    )
                     ctx.deps.logger.info(
                         f"  Clustering produced {len(candidates.auto_merge)} auto-merges, "
                         f"{len(candidates.agent_review)} pairwise reviews, "
-                        f"{len(multi_member_groups)} groups for LLM review"
+                        f"{len(multi_member_groups)} groups for LLM review{skip_info}"
                     )
 
                     # Helper: format a single variant with spec level and optional source
@@ -538,6 +562,7 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
                         (
                             group_rules,
                             group_new_names,
+                            group_resolved,
                         ) = await self._get_group_consolidation_decisions(
                             candidates.agent_review_groups,
                             candidates.merge_trees,
@@ -547,6 +572,7 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
                         )
                         all_rules.update(group_rules)
                         new_names.update(group_new_names)
+                        resolved.update(group_resolved)
 
                 if not all_rules:
                     break  # No more work to do
@@ -856,7 +882,7 @@ Only return pairs that should merge or be renamed. Omit pairs that should remain
         kind: str,
         entities: dict[str, list[SpeculatedVariant]],
         ctx: GraphRunContext[State, Deps],
-    ) -> tuple[dict[tuple[str, str], tuple[str, str]], set[str]]:
+    ) -> tuple[dict[tuple[str, str], tuple[str, str]], set[str], set[frozenset[str]]]:
         """Query LLM for group consolidation decisions using tree-based splitting.
 
         Uses hierarchical merge trees for surgical splits instead of re-clustering:
@@ -872,20 +898,24 @@ Only return pairs that should merge or be renamed. Omit pairs that should remain
             ctx: Graph run context
 
         Returns:
-            Tuple of (rules, new_names) where:
+            Tuple of (rules, new_names, resolved_groups) where:
             - rules maps (norm_member, kind) → (target, reasoning)
             - new_names is set of new canonical names (for renames)
+            - resolved_groups is set of groups that were fully resolved (merged or kept separate)
         """
         from interaction_finder.extraction.models import ClusterDecisions
         from interaction_finder.agent_config import agent_getter
         from interaction_finder.extraction.clustering import Cluster
 
         if not groups:
-            return {}, set()
+            return {}, set(), set()
 
         max_rounds = ctx.deps.config.tools.extraction.cluster_refinement_max_rounds
         all_rules: dict[tuple[str, str], tuple[str, str]] = {}
         all_new_names: set[str] = set()
+        all_resolved: set[frozenset[str]] = (
+            set()
+        )  # Groups fully resolved (merged/kept separate)
         # Build map from frozenset → tree for splitting
         group_to_tree: dict[frozenset[str], Cluster] = {
             tree.entities: tree for tree in merge_trees
@@ -922,36 +952,38 @@ Only return groups that need action (merge/exclude/split). Omit groups that shou
         )
         agent = get_agent(ctx.deps.config)
         current_groups = list(groups)
+        batch_size = ctx.deps.config.tools.extraction.merge_batch_size
+        entity_types_str = ", ".join(ctx.state.target_entity_types)
 
         for round_num in range(1, max_rounds + 1):
             if not current_groups:
                 break
+            num_batches = -(-len(current_groups) // batch_size)  # ceil division
+            batch_suffix = f" in {num_batches} batches" if num_batches > 1 else ""
             ctx.deps.logger.info(
-                f"Entity consolidation round {round_num}/{max_rounds}: "
-                f"reviewing {len(current_groups)} groups ({sum(len(g) for g in current_groups)} entities)"
+                f"Entity group consolidation round {round_num}/{max_rounds}: "
+                f"{len(current_groups)} groups{batch_suffix}"
             )
-            # Format groups for prompt
-            group_data = []
-            for group in current_groups:
-                members_sorted = sorted(group, key=lambda e: (len(e), e))
-                group_id = _generate_token()
-                group_data.append(
+            # Process batches, collecting groups that need further review
+            groups_needing_review: list[frozenset[str]] = []
+            stats = {"merged": 0, "split": 0, "excluded": 0, "kept_separate": 0}
+            for batch_start in range(0, len(current_groups), batch_size):
+                batch = current_groups[batch_start : batch_start + batch_size]
+                # Build prompt data for this batch
+                group_data = [
                     {
-                        "group_id": group_id,
-                        "entities": group,
-                        "members": [
-                            {"number": i + 1, "name": m}
-                            for i, m in enumerate(members_sorted)
-                        ],
+                        "id": _generate_token(),
+                        "entities": g,
+                        "members": sorted(g, key=lambda e: (len(e), e)),
                     }
+                    for g in batch
+                ]
+                groups_text = "\n\n".join(
+                    f"## Group {g['id']}\nMembers:\n"
+                    + "\n".join(f"  {i + 1}. {m}" for i, m in enumerate(g["members"]))
+                    for g in group_data
                 )
-            entity_types_str = ", ".join(ctx.state.target_entity_types)
-            groups_text = "\n\n".join(
-                f"## Group {g['group_id']}\nMembers:\n"
-                + "\n".join(f"  {m['number']}. {m['name']}" for m in g["members"])
-                for g in group_data
-            )
-            prompt = f"""**Research topic:** {ctx.state.topic}
+                prompt = f"""**Research topic:** {ctx.state.topic}
 **Target entity types:** {entity_types_str}
 
 **Entity groups to consolidate:**
@@ -967,114 +999,96 @@ Examples:
 - Exclude: group_id="def", action="exclude", target="5", reasoning="Member 5 (TAPSE) is a measurement"
 - Split: group_id="ghi", action="split", reasoning="Mixes diseases and measurements"
 """
-            async with ctx.deps.agent_semaphore:
-                result = await agent.run(prompt)
-            id_to_data = {g["group_id"]: g for g in group_data}
-            # Collect decisions by group_id to handle multiple decisions per group
-            decisions_by_group: dict[str, list[ClusterDecision]] = {}
-            for decision in result.output.decisions:
-                if decision.group_id not in id_to_data:
-                    ctx.deps.logger.warning(
-                        f"LLM returned unknown group_id '{decision.group_id}', skipping"
-                    )
-                    continue
-                decisions_by_group.setdefault(decision.group_id, []).append(decision)
-            # Process each group's decisions together
-            groups_needing_review: list[frozenset[str]] = []
-            stats = {"merged": 0, "split": 0, "excluded": 0}
-            for group_id, decisions in decisions_by_group.items():
-                data = id_to_data[group_id]
-                members = [m["name"] for m in data["members"]]
-                group_entities: frozenset[str] = data["entities"]
-                # Separate decision types
-                excludes = [d for d in decisions if d.action == "exclude"]
-                merges = [d for d in decisions if d.action == "merge"]
-                splits = [d for d in decisions if d.action == "split"]
-                # Validate: merge + split is contradictory
-                if merges and splits:
-                    ctx.deps.logger.warning(
-                        f"Group {group_id}: merge and split are contradictory, skipping"
-                    )
-                    continue
-                # Apply excludes first to get remaining members
-                remaining = set(members)
-                excluded_names = []
-                for exc in excludes:
-                    if not exc.target:
+                async with ctx.deps.agent_semaphore:
+                    result = await agent.run(prompt)
+                # Index decisions by group_id
+                id_to_group = {g["id"]: g for g in group_data}
+                decisions_by_id: dict[str, list[ClusterDecision]] = {}
+                for d in result.output.decisions:
+                    if d.group_id not in id_to_group:
+                        ctx.deps.logger.warning(f"Unknown group_id '{d.group_id}'")
                         continue
-                    member = self._resolve_group_target(exc.target, members, entities)
-                    if member in remaining:
-                        remaining.discard(member)
-                        excluded_names.append(member)
-                        stats["excluded"] += 1
-                if excluded_names:
-                    ctx.deps.logger.info(
-                        f"  Group {group_id}: excluded {excluded_names}"
-                    )
-                # If nothing left to process, done with this group
-                if len(remaining) <= 1:
-                    continue
-                remaining_entities = frozenset(remaining)
-                # Now apply merge or split to the remainder
-                if merges:
-                    merge = merges[0]  # Use first merge decision
-                    if not merge.target:
-                        ctx.deps.logger.warning(
-                            f"Group {group_id}: merge requires target, skipping"
-                        )
+                    decisions_by_id.setdefault(d.group_id, []).append(d)
+                # Process decisions
+                groups_with_decisions: set[frozenset[str]] = set()
+                for gid, decisions in decisions_by_id.items():
+                    g = id_to_group[gid]
+                    groups_with_decisions.add(g["entities"])
+                    members = g["members"]
+                    # Categorize decisions
+                    excludes = [d for d in decisions if d.action == "exclude"]
+                    merges = [d for d in decisions if d.action == "merge"]
+                    splits = [d for d in decisions if d.action == "split"]
+                    if merges and splits:
+                        ctx.deps.logger.warning(f"Group {gid}: merge+split conflict")
                         continue
-                    target = self._resolve_group_target(
-                        merge.target, list(remaining), entities
-                    )
-                    if target not in entities:
-                        all_new_names.add(target)
-                    for member in remaining:
-                        if member != target:
-                            all_rules[(normalize_for_comparison(member), kind)] = (
-                                target,
-                                merge.reasoning or f"Group {group_id}",
+                    # Apply excludes first
+                    remaining = set(members)
+                    for exc in excludes:
+                        if exc.target:
+                            member = self._resolve_group_target(
+                                exc.target, members, entities
                             )
-                    stats["merged"] += 1
-                elif splits:
-                    ctx.deps.logger.info(
-                        f"  Group {group_id} ({len(remaining)} members) → "
-                        f"split at weakest link"
-                    )
-                    # Split the remaining entities using tree
-                    tree = group_to_tree.get(group_entities)
-                    if excluded_names and tree:
-                        # Find subtree for remaining entities
-                        tree = tree.find_subtree(remaining_entities)
-                    if tree is None:
-                        tree = group_to_tree.get(remaining_entities)
-                    if tree is None:
-                        ctx.deps.logger.warning(
-                            f"No merge tree for group {group_id}, skipping split"
-                        )
+                            if member in remaining:
+                                remaining.discard(member)
+                                stats["excluded"] += 1
+                    if len(remaining) <= 1:
                         continue
-                    sub_clusters = tree.split_into_n(2)
-                    for sub in sub_clusters:
-                        if len(sub) > 1:
-                            groups_needing_review.append(sub)
-                            if sub not in group_to_tree:
-                                subtree = tree.find_subtree(sub)
-                                if subtree:
-                                    group_to_tree[sub] = subtree
-                    stats["split"] += 1
-                elif excludes:
-                    # Excludes only: queue remaining for next round review
-                    groups_needing_review.append(remaining_entities)
-                    tree = group_to_tree.get(group_entities)
-                    if tree:
-                        subtree = tree.find_subtree(remaining_entities)
-                        if subtree:
-                            group_to_tree[remaining_entities] = subtree
-            # Count groups kept separate (no decisions returned)
-            groups_with_decisions = len(decisions_by_group)
+                    remaining_entities = frozenset(remaining)
+                    # Apply merge or split (resolve target against original members list)
+                    if merges:
+                        merge = merges[0]
+                        if not merge.target:
+                            continue
+                        target = self._resolve_group_target(
+                            merge.target, members, entities
+                        )
+                        # Check if target was an existing member that got excluded
+                        if target in members and target not in remaining:
+                            ctx.deps.logger.warning(
+                                f"Group {gid}: merge target '{target}' was excluded"
+                            )
+                            continue
+                        if target not in entities:
+                            all_new_names.add(target)
+                        for member in remaining:
+                            if member != target:
+                                all_rules[(normalize_for_comparison(member), kind)] = (
+                                    target,
+                                    merge.reasoning or f"Group {gid}",
+                                )
+                        stats["merged"] += 1
+                    elif splits:
+                        tree = group_to_tree.get(g["entities"]) or group_to_tree.get(
+                            remaining_entities
+                        )
+                        if tree and len(remaining) < len(g["entities"]):
+                            tree = tree.find_subtree(remaining_entities) or tree
+                        if not tree:
+                            ctx.deps.logger.warning(f"No tree for group {gid}")
+                            continue
+                        for sub in tree.split_into_n(2):
+                            if len(sub) > 1:
+                                groups_needing_review.append(sub)
+                                if sub not in group_to_tree and (
+                                    st := tree.find_subtree(sub)
+                                ):
+                                    group_to_tree[sub] = st
+                        stats["split"] += 1
+                    elif excludes:
+                        # Only excludes: queue remainder for review
+                        groups_needing_review.append(remaining_entities)
+                        if (tree := group_to_tree.get(g["entities"])) and (
+                            st := tree.find_subtree(remaining_entities)
+                        ):
+                            group_to_tree[remaining_entities] = st
+                # Groups without decisions are kept separate - mark as resolved
+                kept_separate = set(batch) - groups_with_decisions
+                all_resolved.update(kept_separate)
+                stats["kept_separate"] += len(kept_separate)
             ctx.deps.logger.info(
-                f"  Round {round_num} results: {stats['merged']} merged, "
-                f"{stats['split']} split, {stats['excluded']} excluded, "
-                f"{len(current_groups) - groups_with_decisions} kept separate"
+                f"  Results: {stats['merged']} merged, {stats['split']} split, "
+                f"{stats['excluded']} excluded, {stats['kept_separate']} separate"
             )
             if not groups_needing_review:
                 break
@@ -1084,7 +1098,7 @@ Examples:
             f"Entity group consolidation complete: {len(all_rules)} merge rules created, "
             f"{len(all_new_names)} new canonical names"
         )
-        return all_rules, all_new_names
+        return all_rules, all_new_names, all_resolved
 
     def _resolve_group_target(
         self,

@@ -279,13 +279,13 @@ class IfetcherConfig(BaseModel):
                 description="Number of chunks to pad around text regions",
             )
             merge_batch_size: int = Field(
-                50,
+                20,
                 ge=1,
                 le=200,
                 description="Maximum number of entity consolidation decisions per LLM call",
             )
             max_rename_iterations: int = Field(
-                3,
+                5,
                 ge=1,
                 le=10,
                 description="Maximum iterations for entity rename re-evaluation loop",
@@ -297,9 +297,9 @@ class IfetcherConfig(BaseModel):
                 description="Minimum token overlap proportion for clustering entities (0.0-1.0)",
             )
             cluster_refinement_max_rounds: int = Field(
-                3,
+                10,
                 ge=1,
-                le=5,
+                le=20,
                 description="Maximum rounds of iterative cluster refinement via LLM review",
             )
             filter_irrelevant_relationships: bool = Field(
