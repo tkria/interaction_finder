@@ -52,6 +52,7 @@ def _render_pair_cards(pairs: list[dict[str, Any]]) -> str:
                     # First assessment's polarity/evidence for badge display
                     "polarity": g["assessments"][0].get("polarity"),
                     "overall": g["assessments"][0].get("overall"),
+                    "label": g["assessments"][0].get("label"),
                 }
                 for g in pair["document_groups"]
             ]
@@ -88,7 +89,7 @@ def _render_pair_cards(pairs: list[dict[str, Any]]) -> str:
 
         # Build compact polarity pill with counts and tooltips
         polarity_summary = pair.get("polarity_summary", {})
-        polarity_labels = {
+        polarity_tooltips = {
             "positive": "Positive relationships",
             "negative": "Negating relationships",
             "neutral": "Neutral relationships",
@@ -98,10 +99,10 @@ def _render_pair_cards(pairs: list[dict[str, Any]]) -> str:
             info = polarity_summary.get(polarity)
             if info and info.get("count", 0) > 0:
                 count = info["count"]
-                label = polarity_labels[polarity]
+                tooltip = polarity_tooltips[polarity]
                 polarity_counts.append(
                     f'<span class="polarity-count polarity-{polarity}" '
-                    f'data-tooltip="{label}">{count}</span>'
+                    f'data-tooltip="{tooltip}">{count}</span>'
                 )
         polarity_html = (
             f'<span class="polarity-pill">{"".join(polarity_counts)}</span>'
@@ -111,7 +112,7 @@ def _render_pair_cards(pairs: list[dict[str, Any]]) -> str:
 
         summary_html = f"""
             <div class="pair-summary">
-                <span class="pair-counts">{doc_count}d {quote_count}q</span>{polarity_html}<span class="evidence-badge evidence-{overall}" data-tooltip="Evidence level {overall}/9">{_escape_html(label.upper())}</span>
+                <span class="pair-counts">{doc_count}d {quote_count}q</span>{polarity_html}<span class="evidence-badge evidence-{overall}">{_escape_html(label.upper())}</span>
             </div>"""
 
         # Build complete card with minimal data-attributes

@@ -1415,7 +1415,7 @@ function renderContent() {
     // Render one accordion per document (groups may consolidate multiple assessments)
     content.innerHTML = docGroups.map((group, idx) => {
         const {doc_idx: docIdx, total_quotes: quotes, assessment_count: count,
-               relationships, polarity, confidence} = group;
+               relationships, polarity, overall, label} = group;
 
         const template = document.getElementById(`doc-template-${docIdx}`);
         if (!template) return '';
@@ -1436,14 +1436,14 @@ function renderContent() {
                 ? `<span class="relationship-label-small">${escapeHtml(relationships[0].replace(/_/g, ' '))}</span>`
                 : '';
 
-        // Build polarity/confidence badge
+        // Build polarity/evidence badge (two-segment pill)
         const polarityMap = {positive: '+', negative: '-', neutral: 'N', irrelevant: 'I'};
-        const badge = polarity && confidence
+        const badge = polarity && overall
             ? `<span class="pc-pill">
                    <span class="${escapeHtml(polarity)}">${escapeHtml(polarityMap[polarity] || polarity)}</span>
-                   <span class="confidence-${escapeHtml(confidence)}">${escapeHtml(confidence)}</span>
+                   <span class="evidence-${overall}">${escapeHtml(label || '')}</span>
                </span>`
-            : confidence ? `<span class="confidence-${escapeHtml(confidence)}">${escapeHtml(confidence)}</span>`
+            : overall ? `<span class="evidence-badge evidence-${overall}">${escapeHtml(label || '')}</span>`
             : polarity ? `<span class="polarity-badge polarity-${escapeHtml(polarity)}">${escapeHtml(polarityMap[polarity] || polarity)}</span>`
             : '';
 
