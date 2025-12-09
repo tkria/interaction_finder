@@ -39,7 +39,7 @@ from interaction_finder.resources import ResourceId
 # Maps field_name → (handler_type, inner_type_for_validation)
 _SERIALIZATION_REGISTRY: dict[str, tuple[str, type | None]] = {
     "entities_by_resource": ("by_resource", dict[str, EntityMention]),
-    "validated_entities_by_resource": ("by_resource", dict[str, EntityRef]),
+    "validated_entities_by_resource": ("entity_ref_by_resource", dict[str, EntityRef]),
     "proximal_sets_by_resource": ("by_resource", list[ProximalEntitySet]),
     "pair_assessments_by_resource": ("by_resource", list[PairAssessment]),
     "pair_judgments": ("pair_key", PairJudgment),
@@ -195,6 +195,24 @@ class State:
                     key_str(k): TypeAdapter(inner_type).dump_python(v, mode="json")
                     for k, v in value.items()
                 }
+            elif handler_type == "entity_ref_by_resource":
+                # dict[ResourceId, dict[str, EntityRef]] → preserve full EntityRef data
+                # Bypass EntityRef's JSON serializer that returns only canonical string
+                from pydantic.json_schema import to_jsonable_python
+
+                result[fld.name] = {
+                    key_str(k): {
+                        name: {
+                            "canonical": ref.canonical,
+                            "mentions": to_jsonable_python(
+                                ref.mentions,
+                                fallback=lambda x: x.model_dump(mode="json"),
+                            ),
+                        }
+                        for name, ref in entities.items()
+                    }
+                    for k, entities in value.items()
+                }
             elif handler_type == "pair_key":
                 # dict[EntityPairKey, X] → dict[str, X_serialized]
                 result[fld.name] = {
@@ -263,12 +281,18 @@ class State:
             if handler_type == "by_resource":
                 # dict[str, X_serialized] → dict[ResourceId, X]
                 # Rehydrate quotes in entity fields before validation
-                if fld.name in (
-                    "entities_by_resource",
-                    "validated_entities_by_resource",
-                ):
+                if fld.name == "entities_by_resource":
                     _rehydrate_entity_quotes(value_data, resource_pool)
 
+                value = {
+                    get_rid(url): TypeAdapter(inner_type).validate_python(v)
+                    for url, v in value_data.items()
+                }
+                setattr(state, fld.name, value)
+
+            elif handler_type == "entity_ref_by_resource":
+                # dict[str, dict[str, EntityRef_data]] → dict[ResourceId, dict[str, EntityRef]]
+                _rehydrate_entity_quotes(value_data, resource_pool)
                 value = {
                     get_rid(url): TypeAdapter(inner_type).validate_python(v)
                     for url, v in value_data.items()

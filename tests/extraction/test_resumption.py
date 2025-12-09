@@ -268,5 +268,142 @@ def test_checkpoint_backward_compatibility():
     assert metadata.is_resumable is False
 
 
+def test_validated_entities_preserve_mentions_and_aliases():
+    """Test that validated_entities_by_resource preserves full EntityRef data.
+
+    EntityRef contains mentions with original names, aliases, and quotes.
+    This data must survive serialization roundtrip for checkpoint resumption.
+    """
+    pool = ResourcePool()
+    resource = pool.add(
+        url="http://example.com/doc1",
+        title="Test Document",
+        document_text="Gene BRCA1 (breast cancer 1) is important.",
+    )
+    rid = resource.id
+
+    state = State(
+        topic="test",
+        target_entity_types=["gene"],
+        permitted_pairs={"gene": {"gene"}},
+    )
+
+    # Create EntityRef with mentions that have aliases and quotes
+    mention = EntityMention(
+        kind="gene",
+        name="BRCA1",
+        aliases=["breast cancer 1", "BRCA-1"],
+        quotes=[
+            ResourceQuote(
+                resource=resource,
+                text="Gene BRCA1 (breast cancer 1) is important.",
+            )
+        ],
+        reasoning="Important cancer gene",
+    )
+    entity_ref = EntityRef(canonical="BRCA1", mentions=[mention])
+
+    state.validated_entities_by_resource[rid] = {"BRCA1": entity_ref}
+
+    # Serialize
+    state_dict = state.to_dict()
+
+    # Verify serialized structure preserves full data
+    serialized_entities = state_dict["validated_entities_by_resource"]
+    assert rid.url in serialized_entities
+    entity_data = serialized_entities[rid.url]["BRCA1"]
+    assert entity_data["canonical"] == "BRCA1"
+    assert len(entity_data["mentions"]) == 1
+    assert entity_data["mentions"][0]["name"] == "BRCA1"
+    assert entity_data["mentions"][0]["aliases"] == ["breast cancer 1", "BRCA-1"]
+    assert len(entity_data["mentions"][0]["quotes"]) == 1
+
+    # Deserialize
+    restored_state = State.from_dict(
+        state_dict,
+        topic="test",
+        target_entity_types=["gene"],
+        permitted_pairs={"gene": {"gene"}},
+        resource_pool=pool,
+    )
+
+    # Verify full EntityRef data restored
+    restored_entities = restored_state.validated_entities_by_resource[rid]
+    assert "BRCA1" in restored_entities
+    restored_ref = restored_entities["BRCA1"]
+    assert restored_ref.canonical == "BRCA1"
+    assert len(restored_ref.mentions) == 1
+    assert restored_ref.mentions[0].name == "BRCA1"
+    assert restored_ref.mentions[0].aliases == ["breast cancer 1", "BRCA-1"]
+    assert len(restored_ref.mentions[0].quotes) == 1
+    # Verify aliases() method works correctly
+    assert set(restored_ref.aliases()) == {"breast cancer 1", "BRCA-1"}
+
+
+def test_validated_entities_preserve_merged_mentions():
+    """Test that merged EntityRefs preserve all original mentions.
+
+    When entities A and B merge into A, the resulting EntityRef should have
+    mentions from both original entities, and B's original name should appear
+    in aliases.
+    """
+    pool = ResourcePool()
+    resource = pool.add(
+        url="http://example.com/doc1",
+        title="Test Document",
+        document_text="TP53 and p53 are the same gene.",
+    )
+    rid = resource.id
+
+    state = State(
+        topic="test",
+        target_entity_types=["gene"],
+        permitted_pairs={"gene": {"gene"}},
+    )
+
+    # Simulate merged entity: TP53 absorbed p53
+    mention1 = EntityMention(
+        kind="gene",
+        name="TP53",
+        aliases=["tumor protein p53"],
+        quotes=[],
+        reasoning="Standard name",
+    )
+    mention2 = EntityMention(
+        kind="gene",
+        name="p53",  # Original name differs from canonical
+        aliases=["tumor suppressor p53"],
+        quotes=[],
+        reasoning="Common alias",
+    )
+    # Merged EntityRef has both mentions
+    merged_ref = EntityRef(canonical="TP53", mentions=[mention1, mention2])
+
+    state.validated_entities_by_resource[rid] = {"TP53": merged_ref}
+
+    # Serialize and deserialize
+    state_dict = state.to_dict()
+    restored_state = State.from_dict(
+        state_dict,
+        topic="test",
+        target_entity_types=["gene"],
+        permitted_pairs={"gene": {"gene"}},
+        resource_pool=pool,
+    )
+
+    # Verify both mentions preserved
+    restored_ref = restored_state.validated_entities_by_resource[rid]["TP53"]
+    assert len(restored_ref.mentions) == 2
+
+    # Verify aliases() aggregates correctly:
+    # - "p53" from mention2.name (differs from canonical)
+    # - "tumor protein p53" from mention1.aliases
+    # - "tumor suppressor p53" from mention2.aliases
+    aliases = restored_ref.aliases()
+    assert "p53" in aliases  # Original name of merged entity
+    assert "tumor protein p53" in aliases
+    assert "tumor suppressor p53" in aliases
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
