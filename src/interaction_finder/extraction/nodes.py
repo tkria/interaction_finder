@@ -137,6 +137,13 @@ def _resolve_pair_from_decision(
     return (canonical_pair, norm_child)
 
 
+def _get_entity_aliases(canonical: str, state: "State") -> list[str]:
+    """Get aliases for an entity from the global index."""
+    if ref := state.global_entities.get(canonical):
+        return ref.aliases()
+    return []
+
+
 async def _save_partial_checkpoint(
     ctx: GraphRunContext[State, Deps], stage: str
 ) -> None:
@@ -605,6 +612,9 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
                 f"Entity consolidation: {total_rules} rules applied, "
                 f"{ctx.state.entities_merged} entities merged{iterations_suffix}",
             )
+
+            # Build global entity index (aggregate mentions across all resources)
+            self._build_global_entity_index(ctx)
 
             # Save checkpoint after entity consolidation
             await _save_partial_checkpoint(ctx, "consolidate_entities")
@@ -1437,6 +1447,19 @@ For each pair, decide the appropriate action (skip, merge, or rename)."""
                             mentions=assessment.entity2.mentions,
                         )
 
+    def _build_global_entity_index(self, ctx: GraphRunContext[State, Deps]) -> None:
+        """Aggregate mentions across all resources into global entity index."""
+        from collections import defaultdict
+
+        mentions_by_canonical: dict[str, list[EntityMention]] = defaultdict(list)
+        for entities in ctx.state.validated_entities_by_resource.values():
+            for canonical, ref in entities.items():
+                mentions_by_canonical[canonical].extend(ref.mentions)
+        ctx.state.global_entities = {
+            c: EntityRef(canonical=c, mentions=m)
+            for c, m in mentions_by_canonical.items()
+        }
+
 
 @dataclass
 class ConsolidateRelationshipsNode(BaseNode[State, Deps, ExtractionResult]):
@@ -1673,12 +1696,12 @@ For each relationship, provide:
                     entity1=SimpleEntity(
                         name=first.entity1.canonical,
                         kind=first.entity1.kind,
-                        aliases=first.entity1.aliases(),
+                        aliases=_get_entity_aliases(first.entity1.canonical, ctx.state),
                     ),
                     entity2=SimpleEntity(
                         name=first.entity2.canonical,
                         kind=first.entity2.kind,
-                        aliases=first.entity2.aliases(),
+                        aliases=_get_entity_aliases(first.entity2.canonical, ctx.state),
                     ),
                     relationship=first.relationship,
                     spread=spread,
@@ -2112,12 +2135,16 @@ Provide: accepted (true/false), relationship (selected label), confidence (high/
                     entity1=SimpleEntity(
                         name=first_assessment.entity1.canonical,
                         kind=first_assessment.entity1.kind,
-                        aliases=first_assessment.entity1.aliases(),
+                        aliases=_get_entity_aliases(
+                            first_assessment.entity1.canonical, ctx.state
+                        ),
                     ),
                     entity2=SimpleEntity(
                         name=first_assessment.entity2.canonical,
                         kind=first_assessment.entity2.kind,
-                        aliases=first_assessment.entity2.aliases(),
+                        aliases=_get_entity_aliases(
+                            first_assessment.entity2.canonical, ctx.state
+                        ),
                     ),
                     relationship=relationship,
                     spread=spread,
@@ -2167,12 +2194,16 @@ Provide: accepted (true/false), relationship (selected label), confidence (high/
                         entity1=SimpleEntity(
                             name=first_assessment.entity1.canonical,
                             kind=first_assessment.entity1.kind,
-                            aliases=first_assessment.entity1.aliases(),
+                            aliases=_get_entity_aliases(
+                                first_assessment.entity1.canonical, ctx.state
+                            ),
                         ),
                         entity2=SimpleEntity(
                             name=first_assessment.entity2.canonical,
                             kind=first_assessment.entity2.kind,
-                            aliases=first_assessment.entity2.aliases(),
+                            aliases=_get_entity_aliases(
+                                first_assessment.entity2.canonical, ctx.state
+                            ),
                         ),
                         relationship=first_assessment.relationship,
                         spread=spread,
@@ -2195,12 +2226,16 @@ Provide: accepted (true/false), relationship (selected label), confidence (high/
                 entity1=SimpleEntity(
                     name=first_assessment.entity1.canonical,
                     kind=first_assessment.entity1.kind,
-                    aliases=first_assessment.entity1.aliases(),
+                    aliases=_get_entity_aliases(
+                        first_assessment.entity1.canonical, ctx.state
+                    ),
                 ),
                 entity2=SimpleEntity(
                     name=first_assessment.entity2.canonical,
                     kind=first_assessment.entity2.kind,
-                    aliases=first_assessment.entity2.aliases(),
+                    aliases=_get_entity_aliases(
+                        first_assessment.entity2.canonical, ctx.state
+                    ),
                 ),
                 relationship=result.output.relationship,
                 spread=spread,
@@ -2659,12 +2694,12 @@ For each relationship, provide:
                     entity1=SimpleEntity(
                         name=first.entity1.canonical,
                         kind=first.entity1.kind,
-                        aliases=first.entity1.aliases(),
+                        aliases=_get_entity_aliases(first.entity1.canonical, ctx.state),
                     ),
                     entity2=SimpleEntity(
                         name=first.entity2.canonical,
                         kind=first.entity2.kind,
-                        aliases=first.entity2.aliases(),
+                        aliases=_get_entity_aliases(first.entity2.canonical, ctx.state),
                     ),
                     relationship=first.relationship,
                     spread=spread,
@@ -2767,6 +2802,7 @@ class FinalizeNode(BaseNode[State, Deps, ExtractionResult]):
                 judgments=all_judgments,
                 metadata=metadata,
                 consolidated=ctx.state.consolidated,
+                entities=ctx.state.global_entities,
             )
 
             return End(result)

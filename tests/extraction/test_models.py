@@ -796,6 +796,12 @@ class TestExtractionResultRehydration:
             quotes_failed=0,
         )
 
+        # Build entities dict (normally done by ConsolidateEntitiesNode)
+        entities = {
+            "BRCA1": EntityRef(canonical="BRCA1", mentions=[entity1]),
+            "Cancer": EntityRef(canonical="Cancer", mentions=[entity2]),
+        }
+
         result = ExtractionResult(
             topic="Topic",
             target_entity_types=["gene", "disease"],
@@ -803,6 +809,7 @@ class TestExtractionResultRehydration:
             resources=pool,
             judgments=[judgment],
             metadata=metadata,
+            entities=entities,
         )
 
         # Serialize to JSON
@@ -906,6 +913,12 @@ class TestExtractionResultRehydration:
             quotes_failed=0,
         )
 
+        # Build entities dict (normally done by ConsolidateEntitiesNode)
+        entities = {
+            "BRCA1": EntityRef(canonical="BRCA1", mentions=[entity1]),
+            "Cancer": EntityRef(canonical="Cancer", mentions=[entity2]),
+        }
+
         result = ExtractionResult(
             topic="Topic",
             target_entity_types=["gene", "disease"],
@@ -913,6 +926,7 @@ class TestExtractionResultRehydration:
             resources=pool,
             judgments=[judgement],
             metadata=metadata,
+            entities=entities,
         )
 
         serialized = result.model_dump(mode="json")

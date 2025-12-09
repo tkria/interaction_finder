@@ -98,7 +98,15 @@ class EntityRef(BaseModel):
     """
 
     canonical: str
-    mentions: list[EntityMention]
+    mentions: list[EntityMention] = []
+
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_canonical_string(cls, data):
+        """Accept canonical string and create minimal EntityRef."""
+        if isinstance(data, str):
+            return {"canonical": data, "mentions": []}
+        return data
 
     @model_serializer(mode="wrap")
     def _serialize(self, serializer, info):
@@ -631,28 +639,19 @@ class ExtractionResult(BaseModel):
         default_factory=ConsolidatedData,
         description="Unified consolidation provenance for entities and relationships",
     )
+    entities: dict[str, EntityRef] = Field(
+        default_factory=dict,
+        description="Global entity index with aggregated mentions from all resources",
+    )
 
     @model_serializer(mode="wrap")
     def _serialize(self, serializer, info):
-        """Collect unique EntityRefs and serialize with entities dict."""
+        """Serialize with full EntityRef data in entities dict."""
         if info.mode != "json":
             return serializer(self)
-
-        # Collect unique EntityRefs before serialization
-        entities: dict[str, EntityRef] = {}
-        for judgment in self.judgments:
-            for assessment in judgment.iter_assessments():
-                if assessment.entity1.canonical not in entities:
-                    entities[assessment.entity1.canonical] = assessment.entity1
-                if assessment.entity2.canonical not in entities:
-                    entities[assessment.entity2.canonical] = assessment.entity2
-
         # Do default serialization (EntityRefs become strings via their serializer)
         data = serializer(self)
-
         # Manually serialize entities dict with full EntityRef data
-        # We serialize mentions in JSON mode (to convert ResourceQuote.resource to resource_url)
-        # but keep the top-level EntityRef structure (canonical + mentions)
         data["entities"] = {
             canonical: {
                 "canonical": ref.canonical,
@@ -660,9 +659,8 @@ class ExtractionResult(BaseModel):
                     ref.mentions, fallback=lambda x: x.model_dump(mode="json")
                 ),
             }
-            for canonical, ref in entities.items()
+            for canonical, ref in self.entities.items()
         }
-
         return data
 
     @model_validator(mode="before")

@@ -405,5 +405,80 @@ def test_validated_entities_preserve_merged_mentions():
     assert "tumor suppressor p53" in aliases
 
 
+def test_global_entities_serialization_roundtrip():
+    """Test that global_entities survives serialization roundtrip.
+
+    The global entity index aggregates mentions across all resources and is
+    used for PairJudgment alias lookup.
+    """
+    pool = ResourcePool()
+    resource1 = pool.add(
+        url="http://example.com/doc1",
+        title="Document 1",
+        document_text="BRCA1 is important.",
+    )
+    resource2 = pool.add(
+        url="http://example.com/doc2",
+        title="Document 2",
+        document_text="BRCA-1 is studied.",
+    )
+
+    state = State(
+        topic="test",
+        target_entity_types=["gene"],
+        permitted_pairs={"gene": {"gene"}},
+    )
+
+    # Simulate global_entities built by ConsolidateEntitiesNode
+    # Two mentions from different documents, aggregated into one EntityRef
+    mention1 = EntityMention(
+        kind="gene",
+        name="BRCA1",
+        aliases=[],
+        quotes=[],
+        reasoning="From doc1",
+    )
+    mention2 = EntityMention(
+        kind="gene",
+        name="BRCA-1",  # Different name in doc2
+        aliases=["breast cancer 1"],
+        quotes=[],
+        reasoning="From doc2",
+    )
+    state.global_entities = {
+        "BRCA1": EntityRef(canonical="BRCA1", mentions=[mention1, mention2])
+    }
+
+    # Serialize
+    state_dict = state.to_dict()
+
+    # Verify serialized structure
+    assert "global_entities" in state_dict
+    assert "BRCA1" in state_dict["global_entities"]
+    entity_data = state_dict["global_entities"]["BRCA1"]
+    assert entity_data["canonical"] == "BRCA1"
+    assert len(entity_data["mentions"]) == 2
+
+    # Deserialize
+    restored_state = State.from_dict(
+        state_dict,
+        topic="test",
+        target_entity_types=["gene"],
+        permitted_pairs={"gene": {"gene"}},
+        resource_pool=pool,
+    )
+
+    # Verify global_entities restored
+    assert "BRCA1" in restored_state.global_entities
+    restored_ref = restored_state.global_entities["BRCA1"]
+    assert restored_ref.canonical == "BRCA1"
+    assert len(restored_ref.mentions) == 2
+
+    # Verify aliases() aggregates from both mentions
+    aliases = restored_ref.aliases()
+    assert "BRCA-1" in aliases  # From mention2.name (differs from canonical)
+    assert "breast cancer 1" in aliases  # From mention2.aliases
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

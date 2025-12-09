@@ -40,6 +40,7 @@ from interaction_finder.resources import ResourceId
 _SERIALIZATION_REGISTRY: dict[str, tuple[str, type | None]] = {
     "entities_by_resource": ("by_resource", dict[str, EntityMention]),
     "validated_entities_by_resource": ("entity_ref_by_resource", dict[str, EntityRef]),
+    "global_entities": ("global_entity_ref", dict[str, EntityRef]),
     "proximal_sets_by_resource": ("by_resource", list[ProximalEntitySet]),
     "pair_assessments_by_resource": ("by_resource", list[PairAssessment]),
     "pair_judgments": ("pair_key", PairJudgment),
@@ -120,6 +121,9 @@ class State:
     entities_merged: int = 0
     # Unified consolidation provenance - built incrementally during pipeline
     consolidated: ConsolidatedData = field(default_factory=ConsolidatedData)
+    # Global entity index: canonical → EntityRef with aggregated mentions from all resources
+    # Built at end of ConsolidateEntitiesNode, used for PairJudgment alias lookup
+    global_entities: dict[str, EntityRef] = field(default_factory=dict)
     # Within-run cache for LLM merge decisions: (child_canonical, parent_canonical, kind) → (target, reasoning)
     # target is None for "skip", parent for "merge", or custom name for "rename"
     # Prevents redundant LLM calls when same pair appears across multiple documents
@@ -213,6 +217,20 @@ class State:
                     }
                     for k, entities in value.items()
                 }
+            elif handler_type == "global_entity_ref":
+                # dict[str, EntityRef] → preserve full EntityRef data (not nested by resource)
+                from pydantic.json_schema import to_jsonable_python
+
+                result[fld.name] = {
+                    canonical: {
+                        "canonical": ref.canonical,
+                        "mentions": to_jsonable_python(
+                            ref.mentions,
+                            fallback=lambda x: x.model_dump(mode="json"),
+                        ),
+                    }
+                    for canonical, ref in value.items()
+                }
             elif handler_type == "pair_key":
                 # dict[EntityPairKey, X] → dict[str, X_serialized]
                 result[fld.name] = {
@@ -297,6 +315,22 @@ class State:
                     get_rid(url): TypeAdapter(inner_type).validate_python(v)
                     for url, v in value_data.items()
                 }
+                setattr(state, fld.name, value)
+
+            elif handler_type == "global_entity_ref":
+                # dict[str, EntityRef_data] → dict[str, EntityRef]
+                # Rehydrate quotes in mentions
+                for entity_data in value_data.values():
+                    if "mentions" in entity_data:
+                        for mention in entity_data["mentions"]:
+                            if "quotes" in mention:
+                                for quote in mention["quotes"]:
+                                    if "resource_url" in quote:
+                                        quote["resource"] = resource_pool.get(
+                                            quote["resource_url"]
+                                        )
+                                        del quote["resource_url"]
+                value = TypeAdapter(inner_type).validate_python(value_data)
                 setattr(state, fld.name, value)
 
             elif handler_type == "pair_key":
