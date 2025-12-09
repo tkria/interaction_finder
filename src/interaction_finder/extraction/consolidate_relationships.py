@@ -74,12 +74,12 @@ Classify each relationship (after consolidation) by its **biological polarity** 
 
 **POSITIVE** - Relationship indicates promoting/increasing/activating effect
 - Examples: "increases_risk_of", "causes", "activates", "promotes", "upregulates"
-- Key indicators: mutations that increase disease risk, factors that promote pathology
+- Key indicators: factors that increase activity, expression, or occurrence
 - Biological direction: Entity A → more of Entity B or its effects
 
 **NEGATIVE** - Relationship indicates inhibiting/decreasing/protective effect
 - Examples: "protects_against", "reduces_risk_of", "inhibits", "prevents", "downregulates", "treats"
-- Key indicators: interventions that reduce disease, protective factors, inhibitory mechanisms
+- Key indicators: factors that decrease activity, expression, or occurrence
 - Biological direction: Entity A → less of Entity B or its effects
 
 **NEUTRAL** - Relationship is mechanistic but directionality is ambiguous
@@ -98,10 +98,10 @@ For any research context:
 - "BMPR2 regulates vascular tone" → **neutral** (regulation direction unclear)
 - "BMPR2 co-cited with PAH" → **irrelevant** (no biological mechanism claimed)
 
-For gene-disease relationships:
-- "increases_risk_of" → **positive** (promotes disease)
-- "protects_against" → **negative** (reduces disease)
-- "associated_with" → **neutral** (correlation, direction unclear)
+For any entity pair:
+- "increases_risk_of", "activates", "upregulates" → **positive** (promotes/increases)
+- "protects_against", "inhibits", "downregulates" → **negative** (inhibits/decreases)
+- "associated_with", "interacts_with" → **neutral** (direction unclear)
 - "co-occurs_in_literature" → **irrelevant** (not biological)
 
 **Decision criteria for polarity:**
@@ -154,20 +154,12 @@ Given relationships: ["increases_risk_of", "protects_against", "associated_with"
 
 ---
 
-## Output Format
+## Important Guidelines
 
-For each relationship:
-- `original`: The label as it appears
-- `consolidated`: Canonical form (may equal original if already canonical)
-- `polarity`: positive | negative | neutral | irrelevant
-- `opposites`: List of original relationship labels with opposite effects (empty list if none)
-- `reasoning`: Explain consolidation, polarity, and opposition decisions (30+ chars)
-
-**Important notes:**
 - Consolidated labels MUST be 1-2 words maximum, general and reusable
-- If label is already canonical, consolidated = original
+- If label is already canonical, use it unchanged as the consolidated form
 - Multiple originals can map to same consolidated label
-- Polarity applies to the consolidated label
+- Polarity classification applies to the consolidated label
 - Opposites should reference **original** labels as they appear in the input list
 - Empty opposites list is valid and common
 - When uncertain about directionality, prefer neutral over irrelevant

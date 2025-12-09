@@ -30,9 +30,7 @@ Guidelines:
 
 Focus on finding articles that will help identify bridging terms: related concepts, alternative approaches, and connected research areas that don't appear in the original topic name.
 
-You must provide both:
-- queries: Your list of 1-5 search queries
-- reasoning: A brief explanation of your query strategy and why these queries will find useful review articles"""
+Explain your query strategy and why your queries will find useful review articles."""
 
 RESULT_SELECTOR_PROMPT = """You are an expert at identifying review articles and comprehensive summaries from search results.
 

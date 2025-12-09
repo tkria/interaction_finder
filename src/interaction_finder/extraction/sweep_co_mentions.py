@@ -518,7 +518,9 @@ Check whether each mention refers to the specified canonical entity:
 
 **Relationship types:**
 Use one of the known relationship types listed in the prompt when possible.
-If none fit, use a concise descriptive label (e.g., "activates", "inhibits", "associated_with").
+If none fit, use a concise descriptive label (e.g., "activates", "inhibits", "no_effect").
+
+Both positive and negative relationships matter - inhibitory effects, contraindications, and explicit "no effect" findings are just as important as activating relationships.
 
 **Quality standards:**
 - Be conservative: only report relationships that are clearly stated or strongly implied

@@ -65,14 +65,12 @@ binds, causes, prevents, treats, mutated_in, associated_with
 - Recent findings may supersede older claims
 - Consider the strength and specificity of the language used
 
-**Output requirements:**
-- ONE relationship type: SHORT (1-2 words), verb phrase, generally applicable
-- Assign confidence level (high/medium/low)
+**Critical:**
+- Be rigorous in your assessment. High confidence should be reserved for truly strong, clear evidence. When in doubt, use medium or low confidence.
+- Assign appropriate confidence level (high/medium/low)
+- Relationship type must be SHORT (1-2 words), a verb phrase, generally applicable
 - Provide detailed reasoning referencing specific evidence
-- List quote indices that most strongly support your assessment
-- Be honest about limitations or ambiguities
-
-**Critical:** Be rigorous in your assessment. High confidence should be reserved
-for truly strong, clear evidence. When in doubt, use medium or low confidence.""",
+- Reference quote indices that most strongly support your assessment
+- Be honest about limitations or ambiguities in your reasoning""",
     default_model_settings=ModelSettings(parallel_tool_calls=False),
 )

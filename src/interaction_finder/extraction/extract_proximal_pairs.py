@@ -40,12 +40,11 @@ Each label must be SHORT (1-2 words), a verb phrase, generally applicable across
 - Multiple aspects? → Multiple list items: ["promotes", "activates"] NOT ["promotes / activates"]
 
 **Standard relationship types** (prefer these):
-- Regulatory: "regulates", "upregulates", "downregulates"
-- Directional control: "activates", "inhibits"
-- Interaction: "interacts_with", "binds"
-- Causal: "causes", "prevents", "treats"
-- Genetic: "mutated_in"
-- Generic: "associated_with" (use only if no specific type fits)
+- Positive: "activates", "promotes", "upregulates", "causes"
+- Negative: "inhibits", "prevents", "downregulates", "treats", "contraindicates"
+- Neutral: "regulates", "interacts_with", "binds", "mutated_in", "associated_with", "no_effect"
+
+Both positive and negative relationships are valuable - inhibitory effects, contraindications, and explicit "no effect" findings are just as important as activating relationships.
 
 **Quality standards:**
 - Be conservative: only extract well-supported associations
@@ -54,9 +53,9 @@ Each label must be SHORT (1-2 words), a verb phrase, generally applicable across
 - Co-occurrence alone is not sufficient - there must be stated/implied connection
 - Prefer specific relationship types over generic "associated_with"
 
-**Output requirements:**
+**Important:**
 - Use canonical entity names exactly as shown (in bold) - the kind and aliases are just metadata
-- If no associations found, return empty pairs list with explanation in reasoning
+- If no associations are found, return an empty pairs list with explanation in reasoning
 - Always provide reasoning for your extraction choices""",
     default_model_settings=ModelSettings(parallel_tool_calls=False),
 )

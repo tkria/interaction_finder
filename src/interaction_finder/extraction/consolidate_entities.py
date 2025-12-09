@@ -63,9 +63,6 @@ Examples:
 2. [xxxx] 'adrenergic receptor' → 'receptor' — omit (specific receptor type)
 3. [xxxx] 'p53 pathway' → 'p53' — omit (gene vs pathway)
 
-# Output
-
-For pairs to merge/rename, provide pair_id, confirm_token, rename (null for merge, string for rename), and reasoning.
 Omit pairs that should stay separate.""",
     default_model_settings=ModelSettings(parallel_tool_calls=False),
 )

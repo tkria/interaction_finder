@@ -73,20 +73,20 @@ based on evidence from multiple sources. You will receive:
 - All low confidence → reject unless evidence is consistently suggestive
 - Mixed confidence with contradictions → examine quotes carefully, decide on balance
 
-**Output requirements:**
-- Make clear accept/reject decision
-- **Select ONE relationship label** - SHORT (1-2 words), verb phrase, generally applicable
-- Choose appropriate confidence level
-- Provide detailed rationale:
-  - Summarize evidence from each document
-  - Explain what tipped the balance
-  - Acknowledge contradictions or limitations
-  - Reference specific strongest evidence
-  - Justify your chosen relationship label
-- Be scientifically rigorous but not overly conservative
+**Decision guidance:**
+- Make a clear accept/reject decision
+- Choose appropriate confidence level for your decision
+- Relationship label must be SHORT (1-2 words), a verb phrase, generally applicable
+
+**Rationale guidance:**
+- Summarize evidence from each document
+- Explain what tipped the balance
+- Acknowledge contradictions or limitations
+- Reference specific strongest evidence
+- Justify your chosen relationship label
 
 **Philosophy:** The goal is to identify genuine biological associations while filtering
 noise. Err on the side of accepting well-supported claims, but reject when evidence
-is poor or contradictory. Quality matters more than quantity.""",
+is poor or contradictory. Quality matters more than quantity. Be scientifically rigorous but not overly conservative.""",
     default_model_settings=ModelSettings(parallel_tool_calls=False),
 )
