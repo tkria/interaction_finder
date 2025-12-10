@@ -22,6 +22,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import Union
 
+from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.usage import RunUsage
 from pydantic_graph import BaseNode, End, GraphRunContext
 
@@ -985,7 +986,7 @@ Only return pairs that should merge or be renamed. Omit pairs that should remain
                 if pair_id not in returned_ids:
                     cache_key = (child, parent)
                     kind_cache.cache[cache_key] = (None, "implicit_skip")
-        except (TimeoutError, ConnectionError, ValueError) as e:
+        except (TimeoutError, ConnectionError, ValueError, ModelHTTPError) as e:
             ctx.deps.logger.error(f"Entity consolidation failed: {e}")
 
     async def _get_group_consolidation_decisions(
@@ -1532,7 +1533,7 @@ For each relationship, provide:
                 async with ctx.deps.agent_semaphore:
                     result = await agent.run(prompt, deps=ctx.deps, usage=usage)
             return result.output.consolidations
-        except (TimeoutError, ConnectionError, ValueError) as e:
+        except (TimeoutError, ConnectionError, ValueError, ModelHTTPError) as e:
             ctx.deps.logger.error(
                 f"Relationship consolidation failed: {type(e).__name__}: {e}"
             )
@@ -2135,7 +2136,7 @@ Provide: accepted (true/false), relationship (selected label), synthesized evide
                         if ctx.deps.progress:
                             ctx.deps.progress["Unique pairs"].work()
                         result = await agent.run(prompt, deps=ctx.deps, usage=usage)
-            except (TimeoutError, ConnectionError, ValueError) as e:
+            except (TimeoutError, ConnectionError, ValueError, ModelHTTPError) as e:
                 ctx.deps.logger.error(
                     f"Cross-document judgment failed for {pair_key}: "
                     f"{type(e).__name__}: {e}"
@@ -2546,7 +2547,12 @@ For each new relationship, provide:
                         missing = missing - set(
                             ctx.state.relationship_polarities.keys()
                         )
-                    except (TimeoutError, ConnectionError, ValueError) as e:
+                    except (
+                        TimeoutError,
+                        ConnectionError,
+                        ValueError,
+                        ModelHTTPError,
+                    ) as e:
                         ctx.deps.logger.warning(
                             f"Retry {attempt} failed: {type(e).__name__}"
                         )
@@ -2560,7 +2566,7 @@ For each new relationship, provide:
                     for label in missing:
                         ctx.state.relationship_polarities[label] = "neutral"
 
-            except (TimeoutError, ConnectionError, ValueError) as e:
+            except (TimeoutError, ConnectionError, ValueError, ModelHTTPError) as e:
                 ctx.deps.logger.warning(
                     f"New relationship consolidation failed: {type(e).__name__}: {e}; "
                     f"defaulting new labels to neutral polarity"

@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from pydantic import BaseModel, Field
+from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.usage import RunUsage
 
 from interaction_finder.agent_config import agent_getter
@@ -695,7 +696,7 @@ Provide supporting quotes for confirmed relationships."""
                 if deps.progress:
                     deps.progress["Regions"].work()
                 result = await agent.run(prompt, deps=deps, usage=usage)
-    except (TimeoutError, ConnectionError, ValueError) as e:
+    except (TimeoutError, ConnectionError, ValueError, ModelHTTPError) as e:
         deps.logger.error(f"{diagnostic_prefix} failed: {type(e).__name__}: {e}")
         return ([], [])
     # Process confirmed pairs

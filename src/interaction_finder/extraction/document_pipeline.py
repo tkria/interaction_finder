@@ -10,6 +10,7 @@ concurrent per-document processing while maintaining clean separation of concern
 
 import asyncio
 
+from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.usage import RunUsage
 
 from interaction_finder.agent_utils import rename_agent
@@ -132,7 +133,7 @@ For each entity of the specified types relevant to the topic, provide:
                 if deps.progress:
                     deps.progress["Processed"].work()
                 result = await agent.run(prompt, deps=deps, usage=RunUsage())
-    except (TimeoutError, ConnectionError, ValueError) as e:
+    except (TimeoutError, ConnectionError, ValueError, ModelHTTPError) as e:
         deps.logger.error(f"Document analysis failed for {resource.id.url}: {e}")
         return {}, None, 0, 0
     entities, validated, failed = _process_entity_extractions(
@@ -236,7 +237,7 @@ For each binary association between these entities that is clearly stated or imp
         with rename_agent(agent, name=f"ExtractProximalPairs: {entities_str}"):
             async with deps.agent_semaphore:
                 result = await agent.run(prompt, deps=deps, usage=usage)
-    except (TimeoutError, ConnectionError, ValueError) as e:
+    except (TimeoutError, ConnectionError, ValueError, ModelHTTPError) as e:
         deps.logger.error(f"Proximal pair extraction failed: {type(e).__name__}: {e}")
         return ([], 0, 0)
 
@@ -432,7 +433,7 @@ Assess evidence for an entity association.
                     # Mark pair as done when assessment completes or fails
                     if deps.progress:
                         deps.progress["Pairs assessed"].done()
-    except (TimeoutError, ConnectionError, ValueError) as e:
+    except (TimeoutError, ConnectionError, ValueError, ModelHTTPError) as e:
         deps.logger.error(
             f"Pair assessment failed for {entity1.canonical}-{entity2.canonical}: "
             f"{type(e).__name__}: {e}"
