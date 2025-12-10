@@ -114,10 +114,31 @@ def _rehydrate_proximal_sets(sets_data: dict, resource_pool: "ResourcePool") -> 
                     _rehydrate_quotes_list(quotes, resource_pool)
 
 
+def _resolve_entity_ref(
+    name: str,
+    local_entities: dict[str, EntityRef],
+    global_entities: dict[str, EntityRef] | None,
+) -> EntityRef:
+    """Find an EntityRef by name or create a placeholder if missing."""
+    if name in local_entities:
+        return local_entities[name]
+    if global_entities and name in global_entities:
+        return global_entities[name]
+    placeholder = EntityMention(
+        kind="unknown",
+        name=name,
+        aliases=[],
+        quotes=[],
+        reasoning="placeholder (entity data missing during rehydration)",
+    )
+    return EntityRef(canonical=name, mentions=[placeholder])
+
+
 def _rehydrate_pair_assessments(
     assessments_data: dict,
     resource_pool: "ResourcePool",
     validated_entities: dict["ResourceId", dict[str, EntityRef]] | None,
+    global_entities: dict[str, EntityRef] | None,
 ) -> None:
     """Rehydrate resource_url → resource in PairAssessment quotes.
 
@@ -142,8 +163,10 @@ def _rehydrate_pair_assessments(
             # Replace entity string references with validated EntityRef objects
             for field in ("entity1", "entity2"):
                 entity = assessment.get(field)
-                if isinstance(entity, str) and entity in entities_for_resource:
-                    assessment[field] = entities_for_resource[entity]
+                if isinstance(entity, str):
+                    assessment[field] = _resolve_entity_ref(
+                        entity, entities_for_resource, global_entities
+                    )
 
 
 @dataclass
@@ -380,7 +403,10 @@ class State:
                     _rehydrate_proximal_sets(value_data, resource_pool)
                 elif fld.name == "pair_assessments_by_resource":
                     _rehydrate_pair_assessments(
-                        value_data, resource_pool, state.validated_entities_by_resource
+                        value_data,
+                        resource_pool,
+                        state.validated_entities_by_resource,
+                        state.global_entities,
                     )
                 value = {
                     get_rid(url): TypeAdapter(inner_type).validate_python(v)

@@ -738,6 +738,176 @@ def test_pair_assessments_rehydrate_entity_refs_with_mentions():
     )  # rehydrated
 
 
+def test_pair_assessments_rehydrate_from_global_entities_when_missing():
+    """Pair assessments should fall back to global_entities when resource-local refs missing."""
+    pool = ResourcePool()
+    resource = pool.add(
+        url="http://example.com/doc3",
+        title="Doc",
+        document_text="BMPR2 drives synthetic SMC phenotype.",
+    )
+    rid = resource.id
+    state = State(
+        topic="test",
+        target_entity_types=["gene", "phenotype"],
+        permitted_pairs={"gene": {"phenotype"}, "phenotype": {"gene"}},
+    )
+
+    bmpr2_mention = EntityMention(
+        kind="gene",
+        name="BMPR2",
+        aliases=[],
+        quotes=[
+            ResourceQuote(
+                resource=resource,
+                query_text="BMPR2 drives",
+                spans=[(0, 12)],
+                is_disjoint=False,
+            )
+        ],
+        reasoning="Gene mention",
+    )
+    state.validated_entities_by_resource[rid] = {
+        "BMPR2": EntityRef(canonical="BMPR2", mentions=[bmpr2_mention])
+    }
+
+    global_phenotype = EntityRef(
+        canonical="Synthetic SMC phenotype",
+        mentions=[
+            EntityMention(
+                kind="phenotype",
+                name="Synthetic SMC phenotype",
+                aliases=[],
+                quotes=[
+                    ResourceQuote(
+                        resource=resource,
+                        query_text="synthetic SMC phenotype",
+                        spans=[(13, 37)],
+                        is_disjoint=False,
+                    )
+                ],
+                reasoning="Phenotype mention",
+            )
+        ],
+    )
+    state.global_entities = {"Synthetic SMC phenotype": global_phenotype}
+
+    evidence = EvidenceQuality(
+        directness="explicit",
+        source_type="primary",
+        specificity="mechanistic",
+        language="definitive",
+        overall=6,
+    )
+    assessment = PairAssessment(
+        resource_id=rid,
+        entity1=state.validated_entities_by_resource[rid]["BMPR2"],
+        entity2="Synthetic SMC phenotype",
+        relationship="causes",
+        quotes=[
+            ResourceQuote(
+                resource=resource,
+                query_text="BMPR2 drives synthetic SMC phenotype",
+                spans=[(0, 37)],
+                is_disjoint=False,
+            )
+        ],
+        evidence=evidence,
+        reasoning="Explicit statement",
+    )
+    state.pair_assessments_by_resource[rid] = [assessment]
+
+    restored_state = State.from_dict(
+        state.to_dict(),
+        topic="test",
+        target_entity_types=["gene", "phenotype"],
+        permitted_pairs={"gene": {"phenotype"}, "phenotype": {"gene"}},
+        resource_pool=pool,
+    )
+
+    restored_assessment = restored_state.pair_assessments_by_resource[rid][0]
+    assert (
+        restored_assessment.entity2
+        is restored_state.global_entities["Synthetic SMC phenotype"]
+    )
+    assert restored_assessment.entity2.mentions
+
+
+def test_pair_assessments_create_placeholder_when_entity_missing():
+    """Pair assessments should create placeholder EntityRef if entity data missing."""
+    pool = ResourcePool()
+    resource = pool.add(
+        url="http://example.com/doc4",
+        title="Doc",
+        document_text="Unknown relation.",
+    )
+    rid = resource.id
+    state = State(
+        topic="test",
+        target_entity_types=["gene", "phenotype"],
+        permitted_pairs={"gene": {"phenotype"}, "phenotype": {"gene"}},
+    )
+
+    gene_ref = EntityRef(
+        canonical="BMPR2",
+        mentions=[
+            EntityMention(
+                kind="gene",
+                name="BMPR2",
+                aliases=[],
+                quotes=[
+                    ResourceQuote(
+                        resource=resource,
+                        query_text="BMPR2",
+                        spans=[(0, 5)],
+                        is_disjoint=False,
+                    )
+                ],
+                reasoning="Gene mention",
+            )
+        ],
+    )
+    state.validated_entities_by_resource[rid] = {"BMPR2": gene_ref}
+
+    evidence = EvidenceQuality(
+        directness="implied",
+        source_type="review",
+        specificity="associative",
+        language="hedged",
+        overall=4,
+    )
+    assessment = PairAssessment(
+        resource_id=rid,
+        entity1=gene_ref,
+        entity2="Unknown Phenotype",
+        relationship="associated_with",
+        quotes=[
+            ResourceQuote(
+                resource=resource,
+                query_text="Unknown relation",
+                spans=[(0, 16)],
+                is_disjoint=False,
+            )
+        ],
+        evidence=evidence,
+        reasoning="Weak statement",
+    )
+    state.pair_assessments_by_resource[rid] = [assessment]
+
+    restored_state = State.from_dict(
+        state.to_dict(),
+        topic="test",
+        target_entity_types=["gene", "phenotype"],
+        permitted_pairs={"gene": {"phenotype"}, "phenotype": {"gene"}},
+        resource_pool=pool,
+    )
+
+    restored_assessment = restored_state.pair_assessments_by_resource[rid][0]
+    assert restored_assessment.entity2.canonical == "Unknown Phenotype"
+    assert restored_assessment.entity2.mentions
+    assert restored_assessment.entity2.mentions[0].kind == "unknown"
+
+
 def test_pair_judgments_rehydrate_assessment_entities_from_global():
     """PairJudgment spread assessments should rehydrate EntityRefs via global_entities."""
     pool = ResourcePool()
