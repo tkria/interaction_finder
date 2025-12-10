@@ -153,7 +153,7 @@ def test_state_serialization_preserves_structure():
     assert "proximal_sets_by_resource" in state_dict
     assert "pair_assessments_by_resource" in state_dict
     assert "pair_judgments" in state_dict
-    assert "agent_merge_cache" in state_dict
+    assert "merge_cache_by_kind" in state_dict
     assert "consolidated" in state_dict
 
     # Deserialize
@@ -180,18 +180,30 @@ def test_state_serialization_with_tuple_keys():
         permitted_pairs={"gene": {"gene"}},
     )
 
-    # Add agent merge cache (tuple keys)
-    state.agent_merge_cache = {
-        ("BRCA1", "BRCA-1", "gene"): ("BRCA1", "merge into canonical"),
-        ("TP53", "p53", "gene"): ("TP53", "standard nomenclature"),
+    # Add merge cache by kind (per-kind caches with tuple keys)
+    from interaction_finder.extraction.state import MergeCacheForKind
+
+    state.merge_cache_by_kind = {
+        "gene": MergeCacheForKind(
+            cache={
+                ("BRCA1", "BRCA-1"): ("BRCA1", "merge into canonical"),
+                ("TP53", "p53"): ("TP53", "standard nomenclature"),
+            },
+            hits=5,
+            misses=2,
+        )
     }
 
     # Serialize
     state_dict = state.to_dict()
 
-    # Check tuple keys converted to strings
-    assert "BRCA1|BRCA-1|gene" in state_dict["agent_merge_cache"]
-    assert "TP53|p53|gene" in state_dict["agent_merge_cache"]
+    # Check structure: kind → {cache: {tuple_key: value}, hits, misses}
+    assert "gene" in state_dict["merge_cache_by_kind"]
+    gene_cache = state_dict["merge_cache_by_kind"]["gene"]
+    assert "BRCA1|BRCA-1" in gene_cache["cache"]
+    assert "TP53|p53" in gene_cache["cache"]
+    assert gene_cache["hits"] == 5
+    assert gene_cache["misses"] == 2
 
     # Deserialize
     restored_state = State.from_dict(
@@ -203,11 +215,12 @@ def test_state_serialization_with_tuple_keys():
     )
 
     # Verify restoration
-    assert ("BRCA1", "BRCA-1", "gene") in restored_state.agent_merge_cache
-    assert restored_state.agent_merge_cache[("BRCA1", "BRCA-1", "gene")] == (
-        "BRCA1",
-        "merge into canonical",
-    )
+    assert "gene" in restored_state.merge_cache_by_kind
+    gene_cache = restored_state.merge_cache_by_kind["gene"]
+    assert ("BRCA1", "BRCA-1") in gene_cache.cache
+    assert gene_cache.cache[("BRCA1", "BRCA-1")] == ("BRCA1", "merge into canonical")
+    assert gene_cache.hits == 5
+    assert gene_cache.misses == 2
 
 
 def test_state_serialization_empty_collections():

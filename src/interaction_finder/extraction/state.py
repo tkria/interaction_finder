@@ -36,6 +36,21 @@ from interaction_finder.extraction.models import (
 )
 from interaction_finder.resources import ResourceId
 
+
+@dataclass
+class MergeCacheForKind:
+    """Per-kind cache for entity merge decisions.
+
+    Isolates cache state by entity kind to enable concurrent processing.
+    """
+
+    # (child_canonical, parent_canonical) → (target, reasoning)
+    # target is None for "skip", parent for "merge", or custom name for "rename"
+    cache: dict[tuple[str, str], tuple[str | None, str]] = field(default_factory=dict)
+    hits: int = 0
+    misses: int = 0
+
+
 # Registry of special serialization handlers for State fields
 # Maps field_name → (handler_type, inner_type_for_validation)
 _SERIALIZATION_REGISTRY: dict[str, tuple[str, type | None]] = {
@@ -45,7 +60,7 @@ _SERIALIZATION_REGISTRY: dict[str, tuple[str, type | None]] = {
     "proximal_sets_by_resource": ("by_resource", list[ProximalEntitySet]),
     "pair_assessments_by_resource": ("by_resource", list[PairAssessment]),
     "pair_judgments": ("pair_key", PairJudgment),
-    "agent_merge_cache": ("tuple_key", None),
+    "merge_cache_by_kind": ("merge_cache_by_kind", None),
     "consolidated": ("pydantic_model", ConsolidatedData),
     "paper_quality": ("by_resource", PaperQualityAssessment),
 }
@@ -126,15 +141,9 @@ class State:
     # Global entity index: canonical → EntityRef with aggregated mentions from all resources
     # Built at end of ConsolidateEntitiesNode, used for PairJudgment alias lookup
     global_entities: dict[str, EntityRef] = field(default_factory=dict)
-    # Within-run cache for LLM merge decisions: (child_canonical, parent_canonical, kind) → (target, reasoning)
-    # target is None for "skip", parent for "merge", or custom name for "rename"
-    # Prevents redundant LLM calls when same pair appears across multiple documents
-    agent_merge_cache: dict[tuple[str, str, str], tuple[str | None, str]] = field(
-        default_factory=dict
-    )
-    # Cache statistics
-    merge_cache_hits: int = 0
-    merge_cache_misses: int = 0
+    # Per-kind cache for LLM merge decisions, enabling concurrent kind processing
+    # Each kind has its own cache and hit/miss counters
+    merge_cache_by_kind: dict[str, MergeCacheForKind] = field(default_factory=dict)
 
     # === Stage 3: Proximal Set Identification ===
     # Groups of entities found in close proximity per resource
@@ -245,10 +254,15 @@ class State:
                     str(k): TypeAdapter(inner_type).dump_python(v, mode="json")
                     for k, v in value.items()
                 }
-            elif handler_type == "tuple_key":
-                # dict[tuple, X] → dict[str, X]
+            elif handler_type == "merge_cache_by_kind":
+                # dict[str, MergeCacheForKind] → dict[str, dict]
                 result[fld.name] = {
-                    "|".join(str(x) for x in k): v for k, v in value.items()
+                    kind: {
+                        "cache": {"|".join(k): v for k, v in cache.cache.items()},
+                        "hits": cache.hits,
+                        "misses": cache.misses,
+                    }
+                    for kind, cache in value.items()
                 }
             elif handler_type == "pydantic_model":
                 # Pydantic model → JSON dict
@@ -354,11 +368,19 @@ class State:
                 }
                 setattr(state, fld.name, value)
 
-            elif handler_type == "tuple_key":
-                # dict[str, X] → dict[tuple, X]
-                value = {tuple(k.split("|")): v for k, v in value_data.items()}
+            elif handler_type == "merge_cache_by_kind":
+                # dict[str, dict] → dict[str, MergeCacheForKind]
+                value = {
+                    kind: MergeCacheForKind(
+                        cache={
+                            tuple(k.split("|")): v for k, v in data["cache"].items()
+                        },
+                        hits=data["hits"],
+                        misses=data["misses"],
+                    )
+                    for kind, data in value_data.items()
+                }
                 setattr(state, fld.name, value)
-
             elif handler_type == "pydantic_model":
                 # JSON dict → Pydantic model
                 setattr(state, fld.name, inner_type.model_validate(value_data))

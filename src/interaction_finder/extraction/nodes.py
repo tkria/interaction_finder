@@ -55,7 +55,7 @@ from interaction_finder.extraction.models import (
     RelationshipConsolidation,
     SimpleEntity,
 )
-from interaction_finder.extraction.state import State
+from interaction_finder.extraction.state import MergeCacheForKind, State
 from interaction_finder.extraction.entity_matching import (
     extract_entity_variants,
     find_consolidation_candidates,
@@ -86,6 +86,20 @@ _TOKEN_CHARS = string.ascii_letters + string.digits
 def _generate_token(length: int = 4) -> str:
     """Generate a random alphanumeric token for pair verification."""
     return "".join(secrets.choice(_TOKEN_CHARS) for _ in range(length))
+
+
+def _get_merge_cache(state: State, kind: str) -> MergeCacheForKind:
+    """Get or create the merge cache for an entity kind."""
+    if kind not in state.merge_cache_by_kind:
+        state.merge_cache_by_kind[kind] = MergeCacheForKind()
+    return state.merge_cache_by_kind[kind]
+
+
+def _aggregate_cache_stats(state: State) -> tuple[int, int]:
+    """Aggregate cache hits and misses across all kinds."""
+    hits = sum(c.hits for c in state.merge_cache_by_kind.values())
+    misses = sum(c.misses for c in state.merge_cache_by_kind.values())
+    return hits, misses
 
 
 def _resolve_pair_from_decision(
@@ -230,8 +244,12 @@ async def _save_partial_checkpoint(
                     ctx.state.validated_entities_by_resource
                 ),
                 entities_merged=ctx.state.entities_merged,
-                merge_cache_hits=ctx.state.merge_cache_hits,
-                merge_cache_misses=ctx.state.merge_cache_misses,
+                merge_cache_hits=sum(
+                    c.hits for c in ctx.state.merge_cache_by_kind.values()
+                ),
+                merge_cache_misses=sum(
+                    c.misses for c in ctx.state.merge_cache_by_kind.values()
+                ),
                 proximal_sets_found=count_nested(ctx.state.proximal_sets_by_resource),
                 total_pairs_found=0,
                 pairs_accepted=0,
@@ -475,7 +493,11 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
     async def run(
         self, ctx: GraphRunContext[State, Deps]
     ) -> "ConsolidateRelationshipsNode":
-        """Consolidate entities globally and update pair references."""
+        """Consolidate entities globally and update pair references.
+
+        Processes each entity kind concurrently, then applies all merge rules
+        together with transitive resolution.
+        """
         with logfire.span("ConsolidateEntitiesNode"):
             if ctx.deps.progress:
                 ctx.deps.progress.set_status("Consolidating entities")
@@ -484,190 +506,268 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
                 ctx.state.consolidated.entities.initial = _snapshot_entity_counts(
                     ctx.state
                 )
-            max_iterations = ctx.deps.config.tools.extraction.max_rename_iterations
-            total_rules = 0
-            iterations_completed = 0
-            # Collect entities once, then iteratively find/process merge opportunities
+            # Collect entities once
             entities_by_kind, mentions_by_kind = self._collect_entity_variants(ctx)
-            # Track groups already resolved (kept separate) to avoid re-asking
-            resolved_groups_by_kind: dict[str, set[frozenset[str]]] = {}
-            for iteration in range(1, max_iterations + 1):
-                iterations_completed = iteration
-
-                # Find consolidation candidates using new system
-                all_rules: dict[tuple[str, str], tuple[str, str]] = {}
-                new_names: set[str] = set()
-
-                threshold = (
-                    ctx.deps.config.tools.extraction.cluster_token_overlap_threshold
+            # Pre-initialize shared structures before concurrent execution to avoid races
+            for kind in entities_by_kind:
+                ctx.state.consolidated.entities.merges.setdefault(
+                    kind, EntityKindMerges()
                 )
-                for kind, entities in entities_by_kind.items():
-                    mention_counts = mentions_by_kind.get(kind, {})
-                    ctx.deps.logger.info(
-                        f"Clustering {len(entities)} {kind} entities (threshold={threshold:.2f})"
-                    )
-                    candidates = find_consolidation_candidates(
-                        entities, threshold, mention_counts, ctx.deps.logger
-                    )
-                    # Filter out groups already resolved in previous iterations
-                    resolved = resolved_groups_by_kind.setdefault(kind, set())
-                    new_groups = [
-                        g for g in candidates.agent_review_groups if g not in resolved
-                    ]
-                    filtered_count = len(candidates.agent_review_groups) - len(
-                        new_groups
-                    )
-                    candidates.agent_review_groups = new_groups
-                    # Also filter merge_trees to match
-                    if filtered_count > 0:
-                        new_group_set = set(new_groups)
-                        candidates.merge_trees = [
-                            t
-                            for t in candidates.merge_trees
-                            if t.entities in new_group_set
-                        ]
-                    # Track clusters presented to LLM in consolidated data
-                    if candidates.agent_review_groups:
-                        kind_merges = ctx.state.consolidated.entities.merges.setdefault(
-                            kind, EntityKindMerges()
-                        )
-                        for cluster in candidates.agent_review_groups:
-                            kind_merges.clusters.append(list(cluster))
-                    # Log clustering results
-                    multi_member_groups = [
-                        g for g in candidates.agent_review_groups if len(g) > 1
-                    ]
-                    skip_info = (
-                        f" ({filtered_count} already resolved)"
-                        if filtered_count
-                        else ""
-                    )
-                    ctx.deps.logger.info(
-                        f"  Clustering produced {len(candidates.auto_merge)} auto-merges, "
-                        f"{len(candidates.agent_review)} pairwise reviews, "
-                        f"{len(multi_member_groups)} groups for LLM review{skip_info}"
-                    )
-
-                    # Helper: format a single variant with spec level and optional source
-                    def fmt_variant(v):
-                        source = (
-                            f":{v.source}"
-                            if v.speculation and v.source != "paren_expansion"
-                            else ""
-                        )
-                        return f"'{v.form}' [{v.speculation}{source}]"
-
-                    # Log contested warnings with full context (batched)
-                    if candidates.contested_warnings:
-                        contested_lines = [f"Contested variants for {kind}:"]
-                        structured_data = []
-                        for (
-                            norm_form,
-                            canonical_to_variants,
-                        ) in candidates.contested_warnings:
-                            canonicals = list(canonical_to_variants.keys())
-                            canonical_list = "' and '".join(canonicals)
-                            # Build variant details
-                            variant_details = [
-                                f"    - {canonical}: {', '.join(fmt_variant(v) for v in entities.get(canonical, []) if normalize_for_comparison(v.form) == norm_form)}"
-                                for canonical in canonicals
-                            ]
-                            similarity = self._analyze_entity_similarity(canonicals)
-                            contested_lines.extend(
-                                [
-                                    f"  '{norm_form}' from '{canonical_list}':",
-                                    *variant_details,
-                                    f"    - Similarity: {similarity}",
-                                ]
-                            )
-                            # Build structured data for Logfire
-                            structured_data.append(
-                                {
-                                    "normalized_form": norm_form,
-                                    "entities": canonicals,
-                                    "similarity": similarity,
-                                }
-                            )
-                        ctx.deps.logger.info(
-                            "\n".join(contested_lines),
-                            extra={
-                                "contested_variants": structured_data,
-                                "entity_kind": kind,
-                            },
-                        )
-
-                    # Process auto-merge decisions
-                    for child, parent, reasoning in candidates.auto_merge:
-                        child_norm = normalize_for_comparison(child)
-                        all_rules[(child_norm, kind)] = (parent, reasoning)
-
-                    # Process agent review pairs
-                    if candidates.agent_review:
-                        (
-                            llm_rules,
-                            llm_new_names,
-                        ) = await self._get_consolidation_decisions_for_kind(
-                            candidates.agent_review, kind, entities, ctx
-                        )
-                        all_rules.update(llm_rules)
-                        new_names.update(llm_new_names)
-
-                    # Process agent review groups with merge trees
-                    if candidates.agent_review_groups:
-                        (
-                            group_rules,
-                            group_new_names,
-                            group_resolved,
-                        ) = await self._get_group_consolidation_decisions(
-                            candidates.agent_review_groups,
-                            candidates.merge_trees,
-                            kind,
-                            entities,
-                            ctx,
-                        )
-                        all_rules.update(group_rules)
-                        new_names.update(group_new_names)
-                        resolved.update(group_resolved)
-
-                if not all_rules:
-                    break  # No more work to do
-
+                _get_merge_cache(ctx.state, kind)
+            # Process each kind concurrently. This is safe because:
+            # - merge_cache_by_kind is keyed by kind, so each kind has isolated cache state
+            # - consolidated.entities.merges is keyed by kind (pre-initialized above)
+            tasks = [
+                self._consolidate_kind(
+                    kind, entities, mentions_by_kind.get(kind, {}), ctx
+                )
+                for kind, entities in entities_by_kind.items()
+            ]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            # Collect rules, checking for errors
+            all_rules: dict[tuple[str, str], tuple[str, str]] = {}
+            for kind, result in zip(entities_by_kind.keys(), results):
+                if isinstance(result, Exception):
+                    ctx.deps.logger.error(f"{kind} consolidation failed: {result}")
+                else:
+                    all_rules.update(result)
+            # Apply all rules with transitive resolution
+            if all_rules:
                 resolved_rules = self._resolve_transitive_merges(all_rules)
                 self._apply_merge_rules_globally(resolved_rules, ctx)
                 self._update_pair_entity_references(resolved_rules, ctx)
-                total_rules += len(resolved_rules)
-
-                # If renames created new names, add them to entities_by_kind and re-check
-                if not new_names:
-                    break
-                self._add_new_names_to_entities(new_names, entities_by_kind)
-                ctx.deps.logger.debug(
-                    f"Consolidation iteration {iteration}: {len(new_names)} renames, re-evaluating"
-                )
-            else:
-                # Loop completed without break - hit max_iterations with pending renames
-                if new_names:
-                    ctx.deps.logger.warning(
-                        f"Entity consolidation hit max iterations ({max_iterations}) "
-                        f"with {len(new_names)} pending renames"
-                    )
-            iterations_suffix = (
-                f" in {iterations_completed} iteration{'s' if iterations_completed != 1 else ''}"
-                if iterations_completed > 1
-                else ""
-            )
             ctx.deps.logger.info(
-                f"Entity consolidation: {total_rules} rules applied, "
-                f"{ctx.state.entities_merged} entities merged{iterations_suffix}",
+                f"Entity consolidation: {len(all_rules)} rules applied, "
+                f"{ctx.state.entities_merged} entities merged",
             )
-
             # Build global entity index (aggregate mentions across all resources)
             self._build_global_entity_index(ctx)
-
             # Save checkpoint after entity consolidation
             await _save_partial_checkpoint(ctx, "consolidate_entities")
-
             return ConsolidateRelationshipsNode()
+
+    async def _consolidate_kind(
+        self,
+        kind: str,
+        entities: dict[str, list[SpeculatedVariant]],
+        mention_counts: dict[str, int],
+        ctx: GraphRunContext[State, Deps],
+    ) -> dict[tuple[str, str], tuple[str, str]]:
+        """Process a single entity kind to completion.
+
+        Re-clusters on each iteration but filters results to avoid redundant work:
+        - Auto-merges: skip if already applied (tracked by normalized child name)
+        - Groups: skip if already resolved, or if they don't contain new names from renames
+        - Pairwise reviews: handled by LLM cache in _get_consolidation_decisions_for_kind
+
+        Iteration continues only when renames create new canonical names that might
+        cluster with other entities.
+
+        Returns all merge rules for this kind as {(norm_name, kind): (target, reasoning)}.
+        """
+        with logfire.span(f"Consolidate {kind} entities", kind=kind):
+            return await self._consolidate_kind_impl(
+                kind, entities, mention_counts, ctx
+            )
+
+    async def _consolidate_kind_impl(
+        self,
+        kind: str,
+        entities: dict[str, list[SpeculatedVariant]],
+        mention_counts: dict[str, int],
+        ctx: GraphRunContext[State, Deps],
+    ) -> dict[tuple[str, str], tuple[str, str]]:
+        """Implementation of per-kind consolidation (wrapped by _consolidate_kind)."""
+        max_iterations = ctx.deps.config.tools.extraction.max_rename_iterations
+        threshold = ctx.deps.config.tools.extraction.cluster_token_overlap_threshold
+        kind_merges = ctx.state.consolidated.entities.merges[kind]
+        # Track groups resolved (kept separate) to avoid re-asking
+        resolved_groups: set[frozenset[str]] = set()
+        all_rules: dict[tuple[str, str], tuple[str, str]] = {}
+        # Track auto-merges already applied (keyed by normalized child)
+        applied_auto_merges: set[str] = set()
+        # Track new names from previous iteration (for targeted re-review)
+        previous_new_names: set[str] = set()
+        for iteration in range(1, max_iterations + 1):
+            # Cluster entities
+            ctx.deps.logger.info(
+                f"Clustering {len(entities)} {kind} entities (threshold={threshold:.2f})"
+            )
+            candidates = find_consolidation_candidates(
+                entities, threshold, mention_counts, ctx.deps.logger
+            )
+            # Filter out groups already resolved
+            new_groups = [
+                g for g in candidates.agent_review_groups if g not in resolved_groups
+            ]
+            filtered_resolved = len(candidates.agent_review_groups) - len(new_groups)
+            # On subsequent iterations, only review groups containing new names from renames
+            filtered_no_new_names = 0
+            if previous_new_names:
+                groups_with_new_names = [
+                    g for g in new_groups if g & previous_new_names
+                ]
+                filtered_no_new_names = len(new_groups) - len(groups_with_new_names)
+                new_groups = groups_with_new_names
+            candidates.agent_review_groups = new_groups
+            if filtered_resolved > 0 or filtered_no_new_names > 0:
+                new_group_set = set(new_groups)
+                candidates.merge_trees = [
+                    t for t in candidates.merge_trees if t.entities in new_group_set
+                ]
+            # Filter auto-merges to only include new ones
+            total_auto_merges = len(candidates.auto_merge)
+            new_auto_merges = [
+                (child, parent, reasoning)
+                for child, parent, reasoning in candidates.auto_merge
+                if normalize_for_comparison(child) not in applied_auto_merges
+            ]
+            filtered_auto_merges = total_auto_merges - len(new_auto_merges)
+            # Track clusters presented to LLM
+            for cluster in candidates.agent_review_groups:
+                kind_merges.clusters.append(list(cluster))
+            # Log clustering results
+            multi_member_groups = [g for g in new_groups if len(g) > 1]
+            skip_parts = []
+            if filtered_resolved:
+                skip_parts.append(f"{filtered_resolved} groups already resolved")
+            if filtered_no_new_names:
+                skip_parts.append(f"{filtered_no_new_names} groups without new names")
+            if filtered_auto_merges:
+                skip_parts.append(f"{filtered_auto_merges} auto-merges already applied")
+            skip_info = f" (skipped: {', '.join(skip_parts)})" if skip_parts else ""
+            ctx.deps.logger.info(
+                f"Clustering produced {len(new_auto_merges)} auto-merges, "
+                f"{len(candidates.agent_review)} pairwise reviews, "
+                f"{len(multi_member_groups)} groups for LLM review{skip_info}"
+            )
+            # Early exit if no work remains
+            if (
+                not new_auto_merges
+                and not candidates.agent_review
+                and not candidates.agent_review_groups
+            ):
+                ctx.deps.logger.debug(f"No work remaining for {kind}, exiting early")
+                break
+            # Log contested warnings
+            self._log_contested_warnings(
+                candidates.contested_warnings, kind, entities, ctx
+            )
+            # Process auto-merge decisions (only new ones)
+            iteration_rules: dict[tuple[str, str], tuple[str, str]] = {}
+            for child, parent, reasoning in new_auto_merges:
+                child_norm = normalize_for_comparison(child)
+                iteration_rules[(child_norm, kind)] = (parent, reasoning)
+                applied_auto_merges.add(child_norm)
+            # Process agent review pairs
+            new_names: set[str] = set()
+            if candidates.agent_review:
+                (
+                    llm_rules,
+                    llm_new_names,
+                ) = await self._get_consolidation_decisions_for_kind(
+                    candidates.agent_review, kind, entities, ctx
+                )
+                iteration_rules.update(llm_rules)
+                new_names.update(llm_new_names)
+            # Process agent review groups with merge trees
+            if candidates.agent_review_groups:
+                (
+                    group_rules,
+                    group_new_names,
+                    group_resolved,
+                ) = await self._get_group_consolidation_decisions(
+                    candidates.agent_review_groups,
+                    candidates.merge_trees,
+                    kind,
+                    entities,
+                    ctx,
+                )
+                iteration_rules.update(group_rules)
+                new_names.update(group_new_names)
+                resolved_groups.update(group_resolved)
+            # Accumulate rules
+            all_rules.update(iteration_rules)
+            # Check if we need another iteration
+            if not new_names:
+                break
+            # Add new names for potential further clustering
+            self._add_new_names_to_kind(new_names, entities)
+            previous_new_names = new_names
+            ctx.deps.logger.debug(
+                f"{kind} consolidation iteration {iteration}: "
+                f"{len(new_names)} renames, re-evaluating"
+            )
+        else:
+            if new_names:
+                ctx.deps.logger.warning(
+                    f"{kind} consolidation hit max iterations ({max_iterations}) "
+                    f"with {len(new_names)} pending renames"
+                )
+        return all_rules
+
+    def _log_contested_warnings(
+        self,
+        contested_warnings: list,
+        kind: str,
+        entities: dict[str, list[SpeculatedVariant]],
+        ctx: GraphRunContext[State, Deps],
+    ) -> None:
+        """Log contested variant warnings with full context."""
+        if not contested_warnings:
+            return
+
+        def fmt_variant(v: SpeculatedVariant) -> str:
+            source = (
+                f":{v.source}"
+                if v.speculation and v.source != "paren_expansion"
+                else ""
+            )
+            return f"'{v.form}' [{v.speculation}{source}]"
+
+        contested_lines = [f"Contested variants for {kind}:"]
+        structured_data = []
+        for norm_form, canonical_to_variants in contested_warnings:
+            canonicals = list(canonical_to_variants.keys())
+            canonical_list = "' and '".join(canonicals)
+            variant_details = [
+                f"    - {canonical}: {', '.join(fmt_variant(v) for v in entities.get(canonical, []) if normalize_for_comparison(v.form) == norm_form)}"
+                for canonical in canonicals
+            ]
+            similarity = self._analyze_entity_similarity(canonicals)
+            contested_lines.extend(
+                [
+                    f"  '{norm_form}' from '{canonical_list}':",
+                    *variant_details,
+                    f"    - Similarity: {similarity}",
+                ]
+            )
+            structured_data.append(
+                {
+                    "normalized_form": norm_form,
+                    "entities": canonicals,
+                    "similarity": similarity,
+                }
+            )
+        ctx.deps.logger.info(
+            "\n".join(contested_lines),
+            extra={"contested_variants": structured_data, "entity_kind": kind},
+        )
+
+    def _add_new_names_to_kind(
+        self, new_names: set[str], entities: dict[str, list[SpeculatedVariant]]
+    ) -> None:
+        """Add new canonical names from renames to entity dict for re-clustering."""
+        for new_canonical in new_names:
+            if new_canonical not in entities:
+                entities[new_canonical] = [
+                    SpeculatedVariant(
+                        form=new_canonical,
+                        speculation=0,
+                        source="original",
+                        is_from_alias=False,
+                    )
+                ]
 
     def _collect_entity_variants(
         self, ctx: GraphRunContext[State, Deps]
@@ -704,38 +804,6 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
                 )
 
         return entities_by_kind, mentions_by_kind
-
-    def _add_new_names_to_entities(
-        self,
-        new_names: set[str],
-        entities_by_kind: dict[str, dict[str, list[SpeculatedVariant]]],
-    ) -> None:
-        """Add new canonical names (from renames) to entities_by_kind for re-evaluation.
-
-        This allows subsequent iterations to detect any new merge opportunities
-        created by the renames.
-
-        Parameters:
-            new_names: Set of new canonical entity names
-            entities_by_kind: Dict structure to update (kind → canonical → variants)
-        """
-        # New names get added with a single variant (the original form at spec level 0)
-        from interaction_finder.extraction.entity_matching import SpeculatedVariant
-
-        # We need to determine which kind each new name belongs to
-        # For now, add to all kinds that have entities (this is conservative)
-        for kind in entities_by_kind:
-            for new_canonical in new_names:
-                if new_canonical not in entities_by_kind[kind]:
-                    # Add with single variant at spec level 0
-                    entities_by_kind[kind][new_canonical] = [
-                        SpeculatedVariant(
-                            form=new_canonical,
-                            speculation=0,
-                            source="original",
-                            is_from_alias=False,
-                        )
-                    ]
 
     def _analyze_entity_similarity(self, canonicals: list[str]) -> str:
         """Analyze why entities with the same normalized form are not safe to merge.
@@ -794,19 +862,18 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
         if not agent_review_pairs:
             return {}, set()
 
+        kind_cache = _get_merge_cache(ctx.state, kind)
         # Deduplicate pairs and check cache
-        unique_pairs: dict[tuple[str, str, str], tuple[str, str]] = {}
+        unique_pairs: dict[tuple[str, str], tuple[str, str]] = {}
         for child, parent in agent_review_pairs:
-            cache_key = (child, parent, kind)
+            cache_key = (child, parent)
             if cache_key not in unique_pairs:
                 unique_pairs[cache_key] = (child, parent)
-
         # Separate cached and uncached
         uncached: list[tuple[str, str]] = []
         for cache_key, (child, parent) in unique_pairs.items():
-            if cache_key not in ctx.state.agent_merge_cache:
+            if cache_key not in kind_cache.cache:
                 uncached.append((child, parent))
-
         # Get LLM decisions for uncached pairs
         if uncached:
             batch_size = ctx.deps.config.tools.extraction.merge_batch_size
@@ -814,13 +881,12 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
                 await self._process_consolidation_batch_new(
                     uncached[i : i + batch_size], kind, i // batch_size + 1, ctx
                 )
-
         # Build rules from cache (now contains all pairs)
         return self._build_rules_from_cache(unique_pairs, kind, entities, ctx)
 
     def _build_rules_from_cache(
         self,
-        pairs: dict[tuple[str, str, str], tuple[str, str]],
+        pairs: dict[tuple[str, str], tuple[str, str]],
         kind: str,
         entities: dict[str, list[SpeculatedVariant]],
         ctx: GraphRunContext[State, Deps],
@@ -828,7 +894,7 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
         """Build consolidation rules from cached decisions.
 
         Parameters:
-            pairs: Map of cache_key → (child, parent)
+            pairs: Map of (child, parent) → (child, parent)
             kind: Entity kind
             entities: Dict of canonical_name → variants
             ctx: Graph run context
@@ -836,14 +902,13 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
         Returns:
             Tuple of (rules, new_names)
         """
+        kind_cache = _get_merge_cache(ctx.state, kind)
         rules: dict[tuple[str, str], tuple[str, str]] = {}
         new_names: set[str] = set()
-
         for cache_key in pairs:
-            if cache_key in ctx.state.agent_merge_cache:
-                target, reasoning = ctx.state.agent_merge_cache[cache_key]
-                ctx.state.merge_cache_hits += 1
-
+            if cache_key in kind_cache.cache:
+                target, reasoning = kind_cache.cache[cache_key]
+                kind_cache.hits += 1
                 if target:  # merge or rename
                     child = cache_key[0]
                     child_norm = normalize_for_comparison(child)
@@ -852,8 +917,7 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
                         new_names.add(target)
                 # else: skip - no rule
             else:
-                ctx.state.merge_cache_misses += 1
-
+                kind_cache.misses += 1
         return rules, new_names
 
     async def _process_consolidation_batch_new(
@@ -869,13 +933,12 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
             batch: List of (child_canonical, parent_canonical) pairs
             kind: Entity kind
             batch_num: Batch number for logging
-            ctx: Graph run context (cache is populated in ctx.state.agent_merge_cache)
+            ctx: Graph run context (cache is populated in merge_cache_by_kind[kind])
         """
         # Build prompt structures
         pairs_description = []
         id_to_pair: dict[int, tuple[str, str, str]] = {}  # id → (parent, child, token)
         token_to_id: dict[str, int] = {}
-
         for pair_id, (child, parent) in enumerate(batch, start=1):
             if parent == child:
                 continue
@@ -883,10 +946,8 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
             id_to_pair[pair_id] = (parent, child, token)
             token_to_id[token] = pair_id
             pairs_description.append(f"{pair_id}. [{token}] {child!r} → {parent!r} ?")
-
         if not pairs_description:
             return
-
         # Build and execute prompt
         prompt = f"""**Research topic:** {ctx.state.topic}
 
@@ -896,16 +957,14 @@ class ConsolidateEntitiesNode(BaseNode[State, Deps, ExtractionResult]):
 {chr(10).join(pairs_description)}
 
 Only return pairs that should merge or be renamed. Omit pairs that should remain separate."""
-
+        kind_cache = _get_merge_cache(ctx.state, kind)
         agent = get_entity_consolidation_agent(ctx.deps.config)
         try:
             with rename_agent(agent, name=f"ConsolidateEntities ({kind}, {batch_num})"):
                 async with ctx.deps.agent_semaphore:
                     result = await agent.run(prompt, deps=ctx.deps, usage=RunUsage())
-
             # Process decisions and populate cache
             returned_ids = {d.pair_id for d in result.output.decisions}
-
             for decision in result.output.decisions:
                 resolved = _resolve_pair_from_decision(
                     decision.pair_id,
@@ -916,20 +975,16 @@ Only return pairs that should merge or be renamed. Omit pairs that should remain
                 )
                 if resolved is None:
                     continue
-
                 parent, child = resolved
-                cache_key = (child, parent, kind)
-
+                cache_key = (child, parent)
                 # Cache decision: target for merge/rename
                 target = decision.rename if decision.rename else parent
-                ctx.state.agent_merge_cache[cache_key] = (target, decision.reasoning)
-
+                kind_cache.cache[cache_key] = (target, decision.reasoning)
             # Cache implicit skips (pairs not returned by LLM)
             for pair_id, (parent, child, token) in id_to_pair.items():
                 if pair_id not in returned_ids:
-                    cache_key = (child, parent, kind)
-                    ctx.state.agent_merge_cache[cache_key] = (None, "implicit_skip")
-
+                    cache_key = (child, parent)
+                    kind_cache.cache[cache_key] = (None, "implicit_skip")
         except (TimeoutError, ConnectionError, ValueError) as e:
             ctx.deps.logger.error(f"Entity consolidation failed: {e}")
 
@@ -1182,160 +1237,6 @@ Examples:
 
         # Case 2 & 3: Member name or new name
         return target_spec
-
-    async def _get_consolidation_decisions(
-        self,
-        candidate_pairs_by_kind: dict[str, list[tuple[str, str]]],
-        canonical_lookup: dict[tuple[str, str], str],
-        unique_entities: dict[str, dict[str, set[str]]],
-        ctx: GraphRunContext[State, Deps],
-    ) -> tuple[dict[tuple[str, str], tuple[str, str]], set[tuple[str, str]]]:
-        """Query LLM for consolidation decisions on entity pairs (LEGACY - will be removed).
-
-        Returns:
-            Tuple of (rules, new_names) where:
-            - rules maps (norm_child, kind) → (target, reasoning)
-            - new_names is set of (new_canonical, kind) for targets that don't
-              exist in unique_entities (i.e., renames to new names)
-        """
-        rules: dict[tuple[str, str], tuple[str, str]] = {}
-        new_names: set[tuple[str, str]] = set()
-        for kind, pairs in candidate_pairs_by_kind.items():
-            kind_entities = unique_entities.get(kind, {})
-            # Separate cached and uncached pairs
-            uncached_pairs = []
-            for norm_parent, norm_child in pairs:
-                cache_key = (norm_parent, norm_child, kind)
-                if cache_key in ctx.state.merge_decision_cache:
-                    # Cache stores target canonical name (merge/rename) or False (skip)
-                    target = ctx.state.merge_decision_cache[cache_key]
-                    if target:
-                        # Cached decisions use "cached" as reasoning (original LLM reasoning not stored)
-                        rules[(norm_child, kind)] = (target, "cached")
-                        # Check if target is a new name (rename to non-existent entity)
-                        target_norm = normalize_for_comparison(target)
-                        if target_norm not in kind_entities:
-                            new_names.add((target, kind))
-                    ctx.state.merge_cache_hits += 1
-                else:
-                    uncached_pairs.append((norm_parent, norm_child))
-                    ctx.state.merge_cache_misses += 1
-            # Query LLM for uncached pairs in batches
-            batch_size = ctx.deps.config.tools.extraction.merge_batch_size
-            for i in range(0, len(uncached_pairs), batch_size):
-                batch = uncached_pairs[i : i + batch_size]
-                batch_rules, batch_new_names = await self._process_consolidation_batch(
-                    batch,
-                    kind,
-                    canonical_lookup,
-                    kind_entities,
-                    i // batch_size + 1,
-                    ctx,
-                )
-                rules.update(batch_rules)
-                new_names.update(batch_new_names)
-        return rules, new_names
-
-    async def _process_consolidation_batch(
-        self,
-        batch: list[tuple[str, str]],
-        kind: str,
-        canonical_lookup: dict[tuple[str, str], str],
-        kind_entities: dict[str, set[str]],
-        batch_num: int,
-        ctx: GraphRunContext[State, Deps],
-    ) -> tuple[dict[tuple[str, str], tuple[str, str]], set[tuple[str, str]]]:
-        """Process a batch of entity pairs for consolidation decisions.
-
-        Returns:
-            Tuple of (rules, new_names) where:
-            - rules maps (norm_child, kind) → (target, reasoning)
-            - new_names is set of (new_canonical, kind) for targets not in kind_entities
-        """
-        rules: dict[tuple[str, str], tuple[str, str]] = {}
-        new_names: set[tuple[str, str]] = set()
-        # Build prompt structures
-        pairs_description = []
-        seen_canonical: set[tuple[str, str]] = set()
-        canonical_to_norm: dict[tuple[str, str], list[tuple[str, str]]] = {}
-        # id → (canonical_pair, norm_child, token) - norm_child used to key rules
-        id_to_pair: dict[int, tuple[tuple[str, str], str, str]] = {}
-        token_to_id: dict[str, int] = {}
-        pair_id = 0
-        for norm_parent, norm_child in batch:
-            parent = canonical_lookup[(norm_parent, kind)]
-            child = canonical_lookup[(norm_child, kind)]
-            # Skip identical canonical names (auto-cache as merge to parent)
-            if parent == child:
-                ctx.state.merge_decision_cache[(norm_parent, norm_child, kind)] = parent
-                continue
-            # Track norm→canonical mapping
-            canonical_pair = (parent, child)
-            canonical_to_norm.setdefault(canonical_pair, []).append(
-                (norm_parent, norm_child)
-            )
-            # Skip duplicate canonical pairs
-            if canonical_pair in seen_canonical:
-                continue
-            seen_canonical.add(canonical_pair)
-            # Build prompt entry
-            pair_id += 1
-            token = _generate_token()
-            id_to_pair[pair_id] = (canonical_pair, norm_child, token)
-            token_to_id[token] = pair_id
-            pairs_description.append(f"{pair_id}. [{token}] {child!r} → {parent!r} ?")
-        if not pairs_description:
-            return rules, new_names
-        # Build and execute prompt
-        prompt = f"""**Research topic:** {ctx.state.topic}
-
-**Target entity types:** {", ".join(ctx.state.target_entity_types)}
-
-**Entity pairs to evaluate:**
-{chr(10).join(pairs_description)}
-
-For each pair, decide the appropriate action (skip, merge, or rename)."""
-        agent = get_entity_consolidation_agent(ctx.deps.config)
-        try:
-            with rename_agent(agent, name=f"ConsolidateEntities ({kind}, {batch_num})"):
-                async with ctx.deps.agent_semaphore:
-                    result = await agent.run(prompt, deps=ctx.deps, usage=RunUsage())
-            # Process decisions
-            for decision in result.output.decisions:
-                resolved = _resolve_pair_from_decision(
-                    decision.pair_id,
-                    decision.pair_token,
-                    id_to_pair,
-                    token_to_id,
-                    ctx.deps.logger,
-                )
-                if resolved is None:
-                    continue
-                canonical_pair, norm_child = resolved
-                parent, child = canonical_pair
-                norm_pairs = canonical_to_norm[canonical_pair]
-                # Determine target based on action
-                if decision.action == "skip":
-                    for np, nc in norm_pairs:
-                        ctx.state.merge_decision_cache[(np, nc, kind)] = False
-                    continue
-                elif decision.action == "merge":
-                    target = parent
-                elif decision.action == "rename" and decision.target:
-                    target = decision.target
-                else:
-                    continue
-                # Cache decision and create rule (same for merge and rename)
-                for np, nc in norm_pairs:
-                    ctx.state.merge_decision_cache[(np, nc, kind)] = target
-                rules[(norm_child, kind)] = (target, decision.reasoning)
-                # Check if target is a new name (not in existing entities)
-                target_norm = normalize_for_comparison(target)
-                if target_norm not in kind_entities:
-                    new_names.add((target, kind))
-        except (TimeoutError, ConnectionError, ValueError) as e:
-            ctx.deps.logger.error(f"Entity consolidation failed: {e}")
-        return rules, new_names
 
     def _resolve_transitive_merges(
         self, merge_rules: dict[tuple[str, str], tuple[str, str]]
@@ -2838,14 +2739,15 @@ class FinalizeNode(BaseNode[State, Deps, ExtractionResult]):
             pairs_accepted = sum(1 for j in all_judgments if j.accepted)
             pairs_rejected = total_pairs_found - pairs_accepted
 
+            cache_hits, cache_misses = _aggregate_cache_stats(ctx.state)
             metadata = ExtractionMetadata(
                 topic=ctx.state.topic,
                 resource_count=len(ctx.deps.resource_pool.resources),
                 total_entities_found=total_entities_found,
                 entities_after_validation=entities_after_validation,
                 entities_merged=ctx.state.entities_merged,
-                merge_cache_hits=ctx.state.merge_cache_hits,
-                merge_cache_misses=ctx.state.merge_cache_misses,
+                merge_cache_hits=cache_hits,
+                merge_cache_misses=cache_misses,
                 proximal_sets_found=proximal_sets_found,
                 total_pairs_found=total_pairs_found,
                 pairs_accepted=pairs_accepted,

@@ -106,8 +106,10 @@ class TestWithinRunCaching:
         assert mock_agent.run.call_count == 1
 
         # Cache statistics: Both calls check cache, first populates it, second uses it
-        assert ctx.state.merge_cache_hits == 2  # Both calls found it in cache
-        assert ctx.state.merge_cache_misses == 0  # No misses
+        gene_cache = ctx.state.merge_cache_by_kind.get("gene")
+        assert gene_cache is not None
+        assert gene_cache.hits == 2  # Both calls found it in cache
+        assert gene_cache.misses == 0  # No misses
 
         # Both calls should produce the same (empty) rules
         assert rules1 == rules2 == {}
@@ -170,28 +172,24 @@ class TestSpeculationBasedConsolidation:
 class TestRenameMergeOpportunities:
     """Test that renames create new merge opportunities."""
 
-    def test_add_new_names_to_entities(self, mock_deps):
-        """New canonical names from renames should be added to entities_by_kind."""
+    def test_add_new_names_to_kind(self, mock_deps):
+        """New canonical names from renames should be added to the entity dict."""
         from interaction_finder.extraction.entity_matching import SpeculatedVariant
 
         node = ConsolidateEntitiesNode()
-        entities_by_kind = {
-            "gene": {
-                "TGF": [SpeculatedVariant("TGF", 0, "original", False)],
-                "TGF receptor": [
-                    SpeculatedVariant("TGF receptor", 0, "original", False)
-                ],
-            }
+        entities = {
+            "TGF": [SpeculatedVariant("TGF", 0, "original", False)],
+            "TGF receptor": [SpeculatedVariant("TGF receptor", 0, "original", False)],
         }
 
         # Rename created "TGF-β"
         new_names = {"TGF-β"}
-        node._add_new_names_to_entities(new_names, entities_by_kind)
+        node._add_new_names_to_kind(new_names, entities)
 
         # New entity should be added
-        assert "TGF-β" in entities_by_kind["gene"]
+        assert "TGF-β" in entities
         # Should have single variant at speculation=0
-        variants = entities_by_kind["gene"]["TGF-β"]
+        variants = entities["TGF-β"]
         assert len(variants) == 1
         assert variants[0].speculation == 0
         assert variants[0].source == "original"

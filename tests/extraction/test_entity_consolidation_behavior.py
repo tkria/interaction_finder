@@ -286,6 +286,9 @@ class TestCrossDocumentConsistency:
     @pytest.mark.asyncio
     async def test_contested_variants_prevented_from_merging(self, mock_deps):
         """Contested variants (mapping to multiple entities) should not auto-merge."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from interaction_finder.extraction.models import ClusterDecisions
+
         state = State(
             topic="test",
             target_entity_types=["gene"],
@@ -325,7 +328,15 @@ class TestCrossDocumentConsistency:
         node = ConsolidateEntitiesNode()
         ctx = GraphRunContext(state=state, deps=mock_deps)
 
-        await node.run(ctx)
+        # Mock LLM to return empty decisions (keep entities separate)
+        mock_result = MagicMock()
+        mock_result.output = ClusterDecisions(decisions=[])
+        mock_agent = MagicMock()
+        mock_agent.run = AsyncMock(return_value=mock_result)
+
+        with patch("interaction_finder.agent_config.agent_getter") as mock_getter:
+            mock_getter.return_value = lambda config: mock_agent
+            await node.run(ctx)
 
         # Should remain separate due to contestation
         canonical1 = list(ctx.state.validated_entities_by_resource[resource1].values())[
@@ -702,6 +713,9 @@ class TestEdgeCases:
     @pytest.mark.asyncio
     async def test_parenthetical_expansion_contestation(self, mock_deps):
         """Parenthetical expansion that's contested should not auto-merge."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from interaction_finder.extraction.models import ClusterDecisions
+
         state = State(
             topic="test",
             target_entity_types=["gene"],
@@ -740,7 +754,15 @@ class TestEdgeCases:
         node = ConsolidateEntitiesNode()
         ctx = GraphRunContext(state=state, deps=mock_deps)
 
-        await node.run(ctx)
+        # Mock LLM to return empty decisions (keep entities separate)
+        mock_result = MagicMock()
+        mock_result.output = ClusterDecisions(decisions=[])
+        mock_agent = MagicMock()
+        mock_agent.run = AsyncMock(return_value=mock_result)
+
+        with patch("interaction_finder.agent_config.agent_getter") as mock_getter:
+            mock_getter.return_value = lambda config: mock_agent
+            await node.run(ctx)
 
         # Should remain separate due to contestation
         canonical1 = list(ctx.state.validated_entities_by_resource[resource1].values())[
@@ -1093,7 +1115,18 @@ class TestContestedVariantClustering:
         node = ConsolidateEntitiesNode()
         ctx = GraphRunContext(state=state, deps=mock_deps)
 
-        await node.run(ctx)
+        # Mock LLM to return empty decisions (keep entities separate)
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from interaction_finder.extraction.models import ClusterDecisions
+
+        mock_result = MagicMock()
+        mock_result.output = ClusterDecisions(decisions=[])
+        mock_agent = MagicMock()
+        mock_agent.run = AsyncMock(return_value=mock_result)
+
+        with patch("interaction_finder.agent_config.agent_getter") as mock_getter:
+            mock_getter.return_value = lambda config: mock_agent
+            await node.run(ctx)
 
         # Check that clusters were recorded in consolidated data for phenotype kind
         phenotype_merges = ctx.state.consolidated.entities.merges.get("phenotype")
