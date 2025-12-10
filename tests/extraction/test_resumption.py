@@ -7,9 +7,12 @@ from interaction_finder.extraction.models import (
     EntityPairKey,
     EntityRef,
     ExtractionMetadata,
+    EvidenceQuality,
     PairAssessment,
     PairJudgment,
+    PairSpread,
     ProximalEntitySet,
+    SimpleEntity,
 )
 from interaction_finder.extraction.state import State
 from interaction_finder.resources import (
@@ -631,6 +634,220 @@ def test_pair_assessments_preserve_quotes():
     restored = restored_assessments[0]
     assert restored.quotes[0].resource == resource
     assert restored.quotes[0].query_text == "BRCA1 is associated with breast cancer"
+
+
+def test_pair_assessments_rehydrate_entity_refs_with_mentions():
+    """Pair assessments should reuse validated EntityRefs (with mentions) on resume."""
+    pool = ResourcePool()
+    resource = pool.add(
+        url="http://example.com/doc1",
+        title="Test Document",
+        document_text="BMPR2 causes pulmonary hypertension.",
+    )
+    rid = resource.id
+    state = State(
+        topic="test",
+        target_entity_types=["gene", "phenotype"],
+        permitted_pairs={"gene": {"phenotype"}, "phenotype": {"gene"}},
+    )
+
+    bmpr2_mention = EntityMention(
+        kind="gene",
+        name="BMPR2",
+        aliases=[],
+        quotes=[
+            ResourceQuote(
+                resource=resource,
+                query_text="BMPR2 causes",
+                spans=[(0, 12)],
+                is_disjoint=False,
+            )
+        ],
+        reasoning="Detected gene",
+    )
+    pah_mention = EntityMention(
+        kind="phenotype",
+        name="Pulmonary Hypertension",
+        aliases=["PAH"],
+        quotes=[
+            ResourceQuote(
+                resource=resource,
+                query_text="pulmonary hypertension",
+                spans=[(13, 35)],
+                is_disjoint=False,
+            )
+        ],
+        reasoning="Detected phenotype",
+    )
+
+    state.validated_entities_by_resource[rid] = {
+        "BMPR2": EntityRef(canonical="BMPR2", mentions=[bmpr2_mention]),
+        "Pulmonary Hypertension": EntityRef(
+            canonical="Pulmonary Hypertension", mentions=[pah_mention]
+        ),
+    }
+
+    evidence = EvidenceQuality(
+        directness="explicit",
+        source_type="primary",
+        specificity="mechanistic",
+        language="definitive",
+        overall=7,
+    )
+
+    assessment = PairAssessment(
+        resource_id=rid,
+        entity1=state.validated_entities_by_resource[rid]["BMPR2"],
+        entity2=state.validated_entities_by_resource[rid]["Pulmonary Hypertension"],
+        relationship="causes",
+        quotes=[
+            ResourceQuote(
+                resource=resource,
+                query_text="BMPR2 causes pulmonary hypertension",
+                spans=[(0, 35)],
+                is_disjoint=False,
+            )
+        ],
+        evidence=evidence,
+        reasoning="Explicit statement",
+    )
+    state.pair_assessments_by_resource[rid] = [assessment]
+
+    restored_state = State.from_dict(
+        state.to_dict(),
+        topic="test",
+        target_entity_types=["gene", "phenotype"],
+        permitted_pairs={"gene": {"phenotype"}, "phenotype": {"gene"}},
+        resource_pool=pool,
+    )
+
+    restored_assessment = restored_state.pair_assessments_by_resource[rid][0]
+    assert (
+        restored_assessment.entity1
+        is restored_state.validated_entities_by_resource[rid]["BMPR2"]
+    )
+    assert (
+        restored_assessment.entity2
+        is restored_state.validated_entities_by_resource[rid][
+            "Pulmonary Hypertension"
+        ]
+    )
+    assert restored_assessment.entity1.kind == "gene"
+    assert (
+        restored_assessment.entity1.mentions[0].quotes[0].resource == resource
+    )  # rehydrated
+
+
+def test_pair_judgments_rehydrate_assessment_entities_from_global():
+    """PairJudgment spread assessments should rehydrate EntityRefs via global_entities."""
+    pool = ResourcePool()
+    resource = pool.add(
+        url="http://example.com/doc2",
+        title="Doc",
+        document_text="BMPR2 mutations cause PAH.",
+    )
+    rid = resource.id
+    state = State(
+        topic="test",
+        target_entity_types=["gene", "phenotype"],
+        permitted_pairs={"gene": {"phenotype"}, "phenotype": {"gene"}},
+    )
+
+    bmpr2_ref = EntityRef(
+        canonical="BMPR2",
+        mentions=[
+            EntityMention(
+                kind="gene",
+                name="BMPR2",
+                aliases=[],
+                quotes=[
+                    ResourceQuote(
+                        resource=resource,
+                        query_text="BMPR2 mutations",
+                        spans=[(0, 15)],
+                        is_disjoint=False,
+                    )
+                ],
+                reasoning="Gene mention",
+            )
+        ],
+    )
+    pah_ref = EntityRef(
+        canonical="Pulmonary Hypertension",
+        mentions=[
+            EntityMention(
+                kind="phenotype",
+                name="Pulmonary Hypertension",
+                aliases=["PAH"],
+                quotes=[
+                    ResourceQuote(
+                        resource=resource,
+                        query_text="PAH",
+                        spans=[(22, 25)],
+                        is_disjoint=False,
+                    )
+                ],
+                reasoning="Phenotype mention",
+            )
+        ],
+    )
+    state.global_entities = {"BMPR2": bmpr2_ref, "Pulmonary Hypertension": pah_ref}
+
+    evidence = EvidenceQuality(
+        directness="explicit",
+        source_type="primary",
+        specificity="mechanistic",
+        language="definitive",
+        overall=6,
+    )
+
+    spread_assessment = PairAssessment(
+        resource_id=rid,
+        entity1=bmpr2_ref,
+        entity2=pah_ref,
+        relationship="causes",
+        quotes=[
+            ResourceQuote(
+                resource=resource,
+                query_text="BMPR2 mutations cause PAH",
+                spans=[(0, 25)],
+                is_disjoint=False,
+            )
+        ],
+        evidence=evidence,
+        reasoning="Direct causation statement",
+    )
+    pair_key = EntityPairKey("BMPR2", "Pulmonary Hypertension")
+    state.pair_judgments[pair_key] = PairJudgment(
+        entity1=SimpleEntity(name="BMPR2", kind="gene", aliases=[]),
+        entity2=SimpleEntity(
+            name="Pulmonary Hypertension", kind="phenotype", aliases=["PAH"]
+        ),
+        relationship="causes",
+        spread=PairSpread(positive=[spread_assessment]),
+        accepted=True,
+        evidence=evidence,
+        decision_confidence=0.7,
+        reasoning="Consistent evidence",
+    )
+
+    restored_state = State.from_dict(
+        state.to_dict(),
+        topic="test",
+        target_entity_types=["gene", "phenotype"],
+        permitted_pairs={"gene": {"phenotype"}, "phenotype": {"gene"}},
+        resource_pool=pool,
+    )
+
+    restored_judgment = restored_state.pair_judgments[pair_key]
+    restored_assessment = restored_judgment.spread.positive[0]
+    assert (
+        restored_assessment.entity1 is restored_state.global_entities["BMPR2"]
+    )  # pulled from global_entities
+    assert (
+        restored_assessment.entity2
+        is restored_state.global_entities["Pulmonary Hypertension"]
+    )
 
 
 def test_ensure_extraction_allows_resumable():

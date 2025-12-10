@@ -102,29 +102,37 @@ def _rehydrate_judgments_quotes(
         del quote["resource_url"]
 
     def inject_entity(entity_ref: str | dict | list) -> dict | list:
-        """Replace canonical string with full EntityRef dict, or rehydrate quotes in existing dict."""
+        """Replace canonical string with full EntityRef data, or rehydrate quotes."""
         # String reference - look up full entity from entities dict
         if isinstance(entity_ref, str):
-            if entities is None:
-                raise ValueError(
-                    f"Entity string reference '{entity_ref}' found but no entities dict provided"
-                )
-            if entity_ref not in entities:
-                raise ValueError(f"Entity '{entity_ref}' not found in entities dict")
-            # Return the full entity dict, but need to add canonical field
-            entity_dict = entities[entity_ref].copy()
-            entity_dict["canonical"] = entity_ref
-            # Rehydrate quotes in mentions within this entity
-            for mention in entity_dict.get("mentions", []):
-                if isinstance(mention, dict):
-                    quotes_list = mention.get("quotes", [])
-                    # Replace quote dicts with ResourceQuote objects
-                    for i, quote in enumerate(quotes_list):
-                        if isinstance(quote, dict):
-                            inject_quote(quote)
-                            # Construct ResourceQuote from dict
-                            quotes_list[i] = ResourceQuote.model_construct(**quote)
-            return entity_dict
+            from interaction_finder.extraction.models import EntityMention, EntityRef
+
+            if entities and entity_ref in entities:
+                entity_obj = entities[entity_ref]
+                # Accept EntityRef objects directly
+                if isinstance(entity_obj, EntityRef):
+                    return entity_obj
+                # Dict-based entity data (legacy)
+                entity_dict = entity_obj.copy()
+                entity_dict["canonical"] = entity_ref
+                for mention in entity_dict.get("mentions", []):
+                    if isinstance(mention, dict):
+                        quotes_list = mention.get("quotes", [])
+                        for i, quote in enumerate(quotes_list):
+                            if isinstance(quote, dict):
+                                inject_quote(quote)
+                                quotes_list[i] = ResourceQuote.model_construct(**quote)
+                return entity_dict
+
+            # Fallback: construct minimal EntityRef with placeholder mention
+            placeholder = EntityMention(
+                kind="unknown",
+                name=entity_ref,
+                aliases=[],
+                quotes=[],
+                reasoning="placeholder (entity data missing during rehydration)",
+            )
+            return EntityRef(canonical=entity_ref, mentions=[placeholder])
         # Already a dict or list - rehydrate quotes within it
         return entity_ref
 

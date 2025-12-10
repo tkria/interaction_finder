@@ -34,7 +34,7 @@ from interaction_finder.extraction.models import (
     PaperQualityAssessment,
     ProximalEntitySet,
 )
-from interaction_finder.resources import ResourceId
+from interaction_finder.resources import ResourceId, ResourceQuote
 
 
 @dataclass
@@ -67,14 +67,14 @@ _SERIALIZATION_REGISTRY: dict[str, tuple[str, type | None]] = {
 
 
 def _rehydrate_quotes_list(quotes: list[dict], resource_pool: "ResourcePool") -> None:
-    """Rehydrate resource_url → resource in a list of quote dicts.
-
-    Modifies quotes in-place.
-    """
-    for quote in quotes:
-        if isinstance(quote, dict) and "resource_url" in quote:
-            quote["resource"] = resource_pool.get(quote["resource_url"])
-            del quote["resource_url"]
+    """Rehydrate resource_url → Resource and convert dicts back to ResourceQuote."""
+    for idx, quote in enumerate(quotes):
+        if isinstance(quote, dict):
+            if "resource_url" in quote:
+                quote["resource"] = resource_pool.get(quote["resource_url"])
+                del quote["resource_url"]
+            # Replace the dict with a ResourceQuote model
+            quotes[idx] = ResourceQuote.model_validate(quote)
 
 
 def _rehydrate_entity_quotes(
@@ -115,7 +115,9 @@ def _rehydrate_proximal_sets(sets_data: dict, resource_pool: "ResourcePool") -> 
 
 
 def _rehydrate_pair_assessments(
-    assessments_data: dict, resource_pool: "ResourcePool"
+    assessments_data: dict,
+    resource_pool: "ResourcePool",
+    validated_entities: dict["ResourceId", dict[str, EntityRef]] | None,
 ) -> None:
     """Rehydrate resource_url → resource in PairAssessment quotes.
 
@@ -126,10 +128,22 @@ def _rehydrate_pair_assessments(
     Note: entity1/entity2 fields serialize to canonical strings (not dicts
     with mentions), so they don't need rehydration here.
     """
-    for assessments in assessments_data.values():
+    for resource_url, assessments in assessments_data.items():
+        # Find validated entities for this resource (if available)
+        entities_for_resource: dict[str, EntityRef] = {}
+        if validated_entities:
+            resource = resource_pool.get(resource_url)
+            if resource is not None:
+                entities_for_resource = validated_entities.get(resource.id, {}) or {}
+
         for assessment in assessments:
             if "quotes" in assessment:
                 _rehydrate_quotes_list(assessment["quotes"], resource_pool)
+            # Replace entity string references with validated EntityRef objects
+            for field in ("entity1", "entity2"):
+                entity = assessment.get(field)
+                if isinstance(entity, str) and entity in entities_for_resource:
+                    assessment[field] = entities_for_resource[entity]
 
 
 @dataclass
@@ -365,7 +379,9 @@ class State:
                 elif fld.name == "proximal_sets_by_resource":
                     _rehydrate_proximal_sets(value_data, resource_pool)
                 elif fld.name == "pair_assessments_by_resource":
-                    _rehydrate_pair_assessments(value_data, resource_pool)
+                    _rehydrate_pair_assessments(
+                        value_data, resource_pool, state.validated_entities_by_resource
+                    )
                 value = {
                     get_rid(url): TypeAdapter(inner_type).validate_python(v)
                     for url, v in value_data.items()
@@ -394,13 +410,48 @@ class State:
 
             elif handler_type == "pair_key":
                 # dict[str, X_serialized] → dict[EntityPairKey, X]
-                # Rehydrate quotes first using existing helper
+                # Rehydrate quotes (and entity refs) using existing helper
                 judgment_list = list(value_data.values())
-                _rehydrate_judgments_quotes(judgment_list, resource_pool, entities=None)
+                entities_lookup: dict[str, EntityRef] = {}
+                if state.global_entities:
+                    entities_lookup = state.global_entities
+                elif state.validated_entities_by_resource:
+                    # Flatten validated entities as fallback
+                    entities_lookup = {
+                        canonical: ref
+                        for entities in state.validated_entities_by_resource.values()
+                        for canonical, ref in entities.items()
+                    }
+                _rehydrate_judgments_quotes(
+                    judgment_list, resource_pool, entities=entities_lookup or None
+                )
 
                 # Then reconstruct with validated models
+                def parse_pair_key(key_str: str) -> EntityPairKey:
+                    """Support legacy EntityPairKey string formats."""
+                    import ast
+                    import re
+
+                    if "|" in key_str and not key_str.startswith("EntityPairKey("):
+                        parts = key_str.split("|")
+                        if len(parts) == 2:
+                            return EntityPairKey(parts[0], parts[1])
+                    try:
+                        parsed = ast.literal_eval(key_str)
+                        if isinstance(parsed, tuple) and len(parsed) == 2:
+                            return EntityPairKey(*parsed)
+                    except Exception:
+                        pass
+                    match = re.match(
+                        r"EntityPairKey\(entity1_name='([^']+)', entity2_name='([^']+)'\)",
+                        key_str,
+                    )
+                    if match:
+                        return EntityPairKey(match.group(1), match.group(2))
+                    raise ValueError(f"Cannot parse EntityPairKey from '{key_str}'")
+
                 value = {
-                    EntityPairKey(*k.split("|")): inner_type.model_validate(v)
+                    parse_pair_key(k): inner_type.model_validate(v)
                     for k, v in zip(value_data.keys(), judgment_list)
                 }
                 setattr(state, fld.name, value)
