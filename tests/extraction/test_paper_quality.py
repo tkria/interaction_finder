@@ -25,36 +25,36 @@ class TestQualityDimensionScore:
             justification="Methods described adequately with minor gaps.",
         )
         assert score.score == 2
-        assert len(score.justification) >= 10
+        assert len(score.justification) >= 20
 
     def test_score_boundary_values(self):
-        """Test all valid score values (0-3)."""
-        for s in [0, 1, 2, 3]:
+        """Test all valid score values (0-4)."""
+        for s in [0, 1, 2, 3, 4]:
             score = QualityDimensionScore(
                 score=s,
-                justification="This is a valid justification text.",
+                justification="This is a valid justification text for testing.",
             )
             assert score.score == s
 
     def test_invalid_score_value(self):
-        """Test that scores outside 0-3 are rejected."""
+        """Test that scores outside 0-4 are rejected."""
         with pytest.raises(ValidationError):
             QualityDimensionScore(
-                score=4,
-                justification="This should fail due to invalid score.",
+                score=5,
+                justification="This should fail due to invalid score value.",
             )
         with pytest.raises(ValidationError):
             QualityDimensionScore(
                 score=-1,
-                justification="This should fail due to negative score.",
+                justification="This should fail due to negative score value.",
             )
 
     def test_justification_min_length(self):
-        """Test that justification must be at least 10 characters."""
+        """Test that justification must be at least 20 characters."""
         with pytest.raises(ValidationError):
             QualityDimensionScore(
                 score=2,
-                justification="Too short",
+                justification="Too short here",
             )
 
 
@@ -81,18 +81,18 @@ class TestPaperQualityAssessment:
         )
         assert assessment.overall_score == 0
 
-    def test_valid_assessment_all_threes(self):
-        """Test assessment with maximum scores (all threes)."""
+    def test_valid_assessment_all_fours(self):
+        """Test assessment with maximum scores (all fours)."""
         assessment = PaperQualityAssessment(
-            method_clarity=self._make_dimension(3),
-            data_provenance=self._make_dimension(3),
-            statistical_rigour=self._make_dimension(3),
-            internal_consistency=self._make_dimension(3),
-            plausibility=self._make_dimension(3),
-            reproducibility_signals=self._make_dimension(3),
-            integrity_indicators=self._make_dimension(3),
+            method_clarity=self._make_dimension(4),
+            data_provenance=self._make_dimension(4),
+            statistical_rigour=self._make_dimension(4),
+            internal_consistency=self._make_dimension(4),
+            plausibility=self._make_dimension(4),
+            reproducibility_signals=self._make_dimension(4),
+            integrity_indicators=self._make_dimension(4),
         )
-        assert assessment.overall_score == 21
+        assert assessment.overall_score == 28
 
     def test_valid_assessment_mixed_scores(self):
         """Test assessment with mixed scores."""
@@ -338,7 +338,7 @@ class TestDocumentAnalysisOut:
 
     def test_combined_output_serialization(self):
         """Test that DocumentAnalysisOut serializes and deserializes correctly."""
-        quality = self._make_quality_assessment(3)
+        quality = self._make_quality_assessment(4)
         entities = [self._make_entity("EGFR", "gene")]
         output = DocumentAnalysisOut(
             paper_quality=quality,
@@ -348,11 +348,11 @@ class TestDocumentAnalysisOut:
         data = output.model_dump()
         assert "paper_quality" in data
         assert "entities" in data
-        assert data["paper_quality"]["method_clarity"]["score"] == 3
+        assert data["paper_quality"]["method_clarity"]["score"] == 4
         assert data["entities"][0]["name"] == "EGFR"
         # Deserialize
         restored = DocumentAnalysisOut.model_validate(data)
-        assert restored.paper_quality.overall_score == 21
+        assert restored.paper_quality.overall_score == 28
         assert len(restored.entities) == 1
         assert restored.entities[0].name == "EGFR"
 

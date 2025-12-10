@@ -315,14 +315,15 @@ class ClusterDecisions(BaseModel):
 class QualityDimensionScore(BaseModel):
     """Score and justification for a single paper quality dimension.
 
-    Each dimension is scored 0-3 with specific anchors defined in the
-    field descriptions of PaperQualityAssessment.
+    Each dimension is scored 0-4 with specific anchors defined in the
+    field descriptions of PaperQualityAssessment. Use the discriminating
+    cues provided for each dimension to distinguish between adjacent scores.
     """
 
-    score: Literal[0, 1, 2, 3]
+    score: Literal[0, 1, 2, 3, 4]
     justification: str = Field(
-        min_length=10,
-        description="Brief explanation supporting this score",
+        min_length=20,
+        description="Concise justification citing specific features observed in the paper",
     )
 
 
@@ -330,76 +331,93 @@ class PaperQualityAssessment(BaseModel):
     """LLM assessment of scientific paper quality for screening.
 
     Seven-dimension rubric based on metascience findings about what reliably
-    distinguishes credible from unreliable research. Each dimension scored 0-3,
-    yielding overall score 0-21.
+    distinguishes credible from unreliable research. Each dimension scored 0-4,
+    yielding overall score 0-28.
 
-    Interpretation:
-        0-6:   EXCLUDE - serious methodological opacity, inconsistency, or misconduct indicators
-        7-12:  CAUTION - usable with care; methods/data incomplete; claims may be overstated
-        13-17: ACCEPTABLE - reasonably described, coherent, methodologically sound
-        18-21: HIGH TRUST - strong rigour, transparency, and methodological completeness
+    Scoring principles:
+        - Assess scientific content only; do not reward or penalise writing quality
+        - Use the discriminating cues to distinguish between adjacent scores
+        - When uncertain between adjacent scores, prefer the lower score
+        - Score 4 requires meeting all listed criteria explicitly
+        - Perfect metrics (100% accuracy, AUC=1.0) without acknowledged limitations
+          indicate potential problems, not quality
+
+    Interpretation tiers:
+        0-7:   EXCLUDE - serious deficiencies; do not use without independent verification
+        8-14:  CAUTION - notable gaps; usable for hypothesis generation, verify key claims
+        15-21: ACCEPTABLE - sound methodology; suitable for evidence synthesis
+        22-28: HIGH_TRUST - rigorous and transparent; high confidence in findings
     """
 
     method_clarity: QualityDimensionScore = Field(
-        description="""Methodological clarity and completeness.
-        Does the paper describe its methods in enough detail to understand or reproduce the study?
-        0: Methods vague, missing, or implausible; key steps omitted
-        1: Methods described superficially; major gaps; cannot follow workflow
-        2: Mostly clear methods with some missing specifics (parameters, versions, QC)
-        3: Detailed, coherent, reproducible description of all major steps"""
+        description="""Methodological clarity: Could a competent researcher replicate the study?
+        0: Methods absent or incoherent; cannot determine what was done
+        1: Major steps missing or vague; workflow not followable
+        2: Workflow clear but key parameters missing (tools named without versions, thresholds unstated)
+        3: Parameters stated; gaps are minor (equipment brand, buffer lot); could replicate without contacting authors
+        4: All of: tool versions, parameter values, QC criteria, and workflow order explicitly stated
+        Cue (2 vs 3): Can you write the full protocol, or only name the steps?"""
     )
     data_provenance: QualityDimensionScore = Field(
-        description="""Data provenance and quality transparency.
-        Are data sources, samples, and QC processes described clearly and plausibly?
-        0: Data source unclear or contradictory; no samples/QC described
-        1: Basic data information present but major missing details (selection criteria, QC)
-        2: Adequate provenance with minor omissions; QC described briefly
-        3: High-quality provenance: source, selection, processing, QC all explicit"""
+        description="""Data provenance: Could you reconstruct how the final sample set was derived?
+        0: Data source not stated or contradictory; sample origin unknown
+        1: Source named but major uncertainty remains (selection criteria absent, sample size unstated or changes between sections)
+        2: Selection criteria partially described; QC mentioned but not quantified (e.g., "outliers removed" without threshold)
+        3: Selection criteria explicit; QC quantified with thresholds; sample flow traceable
+        4: All of: source, selection, exclusions, processing steps, QC thresholds, and sample counts at each stage
+        Cue (2 vs 3): Are QC thresholds stated as numbers, or only described in words?"""
     )
     statistical_rigour: QualityDimensionScore = Field(
-        description="""Statistical and analytical rigour.
-        Does the paper use appropriate statistics, uncertainty measures, and validation?
-        0: No statistical methods; no uncertainty; inappropriate or missing analyses
-        1: Some statistical terms used but incomplete/incorrect; no multiplicity correction
-        2: Reasonable statistical analysis; uncertainty reported; some weaknesses
-        3: Strong statistical practice with appropriate tests, uncertainty, validation, correction"""
+        description="""Statistical rigour: Are the statistical methods appropriate and completely reported?
+        0: No statistical methods; claims without quantitative support
+        1: Statistics present but flawed (wrong test for data type, p-values without sample sizes, no uncertainty measures)
+        2: Correct tests but incomplete reporting (p-values without effect sizes or confidence intervals; missing multiple-testing correction)
+        3: Appropriate tests with effect sizes and uncertainty; correction applied where needed; omissions minor
+        4: All of: correct tests, effect sizes, confidence intervals, multiple-testing correction, plus validation or sensitivity analysis
+        Cue (1 vs 2): Is the test wrong for the data, or correct but underreported?
+        Cue (2 vs 3): Are effect sizes and uncertainty measures present, or just p-values?"""
     )
     internal_consistency: QualityDimensionScore = Field(
-        description="""Internal consistency and logical coherence.
-        Do the methods, results, and claims align without contradictions?
-        0: Clear contradictions (sample counts change; results contradict methods; impossible values)
-        1: Several inconsistencies or unclear relationships between methods and conclusions
-        2: Logical structure overall with minor discrepancies
-        3: Fully consistent and coherent narrative"""
+        description="""Internal consistency: Do methods, results, and claims align without contradiction?
+        0: Clear contradictions (sample sizes change between sections, results impossible given methods, figures contradict tables)
+        1: Multiple unexplained gaps (results reported for analyses not described in methods, key numbers don't reconcile)
+        2: Generally coherent but loose ends (some results lack corresponding methods, minor numerical mismatches)
+        3: Consistent throughout; all results trace to described methods; discrepancies are cosmetic (rounding-level)
+        4: Fully traceable: every result maps to a described method; figures, tables, and text cross-reference accurately
+        Cue (2 vs 3): Are there results with no corresponding method, or just small rounding differences?"""
     )
     plausibility: QualityDimensionScore = Field(
-        description="""Plausibility and claim moderation.
-        Are claims proportional to evidence, and are effect sizes plausible?
-        0: Implausible or exaggerated claims ("perfect accuracy", "complete validation")
-        1: Some overstated conclusions or causal language unsupported by evidence
-        2: Mostly appropriate claims with occasional overreach
-        3: Claims are cautious, evidence-based, and appropriately qualified"""
+        description="""Plausibility of claims: Are conclusions proportional to the evidence presented?
+        0: Extraordinary claims without evidence ("100% accuracy", "cures disease", "definitive proof")
+        1: Causal language for correlational data; conclusions claim more than results show; implausible effect sizes unremarked
+        2: Claims generally supported but hedging inconsistent; abstract overstates relative to results
+        3: Claims match results throughout; abstract accurately reflects findings; consistent hedging; limitations mentioned
+        4: All of: specific limitations named with implications, alternative explanations considered, effect sizes contextualised, conclusions explicitly bounded
+        Cue (2 vs 3): Does the abstract promise more than the results deliver?"""
     )
     reproducibility_signals: QualityDimensionScore = Field(
-        description="""Reproducibility signals.
-        Does the paper provide artefacts or descriptions supporting independent verification?
-        0: No code, data, supplement, or versioning information
-        1: Mentions data or code vaguely but provides no real access or detail
-        2: Some reproducibility material (partial code, supplement), though incomplete
-        3: Strong reproducibility support: code, data, parameters, pipelines clearly available"""
+        description="""Reproducibility signals: Does the paper describe materials sufficient to reproduce the work?
+        0: Nothing mentioned (no code, data, protocols, supplement, or accession numbers)
+        1: Mentioned but restricted ("available on request", "proprietary", no repository or specifics provided)
+        2: Partial materials (code without data, or protocol without key parameters); reviewable but not reproducible
+        3: Key materials described with locations or specifics; reproducible with reasonable effort
+        4: Fully specified: all materials, parameters, procedures, and environment/conditions described
+        Cue (2 vs 3): Could you reproduce the core work from what's described, or only review the approach?"""
     )
     integrity_indicators: QualityDimensionScore = Field(
-        description="""Indicators of misleading practices or low integrity.
-        Does the paper show symptoms associated with fraudulent, predatory, or weak work?
-        0: Strong indicators (contradictory data, impossible results, boilerplate, irrelevant citations)
-        1: Some suspicious patterns but not definitive
-        2: No obvious integrity concerns; normal scientific structure
-        3: Paper demonstrates care, transparency, and integrity; no red flags"""
+        description="""Integrity indicators: Are there red flags suggesting problems, or green flags demonstrating conscientiousness?
+        0: Strong red flags (duplicated figures/data across conditions, impossible values, results implausibly consistent across replicates)
+        1: Weak red flags (suspiciously perfect results like 100% accuracy or all p-values just under 0.05, generic methods lacking study-specific details)
+        2: Neutral (no red flags detected, standard scientific structure, no notable positive signals)
+        3: Positive signals (limitations substantively discussed, conflicts disclosed, negative or null results reported)
+        4: Exemplary (preregistration stated, open peer review noted, all materials stated as open, negative results prominent)
+        Cue (1 vs 2): Perfect metrics (100% sensitivity, AUC=1.0, zero false positives) without acknowledged limitations are a red flag, not a strength.
+        Cue (2 vs 3): Does the paper actively demonstrate care, or merely lack obvious problems?"""
     )
 
     @property
     def overall_score(self) -> int:
-        """Sum of all dimension scores (0-21)."""
+        """Sum of all dimension scores (0-28)."""
         return sum(getattr(self, f).score for f in type(self).model_fields)
 
 
