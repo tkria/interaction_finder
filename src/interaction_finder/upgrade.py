@@ -200,53 +200,50 @@ async def ensure_extraction(
         Checkpoint with extraction stage
     """
     # Already complete and not forcing - silently return (idempotent)
-    if checkpoint.extraction is not None and not force:
+    is_complete = (
+        checkpoint.extraction is not None and checkpoint.extraction.metadata.is_complete
+    )
+    if is_complete and not force:
         return checkpoint
-    # Run extraction stage
-    if checkpoint.extraction is None or force:
-        # Ensure search first (which ensures keywords)
-        # NOTE: force is NOT propagated - we only replace extraction results, not search/keywords
-        checkpoint = await ensure_search(
-            checkpoint,
-            search_backend,
-            config,
-            console=console,
-            checkpoint_path=checkpoint_path,
-            force=False,  # Never propagate force to prerequisites
+    # Run extraction stage (fresh, forced, or resuming incomplete)
+    # Ensure search first (which ensures keywords)
+    # NOTE: force is NOT propagated - we only replace extraction results, not search/keywords
+    checkpoint = await ensure_search(
+        checkpoint,
+        search_backend,
+        config,
+        console=console,
+        checkpoint_path=checkpoint_path,
+        force=False,  # Never propagate force to prerequisites
+    )
+    # Print stage start message
+    if console:
+        console.print(
+            f"[bold]Running extraction stage for:[/bold] {checkpoint.topic} "
+            f"(types: {', '.join(target_entity_types)})\n"
         )
+    # Fetch content and run extraction with dedicated extraction progress counter
+    from interaction_finder.extraction import run_extraction
+    from interaction_finder.extraction.progress import create_extraction_progress
+    from interaction_finder.widesearch import fetch_and_populate_results
 
-        # Print stage start message
+    await fetch_and_populate_results(checkpoint, config)
+    extraction_progress = create_extraction_progress()
+    with extraction_progress:
+        checkpoint = await run_extraction(
+            input_checkpoint=checkpoint,
+            target_entity_types=target_entity_types,
+            config=config,
+            progress=extraction_progress,
+            checkpoint_path=checkpoint_path,
+        )
+    # Save checkpoint if path provided (only after running the stage)
+    if checkpoint_path:
+        from pathlib import Path
+
+        Path(checkpoint_path).write_text(checkpoint.model_dump_json(indent=2))
         if console:
-            console.print(
-                f"[bold]Running extraction stage for:[/bold] {checkpoint.topic} "
-                f"(types: {', '.join(target_entity_types)})\n"
-            )
-
-        # Fetch content and run extraction with dedicated extraction progress counter
-        from interaction_finder.extraction import run_extraction
-        from interaction_finder.extraction.progress import create_extraction_progress
-        from interaction_finder.widesearch import fetch_and_populate_results
-
-        await fetch_and_populate_results(checkpoint, config)
-
-        extraction_progress = create_extraction_progress()
-        with extraction_progress:
-            checkpoint = await run_extraction(
-                input_checkpoint=checkpoint,
-                target_entity_types=target_entity_types,
-                config=config,
-                progress=extraction_progress,
-                checkpoint_path=checkpoint_path,
-            )
-
-        # Save checkpoint if path provided (only after running the stage)
-        if checkpoint_path:
-            from pathlib import Path
-
-            Path(checkpoint_path).write_text(checkpoint.model_dump_json(indent=2))
-            if console:
-                console.print(f"[dim]Saved checkpoint to {checkpoint_path}[/dim]")
-
+            console.print(f"[dim]Saved checkpoint to {checkpoint_path}[/dim]")
     return checkpoint
 
 

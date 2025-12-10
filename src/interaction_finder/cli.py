@@ -1033,10 +1033,14 @@ def extract(
                 "Use -o/--output to specify where to save results."
             )
             raise typer.Exit(1)
-        # Check if extraction results already exist
-        if checkpoint.extraction is not None and not force:
+        # Block if extraction already complete (incomplete extractions can resume)
+        if (
+            checkpoint.extraction is not None
+            and checkpoint.extraction.metadata.is_complete
+            and not force
+        ):
             console.print(
-                "[yellow]⚠ Extraction results already exist. Use --force to replace.[/yellow]"
+                "[yellow]⚠ Extraction already complete. Use --force to replace.[/yellow]"
             )
             raise typer.Exit(1)
         # Create search backend (needed if search stage must run)

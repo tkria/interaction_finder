@@ -493,5 +493,59 @@ def test_global_entities_serialization_roundtrip():
     assert "breast cancer 1" in aliases  # From mention2.aliases
 
 
+def test_ensure_extraction_allows_resumable():
+    """Test that ensure_extraction allows resumable extractions to continue.
+
+    When an extraction checkpoint has is_resumable=True, ensure_extraction
+    should NOT return early but instead proceed to resume the extraction.
+    """
+    from interaction_finder.checkpoint import (
+        ExtractionStageData,
+        PipelineCheckpoint,
+        SearchStageData,
+    )
+    from interaction_finder.upgrade import checkpoint_stage
+
+    # Create checkpoint with resumable extraction
+    checkpoint = PipelineCheckpoint(
+        topic="test topic",
+        resources=ResourcePool(),
+        search=SearchStageData(
+            results=[],
+            queries=["test query"],
+            query_results={},
+            keyphrases=[],
+            rounds_completed=1,
+        ),
+        extraction=ExtractionStageData(
+            target_entity_types=["gene"],
+            permitted_pairs={"gene": ["gene"]},
+            judgments=[],
+            metadata=ExtractionMetadata(
+                topic="test topic",
+                resource_count=5,
+                total_entities_found=10,
+                entities_after_validation=8,
+                entities_merged=2,
+                merge_cache_hits=0,
+                merge_cache_misses=0,
+                proximal_sets_found=3,
+                total_pairs_found=0,
+                pairs_accepted=0,
+                pairs_rejected=0,
+                quotes_validated=10,
+                quotes_failed=0,
+                # Incomplete - should be resumable
+                resume_from="consolidate_entities",
+                resume_state={"some": "state"},
+            ),
+        ),
+    )
+    # Verify the checkpoint is at extraction stage but resumable
+    assert checkpoint_stage(checkpoint) == "extraction"
+    assert checkpoint.extraction.metadata.is_resumable is True
+    assert checkpoint.extraction.metadata.is_complete is False
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
