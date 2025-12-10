@@ -392,7 +392,7 @@ class ReasoningTemplateRenderer:
             return ""
         score = quality.overall_score
         return f"""
-        <div class="paper-quality">Quality <progress value="{score}" max="21"></progress></div>"""
+        <div class="paper-quality">Quality&nbsp;<progress value="{score}" max="28"></progress></div>"""
 
     def _render_quote_navigation(
         self,

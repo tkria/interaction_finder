@@ -788,6 +788,14 @@ header {
     margin-bottom: 0.25rem;
 }
 
+.paper-quality {
+    display: flex;
+    align-items: baseline;
+}
+.paper-quality progress {
+    width: auto;
+}
+
 .reasoning-subtitle {
     font-size: 0.85em;
     color: var(--pico-muted-color);
