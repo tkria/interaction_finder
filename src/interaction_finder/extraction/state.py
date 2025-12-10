@@ -66,6 +66,17 @@ _SERIALIZATION_REGISTRY: dict[str, tuple[str, type | None]] = {
 }
 
 
+def _rehydrate_quotes_list(quotes: list[dict], resource_pool: "ResourcePool") -> None:
+    """Rehydrate resource_url → resource in a list of quote dicts.
+
+    Modifies quotes in-place.
+    """
+    for quote in quotes:
+        if isinstance(quote, dict) and "resource_url" in quote:
+            quote["resource"] = resource_pool.get(quote["resource_url"])
+            del quote["resource_url"]
+
+
 def _rehydrate_entity_quotes(
     entities_data: dict, resource_pool: "ResourcePool"
 ) -> None:
@@ -84,13 +95,41 @@ def _rehydrate_entity_quotes(
                     quotes_lists.extend(
                         m["quotes"] for m in entity_data["mentions"] if "quotes" in m
                     )
-
             # Rehydrate all quotes
             for quotes in quotes_lists:
-                for quote in quotes:
-                    if isinstance(quote, dict) and "resource_url" in quote:
-                        quote["resource"] = resource_pool.get(quote["resource_url"])
-                        del quote["resource_url"]
+                _rehydrate_quotes_list(quotes, resource_pool)
+
+
+def _rehydrate_proximal_sets(sets_data: dict, resource_pool: "ResourcePool") -> None:
+    """Rehydrate resource_url → resource in ProximalEntitySet quotes.
+
+    Modifies sets_data in-place. Structure is:
+    {resource_url: [ProximalEntitySet_dict, ...]}
+    where each set has entity_quotes: {entity_name: [quote_dict, ...]}
+    """
+    for proximal_sets in sets_data.values():
+        for pset in proximal_sets:
+            if "entity_quotes" in pset:
+                for quotes in pset["entity_quotes"].values():
+                    _rehydrate_quotes_list(quotes, resource_pool)
+
+
+def _rehydrate_pair_assessments(
+    assessments_data: dict, resource_pool: "ResourcePool"
+) -> None:
+    """Rehydrate resource_url → resource in PairAssessment quotes.
+
+    Modifies assessments_data in-place. Structure is:
+    {resource_url: [PairAssessment_dict, ...]}
+    where each assessment has quotes: [quote_dict, ...]
+
+    Note: entity1/entity2 fields serialize to canonical strings (not dicts
+    with mentions), so they don't need rehydration here.
+    """
+    for assessments in assessments_data.values():
+        for assessment in assessments:
+            if "quotes" in assessment:
+                _rehydrate_quotes_list(assessment["quotes"], resource_pool)
 
 
 @dataclass
@@ -320,10 +359,13 @@ class State:
 
             if handler_type == "by_resource":
                 # dict[str, X_serialized] → dict[ResourceId, X]
-                # Rehydrate quotes in entity fields before validation
+                # Rehydrate quotes before validation based on field type
                 if fld.name == "entities_by_resource":
                     _rehydrate_entity_quotes(value_data, resource_pool)
-
+                elif fld.name == "proximal_sets_by_resource":
+                    _rehydrate_proximal_sets(value_data, resource_pool)
+                elif fld.name == "pair_assessments_by_resource":
+                    _rehydrate_pair_assessments(value_data, resource_pool)
                 value = {
                     get_rid(url): TypeAdapter(inner_type).validate_python(v)
                     for url, v in value_data.items()
@@ -346,12 +388,7 @@ class State:
                     if "mentions" in entity_data:
                         for mention in entity_data["mentions"]:
                             if "quotes" in mention:
-                                for quote in mention["quotes"]:
-                                    if "resource_url" in quote:
-                                        quote["resource"] = resource_pool.get(
-                                            quote["resource_url"]
-                                        )
-                                        del quote["resource_url"]
+                                _rehydrate_quotes_list(mention["quotes"], resource_pool)
                 value = TypeAdapter(inner_type).validate_python(value_data)
                 setattr(state, fld.name, value)
 

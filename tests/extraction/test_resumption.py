@@ -493,6 +493,146 @@ def test_global_entities_serialization_roundtrip():
     assert "breast cancer 1" in aliases  # From mention2.aliases
 
 
+def test_proximal_sets_preserve_quotes():
+    """Test that proximal_sets_by_resource preserves quotes through serialization.
+
+    ProximalEntitySet contains entity_quotes with ResourceQuote objects that
+    reference Resource instances. These must be correctly dehydrated to
+    resource_url during serialization and rehydrated on deserialization.
+    """
+    pool = ResourcePool()
+    resource = pool.add(
+        url="http://example.com/doc1",
+        title="Test Document",
+        document_text="EIF2AK4 mutations cause pulmonary veno-occlusive disease.",
+    )
+    rid = resource.id
+    state = State(
+        topic="test",
+        target_entity_types=["gene", "disease"],
+        permitted_pairs={"gene": {"disease"}, "disease": {"gene"}},
+    )
+    # Create proximal set with quotes (using correct ResourceQuote fields)
+    proximal_set = ProximalEntitySet(
+        entities={"EIF2AK4", "pulmonary veno-occlusive disease"},
+        chunk_range=(0, 1),
+        entity_quotes={
+            "EIF2AK4": [
+                ResourceQuote(
+                    resource=resource,
+                    query_text="EIF2AK4 mutations cause",
+                    spans=[(0, 22)],
+                    is_disjoint=False,
+                )
+            ],
+            "pulmonary veno-occlusive disease": [
+                ResourceQuote(
+                    resource=resource,
+                    query_text="pulmonary veno-occlusive disease",
+                    spans=[(25, 57)],
+                    is_disjoint=False,
+                )
+            ],
+        },
+    )
+    state.proximal_sets_by_resource[rid] = [proximal_set]
+    # Serialize
+    state_dict = state.to_dict()
+    # Verify quotes serialized with resource_url (not resource object)
+    serialized_sets = state_dict["proximal_sets_by_resource"]
+    assert rid.url in serialized_sets
+    entity_quotes = serialized_sets[rid.url][0]["entity_quotes"]
+    assert "resource_url" in entity_quotes["EIF2AK4"][0]
+    assert entity_quotes["EIF2AK4"][0]["resource_url"] == rid.url
+    # Deserialize
+    restored_state = State.from_dict(
+        state_dict,
+        topic="test",
+        target_entity_types=["gene", "disease"],
+        permitted_pairs={"gene": {"disease"}, "disease": {"gene"}},
+        resource_pool=pool,
+    )
+    # Verify quotes rehydrated with resource objects
+    restored_sets = restored_state.proximal_sets_by_resource[rid]
+    assert len(restored_sets) == 1
+    restored_quotes = restored_sets[0].entity_quotes
+    assert "EIF2AK4" in restored_quotes
+    assert restored_quotes["EIF2AK4"][0].resource == resource
+    assert restored_quotes["EIF2AK4"][0].query_text == "EIF2AK4 mutations cause"
+
+
+def test_pair_assessments_preserve_quotes():
+    """Test that pair_assessments_by_resource preserves direct quotes through serialization.
+
+    PairAssessment contains direct quotes that reference Resources. These must be
+    correctly dehydrated/rehydrated. Note: EntityRef fields serialize to just
+    canonical strings in JSON mode, so entity mention quotes are not preserved
+    in pair_assessments_by_resource (they're preserved in validated_entities_by_resource).
+    """
+    from interaction_finder.extraction.models import EvidenceQuality
+
+    pool = ResourcePool()
+    resource = pool.add(
+        url="http://example.com/doc1",
+        title="Test Document",
+        document_text="BRCA1 is associated with breast cancer.",
+    )
+    rid = resource.id
+    state = State(
+        topic="test",
+        target_entity_types=["gene", "disease"],
+        permitted_pairs={"gene": {"disease"}, "disease": {"gene"}},
+    )
+    # PairAssessment with direct quotes (entity refs serialize to strings)
+    assessment = PairAssessment(
+        resource_id=rid,
+        entity1=EntityRef(canonical="BRCA1"),
+        entity2=EntityRef(canonical="breast cancer"),
+        relationship="associated with",
+        quotes=[
+            ResourceQuote(
+                resource=resource,
+                query_text="BRCA1 is associated with breast cancer",
+                spans=[(0, 38)],
+                is_disjoint=False,
+            )
+        ],
+        evidence=EvidenceQuality(
+            directness="explicit",
+            source_type="primary",
+            specificity="associative",
+            language="definitive",
+            overall=7,
+        ),
+        reasoning="Clear statement of association",
+    )
+    state.pair_assessments_by_resource[rid] = [assessment]
+    # Serialize
+    state_dict = state.to_dict()
+    # Verify direct quotes serialized with resource_url
+    serialized_assessments = state_dict["pair_assessments_by_resource"]
+    assert rid.url in serialized_assessments
+    assessment_data = serialized_assessments[rid.url][0]
+    assert "resource_url" in assessment_data["quotes"][0]
+    # EntityRefs serialize to just canonical strings
+    assert assessment_data["entity1"] == "BRCA1"
+    assert assessment_data["entity2"] == "breast cancer"
+    # Deserialize
+    restored_state = State.from_dict(
+        state_dict,
+        topic="test",
+        target_entity_types=["gene", "disease"],
+        permitted_pairs={"gene": {"disease"}, "disease": {"gene"}},
+        resource_pool=pool,
+    )
+    # Verify direct quotes rehydrated
+    restored_assessments = restored_state.pair_assessments_by_resource[rid]
+    assert len(restored_assessments) == 1
+    restored = restored_assessments[0]
+    assert restored.quotes[0].resource == resource
+    assert restored.quotes[0].query_text == "BRCA1 is associated with breast cancer"
+
+
 def test_ensure_extraction_allows_resumable():
     """Test that ensure_extraction allows resumable extractions to continue.
 
