@@ -80,7 +80,6 @@ class TestPaperQualityAssessment:
             integrity_indicators=self._make_dimension(0),
         )
         assert assessment.overall_score == 0
-        assert assessment.quality_tier == "exclude"
 
     def test_valid_assessment_all_threes(self):
         """Test assessment with maximum scores (all threes)."""
@@ -94,7 +93,6 @@ class TestPaperQualityAssessment:
             integrity_indicators=self._make_dimension(3),
         )
         assert assessment.overall_score == 21
-        assert assessment.quality_tier == "high_trust"
 
     def test_valid_assessment_mixed_scores(self):
         """Test assessment with mixed scores."""
@@ -108,91 +106,6 @@ class TestPaperQualityAssessment:
             integrity_indicators=self._make_dimension(2),
         )
         assert assessment.overall_score == 13
-        assert assessment.quality_tier == "acceptable"
-
-    def test_quality_tier_exclude(self):
-        """Test quality tier boundary for 'exclude' (0-6)."""
-        # Score = 6 (boundary)
-        assessment = PaperQualityAssessment(
-            method_clarity=self._make_dimension(1),
-            data_provenance=self._make_dimension(1),
-            statistical_rigour=self._make_dimension(1),
-            internal_consistency=self._make_dimension(1),
-            plausibility=self._make_dimension(1),
-            reproducibility_signals=self._make_dimension(1),
-            integrity_indicators=self._make_dimension(0),
-        )
-        assert assessment.overall_score == 6
-        assert assessment.quality_tier == "exclude"
-
-    def test_quality_tier_caution(self):
-        """Test quality tier boundary for 'caution' (7-12)."""
-        # Score = 7 (lower boundary)
-        assessment = PaperQualityAssessment(
-            method_clarity=self._make_dimension(1),
-            data_provenance=self._make_dimension(1),
-            statistical_rigour=self._make_dimension(1),
-            internal_consistency=self._make_dimension(1),
-            plausibility=self._make_dimension(1),
-            reproducibility_signals=self._make_dimension(1),
-            integrity_indicators=self._make_dimension(1),
-        )
-        assert assessment.overall_score == 7
-        assert assessment.quality_tier == "caution"
-        # Score = 12 (upper boundary)
-        assessment2 = PaperQualityAssessment(
-            method_clarity=self._make_dimension(2),
-            data_provenance=self._make_dimension(2),
-            statistical_rigour=self._make_dimension(2),
-            internal_consistency=self._make_dimension(2),
-            plausibility=self._make_dimension(2),
-            reproducibility_signals=self._make_dimension(1),
-            integrity_indicators=self._make_dimension(1),
-        )
-        assert assessment2.overall_score == 12
-        assert assessment2.quality_tier == "caution"
-
-    def test_quality_tier_acceptable(self):
-        """Test quality tier boundary for 'acceptable' (13-17)."""
-        # Score = 13 (lower boundary)
-        assessment = PaperQualityAssessment(
-            method_clarity=self._make_dimension(2),
-            data_provenance=self._make_dimension(2),
-            statistical_rigour=self._make_dimension(2),
-            internal_consistency=self._make_dimension(2),
-            plausibility=self._make_dimension(2),
-            reproducibility_signals=self._make_dimension(2),
-            integrity_indicators=self._make_dimension(1),
-        )
-        assert assessment.overall_score == 13
-        assert assessment.quality_tier == "acceptable"
-        # Score = 17 (upper boundary)
-        assessment2 = PaperQualityAssessment(
-            method_clarity=self._make_dimension(2),
-            data_provenance=self._make_dimension(2),
-            statistical_rigour=self._make_dimension(3),
-            internal_consistency=self._make_dimension(3),
-            plausibility=self._make_dimension(2),
-            reproducibility_signals=self._make_dimension(2),
-            integrity_indicators=self._make_dimension(3),
-        )
-        assert assessment2.overall_score == 17
-        assert assessment2.quality_tier == "acceptable"
-
-    def test_quality_tier_high_trust(self):
-        """Test quality tier boundary for 'high_trust' (18-21)."""
-        # Score = 18 (lower boundary)
-        assessment = PaperQualityAssessment(
-            method_clarity=self._make_dimension(3),
-            data_provenance=self._make_dimension(2),
-            statistical_rigour=self._make_dimension(3),
-            internal_consistency=self._make_dimension(3),
-            plausibility=self._make_dimension(2),
-            reproducibility_signals=self._make_dimension(2),
-            integrity_indicators=self._make_dimension(3),
-        )
-        assert assessment.overall_score == 18
-        assert assessment.quality_tier == "high_trust"
 
     def test_serialization_roundtrip(self):
         """Test that assessment can be serialized and deserialized."""
@@ -212,7 +125,6 @@ class TestPaperQualityAssessment:
         # Deserialize from dict
         restored = PaperQualityAssessment.model_validate(data)
         assert restored.overall_score == assessment.overall_score
-        assert restored.quality_tier == assessment.quality_tier
 
     def test_json_serialization(self):
         """Test that assessment serializes to JSON correctly."""
@@ -230,11 +142,10 @@ class TestPaperQualityAssessment:
         assert isinstance(json_data, dict)
         assert isinstance(json_data["method_clarity"], dict)
         assert json_data["method_clarity"]["score"] == 2
-        # overall_score and quality_tier are computed properties, not in JSON
+        # overall_score is a computed properties, not in JSON
         # They are recomputed when the model is validated
         restored = PaperQualityAssessment.model_validate(json_data)
         assert restored.overall_score == 14
-        assert restored.quality_tier == "acceptable"
 
 
 class TestPaperQualityInExtractionResult:
@@ -360,7 +271,6 @@ class TestPaperQualityInExtractionResult:
         assert resource.id.url in restored.paper_quality
         restored_assessment = restored.paper_quality[resource.id.url]
         assert restored_assessment.overall_score == 16
-        assert restored_assessment.quality_tier == "acceptable"
 
 
 class TestDocumentAnalysisOut:
@@ -407,7 +317,6 @@ class TestDocumentAnalysisOut:
             entities=entities,
         )
         assert output.paper_quality.overall_score == 14
-        assert output.paper_quality.quality_tier == "acceptable"
         assert len(output.entities) == 2
         assert output.entities[0].name == "BRCA1"
 
@@ -419,7 +328,6 @@ class TestDocumentAnalysisOut:
             entities=[],
         )
         assert output.paper_quality.overall_score == 7
-        assert output.paper_quality.quality_tier == "caution"
         assert len(output.entities) == 0
 
     def test_combined_output_field_order(self):
@@ -445,7 +353,6 @@ class TestDocumentAnalysisOut:
         # Deserialize
         restored = DocumentAnalysisOut.model_validate(data)
         assert restored.paper_quality.overall_score == 21
-        assert restored.paper_quality.quality_tier == "high_trust"
         assert len(restored.entities) == 1
         assert restored.entities[0].name == "EGFR"
 

@@ -193,6 +193,7 @@ class ReasoningTemplateRenderer:
         quote_id_map: dict[tuple[int, tuple], str],
         doc_idx_map: dict[str, int] | None = None,
         doc_labels: dict[int, str] | None = None,
+        paper_quality: dict[str, Any] | None = None,
     ):
         """Initialize renderer for a specific pair.
 
@@ -202,12 +203,14 @@ class ReasoningTemplateRenderer:
             quote_id_map: Mapping of (doc_idx, quote_key) -> quote_id
             doc_idx_map: Mapping of resource_id -> doc_idx for citation linking
             doc_labels: Pre-assigned mapping from doc_idx to alphabetic label (A, B, ...)
+            paper_quality: Paper quality assessments keyed by resource URL
         """
         self.pair = pair
         self.pair_idx = pair_idx
         self.quote_id_map = quote_id_map
         self.doc_idx_map = doc_idx_map
         self.doc_labels = doc_labels
+        self.paper_quality = paper_quality or {}
         # Build entity search terms
         self.entity1_terms = [pair["entity1"]["name"]] + pair["entity1"]["aliases"]
         self.entity2_terms = [pair["entity2"]["name"]] + pair["entity2"]["aliases"]
@@ -355,6 +358,9 @@ class ReasoningTemplateRenderer:
         count_text = (
             f"{len(assessments)} assessment{'s' if len(assessments) > 1 else ''}"
         )
+        # Look up paper quality by URL
+        url = assessments[0].get("url", "")
+        quality_html = self._render_paper_quality(url)
 
         return f"""
     <div class="reasoning-panel">
@@ -363,12 +369,30 @@ class ReasoningTemplateRenderer:
             <span class="pair-relation">{_format_relationship(self.pair["relationship"])}</span>
             <span class="pair-entity">{_escape_html(self.pair["entity2"]["name"])}</span>
         </div>
-        <div class="reasoning-doc-title">{_escape_html(title)}</div>
+        <div class="reasoning-doc-title">{_escape_html(title)}</div>{quality_html}
         <div class="reasoning-subtitle">{count_text}</div>
         {assessments_html}
         {self._render_quote_navigation(all_quotes, doc_idx, quote_assessments, len(assessments) > 1)}
         {self._render_other_pairs_navigation(doc_idx, all_pairs)}
     </div>"""
+
+    def _render_paper_quality(self, url: str) -> str:
+        """Render paper quality indicator if available.
+
+        Args:
+            url: Resource URL to look up quality assessment
+
+        Returns:
+            HTML for quality progress bar, or empty string if not available
+        """
+        if not url or not self.paper_quality:
+            return ""
+        quality = self.paper_quality.get(url)
+        if quality is None:
+            return ""
+        score = quality.overall_score
+        return f"""
+        <div class="paper-quality">Quality <progress value="{score}" max="21"></progress></div>"""
 
     def _render_quote_navigation(
         self,
@@ -514,6 +538,7 @@ def render_all_reasoning_templates(
     quote_id_map: dict[tuple[int, tuple], str],
     doc_idx_map: dict[str, int] | None = None,
     pair_doc_labels: dict[int, dict[int, str]] | None = None,
+    paper_quality: dict[str, Any] | None = None,
 ) -> dict[str, dict[str, str]]:
     """Render all reasoning templates for all pairs.
 
@@ -522,6 +547,7 @@ def render_all_reasoning_templates(
         quote_id_map: Mapping of (doc_idx, quote_key) -> quote_id
         doc_idx_map: Mapping of resource_id -> doc_idx for citation linking
         pair_doc_labels: Per-pair document labels mapping pair_idx -> (doc_idx -> label)
+        paper_quality: Paper quality assessments keyed by resource URL
 
     Returns:
         Nested dict mapping pair_idx -> template_type -> HTML
@@ -532,7 +558,7 @@ def render_all_reasoning_templates(
         # Get doc labels for this pair (in display order)
         doc_labels = pair_doc_labels.get(pair_idx) if pair_doc_labels else None
         renderer = ReasoningTemplateRenderer(
-            pair, pair_idx, quote_id_map, doc_idx_map, doc_labels
+            pair, pair_idx, quote_id_map, doc_idx_map, doc_labels, paper_quality
         )
 
         pair_templates: dict[str, str] = {}
