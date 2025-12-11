@@ -384,8 +384,10 @@ def _add_new_names_to_kind(
     new_names: set[str], entities: dict[str, list[SpeculatedVariant]]
 ) -> None:
     """Add new canonical names from renames to entity dict for re-clustering."""
+    # Build normalized lookup to avoid adding case variants of existing entities
+    existing_normalized = {normalize_for_comparison(k) for k in entities}
     for new_canonical in new_names:
-        if new_canonical not in entities:
+        if normalize_for_comparison(new_canonical) not in existing_normalized:
             entities[new_canonical] = [
                 SpeculatedVariant(
                     form=new_canonical,
@@ -394,6 +396,7 @@ def _add_new_names_to_kind(
                     is_from_alias=False,
                 )
             ]
+            existing_normalized.add(normalize_for_comparison(new_canonical))
 
 
 def _analyze_entity_similarity(canonicals: list[str]) -> str:
@@ -753,16 +756,17 @@ def _resolve_group_target(
         if 0 <= idx < len(members):
             member = members[idx]
             if name_part:
+                # Resolve imprecise responses (β vs beta, hyphens, etc.)
                 try:
                     name_match = find_entity_match(name_part, entities)
                 except (IndexError, KeyError):
                     name_match = None
+                # Compare canonicals case-sensitively (both from entities dict)
                 if name_match is None or name_match.canonical != member:
-                    resolved_to = name_match.canonical if name_match else "nothing"
+                    resolved = name_match.canonical if name_match else name_part
                     logger.warning(
                         f"Merge target mismatch: member {idx + 1} is '{member}' "
-                        f"but specified name '{name_part}' resolves to "
-                        f"'{resolved_to}'; using member number"
+                        f"but '{name_part}' resolves to '{resolved}'; using member number"
                     )
             return member
     # Case 3: Exact member name

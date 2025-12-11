@@ -216,6 +216,34 @@ class TestAddNewNamesToKind:
         assert len(entities) == 4
         assert all(name in entities for name in ["Gene1", "Gene2", "Gene3", "Gene4"])
 
+    def test_skips_case_variants_of_existing_names(self):
+        """Names differing only in case from existing entries are not added."""
+        entities = {
+            "cataract": [SpeculatedVariant("cataract", 0, "original", False)],
+        }
+        new_names = {"Cataract", "CATARACT"}  # Case variants of existing
+        _add_new_names_to_kind(new_names, entities)
+        # Should still have exactly one entry - the original
+        assert len(entities) == 1
+        assert "cataract" in entities
+        assert "Cataract" not in entities
+        assert "CATARACT" not in entities
+
+    def test_case_insensitive_check_allows_different_entities(self):
+        """Genuinely different entities are still added."""
+        entities = {
+            "cataract": [SpeculatedVariant("cataract", 0, "original", False)],
+        }
+        new_names = {
+            "Glaucoma",
+            "Cataract",
+        }  # Glaucoma is new, Cataract is case variant
+        _add_new_names_to_kind(new_names, entities)
+        assert len(entities) == 2
+        assert "cataract" in entities
+        assert "Glaucoma" in entities
+        assert "Cataract" not in entities
+
 
 class TestCacheStatisticsIntegration:
     """Integration tests for cache statistics tracking."""
