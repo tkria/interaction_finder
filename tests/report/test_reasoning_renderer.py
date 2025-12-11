@@ -6,8 +6,10 @@ from interaction_finder.report.data_prep import _quote_key_for_id
 from interaction_finder.report.reasoning_renderer import (
     EntityHighlighter,
     ReasoningTemplateRenderer,
+    _deduplicate_aliases,
     _index_to_alpha_label,
     _linkify_citations,
+    _render_aliases,
     render_all_reasoning_templates,
 )
 
@@ -315,7 +317,8 @@ class TestReasoningTemplateRenderer:
             "entity1": {"name": "BRCA1", "kind": "gene", "aliases": ["BRCA1"]},
             "entity2": {"name": "Cancer", "kind": "disease", "aliases": ["Cancer"]},
             "relationship": "associated_with",
-            "overall": 8, "label": "Strong",
+            "overall": 8,
+            "label": "Strong",
             "reasoning": "Strong evidence shows BRCA1 increases Cancer risk.",
             "assessments": [],
         }
@@ -347,7 +350,8 @@ class TestReasoningTemplateRenderer:
                 "aliases": ["PAH"],
             },
             "relationship": "associated_with",
-            "overall": 6, "label": "Moderate",
+            "overall": 6,
+            "label": "Moderate",
             "reasoning": "SOX17 mutations are found in PAH patients. Multiple SOX17 variants cause PAH.",
             "assessments": [],
         }
@@ -374,7 +378,8 @@ def test_render_all_reasoning_templates():
             "entity1": {"name": "BRCA1", "kind": "gene", "aliases": ["BRCA1"]},
             "entity2": {"name": "Cancer", "kind": "disease", "aliases": ["Cancer"]},
             "relationship": "causes",
-            "overall": 8, "label": "Strong",
+            "overall": 8,
+            "label": "Strong",
             "reasoning": "BRCA1 causes Cancer",
             "assessments": [
                 {
@@ -382,7 +387,8 @@ def test_render_all_reasoning_templates():
                     "doc_idx": 0,
                     "title": "Study 1",
                     "relationship": "causes",
-                    "overall": 8, "label": "Strong",
+                    "overall": 8,
+                    "label": "Strong",
                     "reasoning": "Evidence from study",
                     "quotes": [],
                 }
@@ -396,7 +402,8 @@ def test_render_all_reasoning_templates():
                             "doc_idx": 0,
                             "title": "Study 1",
                             "relationship": "causes",
-                            "overall": 8, "label": "Strong",
+                            "overall": 8,
+                            "label": "Strong",
                             "reasoning": "Evidence from study",
                             "quotes": [],
                         }
@@ -410,7 +417,8 @@ def test_render_all_reasoning_templates():
             "entity1": {"name": "TP53", "kind": "gene", "aliases": ["TP53"]},
             "entity2": {"name": "Cancer", "kind": "disease", "aliases": ["Cancer"]},
             "relationship": "prevents",
-            "overall": 8, "label": "Strong",
+            "overall": 8,
+            "label": "Strong",
             "reasoning": "TP53 prevents Cancer",
             "assessments": [],
             "document_groups": [],
@@ -459,7 +467,8 @@ def test_quote_deduplication_in_document_groups():
         "entity1": {"name": "BRCA1", "kind": "gene", "aliases": ["BRCA1"]},
         "entity2": {"name": "Cancer", "kind": "disease", "aliases": ["Cancer"]},
         "relationship": "associated_with",
-        "overall": 8, "label": "Strong",
+        "overall": 8,
+        "label": "Strong",
         "reasoning": "Multiple lines of evidence",
         "assessments": [],
         "document_groups": [
@@ -471,7 +480,8 @@ def test_quote_deduplication_in_document_groups():
                         "doc_idx": 0,
                         "title": "Study 1",
                         "relationship": "increases_risk_of",
-                        "overall": 8, "label": "Strong",
+                        "overall": 8,
+                        "label": "Strong",
                         "reasoning": "First assessment reasoning",
                         "quotes": [shared_quote, unique_quote1],
                     },
@@ -480,7 +490,8 @@ def test_quote_deduplication_in_document_groups():
                         "doc_idx": 0,
                         "title": "Study 1",
                         "relationship": "causes",
-                        "overall": 6, "label": "Moderate",
+                        "overall": 6,
+                        "label": "Moderate",
                         "reasoning": "Second assessment reasoning",
                         "quotes": [shared_quote, unique_quote2],
                     },
@@ -565,7 +576,8 @@ def test_quote_navigation_uses_correct_ids():
         "entity1": {"name": "GeneX", "kind": "gene", "aliases": []},
         "entity2": {"name": "DiseaseY", "kind": "disease", "aliases": []},
         "relationship": "associated_with",
-        "overall": 8, "label": "Strong",
+        "overall": 8,
+        "label": "Strong",
         "reasoning": "Evidence text",
         "assessments": [],
         "document_groups": [
@@ -577,7 +589,8 @@ def test_quote_navigation_uses_correct_ids():
                         "doc_idx": 0,
                         "title": "Study",
                         "relationship": "associated_with",
-                        "overall": 8, "label": "Strong",
+                        "overall": 8,
+                        "label": "Strong",
                         "reasoning": "Reasoning",
                         "polarity": "positive",
                         "quotes": [quote_pair1],
@@ -786,7 +799,8 @@ class TestReasoningTemplateWithCitations:
             "entity1": {"name": "BRCA1", "kind": "gene", "aliases": []},
             "entity2": {"name": "Cancer", "kind": "disease", "aliases": []},
             "relationship": "associated_with",
-            "overall": 8, "label": "Strong",
+            "overall": 8,
+            "label": "Strong",
             "reasoning": "Evidence from [1_abc12345] supports this association.",
             "assessments": [],
         }
@@ -803,7 +817,8 @@ class TestReasoningTemplateWithCitations:
             "entity1": {"name": "BRCA1", "kind": "gene", "aliases": []},
             "entity2": {"name": "Cancer", "kind": "disease", "aliases": []},
             "relationship": "associated_with",
-            "overall": 8, "label": "Strong",
+            "overall": 8,
+            "label": "Strong",
             "reasoning": "BRCA1 causes Cancer per [1_abc12345].",
             "assessments": [],
         }
@@ -814,3 +829,36 @@ class TestReasoningTemplateWithCitations:
         assert '<span class="entity-highlight entity1"' in result
         assert '<span class="entity-highlight entity2"' in result
         assert '<span class="doc-link"' in result
+
+
+class TestAliasDeduplication:
+    """Tests for alias deduplication in reasoning panel."""
+
+    def test_selects_best_form(self):
+        """Deduplication selects best form (prefers mixed-case)."""
+        # Prefers mixed-case Brca1 over all-lower or all-upper
+        aliases = ["brca1", "Brca1", "BRCA1"]
+        result = _deduplicate_aliases(aliases)
+        assert result == ["Brca1"]
+
+    def test_distinct_aliases_preserved(self):
+        """Genuinely different aliases should all be kept."""
+        aliases = ["PAH", "Pulmonary arterial hypertension", "IPAH"]
+        result = _deduplicate_aliases(aliases)
+        assert result == aliases
+
+    def test_empty_list(self):
+        """Empty alias list returns empty list."""
+        assert _deduplicate_aliases([]) == []
+
+    def test_render_aliases_deduplicates(self):
+        """_render_aliases applies deduplication before rendering."""
+        aliases = ["sox17", "Sox17", "SOX17"]
+        result = _render_aliases(aliases)
+        # Prefers mixed-case Sox17
+        assert "Sox17" in result
+        assert "sox17" not in result
+
+    def test_render_aliases_empty(self):
+        """Empty alias list renders to empty string."""
+        assert _render_aliases([]) == ""

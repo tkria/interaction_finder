@@ -7,10 +7,12 @@ with entity highlighting and navigation elements.
 import re
 from typing import Any
 
+from interaction_finder.extraction.entity_matching import select_best_form
 from interaction_finder.extraction.utils import (
     CITATION_BRACKET_PATTERN,
     parse_citation_ids,
 )
+from interaction_finder.text_mapping import NormalizedTextMapper
 
 
 def _quote_key_for_id(quote: dict[str, Any]) -> tuple:
@@ -609,19 +611,29 @@ def _format_relationship(rel: str) -> str:
     return _escape_html(rel.replace("_", " "))
 
 
+def _deduplicate_aliases(aliases: list[str]) -> list[str]:
+    """Deduplicate aliases by normalized form, keeping best form from each group."""
+    groups: dict[str, set[str]] = {}
+    for alias in aliases:
+        groups.setdefault(NormalizedTextMapper.normalize(alias), set()).add(alias)
+    return [select_best_form(g) for g in groups.values()]
+
+
 def _render_aliases(aliases: list[str]) -> str:
     """Render entity aliases section.
+
+    Deduplicates aliases that differ only in case or punctuation before display.
 
     Args:
         aliases: List of alias strings
 
     Returns:
-        HTML for aliases (empty string if no aliases)
+        HTML for aliases (empty string if no aliases after deduplication)
     """
-    if not aliases:
+    deduped = _deduplicate_aliases(aliases)
+    if not deduped:
         return ""
-
-    aliases_text = ", ".join(aliases)
+    aliases_text = ", ".join(deduped)
     return f"""
                 <div class="alias-tooltip">Aliases: {_escape_html(aliases_text)}</div>"""
 

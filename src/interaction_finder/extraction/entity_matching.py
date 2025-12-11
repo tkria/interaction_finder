@@ -741,10 +741,10 @@ def _has_token_overlap(
     return total_overlap >= required_overlap
 
 
-def _select_best_canonical(canonical_names: set[str]) -> str:
-    """Select best capitalization: prefer mixed-case over all-upper/all-lower."""
+def select_best_form(names: set[str]) -> str:
+    """Select best form from equivalent names: prefer mixed-case over all-upper/all-lower."""
     return max(
-        canonical_names,
+        names,
         key=lambda v: (
             sum(1 for c in v if c.islower())
             * sum(1 for c in v if c.isupper()),  # Mixed
@@ -802,7 +802,7 @@ def find_consolidation_candidates(
         # Check if these are safe capitalization variants (BRCA1/Brca1/brca1)
         if are_safe_capitalization_variants(affected):
             # Pick best canonical (prefer mixed-case)
-            best_canonical = _select_best_canonical(affected)
+            best_canonical = select_best_form(affected)
 
             # Create auto-merge rules for all others
             # Find the lowest speculation variant from the best canonical
