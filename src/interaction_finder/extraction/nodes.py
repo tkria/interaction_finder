@@ -2181,50 +2181,46 @@ Provide: accepted (true/false), relationship (selected label), synthesized evide
                         if ctx.deps.progress:
                             ctx.deps.progress["Unique pairs"].work()
                         result = await agent.run(prompt, deps=ctx.deps, usage=usage)
+                # Validate document citations in reasoning (log warnings for invalid ones)
+                cited_ids = extract_document_citations(result.output.reasoning)
+                _, invalid_citations = validate_document_citations(
+                    cited_ids, valid_doc_ids
+                )
+                if invalid_citations:
+                    ctx.deps.logger.warning(
+                        f"Invalid document citations in reasoning for {pair_key}: "
+                        f"{invalid_citations}"
+                    )
+                # Use LLM output
+                relationship = result.output.relationship
+                accepted = result.output.accepted
+                evidence = result.output.evidence
+                decision_confidence = result.output.decision_confidence
+                reasoning = result.output.reasoning
             except (TimeoutError, ConnectionError, ValueError, ModelHTTPError) as e:
                 ctx.deps.logger.error(
                     f"Cross-document judgment failed for {pair_key}: "
                     f"{type(e).__name__}: {e}"
                 )
-                # Mark as in-progress for error case (will be marked done in finally)
                 if ctx.deps.progress:
                     ctx.deps.progress["Unique pairs"].work()
-                # Default to rejection with low decision confidence (error case)
-                first_assessment = assessments[0]
-                return (
-                    pair_key,
-                    PairJudgment(
-                        entity1=SimpleEntity(
-                            name=first_assessment.entity1.canonical,
-                            kind=first_assessment.entity1.kind,
-                            aliases=_get_entity_aliases(
-                                first_assessment.entity1.canonical, ctx.state
-                            ),
-                        ),
-                        entity2=SimpleEntity(
-                            name=first_assessment.entity2.canonical,
-                            kind=first_assessment.entity2.kind,
-                            aliases=_get_entity_aliases(
-                                first_assessment.entity2.canonical, ctx.state
-                            ),
-                        ),
-                        relationship=first_assessment.relationship,
-                        spread=spread,
-                        accepted=False,
-                        evidence=_aggregate_evidence(assessments),
-                        decision_confidence=0.3,  # Low confidence due to error
-                        reasoning=f"Judgment failed due to error: {e}",
-                    ),
-                )
+                # Fall back to evidence-based decision
+                from collections import Counter
 
-            # Validate document citations in reasoning (log warnings for invalid ones)
-            cited_ids = extract_document_citations(result.output.reasoning)
-            _, invalid_citations = validate_document_citations(cited_ids, valid_doc_ids)
-            if invalid_citations:
-                ctx.deps.logger.warning(
-                    f"Invalid document citations in reasoning for {pair_key}: {invalid_citations}"
+                evidence = _aggregate_evidence(assessments)
+                accepted = evidence.overall >= 5
+                relationship = Counter(a.relationship for a in assessments).most_common(
+                    1
+                )[0][0]
+                decision_confidence = 0.5
+                decision_word = "accepted" if accepted else "rejected"
+                reasoning = (
+                    f"LLM judgment unavailable ({type(e).__name__}); "
+                    f"decision based on {len(assessments)} per-document assessments. "
+                    f"Median evidence level {evidence.overall}/9 "
+                    f"(threshold 5) → {decision_word}."
                 )
-            # Create judgment using LLM-selected relationship
+            # Build judgment from whichever branch we took
             first_assessment = assessments[0]
             judgment = PairJudgment(
                 entity1=SimpleEntity(
@@ -2241,12 +2237,12 @@ Provide: accepted (true/false), relationship (selected label), synthesized evide
                         first_assessment.entity2.canonical, ctx.state
                     ),
                 ),
-                relationship=result.output.relationship,
+                relationship=relationship,
                 spread=spread,
-                accepted=result.output.accepted,
-                evidence=result.output.evidence,
-                decision_confidence=result.output.decision_confidence,
-                reasoning=result.output.reasoning,
+                accepted=accepted,
+                evidence=evidence,
+                decision_confidence=decision_confidence,
+                reasoning=reasoning,
             )
             return (pair_key, judgment)
         finally:
