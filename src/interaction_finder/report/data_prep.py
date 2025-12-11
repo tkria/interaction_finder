@@ -100,12 +100,14 @@ def _build_pair_entry(
     total_quotes = 0
     polarity_counts = {polarity: 0 for polarity in POLARITY_ORDER}
     polarity_best_level = {polarity: 0 for polarity in POLARITY_ORDER}
+    evidence_levels: list[tuple[int, str]] = []  # (level, label) per assessment
     assessments: list[dict[str, Any]] = []
     for assessment, polarity in _iter_assessments_with_polarity(judgment):
         doc_ids.add(assessment.resource_id.id)
         total_quotes += len(assessment.quotes)
         polarity_counts[polarity] += 1
         evidence = assessment.evidence
+        evidence_levels.append((evidence.overall, evidence.label))
         resource = resource_pool.get(assessment.resource_id)
         if resource is None:
             continue
@@ -161,6 +163,7 @@ def _build_pair_entry(
             }
             for polarity in POLARITY_ORDER
         },
+        "evidence_levels": evidence_levels,
         "contentious": _has_opposing_relationships(assessments, opposition_map),
     }
 

@@ -4,6 +4,7 @@ Renders self-contained HTML reports with minimal data-attributes.
 No JSON embedding - all data queryable from HTML structure.
 """
 
+from itertools import groupby
 from typing import Any
 
 from interaction_finder.report.assets import get_css, get_js
@@ -110,9 +111,22 @@ def _render_pair_cards(pairs: list[dict[str, Any]]) -> str:
             else ""
         )
 
+        # Build evidence tooltip if there are varying evidence levels
+        evidence_levels = pair.get("evidence_levels", [])
+        unique_levels = set(evidence_levels)
+        evidence_tooltip = ""
+        if len(unique_levels) > 1:
+            # Group by level, sort descending, format as "4×Strong, 1×Good"
+            sorted_levels = sorted(evidence_levels, key=lambda x: -x[0])
+            parts = [
+                f"{len(list(g))}×{lbl}"
+                for (_lvl, lbl), g in groupby(sorted_levels, key=lambda x: x)
+            ]
+            evidence_tooltip = f' data-tooltip="{_escape_html(", ".join(parts))}"'
+
         summary_html = f"""
             <div class="pair-summary">
-                <span class="pair-counts">{doc_count}d {quote_count}q</span>{polarity_html}<span class="evidence-badge evidence-{overall}">{_escape_html(label.upper())}</span>
+                <span class="pair-counts">{doc_count}d {quote_count}q</span>{polarity_html}<span class="evidence-badge evidence-{overall}"{evidence_tooltip}>{_escape_html(label.upper())}</span>
             </div>"""
 
         # Build complete card with minimal data-attributes

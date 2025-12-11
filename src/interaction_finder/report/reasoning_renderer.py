@@ -308,7 +308,7 @@ class ReasoningTemplateRenderer:
             label = assess.get("label", "None")
             source_line = render_source_line(assess)
             return f"""
-        <div class="assessment-section open">
+        <div class="assessment-section">
             <div class="assessment-header" onclick="this.parentElement.classList.toggle('open')">
                 <span class="assessment-label"><span class="assess-num-badge">{idx + 1}</span>&nbsp;{_format_relationship(assess["relationship"])}</span>
                 <span class="pc-pill">
@@ -322,12 +322,19 @@ class ReasoningTemplateRenderer:
         </div>"""
 
         def render_single_assessment(assess: dict[str, Any]) -> str:
-            """Render single assessment in a box without polarity/evidence badge."""
+            """Render single assessment in a box with polarity/evidence badge."""
+            polarity = assess.get("polarity", "")
+            overall = assess.get("overall", 1)
+            label = assess.get("label", "None")
             source_line = render_source_line(assess)
             return f"""
-        <div class="assessment-section open">
+        <div class="assessment-section">
             <div class="assessment-header" onclick="this.parentElement.classList.toggle('open')">
                 <span class="assessment-label">{_format_relationship(assess["relationship"])}</span>
+                <span class="pc-pill">
+                    <span class="{_escape_html(polarity)}">{_escape_html(polarity_map.get(polarity, polarity))}</span>
+                    <span class="evidence-{overall}">{_escape_html(label)}</span>
+                </span>
             </div>
             <div class="assessment-content">
                 {source_line}<p>{self.highlighter.highlight(assess["reasoning"])}</p>

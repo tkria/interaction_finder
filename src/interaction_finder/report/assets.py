@@ -450,13 +450,9 @@ header {
 
 .pc-pill {
     display: inline-flex;
-    border-radius: 1em;
     gap: 0.2em;
-    overflow: hidden;
-    text-transform: uppercase;
     font-size: 0.65rem;
     font-weight: 600;
-    letter-spacing: 0.05em;
 }
 .pc-pill > span {
     padding: 0.1rem 0.45rem;
@@ -466,7 +462,10 @@ header {
 }
 .pc-pill > span:first-child {
     border: 2px solid;
-    border-radius: 1.5em 0 0 1.5em;
+    border-radius: 2em 0 0 2em;
+}
+.pc-pill > span:last-child {
+    border-radius: 0 2em 2em 0;
 }
 /* Polarity styling */
 .pc-pill > .positive {
@@ -1446,13 +1445,16 @@ function renderContent() {
 
         // Build polarity/evidence badge (two-segment pill)
         const polarityMap = {positive: '+', negative: '-', neutral: 'N', irrelevant: 'I'};
+        const relTooltip = relationships?.length > 0
+            ? ` data-tooltip="${escapeHtml(relationships.map(r => r.replace(/_/g, ' ')).join(', '))}"`
+            : '';
         const badge = polarity && overall
             ? `<span class="pc-pill">
-                   <span class="${escapeHtml(polarity)}">${escapeHtml(polarityMap[polarity] || polarity)}</span>
+                   <span class="${escapeHtml(polarity)}"${relTooltip}>${escapeHtml(polarityMap[polarity] || polarity)}</span>
                    <span class="evidence-${overall}">${escapeHtml(label || '')}</span>
                </span>`
             : overall ? `<span class="evidence-badge evidence-${overall}">${escapeHtml(label || '')}</span>`
-            : polarity ? `<span class="polarity-badge polarity-${escapeHtml(polarity)}">${escapeHtml(polarityMap[polarity] || polarity)}</span>`
+            : polarity ? `<span class="polarity-badge polarity-${escapeHtml(polarity)}"${relTooltip}>${escapeHtml(polarityMap[polarity] || polarity)}</span>`
             : '';
 
         const isOpen = state.openDocumentIdx === idx;
