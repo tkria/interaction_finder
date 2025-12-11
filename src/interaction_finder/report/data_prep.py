@@ -165,6 +165,7 @@ def _build_pair_entry(
         },
         "evidence_levels": evidence_levels,
         "contentious": _has_opposing_relationships(assessments, opposition_map),
+        "topic_relevance": judgment.topic_relevance,
     }
 
 

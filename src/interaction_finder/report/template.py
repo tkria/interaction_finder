@@ -140,6 +140,10 @@ def _render_pair_cards(pairs: list[dict[str, Any]]) -> str:
              data-accepted="{str(pair["accepted"]).lower()}"
              data-docs="{doc_indices}"
              data-contentious="{str(bool(pair.get("contentious"))).lower()}"
+             data-overall="{pair["overall"]}"
+             data-doc-count="{pair["doc_count"]}"
+             data-quote-count="{pair["quote_count"]}"
+             data-relevance="{pair.get("topic_relevance", 3)}"
              data-doc-groups='{doc_groups_data}'>
             <div class="pair-entities">
                 <span title="{_escape_html(entity1_aliases_display)}" data-kind="{_escape_html(pair["entity1"]["kind"])}">
@@ -210,12 +214,88 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                                 aria-label="Clear search"
                                 tabindex="-1">×</button>
                     </div>
-                    <label>
-                        <input type="checkbox" id="show-rejected" role="switch">
-                        Show rejected
-                    </label>
+                    <button type="button"
+                            id="filter-toggle"
+                            class="outline secondary"
+                            aria-expanded="false"
+                            aria-controls="filter-panel"
+                            aria-label="Toggle filter options">
+                        <svg class="gear-icon" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M12 15.5A3.5 3.5 0 0 1 8.5 12 3.5 3.5 0 0 1 12 8.5a3.5 3.5 0 0 1 3.5 3.5 3.5 3.5 0 0 1-3.5 3.5m7.43-2.53c.04-.32.07-.64.07-.97 0-.33-.03-.66-.07-1l2.11-1.63c.19-.15.24-.42.12-.64l-2-3.46c-.12-.22-.39-.31-.61-.22l-2.49 1c-.52-.39-1.06-.73-1.69-.98l-.37-2.65A.506.506 0 0 0 14 2h-4c-.25 0-.46.18-.5.42l-.37 2.65c-.63.25-1.17.59-1.69.98l-2.49-1c-.22-.09-.49 0-.61.22l-2 3.46c-.13.22-.07.49.12.64L4.57 11c-.04.34-.07.67-.07 1 0 .33.03.65.07.97l-2.11 1.66c-.19.15-.25.42-.12.64l2 3.46c.12.22.39.3.61.22l2.49-1.01c.52.4 1.06.74 1.69.99l.37 2.65c.04.24.25.42.5.42h4c.25 0 .46-.18.5-.42l.37-2.65c.63-.26 1.17-.59 1.69-.99l2.49 1.01c.22.08.49 0 .61-.22l2-3.46c.12-.22.07-.49-.12-.64l-2.11-1.66z"/>
+                        </svg>
+                        <span class="filter-active-dot"></span>
+                    </button>
                 </div>
             </div>
+        </div>
+        <div id="filter-panel" class="filter-panel" hidden>
+            <div class="filter-group">
+                <label for="sort-field">Sort:</label>
+                <select id="sort-field">
+                    <option value="evidence" selected>Evidence</option>
+                    <option value="relevance">Relevance</option>
+                    <option value="docs">Documents</option>
+                    <option value="quotes">Quotes</option>
+                    <option value="entity">Entity name</option>
+                </select>
+                <button type="button" id="sort-dir-toggle" class="outline contrast" data-dir="desc" aria-label="Toggle sort direction">↓</button>
+            </div>
+            <div class="filter-group">
+                <label for="evidence-min">Evidence:</label>
+                <select id="evidence-min">
+                    <option value="0" selected>Any</option>
+                    <option value="1">1: None</option>
+                    <option value="2">2: Minimal</option>
+                    <option value="3">3: Tenuous</option>
+                    <option value="4">4: Weak</option>
+                    <option value="5">5: Limited</option>
+                    <option value="6">6: Moderate</option>
+                    <option value="7">7: Good</option>
+                    <option value="8">8: Strong</option>
+                    <option value="9">9: Robust</option>
+                </select>
+                <span class="filter-range-sep">–</span>
+                <select id="evidence-max">
+                    <option value="10" selected>Any</option>
+                    <option value="9">9: Robust</option>
+                    <option value="8">8: Strong</option>
+                    <option value="7">7: Good</option>
+                    <option value="6">6: Moderate</option>
+                    <option value="5">5: Limited</option>
+                    <option value="4">4: Weak</option>
+                    <option value="3">3: Tenuous</option>
+                    <option value="2">2: Minimal</option>
+                    <option value="1">1: None</option>
+                </select>
+            </div>
+            <div class="filter-group">
+                <label for="relevance-min">Relevance:</label>
+                <select id="relevance-min">
+                    <option value="0" selected>Any</option>
+                    <option value="1">1: Tangential</option>
+                    <option value="2">2: Peripheral</option>
+                    <option value="3">3: Related</option>
+                    <option value="4">4: Significant</option>
+                    <option value="5">5: Central</option>
+                </select>
+                <span class="filter-range-sep">–</span>
+                <select id="relevance-max">
+                    <option value="6" selected>Any</option>
+                    <option value="5">5: Central</option>
+                    <option value="4">4: Significant</option>
+                    <option value="3">3: Related</option>
+                    <option value="2">2: Peripheral</option>
+                    <option value="1">1: Tangential</option>
+                </select>
+            </div>
+            <label class="filter-checkbox">
+                <input type="checkbox" id="show-rejected">
+                Show rejected
+            </label>
+            <label class="filter-checkbox">
+                <input type="checkbox" id="contentious-only">
+                Contentious only
+            </label>
         </div>
     </header>
 

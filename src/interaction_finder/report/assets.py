@@ -266,6 +266,91 @@ header {
     color: var(--pico-color);
 }
 
+/* Filter toggle button */
+#filter-toggle {
+    position: relative;
+    width: 2.5rem;
+    height: 2.5rem;
+    padding: 0;
+    margin: 0;
+    flex-shrink: 0;
+    align-self: center;
+}
+.gear-icon {
+    width: 1.2rem;
+    height: 1.2rem;
+    fill: currentColor;
+}
+
+/* Active filter indicator dot */
+.filter-active-dot {
+    display: none;
+    position: absolute;
+    top: 0.25rem;
+    right: 0.25rem;
+    width: 0.5rem;
+    height: 0.5rem;
+    background: var(--pico-primary);
+    border-radius: 50%;
+}
+#filter-toggle.has-active-filters .filter-active-dot {
+    display: block;
+}
+
+/* Filter panel layout */
+.filter-panel {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    align-items: center;
+    margin-top: var(--spacing-compact);
+}
+.filter-panel[hidden] {
+    display: none;
+}
+.filter-group {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+.filter-group label,
+.filter-checkbox {
+    margin: 0;
+    font-size: 0.9rem;
+}
+.filter-group select {
+    width: auto;
+    margin: 0;
+    padding: 0.25rem 0.5rem;
+    font-size: 0.85rem;
+}
+.filter-range-sep {
+    color: var(--pico-muted-color);
+}
+
+/* Sort direction toggle */
+#sort-dir-toggle {
+    width: 2rem;
+    height: 2rem;
+    padding: 0;
+    margin: 0;
+    transition: transform 0.2s;
+}
+#sort-dir-toggle[data-dir="asc"] {
+    transform: rotate(180deg);
+}
+
+/* Filter checkboxes */
+.filter-checkbox {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    cursor: pointer;
+}
+.filter-checkbox input {
+    margin: 0;
+}
+
 /* Horizontal layout for wider screens */
 @media (min-width: 1200px) {
     .header-content {
@@ -301,6 +386,8 @@ header {
     padding: var(--spacing-card);
     border-right: 1px solid var(--pico-muted-border-color);
     background: var(--pico-background-color);
+    display: flex;
+    flex-direction: column;
 }
 
 .pair-card {
@@ -1001,6 +1088,14 @@ const state = {
     openDocumentIdx: null,
     searchQuery: '',
     showRejected: false,
+    // Filter/sort state
+    sortField: 'evidence',    // 'evidence', 'relevance', 'docs', 'quotes', 'entity'
+    sortDir: 'desc',          // 'asc', 'desc'
+    evidenceMin: 0,           // 0 = any, 1-9 = specific
+    evidenceMax: 10,          // 10 = any, 1-9 = specific
+    relevanceMin: 0,          // 0 = any, 1-5 = specific
+    relevanceMax: 6,          // 6 = any, 1-5 = specific
+    showContentious: false,
 };
 
 // URL state management
@@ -1021,6 +1116,14 @@ function getStateFromURL() {
         search: params.get('search') || '',
         rejected: params.get('rejected') === '1',
         scroll: scroll,
+        // Filter/sort params
+        sortField: params.get('sort') || 'evidence',
+        sortDir: params.get('dir') || 'desc',
+        evidenceMin: params.has('emin') ? parseInt(params.get('emin'), 10) : 0,
+        evidenceMax: params.has('emax') ? parseInt(params.get('emax'), 10) : 10,
+        relevanceMin: params.has('rmin') ? parseInt(params.get('rmin'), 10) : 0,
+        relevanceMax: params.has('rmax') ? parseInt(params.get('rmax'), 10) : 6,
+        contentious: params.get('contentious') === '1',
     };
 }
 
@@ -1048,6 +1151,28 @@ function updateURL(usePushState = false) {
     }
     if (state.showRejected) {
         params.set('rejected', '1');
+    }
+    // Filter/sort params (only when non-default)
+    if (state.sortField !== 'evidence') {
+        params.set('sort', state.sortField);
+    }
+    if (state.sortDir !== 'desc') {
+        params.set('dir', state.sortDir);
+    }
+    if (state.evidenceMin > 0) {
+        params.set('emin', state.evidenceMin);
+    }
+    if (state.evidenceMax < 10) {
+        params.set('emax', state.evidenceMax);
+    }
+    if (state.relevanceMin > 0) {
+        params.set('rmin', state.relevanceMin);
+    }
+    if (state.relevanceMax < 6) {
+        params.set('rmax', state.relevanceMax);
+    }
+    if (state.showContentious) {
+        params.set('contentious', '1');
     }
     // Include scroll positions
     const scroll = getScrollPositions();
@@ -1117,9 +1242,27 @@ function restoreStateFromURL(scrollOverride) {
     // Restore search and rejected filter first (affects pair visibility)
     state.searchQuery = urlState.search;
     state.showRejected = urlState.rejected;
+    // Restore filter/sort state
+    state.sortField = urlState.sortField;
+    state.sortDir = urlState.sortDir;
+    state.evidenceMin = urlState.evidenceMin;
+    state.evidenceMax = urlState.evidenceMax;
+    state.relevanceMin = urlState.relevanceMin;
+    state.relevanceMax = urlState.relevanceMax;
+    state.showContentious = urlState.contentious;
     // Update UI controls to match
     document.getElementById('search-input').value = urlState.search;
     document.getElementById('show-rejected').checked = urlState.rejected;
+    document.getElementById('sort-field').value = urlState.sortField;
+    document.getElementById('sort-dir-toggle').dataset.dir = urlState.sortDir;
+    document.getElementById('evidence-min').value = urlState.evidenceMin;
+    document.getElementById('evidence-max').value = urlState.evidenceMax;
+    document.getElementById('relevance-min').value = urlState.relevanceMin;
+    document.getElementById('relevance-max').value = urlState.relevanceMax;
+    document.getElementById('contentious-only').checked = urlState.contentious;
+    // Update filter UI state
+    updateFilterActiveIndicator();
+    updateRangeFilterOptions();
     // Reset selection state (will be set below if URL specifies valid pair)
     state.selectedPairId = null;
     state.openDocumentIdx = null;
@@ -1192,7 +1335,17 @@ function initReport() {
         }
     });
     document.getElementById('search-clear').addEventListener('click', clearSearch);
+    // Filter panel toggle
+    document.getElementById('filter-toggle').addEventListener('click', toggleFilterPanel);
+    // Filter/sort controls
     document.getElementById('show-rejected').addEventListener('change', handleToggleRejected);
+    document.getElementById('sort-field').addEventListener('change', handleSortChange);
+    document.getElementById('sort-dir-toggle').addEventListener('click', handleSortDirToggle);
+    document.getElementById('evidence-min').addEventListener('change', handleEvidenceMinChange);
+    document.getElementById('evidence-max').addEventListener('change', handleEvidenceMaxChange);
+    document.getElementById('relevance-min').addEventListener('change', handleRelevanceMinChange);
+    document.getElementById('relevance-max').addEventListener('change', handleRelevanceMaxChange);
+    document.getElementById('contentious-only').addEventListener('change', handleToggleContentious);
 
     // Add click handlers to pre-rendered pair cards
     const sidebar = document.getElementById('sidebar');
@@ -1260,9 +1413,111 @@ function handleSearch(e) {
 // Toggle rejected pairs
 function handleToggleRejected(e) {
     state.showRejected = e.target.checked;
+    applyFiltersAndSort();
+}
+
+// Toggle filter panel visibility
+function toggleFilterPanel() {
+    const panel = document.getElementById('filter-panel');
+    const toggle = document.getElementById('filter-toggle');
+    const isOpen = !panel.hidden;
+    panel.hidden = isOpen;
+    toggle.setAttribute('aria-expanded', !isOpen);
+}
+
+// Check if any non-default filters are active
+function hasNonDefaultFilters() {
+    return (
+        state.sortField !== 'evidence' ||
+        state.sortDir !== 'desc' ||
+        state.evidenceMin > 0 ||
+        state.evidenceMax < 10 ||
+        state.relevanceMin > 0 ||
+        state.relevanceMax < 6 ||
+        state.showRejected ||
+        state.showContentious
+    );
+}
+
+// Update filter active indicator on gear button
+function updateFilterActiveIndicator() {
+    const toggle = document.getElementById('filter-toggle');
+    if (hasNonDefaultFilters()) {
+        toggle.classList.add('has-active-filters');
+    } else {
+        toggle.classList.remove('has-active-filters');
+    }
+}
+
+// Sort field change handler
+function handleSortChange() {
+    state.sortField = document.getElementById('sort-field').value;
+    applyFiltersAndSort();
+}
+
+// Sort direction toggle handler
+function handleSortDirToggle() {
+    const btn = document.getElementById('sort-dir-toggle');
+    state.sortDir = state.sortDir === 'desc' ? 'asc' : 'desc';
+    btn.dataset.dir = state.sortDir;
+    applyFiltersAndSort();
+}
+
+// Evidence min filter handler
+function handleEvidenceMinChange() {
+    state.evidenceMin = parseInt(document.getElementById('evidence-min').value, 10);
+    applyFiltersAndSort();
+}
+
+// Evidence max filter handler
+function handleEvidenceMaxChange() {
+    state.evidenceMax = parseInt(document.getElementById('evidence-max').value, 10);
+    applyFiltersAndSort();
+}
+
+// Relevance min filter handler
+function handleRelevanceMinChange() {
+    state.relevanceMin = parseInt(document.getElementById('relevance-min').value, 10);
+    applyFiltersAndSort();
+}
+
+// Relevance max filter handler
+function handleRelevanceMaxChange() {
+    state.relevanceMax = parseInt(document.getElementById('relevance-max').value, 10);
+    applyFiltersAndSort();
+}
+
+// Update disabled state of range filter options to prevent invalid ranges
+function updateRangeFilterOptions() {
+    const ranges = [
+        ['evidence-min', 'evidence-max', state.evidenceMin, state.evidenceMax, 0, 10],
+        ['relevance-min', 'relevance-max', state.relevanceMin, state.relevanceMax, 0, 6],
+    ];
+    for (const [minId, maxId, minVal, maxVal, minSentinel, maxSentinel] of ranges) {
+        document.getElementById(minId).querySelectorAll('option').forEach(opt => {
+            const v = parseInt(opt.value, 10);
+            opt.disabled = v > minSentinel && maxVal < maxSentinel && v > maxVal;
+        });
+        document.getElementById(maxId).querySelectorAll('option').forEach(opt => {
+            const v = parseInt(opt.value, 10);
+            opt.disabled = v < maxSentinel && minVal > minSentinel && v < minVal;
+        });
+    }
+}
+
+// Contentious filter handler
+function handleToggleContentious(e) {
+    state.showContentious = e.target.checked;
+    applyFiltersAndSort();
+}
+
+// Combined filter/sort application
+function applyFiltersAndSort() {
+    updateFilterActiveIndicator();
+    updateRangeFilterOptions();
     updateHeaderCounts();
-    updatePairListDisplay();  // May clear selection if pair no longer matches filter
-    updateURL(false);  // replaceState after state is finalized
+    updatePairListDisplay();
+    updateURL(false);
     renderContent();
     renderReasoning();
 }
@@ -1315,12 +1570,31 @@ function updateHeaderCounts() {
 // Filter pairs based on search and rejected toggle
 function getFilteredPairs() {
     const allPairs = document.querySelectorAll('.pair-card');
-    return Array.from(allPairs).filter(card => {
+    let filtered = Array.from(allPairs).filter(card => {
         // Filter rejected
         if (!state.showRejected && card.dataset.accepted === 'false') {
             return false;
         }
-
+        // Evidence range filter
+        const overall = parseInt(card.dataset.overall, 10);
+        if (state.evidenceMin > 0 && overall < state.evidenceMin) {
+            return false;
+        }
+        if (state.evidenceMax < 10 && overall > state.evidenceMax) {
+            return false;
+        }
+        // Relevance range filter
+        const relevance = parseInt(card.dataset.relevance, 10);
+        if (state.relevanceMin > 0 && relevance < state.relevanceMin) {
+            return false;
+        }
+        if (state.relevanceMax < 6 && relevance > state.relevanceMax) {
+            return false;
+        }
+        // Contentious filter
+        if (state.showContentious && card.dataset.contentious !== 'true') {
+            return false;
+        }
         // Search filter
         if (state.searchQuery) {
             const q = state.searchQuery;
@@ -1331,14 +1605,47 @@ function getFilteredPairs() {
                 card.dataset.e2a,
                 card.dataset.rel
             ].join(' ').toLowerCase();
-
             if (!searchable.includes(q)) {
                 return false;
             }
         }
-
         return true;
     });
+    // Sort the filtered results
+    filtered.sort((a, b) => {
+        // Primary: accepted before rejected
+        const aAccepted = a.dataset.accepted === 'true';
+        const bAccepted = b.dataset.accepted === 'true';
+        if (aAccepted !== bAccepted) return bAccepted - aAccepted;
+        // Secondary: user-selected sort field
+        let comparison = 0;
+        switch (state.sortField) {
+            case 'evidence':
+                comparison = parseInt(a.dataset.overall, 10) - parseInt(b.dataset.overall, 10);
+                break;
+            case 'relevance':
+                comparison = parseInt(a.dataset.relevance, 10) - parseInt(b.dataset.relevance, 10);
+                break;
+            case 'docs':
+                comparison = parseInt(a.dataset.docCount, 10) - parseInt(b.dataset.docCount, 10);
+                break;
+            case 'quotes':
+                comparison = parseInt(a.dataset.quoteCount, 10) - parseInt(b.dataset.quoteCount, 10);
+                break;
+            case 'entity':
+                comparison = a.dataset.e1.localeCompare(b.dataset.e1, undefined, { sensitivity: 'base' });
+                if (comparison === 0) {
+                    comparison = a.dataset.e2.localeCompare(b.dataset.e2, undefined, { sensitivity: 'base' });
+                }
+                break;
+            default:
+                // Fall back to evidence if unknown sort field
+                comparison = parseInt(a.dataset.overall, 10) - parseInt(b.dataset.overall, 10);
+        }
+        // Apply sort direction (desc = higher values first)
+        return state.sortDir === 'desc' ? -comparison : comparison;
+    });
+    return filtered;
 }
 
 // Update pair list visibility and selection based on filters
@@ -1346,9 +1653,8 @@ function updatePairListDisplay() {
     const filtered = getFilteredPairs();
     const sidebar = document.getElementById('sidebar');
     const allCards = sidebar.querySelectorAll('.pair-card');
-
     const filteredSet = new Set(filtered);
-
+    // Clear selection if no longer visible
     if (state.selectedPairId !== null) {
         const selectedExists = !!findFilteredPairById(state.selectedPairId, filtered);
         if (!selectedExists) {
@@ -1356,20 +1662,28 @@ function updatePairListDisplay() {
             state.openDocumentIdx = null;
         }
     }
-
+    // Hide/show and update selection state
     allCards.forEach((card) => {
         const pairId = getPairIdFromCard(card);
-
         if (filteredSet.has(card)) {
             card.classList.remove('hidden');
         } else {
             card.classList.add('hidden');
         }
-
         if (state.selectedPairId === pairId) {
             card.classList.add('selected');
         } else {
             card.classList.remove('selected');
+        }
+    });
+    // Reorder DOM using CSS order to match sort order
+    filtered.forEach((card, index) => {
+        card.style.order = index;
+    });
+    // Set high order for hidden cards so they appear last if somehow shown
+    allCards.forEach((card) => {
+        if (!filteredSet.has(card)) {
+            card.style.order = 9999;
         }
     });
 }

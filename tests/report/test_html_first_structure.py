@@ -186,13 +186,16 @@ def test_pair_cards_have_minimal_attributes():
         assert pair_card.get("data-rel") is not None
         assert pair_card.get("data-accepted") in ["true", "false"]
         assert pair_card.get("data-docs") is not None
+        # Sorting attributes (needed for client-side sort)
+        assert pair_card.get("data-overall") is not None
+        assert pair_card.get("data-doc-count") is not None
+        assert pair_card.get("data-quote-count") is not None
+        assert pair_card.get("data-relevance") is not None
 
         # Verify redundant attributes are NOT present
         assert pair_card.get("data-confidence") is None
         assert pair_card.get("data-e1-kind") is None
         assert pair_card.get("data-e2-kind") is None
-        assert pair_card.get("data-doc-count") is None
-        assert pair_card.get("data-quote-count") is None
 
 
 @pytest.mark.skipif(not HAS_BS4, reason="BeautifulSoup4 not installed")
