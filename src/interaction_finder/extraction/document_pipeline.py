@@ -109,7 +109,7 @@ async def analyze_document(
 
     Returns (entities, paper_quality, quotes_validated, quotes_failed).
     """
-    document_text = adjust_heading_levels(resource.text[:15000], target_min_level=2)
+    document_text = adjust_heading_levels(resource.text, target_min_level=2)
     prompt = f"""# Document
 **Title:** {resource.title}
 
