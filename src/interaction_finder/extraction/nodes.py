@@ -15,6 +15,7 @@ Pipeline stages:
 """
 
 import asyncio
+import logging
 import re
 import secrets
 import string
@@ -60,6 +61,7 @@ from interaction_finder.extraction.state import MergeCacheForKind, State
 from interaction_finder.extraction.entity_matching import (
     extract_entity_variants,
     find_consolidation_candidates,
+    find_entity_match,
     SpeculatedVariant,
 )
 from interaction_finder.extraction.utils import (
@@ -1141,7 +1143,7 @@ Examples:
                     for exc in excludes:
                         if exc.target:
                             member = self._resolve_group_target(
-                                exc.target, members, entities
+                                exc.target, members, entities, ctx.deps.logger
                             )
                             if member in remaining:
                                 remaining.discard(member)
@@ -1155,7 +1157,7 @@ Examples:
                         if not merge.target:
                             continue
                         target = self._resolve_group_target(
-                            merge.target, members, entities
+                            merge.target, members, entities, ctx.deps.logger
                         )
                         # Check if target was an existing member that got excluded
                         if target in members and target not in remaining:
@@ -1219,24 +1221,67 @@ Examples:
         target_spec: str,
         members: list[str],
         entities: dict[str, list[SpeculatedVariant]],
+        logger: logging.Logger,
     ) -> str:
         """Resolve target from group decision.
 
+        Handles multiple formats that LLMs may return:
+        - Pure digit: "1", "2" (member number)
+        - Number + name: "2. Entity Name", "2) Entity Name" (common LLM pattern)
+        - Exact name: "Entity Name"
+        - Fuzzy name: variant spelling that matches a member
+        - New name: creates a new canonical
+
         Args:
-            target_spec: Member number ("1"), member name, or new name
+            target_spec: Member number, member name, or new canonical name.
+                Also handles combined formats like "2. Name" or "2) Name".
             members: Group members in order
-            entities: All entities (to check existence)
+            entities: All entities (for fuzzy matching)
+            logger: Logger for warnings
 
         Returns:
-            Target entity name
+            Resolved target entity name
         """
-        # Case 1: Number like "1", "2", etc.
+        members_set = set(members)
+        # Case 1: Pure digit like "1", "2", etc.
         if target_spec.isdigit():
             idx = int(target_spec) - 1
             if 0 <= idx < len(members):
                 return members[idx]
-
-        # Case 2 & 3: Member name or new name
+        # Case 2: Number + name format ("2. Name", "2) Name", "2 Name")
+        # Pattern: optional whitespace, digits, optional ).  delimiter, required
+        # space, then word-starting name
+        match = re.match(r"^\s*(\d+)[).]?\s+(\w.+?)?\s*$", target_spec)
+        if match:
+            num_str, name_part = match.groups()
+            idx = int(num_str) - 1
+            if 0 <= idx < len(members):
+                member = members[idx]
+                # Validate name part matches the member using entity matching
+                if name_part:
+                    try:
+                        name_match = find_entity_match(name_part, entities)
+                    except (IndexError, KeyError):
+                        name_match = None  # Graceful fallback for malformed entities
+                    if name_match is None or name_match.canonical != member:
+                        resolved_to = name_match.canonical if name_match else "nothing"
+                        logger.warning(
+                            f"Merge target mismatch: member {idx + 1} is '{member}' "
+                            f"but specified name '{name_part}' resolves to "
+                            f"'{resolved_to}'; using member number"
+                        )
+                return member
+        # Case 3: Exact member name (fast path, no entity matching needed)
+        if target_spec in members_set:
+            return target_spec
+        # Case 4: Name that fuzzy-matches a member
+        try:
+            entity_match = find_entity_match(target_spec, entities)
+        except (IndexError, KeyError):
+            entity_match = None  # Graceful fallback for malformed entities
+        if entity_match and entity_match.canonical in members_set:
+            return entity_match.canonical
+        # Case 5: New canonical name
         return target_spec
 
     def _resolve_transitive_merges(
