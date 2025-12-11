@@ -49,6 +49,7 @@ def make_assessment(
         kind="disease", name="Cancer", aliases=[], quotes=[], reasoning="test"
     )
     return PairAssessment(
+        topic_relevance=3,
         resource_id=resource,
         entity1=EntityRef(canonical="BRCA1", mentions=[entity1]),
         entity2=EntityRef(canonical="Cancer", mentions=[entity2]),

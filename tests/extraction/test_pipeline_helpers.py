@@ -35,6 +35,7 @@ def make_assessment(
     """Create a PairAssessment with configurable evidence."""
     resource_id = ResourceId(url="https://test.com", counter=0)
     return PairAssessment(
+        topic_relevance=3,
         resource_id=resource_id,
         entity1=EntityRef(
             canonical="BRCA1",

@@ -51,6 +51,7 @@ class TestUpdatePairEntityReferences:
             kind="disease", name="Cancer", aliases=[], quotes=[], reasoning="test"
         )
         assessment = PairAssessment(
+            topic_relevance=3,
             resource_id=resource,
             entity1=EntityRef(canonical="brca1", mentions=[entity1]),
             entity2=EntityRef(canonical="Cancer", mentions=[entity2]),
@@ -83,6 +84,7 @@ class TestUpdatePairEntityReferences:
             kind="disease", name="cancer", aliases=[], quotes=[], reasoning="test"
         )
         assessment = PairAssessment(
+            topic_relevance=3,
             resource_id=resource,
             entity1=EntityRef(canonical="BRCA1", mentions=[entity1]),
             entity2=EntityRef(canonical="cancer", mentions=[entity2]),
@@ -115,6 +117,7 @@ class TestUpdatePairEntityReferences:
             kind="disease", name="cancer", aliases=[], quotes=[], reasoning="test"
         )
         assessment = PairAssessment(
+            topic_relevance=3,
             resource_id=resource,
             entity1=EntityRef(canonical="brca1", mentions=[entity1]),
             entity2=EntityRef(canonical="cancer", mentions=[entity2]),
@@ -149,6 +152,7 @@ class TestUpdatePairEntityReferences:
             kind="gene", name="TP53", aliases=[], quotes=[], reasoning="test"
         )
         assessment = PairAssessment(
+            topic_relevance=3,
             resource_id=resource,
             entity1=EntityRef(canonical="brca1", mentions=[entity1]),
             entity2=EntityRef(canonical="TP53", mentions=[entity2]),
@@ -181,6 +185,7 @@ class TestUpdatePairEntityReferences:
             kind="gene", name="TP53", aliases=[], quotes=[], reasoning="test"
         )
         assessment = PairAssessment(
+            topic_relevance=3,
             resource_id=resource,
             entity1=EntityRef(canonical="BRCA1", mentions=[entity1]),
             entity2=EntityRef(canonical="TP53", mentions=[entity2]),
@@ -212,6 +217,7 @@ class TestUpdatePairEntityReferences:
             kind="gene", name="TP53", aliases=[], quotes=[], reasoning="test"
         )
         assessment = PairAssessment(
+            topic_relevance=3,
             resource_id=resource,
             entity1=EntityRef(canonical="BRCA1", mentions=[entity1]),
             entity2=EntityRef(canonical="TP53", mentions=[entity2]),
@@ -244,6 +250,7 @@ class TestUpdatePairEntityReferences:
             kind="gene", name="EGFR", aliases=[], quotes=[], reasoning="test"
         )
         assessment1 = PairAssessment(
+            topic_relevance=3,
             resource_id=resource,
             entity1=EntityRef(canonical="brca1", mentions=[entity_brca]),
             entity2=EntityRef(canonical="TP53", mentions=[entity_tp53]),
@@ -253,6 +260,7 @@ class TestUpdatePairEntityReferences:
             reasoning="Test1",
         )
         assessment2 = PairAssessment(
+            topic_relevance=3,
             resource_id=resource,
             entity1=EntityRef(canonical="brca1", mentions=[entity_brca]),
             entity2=EntityRef(canonical="EGFR", mentions=[entity_egfr]),
@@ -293,6 +301,7 @@ class TestUpdatePairEntityReferences:
                 kind="disease", name="Cancer", aliases=[], quotes=[], reasoning="test"
             )
             assessment = PairAssessment(
+                topic_relevance=3,
                 resource_id=resource,
                 entity1=EntityRef(canonical="brca1", mentions=[entity1]),
                 entity2=EntityRef(canonical="Cancer", mentions=[entity2]),

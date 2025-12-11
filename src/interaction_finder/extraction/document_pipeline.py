@@ -453,6 +453,7 @@ Assess evidence for an entity association.
         relationship=result.output.relationship,
         quotes=referenced_quotes if referenced_quotes else quotes,
         evidence=result.output.evidence,
+        topic_relevance=result.output.topic_relevance,
         reasoning=result.output.reasoning,
     )
 

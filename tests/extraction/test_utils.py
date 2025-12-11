@@ -737,6 +737,7 @@ class TestBuildPairSpread:
 
         assessments = [
             PairAssessment(
+                topic_relevance=3,
                 resource_id=self.resource.id,
                 entity1=self.entity1_ref,
                 entity2=self.entity2_ref,
@@ -746,6 +747,7 @@ class TestBuildPairSpread:
                 reasoning="test",
             ),
             PairAssessment(
+                topic_relevance=3,
                 resource_id=self.resource.id,
                 entity1=self.entity1_ref,
                 entity2=self.entity2_ref,
@@ -755,6 +757,7 @@ class TestBuildPairSpread:
                 reasoning="test",
             ),
             PairAssessment(
+                topic_relevance=3,
                 resource_id=self.resource.id,
                 entity1=self.entity1_ref,
                 entity2=self.entity2_ref,
@@ -785,6 +788,7 @@ class TestBuildPairSpread:
 
         assessments = [
             PairAssessment(
+                topic_relevance=3,
                 resource_id=self.resource.id,
                 entity1=self.entity1_ref,
                 entity2=self.entity2_ref,
@@ -794,6 +798,7 @@ class TestBuildPairSpread:
                 reasoning="test",
             ),
             PairAssessment(
+                topic_relevance=3,
                 resource_id=self.resource.id,
                 entity1=self.entity1_ref,
                 entity2=self.entity2_ref,
@@ -803,6 +808,7 @@ class TestBuildPairSpread:
                 reasoning="test",
             ),
             PairAssessment(
+                topic_relevance=3,
                 resource_id=self.resource.id,
                 entity1=self.entity1_ref,
                 entity2=self.entity2_ref,
@@ -837,6 +843,7 @@ class TestBuildPairSpread:
 
         assessments = [
             PairAssessment(
+                topic_relevance=3,
                 resource_id=self.resource.id,
                 entity1=self.entity1_ref,
                 entity2=self.entity2_ref,
@@ -859,6 +866,7 @@ class TestBuildPairSpread:
 
         assessments = [
             PairAssessment(
+                topic_relevance=3,
                 resource_id=self.resource.id,
                 entity1=self.entity1_ref,
                 entity2=self.entity2_ref,
@@ -868,6 +876,7 @@ class TestBuildPairSpread:
                 reasoning="test",
             ),
             PairAssessment(
+                topic_relevance=3,
                 resource_id=self.resource.id,
                 entity1=self.entity1_ref,
                 entity2=self.entity2_ref,

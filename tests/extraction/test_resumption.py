@@ -588,6 +588,7 @@ def test_pair_assessments_preserve_quotes():
     )
     # PairAssessment with direct quotes (entity refs serialize to strings)
     assessment = PairAssessment(
+        topic_relevance=3,
         resource_id=rid,
         entity1=EntityRef(canonical="BRCA1"),
         entity2=EntityRef(canonical="breast cancer"),
@@ -696,6 +697,7 @@ def test_pair_assessments_rehydrate_entity_refs_with_mentions():
     )
 
     assessment = PairAssessment(
+        topic_relevance=3,
         resource_id=rid,
         entity1=state.validated_entities_by_resource[rid]["BMPR2"],
         entity2=state.validated_entities_by_resource[rid]["Pulmonary Hypertension"],
@@ -800,6 +802,7 @@ def test_pair_assessments_rehydrate_from_global_entities_when_missing():
         overall=6,
     )
     assessment = PairAssessment(
+        topic_relevance=3,
         resource_id=rid,
         entity1=state.validated_entities_by_resource[rid]["BMPR2"],
         entity2="Synthetic SMC phenotype",
@@ -877,6 +880,7 @@ def test_pair_assessments_create_placeholder_when_entity_missing():
         overall=4,
     )
     assessment = PairAssessment(
+        topic_relevance=3,
         resource_id=rid,
         entity1=gene_ref,
         entity2="Unknown Phenotype",
@@ -972,6 +976,7 @@ def test_pair_judgments_rehydrate_assessment_entities_from_global():
     )
 
     spread_assessment = PairAssessment(
+        topic_relevance=3,
         resource_id=rid,
         entity1=bmpr2_ref,
         entity2=pah_ref,
@@ -989,6 +994,7 @@ def test_pair_judgments_rehydrate_assessment_entities_from_global():
     )
     pair_key = EntityPairKey("BMPR2", "Pulmonary Hypertension")
     state.pair_judgments[pair_key] = PairJudgment(
+        topic_relevance=3,
         entity1=SimpleEntity(name="BMPR2", kind="gene", aliases=[]),
         entity2=SimpleEntity(
             name="Pulmonary Hypertension", kind="phenotype", aliases=["PAH"]

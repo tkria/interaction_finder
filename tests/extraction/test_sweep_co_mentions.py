@@ -307,6 +307,7 @@ class TestIsCoMentionCovered:
         # Create a quote spanning positions 0-100
         quote = sample_resource.quote("BRCA1 is a tumor suppressor gene")
         assessment = PairAssessment(
+            topic_relevance=3,
             resource_id=sample_resource.id,
             entity1=entity_ref_brca1,
             entity2=entity_ref_breast_cancer,
@@ -325,6 +326,7 @@ class TestIsCoMentionCovered:
         """One position outside quote span means not covered."""
         quote = sample_resource.quote("BRCA1 is a tumor suppressor gene")
         assessment = PairAssessment(
+            topic_relevance=3,
             resource_id=sample_resource.id,
             entity1=entity_ref_brca1,
             entity2=entity_ref_breast_cancer,
@@ -348,6 +350,7 @@ class TestIsCoMentionCovered:
         quote1 = sample_resource.quote("BRCA1 is a tumor suppressor gene")
         quote2 = sample_resource.quote("BRCA1 and TP53 interact")
         assessment = PairAssessment(
+            topic_relevance=3,
             resource_id=sample_resource.id,
             entity1=entity_ref_brca1,
             entity2=entity_ref_breast_cancer,
@@ -386,6 +389,7 @@ class TestClassifyCoMention:
         """Existing assessment in different region returns novel with uncovered_region."""
         quote = sample_resource.quote("BRCA1 is a tumor suppressor gene")
         assessment = PairAssessment(
+            topic_relevance=3,
             resource_id=sample_resource.id,
             entity1=entity_ref_brca1,
             entity2=entity_ref_breast_cancer,
@@ -408,6 +412,7 @@ class TestClassifyCoMention:
         """Positions within existing quote are not novel."""
         quote = sample_resource.quote("BRCA1 is a tumor suppressor gene")
         assessment = PairAssessment(
+            topic_relevance=3,
             resource_id=sample_resource.id,
             entity1=entity_ref_brca1,
             entity2=entity_ref_breast_cancer,
@@ -514,6 +519,7 @@ class TestFindNovelCoMentionsInResource:
             "BRCA1 is a tumor suppressor gene associated with breast cancer"
         )
         assessment = PairAssessment(
+            topic_relevance=3,
             resource_id=sample_resource.id,
             entity1=entity_ref_brca1,
             entity2=entity_ref_breast_cancer,
@@ -565,6 +571,7 @@ class TestCollectAssessedPairs:
     ):
         """Collects unique pairs from assessments."""
         assessment1 = PairAssessment(
+            topic_relevance=3,
             resource_id=sample_resource.id,
             entity1=entity_ref_brca1,
             entity2=entity_ref_tp53,
@@ -574,6 +581,7 @@ class TestCollectAssessedPairs:
             reasoning="Test",
         )
         assessment2 = PairAssessment(
+            topic_relevance=3,
             resource_id=sample_resource.id,
             entity1=entity_ref_brca1,
             entity2=entity_ref_breast_cancer,
@@ -593,6 +601,7 @@ class TestCollectAssessedPairs:
         """Same pair in multiple resources counted once."""
         resource_id2 = ResourceId(url="https://example.com/2", counter=2)
         assessment1 = PairAssessment(
+            topic_relevance=3,
             resource_id=sample_resource.id,
             entity1=entity_ref_brca1,
             entity2=entity_ref_tp53,
@@ -602,6 +611,7 @@ class TestCollectAssessedPairs:
             reasoning="Test",
         )
         assessment2 = PairAssessment(
+            topic_relevance=3,
             resource_id=resource_id2,
             entity1=entity_ref_brca1,
             entity2=entity_ref_tp53,
@@ -987,6 +997,7 @@ class TestAssessCoMentionRegionDiagnostics:
                     entity2_name="TP53",
                     relationship="interacts_with",
                     evidence=make_evidence(8),
+                    topic_relevance=3,
                     supporting_quotes=["Some text"],
                     reasoning="Test",
                 )
@@ -1074,6 +1085,7 @@ class TestAssessCoMentionRegionDiagnostics:
                     entity2_name="UNKNOWN_GENE",  # Not in candidates
                     relationship="interacts_with",
                     evidence=make_evidence(8),
+                    topic_relevance=3,
                     supporting_quotes=["Some text"],
                     reasoning="Test",
                 )
@@ -1169,6 +1181,7 @@ class TestAssessCoMentionRegionDiagnostics:
                     entity2_name="breast cancer",
                     relationship="associated_with",
                     evidence=make_evidence(6),
+                    topic_relevance=3,
                     supporting_quotes=["Some text"],
                     reasoning="Test",
                 )
@@ -1270,6 +1283,7 @@ class TestAssessCoMentionRegionDiagnostics:
                     entity2_name="TP53",
                     relationship="interacts_with",
                     evidence=make_evidence(8),
+                    topic_relevance=3,
                     supporting_quotes=["Some text"],
                     reasoning="Test",
                 ),
@@ -1279,6 +1293,7 @@ class TestAssessCoMentionRegionDiagnostics:
                     entity2_name="UNKNOWN2",
                     relationship="regulates",
                     evidence=make_evidence(6),
+                    topic_relevance=3,
                     supporting_quotes=["Some text"],
                     reasoning="Test",
                 ),
@@ -1288,6 +1303,7 @@ class TestAssessCoMentionRegionDiagnostics:
                     entity2_name="breast cancer",
                     relationship="associated_with",
                     evidence=make_evidence(3),
+                    topic_relevance=3,
                     supporting_quotes=["Some text"],
                     reasoning="Test",
                 ),
@@ -1393,6 +1409,7 @@ class TestAssessCoMentionRegionDiagnostics:
                     entity2_name="BRCA1",
                     relationship="interacts_with",
                     evidence=make_evidence(8),
+                    topic_relevance=3,
                     supporting_quotes=[
                         "BRCA1 and TP53 interact in DNA damage response pathways"
                     ],
@@ -1501,6 +1518,7 @@ class TestAssessCoMentionRegionDiagnostics:
                     entity2_name="Familial pulmonary arterial hypertension",
                     relationship="associated_with",
                     evidence=make_evidence(8),
+                    topic_relevance=3,
                     supporting_quotes=[
                         "BRCA1 and TP53 interact in DNA damage response pathways"
                     ],
@@ -1599,6 +1617,7 @@ class TestAssessCoMentionRegionDiagnostics:
                     entity2_name="breast cancer",
                     relationship="associated_with",
                     evidence=make_evidence(6),
+                    topic_relevance=3,
                     # Use a quote that exists in sample_resource
                     supporting_quotes=[
                         "BRCA1 is a tumor suppressor gene associated with breast cancer"
@@ -1702,6 +1721,7 @@ class TestAssessCoMentionRegionDiagnostics:
                     entity2_name="breast cancer",
                     relationship="associated_with",
                     evidence=make_evidence(6),
+                    topic_relevance=3,
                     supporting_quotes=[
                         "BRCA1 is a tumor suppressor gene associated with breast cancer"
                     ],

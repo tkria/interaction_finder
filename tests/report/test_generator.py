@@ -41,6 +41,7 @@ def create_minimal_checkpoint() -> PipelineCheckpoint:
     entity_ref = EntityRef(canonical="BRCA1", mentions=[entity_mention])
 
     assessment = PairAssessment(
+        topic_relevance=3,
         resource_id=resource.id,
         entity1=entity_ref,
         entity2=entity_ref,
@@ -52,6 +53,7 @@ def create_minimal_checkpoint() -> PipelineCheckpoint:
 
     spread = PairSpread(positive=[assessment])
     judgment = PairJudgment(
+        topic_relevance=3,
         entity1=SimpleEntity(name="BRCA1", kind="gene", aliases=["BRCA1"]),
         entity2=SimpleEntity(name="Cancer", kind="disease", aliases=["Cancer"]),
         relationship="associated_with",

@@ -477,6 +477,14 @@ class ConfirmedPair(BaseModel):
     evidence: EvidenceQuality = Field(
         description="Structured assessment of evidence quality"
     )
+    topic_relevance: Literal[1, 2, 3, 4, 5] = Field(
+        description="""How central is this pair to the research topic?
+        1: Tangential - incidental co-occurrence only
+        2: Peripheral - broadly related but not specific to the topic
+        3: Related - connected via known mechanisms or associations
+        4: Directly relevant - involves core aspects of the topic
+        5: Central - directly addresses the research question"""
+    )
     supporting_quotes: list[str] = Field(
         description="Exact verbatim quotes from text supporting this relationship"
     )
@@ -776,6 +784,7 @@ Provide supporting quotes for confirmed relationships."""
                     relationship=confirmed.relationship,
                     quotes=validated_quotes,
                     evidence=confirmed.evidence,
+                    topic_relevance=confirmed.topic_relevance,
                     reasoning=confirmed.reasoning,
                     source="sweep",
                 )

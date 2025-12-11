@@ -57,6 +57,7 @@ def make_assessment(
 ) -> PairAssessment:
     """Create a test PairAssessment."""
     return PairAssessment(
+        topic_relevance=3,
         resource_id=resource,
         entity1=EntityRef(
             canonical=entity1_name,

@@ -330,6 +330,7 @@ async def _judge_pair(
             strong = [a for a in assessments if a.evidence.overall >= 7]
             evidence = aggregate_evidence(strong)
             decision_confidence = 0.95 if len(strong) >= 3 else 0.85
+            topic_relevance = max(a.topic_relevance for a in assessments)
             judgment = PairJudgment(
                 entity1=SimpleEntity(
                     name=first_assessment.entity1.canonical,
@@ -349,6 +350,7 @@ async def _judge_pair(
                 spread=spread,
                 accepted=True,
                 evidence=evidence,
+                topic_relevance=topic_relevance,
                 decision_confidence=decision_confidence,
                 reasoning=reasoning,
             )
@@ -381,6 +383,7 @@ async def _judge_pair(
             relationship = result.output.relationship
             accepted = result.output.accepted
             evidence = result.output.evidence
+            topic_relevance = result.output.topic_relevance
             decision_confidence = result.output.decision_confidence
             reasoning = result.output.reasoning
         except (TimeoutError, ConnectionError, ValueError, ModelHTTPError) as e:
@@ -395,6 +398,7 @@ async def _judge_pair(
             relationship = Counter(a.relationship for a in assessments).most_common(1)[
                 0
             ][0]
+            topic_relevance = max(a.topic_relevance for a in assessments)
             decision_confidence = 0.5
             decision_word = "accepted" if accepted else "rejected"
             reasoning = (
@@ -420,6 +424,7 @@ async def _judge_pair(
             spread=spread,
             accepted=accepted,
             evidence=evidence,
+            topic_relevance=topic_relevance,
             decision_confidence=decision_confidence,
             reasoning=reasoning,
         )

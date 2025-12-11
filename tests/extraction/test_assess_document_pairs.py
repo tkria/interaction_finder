@@ -119,6 +119,7 @@ class TestAssessDocumentPairsDeduplication:
                 language="definitive",
                 overall=8,
             ),
+            topic_relevance=4,
             reasoning="Strong evidence of interaction between these genes.",
             supporting_quote_ids=[0],
         )
@@ -157,6 +158,7 @@ class TestAssessDocumentPairsDeduplication:
         judgment = PairEvidenceJudgment(
             relationship="associated_with",
             evidence=make_evidence(6),
+            topic_relevance=3,
             reasoning="Evidence supports association between entities.",
             supporting_quote_ids=[0],
         )
@@ -200,6 +202,7 @@ class TestAssessDocumentPairsDeduplication:
             result.output = PairEvidenceJudgment(
                 relationship="interacts_with",
                 evidence=make_evidence(8),
+                topic_relevance=4,
                 reasoning="Evidence supports interaction between these genes.",
                 supporting_quote_ids=[0],
             )
@@ -255,6 +258,7 @@ class TestAssessDocumentPairsProgress:
         judgment = PairEvidenceJudgment(
             relationship="associated_with",
             evidence=make_evidence(6),
+            topic_relevance=3,
             reasoning="Evidence supports association between these entities.",
             supporting_quote_ids=[0],
         )

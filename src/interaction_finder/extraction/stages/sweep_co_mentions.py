@@ -188,6 +188,7 @@ async def sweep_co_mentions(state: State, deps: Deps) -> bool:
                             language="hedged",
                             overall=5,
                         ),
+                        topic_relevance=3,
                         reasoning="Discovered during co-mention sweep",
                         source="sweep",
                     )

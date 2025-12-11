@@ -645,6 +645,14 @@ class PairEvidenceJudgment(BaseModel):
     evidence: EvidenceQuality = Field(
         description="Structured assessment of evidence quality"
     )
+    topic_relevance: Literal[1, 2, 3, 4, 5] = Field(
+        description="""How central is this pair to the research topic?
+        1: Tangential - incidental co-occurrence only
+        2: Peripheral - broadly related but not specific to the topic
+        3: Related - connected via known mechanisms or associations
+        4: Directly relevant - involves core aspects of the topic
+        5: Central - directly addresses the research question"""
+    )
 
 
 class CrossDocumentJudgment(BaseModel):
@@ -671,6 +679,14 @@ class CrossDocumentJudgment(BaseModel):
         ge=0.0,
         le=1.0,
         description="Probability that this accept/reject decision is correct (0.0-1.0)",
+    )
+    topic_relevance: Literal[1, 2, 3, 4, 5] = Field(
+        description="""How central is this pair to the research topic?
+        1: Tangential - incidental co-occurrence only
+        2: Peripheral - broadly related but not specific to the topic
+        3: Related - connected via known mechanisms or associations
+        4: Directly relevant - involves core aspects of the topic
+        5: Central - directly addresses the research question"""
     )
 
 
@@ -715,6 +731,7 @@ class PairAssessment(BaseModel):
     relationship: str
     quotes: list[ResourceQuote]
     evidence: EvidenceQuality
+    topic_relevance: Literal[1, 2, 3, 4, 5]
     reasoning: str
     source: Literal["direct", "sweep"] = "direct"
 
@@ -762,6 +779,9 @@ class PairJudgment(BaseModel):
     accepted: bool = Field(description="Whether this pair is accepted")
     evidence: EvidenceQuality = Field(
         description="Synthesized evidence quality for final judgment"
+    )
+    topic_relevance: Literal[1, 2, 3, 4, 5] = Field(
+        description="How central this pair is to the research topic (1-5)"
     )
     decision_confidence: float = Field(
         ge=0.0,

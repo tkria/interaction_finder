@@ -303,6 +303,7 @@ class TestPairJudgment:
     def test_valid_judgment_accepted(self):
         """Test creating valid accepted judgment."""
         judgment = PairJudgment(
+            topic_relevance=3,
             entity1=SimpleEntity(name="BRCA1", kind="gene", aliases=["BRCA1"]),
             entity2=SimpleEntity(
                 name="breast cancer", kind="disease", aliases=["breast cancer"]
@@ -322,6 +323,7 @@ class TestPairJudgment:
     def test_valid_judgment_rejected(self):
         """Test creating valid rejected judgment."""
         judgment = PairJudgment(
+            topic_relevance=3,
             entity1=SimpleEntity(name="BRCA1", kind="gene", aliases=["BRCA1"]),
             entity2=SimpleEntity(
                 name="breast cancer", kind="disease", aliases=["breast cancer"]
@@ -359,6 +361,7 @@ class TestPairJudgment:
         from interaction_finder.extraction.models import EntityRef
 
         supporting = PairAssessment(
+            topic_relevance=3,
             resource_id=resource.id,
             entity1=EntityRef(canonical=entity1.name, mentions=[entity1]),
             entity2=EntityRef(canonical=entity2.name, mentions=[entity2]),
@@ -368,6 +371,7 @@ class TestPairJudgment:
             reasoning="support",
         )
         refuting = PairAssessment(
+            topic_relevance=3,
             resource_id=resource.id,
             entity1=EntityRef(canonical=entity1.name, mentions=[entity1]),
             entity2=EntityRef(canonical=entity2.name, mentions=[entity2]),
@@ -379,6 +383,7 @@ class TestPairJudgment:
 
         spread = PairSpread(positive=[supporting], negative=[refuting])
         judgment = PairJudgment(
+            topic_relevance=3,
             entity1=SimpleEntity(name="BRCA1", kind="gene", aliases=["BRCA1"]),
             entity2=SimpleEntity(name="Cancer", kind="disease", aliases=["Cancer"]),
             relationship="increases_risk_of",
@@ -431,6 +436,7 @@ class TestPairSpread:
         )
 
         assessment = PairAssessment(
+            topic_relevance=3,
             resource_id=resource.id,
             entity1=EntityRef(canonical=entity1.name, mentions=[entity1]),
             entity2=EntityRef(canonical=entity2.name, mentions=[entity2]),
@@ -471,6 +477,7 @@ class TestPairSpread:
         )
 
         assessment1 = PairAssessment(
+            topic_relevance=3,
             resource_id=resource.id,
             entity1=EntityRef(canonical=entity1.name, mentions=[entity1]),
             entity2=EntityRef(canonical=entity2.name, mentions=[entity2]),
@@ -481,6 +488,7 @@ class TestPairSpread:
         )
 
         assessment2 = PairAssessment(
+            topic_relevance=3,
             resource_id=resource.id,
             entity1=EntityRef(canonical=entity1.name, mentions=[entity1]),
             entity2=EntityRef(canonical=entity2.name, mentions=[entity2]),
@@ -534,6 +542,7 @@ class TestPairSpread:
 
         assessments = {
             "supporting": PairAssessment(
+                topic_relevance=3,
                 resource_id=resource.id,
                 entity1=entity1_ref,
                 entity2=entity2_ref,
@@ -543,6 +552,7 @@ class TestPairSpread:
                 reasoning="supporting",
             ),
             "refuting": PairAssessment(
+                topic_relevance=3,
                 resource_id=resource.id,
                 entity1=entity1_ref,
                 entity2=entity2_ref,
@@ -552,6 +562,7 @@ class TestPairSpread:
                 reasoning="refuting",
             ),
             "neutral": PairAssessment(
+                topic_relevance=3,
                 resource_id=resource.id,
                 entity1=entity1_ref,
                 entity2=entity2_ref,
@@ -561,6 +572,7 @@ class TestPairSpread:
                 reasoning="neutral",
             ),
             "irrelevant": PairAssessment(
+                topic_relevance=3,
                 resource_id=resource.id,
                 entity1=entity1_ref,
                 entity2=entity2_ref,
@@ -619,6 +631,7 @@ class TestPairJudgmentSerialization:
         )
 
         assessment = PairAssessment(
+            topic_relevance=3,
             resource_id=resource.id,
             entity1=EntityRef(canonical=entity1.name, mentions=[entity1]),
             entity2=EntityRef(canonical=entity2.name, mentions=[entity2]),
@@ -631,6 +644,7 @@ class TestPairJudgmentSerialization:
         spread = PairSpread(positive=[assessment])
 
         judgment = PairJudgment(
+            topic_relevance=3,
             entity1=SimpleEntity(name="BRCA1", kind="gene", aliases=["BRCA1"]),
             entity2=SimpleEntity(name="cancer", kind="disease", aliases=["cancer"]),
             relationship="increases_risk_of",
@@ -679,6 +693,7 @@ class TestPairJudgmentSerialization:
         entity2_ref = EntityRef(canonical=entity2.name, mentions=[entity2])
 
         supporting_assessment = PairAssessment(
+            topic_relevance=3,
             resource_id=resource.id,
             entity1=entity1_ref,
             entity2=entity2_ref,
@@ -689,6 +704,7 @@ class TestPairJudgmentSerialization:
         )
 
         refuting_assessment = PairAssessment(
+            topic_relevance=3,
             resource_id=resource.id,
             entity1=entity1_ref,
             entity2=entity2_ref,
@@ -702,6 +718,7 @@ class TestPairJudgmentSerialization:
             positive=[supporting_assessment], negative=[refuting_assessment]
         )
         judgment = PairJudgment(
+            topic_relevance=3,
             entity1=SimpleEntity(name="BRCA1", kind="gene", aliases=["BRCA1"]),
             entity2=SimpleEntity(name="cancer", kind="disease", aliases=["cancer"]),
             relationship="increases_risk_of",
@@ -765,6 +782,7 @@ class TestExtractionResultRehydration:
         )
 
         assessment = PairAssessment(
+            topic_relevance=3,
             resource_id=resource.id,
             entity1=EntityRef(canonical=entity1.name, mentions=[entity1]),
             entity2=EntityRef(canonical=entity2.name, mentions=[entity2]),
@@ -775,6 +793,7 @@ class TestExtractionResultRehydration:
         )
 
         judgment = PairJudgment(
+            topic_relevance=3,
             entity1=SimpleEntity(name="BRCA1", kind="gene", aliases=["BRCA1"]),
             entity2=SimpleEntity(name="Cancer", kind="disease", aliases=["Cancer"]),
             relationship="increases_risk_of",
@@ -882,6 +901,7 @@ class TestExtractionResultRehydration:
         )
 
         assessment = PairAssessment(
+            topic_relevance=3,
             resource_id=resource.id,
             entity1=EntityRef(canonical=entity1.name, mentions=[entity1]),
             entity2=EntityRef(canonical=entity2.name, mentions=[entity2]),
@@ -892,6 +912,7 @@ class TestExtractionResultRehydration:
         )
 
         judgement = PairJudgment(
+            topic_relevance=3,
             entity1=SimpleEntity(name="BRCA1", kind="gene", aliases=["BRCA1"]),
             entity2=SimpleEntity(name="Cancer", kind="disease", aliases=["Cancer"]),
             relationship="increases_risk_of",

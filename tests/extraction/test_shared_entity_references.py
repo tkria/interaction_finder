@@ -72,6 +72,7 @@ class TestPairAssessmentReferenceUpdates:
         }
         # Create assessment referencing the child entity
         assessment = PairAssessment(
+            topic_relevance=3,
             resource_id=resource,
             entity1=EntityRef(canonical="brca", mentions=[brca_child]),
             entity2=EntityRef(canonical="BRCA", mentions=[brca_parent]),
@@ -126,6 +127,7 @@ class TestPairAssessmentReferenceUpdates:
         }
         # Assessment: TP53 (gene) associated with cancer (disease)
         assessment = PairAssessment(
+            topic_relevance=3,
             resource_id=resource,
             entity1=EntityRef(canonical="TP53", mentions=[gene_entity]),
             entity2=EntityRef(canonical="cancer", mentions=[disease_child]),

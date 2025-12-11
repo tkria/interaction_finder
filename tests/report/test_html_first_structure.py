@@ -92,6 +92,7 @@ def create_test_checkpoint(
             )
 
             assessment = PairAssessment(
+                topic_relevance=3,
                 resource_id=resource.id,
                 entity1=entity1_ref,
                 entity2=entity2_ref,
@@ -105,6 +106,7 @@ def create_test_checkpoint(
         # Create judgment
         spread = PairSpread(positive=list(assessments))
         judgment = PairJudgment(
+            topic_relevance=3,
             entity1=SimpleEntity(
                 name=f"Entity{pair_idx}_A",
                 kind="gene",
