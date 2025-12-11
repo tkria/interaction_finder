@@ -1210,11 +1210,12 @@ class TestFindBestEntityMatch:
         assert find_best_entity_match("BRCA1", ["BRCA2"]) is None
         assert find_best_entity_match("HER2", ["HER3"]) is None
 
-    def test_allows_longer_number_differences(self):
-        """Test that longer numbers (3+ digits) can still fuzzy match."""
-        # Study numbers, years, etc. with 3+ digits aren't gene families
-        # These go through normal fuzzy matching rules (90% similar, passes)
-        assert find_best_entity_match("Study 2024", ["Study 2025"]) == "Study 2025"
+    def test_rejects_longer_number_differences(self):
+        """Test that longer numbers (3+ digits) are also rejected."""
+        # microRNA-137 vs microRNA-138 are distinct entities
+        assert find_best_entity_match("Study 2024", ["Study 2025"]) is None
+        assert find_best_entity_match("microRNA-137", ["microRNA-138"]) is None
+        assert find_best_entity_match("chromosome 21", ["chromosome 22"]) is None
 
     def test_accepts_high_similarity_typo(self):
         """Test typos in longer strings are accepted."""

@@ -163,7 +163,7 @@ def entity_names_match(a: str, b: str) -> tuple[bool, int]:
     # Check if within fuzzy threshold
     if dist <= max_dist and similarity >= 0.7:
         # Additional safety: reject number-only differences
-        if _only_short_number_difference(a, b):
+        if _only_number_difference(a, b):
             return (False, dist)
         return (True, dist)
 
@@ -411,8 +411,8 @@ def find_best_entity_match(
     max_distance = 1 + shorter_len // 10
     if best_dist > max_distance:
         return None
-    # Reject matches where only short (1-2 digit) numbers differ (e.g. SMAD1/SMAD2)
-    if _only_short_number_difference(query, best_candidate):
+    # Reject matches where only numbers differ (e.g. SMAD1/SMAD2, microRNA-137/microRNA-138)
+    if _only_number_difference(query, best_candidate):
         return None
     # Require specificity: gap to second-best scales inversely with match quality
     # Gap needed = 2 * (1 - best_similarity), so strong matches need small gaps
@@ -422,21 +422,20 @@ def find_best_entity_match(
     return best_candidate
 
 
-# Regex for 1-2 digit numbers not adjacent to other digits
-_SHORT_NUMBER_RE = re.compile(r"(?<!\d)\d{1,2}(?!\d)")
+_NUMBER_RE = re.compile(r"\d+")
 
 
-def _only_short_number_difference(a: str, b: str) -> bool:
-    """Check if strings differ only in short (1-2 digit) numbers.
+def _only_number_difference(a: str, b: str) -> bool:
+    """Check if strings differ only in numeric portions.
 
     Used to reject fuzzy matches between entities like SMAD1/SMAD2, IL-6/IL-8,
-    p53/p63 which are distinct entities differing only by number, not typos.
+    microRNA-137/microRNA-138 which are distinct entities differing only by number.
     """
     a_lower, b_lower = a.lower(), b.lower()
     if a_lower == b_lower:
         return False
-    a_masked = _SHORT_NUMBER_RE.sub("#", a_lower)
-    b_masked = _SHORT_NUMBER_RE.sub("#", b_lower)
+    a_masked = _NUMBER_RE.sub("#", a_lower)
+    b_masked = _NUMBER_RE.sub("#", b_lower)
     return a_masked == b_masked and a_masked != a_lower
 
 
