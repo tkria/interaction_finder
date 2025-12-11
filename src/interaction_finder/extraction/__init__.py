@@ -40,7 +40,6 @@ Example:
     ...     print(f"{judgment.entity1.name} {judgment.relationship} {judgment.entity2.name}")
 """
 
-from interaction_finder.extraction.graph import graph
 from interaction_finder.extraction.models import (
     ExtractionMetadata,
     PairAssessment,
@@ -53,5 +52,4 @@ __all__ = [
     "PairJudgment",
     "PairAssessment",
     "ExtractionMetadata",
-    "graph",
 ]

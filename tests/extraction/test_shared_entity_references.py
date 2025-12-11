@@ -1,244 +1,268 @@
-"""Test that EntityMention shared references work correctly during consolidation.
+"""Tests for shared EntityRef references during entity consolidation.
 
-This addresses Issue 5: EntityMention objects are shared between
-validated_entities_by_resource and pair_assessments_by_resource.
-When entities are renamed/merged, both structures should reflect the changes.
-
-This is intentional mutation-based architecture for efficiency.
+This verifies that:
+1. PairAssessments see entity renames after consolidation
+2. Entity data (mentions, aliases) is properly aggregated after merges
+3. The mutation contract for EntityMention objects is maintained
 """
 
-import asyncio
 import pytest
-from pydantic_graph import GraphRunContext
 
-from interaction_finder.extraction.nodes import ConsolidateEntitiesNode
 from interaction_finder.extraction.models import (
     EntityMention,
     EntityRef,
+    EvidenceQuality,
     PairAssessment,
 )
+from interaction_finder.extraction.stages.consolidate_entities import (
+    _apply_merge_rules_globally,
+    _update_pair_entity_references,
+)
 from interaction_finder.extraction.state import State
-from interaction_finder.resources import ResourceId, ResourcePool
-from interaction_finder.settings import IfetcherConfig
-from tests.extraction.conftest import make_evidence
+from interaction_finder.resources import ResourceId
 
 
-@pytest.fixture
-def mock_config():
-    """Create a mock config for testing."""
-    return IfetcherConfig()
+def build_permitted_pairs(kinds: list[str]) -> dict[str, set[str]]:
+    """Build permitted pairs dict for testing."""
+    return {kind: {kind} for kind in kinds}
 
 
-@pytest.fixture
-def mock_deps(mock_config):
-    """Create mock dependencies."""
-    import logging
-
-    deps = type(
-        "Deps",
-        (),
-        {
-            "config": mock_config,
-            "resource_pool": ResourcePool(),
-            "logger": logging.getLogger("test"),
-            "agent_semaphore": asyncio.Semaphore(1),
-            "progress": None,
-        },
-    )()
-    return deps
-
-
-def test_pair_assessments_see_entity_renames_via_shared_references(mock_deps):
-    """Test that PairAssessments automatically see entity renames.
-
-    Scenario:
-    - Create entities: BRCA (parent), brca (child)
-    - Create PairAssessment referencing the child entity object
-    - Merge child → parent (renames child entity)
-    - Verify: PairAssessment.entity1 now has the updated name
-
-    This works because PairAssessment holds references to the same EntityMention
-    objects that are in validated_entities_by_resource.
-    """
-    state = State(
-        topic="test",
-        target_entity_types=["gene"],
-        permitted_pairs={"gene": {"gene"}},
+def make_evidence(level: int = 5) -> EvidenceQuality:
+    """Create a default EvidenceQuality for testing."""
+    return EvidenceQuality(
+        directness="explicit",
+        source_type="primary",
+        specificity="mechanistic",
+        language="definitive",
+        overall=level,
     )
 
-    resource1 = ResourceId(url="http://doc1.com", id="doc1")
 
-    # Create entities
-    brca_entity = EntityMention(
-        kind="gene",
-        name="BRCA",
-        aliases=[],
-        quotes=[],
-        reasoning="Parent",
-    )
+class TestPairAssessmentReferenceUpdates:
+    """Test that PairAssessments are updated when entities are renamed/merged."""
 
-    brca_lower = EntityMention(
-        kind="gene",
-        name="brca",
-        aliases=[],
-        quotes=[],
-        reasoning="Child",
-    )
+    def test_rename_visible_in_assessments(self):
+        """After entity rename, PairAssessment.entity1.canonical is updated."""
+        state = State(
+            topic="test",
+            target_entity_types=["gene"],
+            permitted_pairs=build_permitted_pairs(["gene"]),
+        )
+        resource = ResourceId(url="https://doc1.com", counter=0)
+        # Create entities: BRCA (parent), brca (child)
+        brca_parent = EntityMention(
+            kind="gene",
+            name="BRCA",
+            aliases=[],
+            quotes=[],
+            reasoning="Parent",
+        )
+        brca_child = EntityMention(
+            kind="gene",
+            name="brca",
+            aliases=[],
+            quotes=[],
+            reasoning="Child",
+        )
+        state.validated_entities_by_resource = {
+            resource: {
+                "BRCA": EntityRef(canonical="BRCA", mentions=[brca_parent]),
+                "brca": EntityRef(canonical="brca", mentions=[brca_child]),
+            }
+        }
+        # Create assessment referencing the child entity
+        assessment = PairAssessment(
+            resource_id=resource,
+            entity1=EntityRef(canonical="brca", mentions=[brca_child]),
+            entity2=EntityRef(canonical="BRCA", mentions=[brca_parent]),
+            relationship="interacts_with",
+            quotes=[],
+            evidence=make_evidence(8),
+            reasoning="Test",
+        )
+        state.pair_assessments_by_resource = {resource: [assessment]}
+        # Merge child → parent
+        merge_rules = {("brca", "gene"): ("BRCA", "auto:merge")}
+        _apply_merge_rules_globally(merge_rules, state)
+        _update_pair_entity_references(merge_rules, state)
+        # Assessment should now reference BRCA for entity1
+        assert assessment.entity1.canonical == "BRCA"
 
-    state.validated_entities_by_resource[resource1] = {
-        "BRCA": EntityRef(canonical="BRCA", mentions=[brca_entity]),
-        "brca": EntityRef(canonical="brca", mentions=[brca_lower]),
-    }
-
-    # Create PairAssessment that references the child entity via EntityRef
-    assessment = PairAssessment(
-        resource_id=resource1,
-        entity1=EntityRef(canonical=brca_lower.name, mentions=[brca_lower]),
-        entity2=EntityRef(canonical=brca_entity.name, mentions=[brca_entity]),
-        relationship="interacts_with",
-        quotes=[],
-        evidence=make_evidence(8),
-        reasoning="Test",
-    )
-
-    state.pair_assessments_by_resource[resource1] = [assessment]
-
-    # Merge child → parent - value is (target, reasoning) tuple
-    merge_rules = {("brca", "gene"): ("BRCA", "test")}
-
-    node = ConsolidateEntitiesNode()
-    ctx = GraphRunContext(state=state, deps=mock_deps)
-
-    node._apply_merge_rules_globally(merge_rules, ctx)
-    node._update_pair_entity_references(merge_rules, ctx)
-
-    # Verify: canonical updated, mentions preserved
-    assert assessment.entity1.canonical == "BRCA"
-    assert "brca" in assessment.entity1.aliases()
-
-
-def test_pair_assessments_see_entity_merges_via_shared_references(mock_deps):
-    """Test that PairAssessments see merged entity data within same document.
-
-    Scenario:
-    - Doc1: BRCA (parent) with quote1, brca (child) with quote2
-    - Create assessment in doc1 referencing parent
-    - Merge child → parent (combines quotes)
-    - Verify: Assessment.entity1 has both quotes
-
-    This demonstrates that when entities in the SAME document are merged,
-    the parent entity accumulates quotes from children, and any assessments
-    referencing the parent see the updated data.
-
-    Note: Cross-document merges work differently (rename without merge).
-    """
-    state = State(
-        topic="test",
-        target_entity_types=["gene"],
-        permitted_pairs={"gene": {"gene"}},
-    )
-
-    resource1 = ResourceId(url="http://doc1.com", id="doc1")
-
-    # Same doc: Parent and child entity
-    # Use model_construct to bypass validation (test doesn't need real ResourceQuote objects)
-    brca_parent = EntityMention.model_construct(
-        kind="gene",
-        name="BRCA",
-        aliases=[],
-        quotes=["Quote from parent"],
-        reasoning="Parent",
-    )
-
-    brca_child = EntityMention.model_construct(
-        kind="gene",
-        name="brca",
-        aliases=[],
-        quotes=["Quote from child"],
-        reasoning="Child",
-    )
-
-    state.validated_entities_by_resource[resource1] = {
-        "BRCA": EntityRef(canonical="BRCA", mentions=[brca_parent]),
-        "brca": EntityRef(canonical="brca", mentions=[brca_child]),
-    }
-
-    # Create assessment referencing parent via EntityRef
-    assessment = PairAssessment(
-        resource_id=resource1,
-        entity1=EntityRef(canonical=brca_parent.name, mentions=[brca_parent]),
-        entity2=EntityRef(canonical=brca_parent.name, mentions=[brca_parent]),
-        relationship="self_reference",
-        quotes=[],
-        evidence=make_evidence(8),
-        reasoning="Test",
-    )
-
-    state.pair_assessments_by_resource[resource1] = [assessment]
-
-    # Merge child → parent within same document - value is (target, reasoning) tuple
-    merge_rules = {("brca", "gene"): ("BRCA", "test")}
-
-    node = ConsolidateEntitiesNode()
-    ctx = GraphRunContext(state=state, deps=mock_deps)
-
-    node._apply_merge_rules_globally(merge_rules, ctx)
-    node._update_pair_entity_references(merge_rules, ctx)
-
-    # Verify: Parent entity now has quotes from both entities
-    assert "Quote from parent" in brca_parent.quotes
-    assert "Quote from child" in brca_child.quotes
-
-    # Assessment sees combined mentions via EntityRef aliases/quotes aggregation
-    assert "brca" in assessment.entity1.aliases()
-    assert len(assessment.entity1.quotes()) == 2
-
-    # Child should be removed from entities dict (only canonical remains)
-    assert "brca" not in state.validated_entities_by_resource[resource1]
-    assert "BRCA" in state.validated_entities_by_resource[resource1]
+    def test_entity2_update_independent(self):
+        """Entity2 can be updated independently of entity1."""
+        state = State(
+            topic="test",
+            target_entity_types=["gene", "disease"],
+            permitted_pairs=build_permitted_pairs(["gene", "disease"]),
+        )
+        resource = ResourceId(url="https://doc1.com", counter=0)
+        gene_entity = EntityMention(
+            kind="gene",
+            name="TP53",
+            aliases=[],
+            quotes=[],
+            reasoning="gene",
+        )
+        disease_child = EntityMention(
+            kind="disease",
+            name="cancer",
+            aliases=[],
+            quotes=[],
+            reasoning="disease child",
+        )
+        disease_parent = EntityMention(
+            kind="disease",
+            name="Cancer",
+            aliases=[],
+            quotes=[],
+            reasoning="disease parent",
+        )
+        state.validated_entities_by_resource = {
+            resource: {
+                "TP53": EntityRef(canonical="TP53", mentions=[gene_entity]),
+                "cancer": EntityRef(canonical="cancer", mentions=[disease_child]),
+                "Cancer": EntityRef(canonical="Cancer", mentions=[disease_parent]),
+            }
+        }
+        # Assessment: TP53 (gene) associated with cancer (disease)
+        assessment = PairAssessment(
+            resource_id=resource,
+            entity1=EntityRef(canonical="TP53", mentions=[gene_entity]),
+            entity2=EntityRef(canonical="cancer", mentions=[disease_child]),
+            relationship="associated_with",
+            quotes=[],
+            evidence=make_evidence(7),
+            reasoning="Test",
+        )
+        state.pair_assessments_by_resource = {resource: [assessment]}
+        # Only merge the disease entity
+        merge_rules = {("cancer", "disease"): ("Cancer", "auto:merge")}
+        _apply_merge_rules_globally(merge_rules, state)
+        _update_pair_entity_references(merge_rules, state)
+        # Entity1 unchanged (gene)
+        assert assessment.entity1.canonical == "TP53"
+        # Entity2 updated (disease)
+        assert assessment.entity2.canonical == "Cancer"
 
 
-def test_entity_mutation_contract_documented(mock_deps):
-    """Document the mutation contract: EntityMention objects are mutable.
+class TestPairAssessmentMergeUpdates:
+    """Test that merges properly aggregate entity data."""
 
-    This test serves as documentation of the intended behavior:
-    1. EntityMention objects are shared between dicts
-    2. Mutations to entity.name, entity.quotes, entity.aliases are visible everywhere
-    3. Dict keys must be updated separately when entity.name changes
-    4. This is intentional for efficiency and simplicity
+    def test_same_doc_merge_combines_mentions(self):
+        """When entities in same document merge, mentions are combined."""
+        state = State(
+            topic="test",
+            target_entity_types=["gene"],
+            permitted_pairs=build_permitted_pairs(["gene"]),
+        )
+        resource = ResourceId(url="https://doc1.com", counter=0)
+        # Parent and child have different mentions
+        parent_mention = EntityMention(
+            kind="gene",
+            name="BRCA",
+            aliases=["Breast Cancer Gene"],
+            quotes=[],
+            reasoning="Parent mention",
+        )
+        child_mention = EntityMention(
+            kind="gene",
+            name="brca",
+            aliases=["brca1"],
+            quotes=[],
+            reasoning="Child mention",
+        )
+        state.validated_entities_by_resource = {
+            resource: {
+                "BRCA": EntityRef(canonical="BRCA", mentions=[parent_mention]),
+                "brca": EntityRef(canonical="brca", mentions=[child_mention]),
+            }
+        }
+        # Merge child → parent
+        merge_rules = {("brca", "gene"): ("BRCA", "auto:merge")}
+        _apply_merge_rules_globally(merge_rules, state)
+        # After merge, BRCA should have both mentions
+        merged_entity = state.validated_entities_by_resource[resource]["BRCA"]
+        assert len(merged_entity.mentions) == 2
+        # Child entity should be removed
+        assert "brca" not in state.validated_entities_by_resource[resource]
 
-    If this test fails, the mutation contract has changed.
-    """
-    # Create an entity
-    entity = EntityMention.model_construct(
-        kind="gene",
-        name="BRCA1",
-        aliases=["Breast Cancer 1"],
-        quotes=["Original quote"],
-        reasoning="Test",
-    )
+    def test_cross_doc_entities_merged_separately(self):
+        """Entities in different documents are merged to same canonical."""
+        state = State(
+            topic="test",
+            target_entity_types=["gene"],
+            permitted_pairs=build_permitted_pairs(["gene"]),
+        )
+        resource1 = ResourceId(url="https://doc1.com", counter=0)
+        resource2 = ResourceId(url="https://doc2.com", counter=1)
+        # Doc1 has BRCA (parent)
+        parent_mention = EntityMention(
+            kind="gene",
+            name="BRCA",
+            aliases=[],
+            quotes=[],
+            reasoning="Doc1",
+        )
+        # Doc2 has brca (child variant)
+        child_mention = EntityMention(
+            kind="gene",
+            name="brca",
+            aliases=[],
+            quotes=[],
+            reasoning="Doc2",
+        )
+        state.validated_entities_by_resource = {
+            resource1: {"BRCA": EntityRef(canonical="BRCA", mentions=[parent_mention])},
+            resource2: {"brca": EntityRef(canonical="brca", mentions=[child_mention])},
+        }
+        # Merge rule applies to both docs
+        merge_rules = {("brca", "gene"): ("BRCA", "auto:merge")}
+        _apply_merge_rules_globally(merge_rules, state)
+        # Doc1 still has BRCA
+        assert "BRCA" in state.validated_entities_by_resource[resource1]
+        # Doc2 now has BRCA (renamed from brca)
+        assert "BRCA" in state.validated_entities_by_resource[resource2]
+        assert "brca" not in state.validated_entities_by_resource[resource2]
 
-    # Store in two dicts (simulating validated_entities and pair assessment)
-    dict1 = {"BRCA1": entity}
-    dict2 = {"ref": entity}
 
-    # Mutate the entity
-    entity.name = "BRCA1-modified"
-    entity.aliases.append("New alias")
-    entity.quotes.append("New quote")
+class TestEntityMutationContract:
+    """Document the mutation contract: EntityMention objects can be shared."""
 
-    # Both dicts see the changes (same object reference)
-    assert dict1["BRCA1"].name == "BRCA1-modified"
-    assert dict2["ref"].name == "BRCA1-modified"
-    assert "New alias" in dict1["BRCA1"].aliases
-    assert "New quote" in dict2["ref"].quotes
+    def test_shared_object_mutation_visible(self):
+        """Mutations to shared EntityMention objects are visible everywhere."""
+        entity = EntityMention(
+            kind="gene",
+            name="BRCA1",
+            aliases=["Breast Cancer 1"],
+            quotes=[],
+            reasoning="Test",
+        )
+        # Store same entity in two references
+        ref1 = EntityRef(canonical="BRCA1", mentions=[entity])
+        ref2 = EntityRef(canonical="BRCA1", mentions=[entity])
+        # Mutate via one reference
+        ref1.mentions[0].aliases.append("New alias")
+        # Both see the change
+        assert "New alias" in ref1.mentions[0].aliases
+        assert "New alias" in ref2.mentions[0].aliases
 
-    # HOWEVER: Dict keys are NOT automatically updated
-    # The key is still "BRCA1" even though entity.name changed
-    assert "BRCA1" in dict1
-    assert "BRCA1-modified" not in dict1
-
-    # To update the key, must explicitly move the entry
-    dict1["BRCA1-modified"] = dict1.pop("BRCA1")
-    assert "BRCA1-modified" in dict1
-    assert "BRCA1" not in dict1
+    def test_dict_key_update_required(self):
+        """Dict keys must be explicitly updated when canonical changes."""
+        entity = EntityMention(
+            kind="gene",
+            name="BRCA1",
+            aliases=[],
+            quotes=[],
+            reasoning="Test",
+        )
+        ref = EntityRef(canonical="BRCA1", mentions=[entity])
+        entities = {"BRCA1": ref}
+        # Update canonical on the EntityRef
+        ref.canonical = "BRCA-renamed"
+        # Dict key is NOT automatically updated
+        assert "BRCA1" in entities
+        assert "BRCA-renamed" not in entities
+        # Must explicitly move the entry
+        entities["BRCA-renamed"] = entities.pop("BRCA1")
+        assert "BRCA-renamed" in entities
+        assert "BRCA1" not in entities

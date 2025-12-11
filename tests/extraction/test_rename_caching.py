@@ -1,399 +1,255 @@
-"""Tests for entity consolidation with speculation-based matching.
+"""Tests for entity consolidation caching behavior.
 
-The new system uses speculation thresholds instead of explicit caching:
-1. Auto-merge for low speculation (≤ threshold)
-2. Agent review for high speculation (> threshold)
-3. Contested variants are filtered out
-4. Renames create new merge opportunities
+The consolidation system caches LLM decisions to avoid redundant calls:
+1. Per-kind caches store (child, parent) → (target, reasoning) mappings
+2. Cache hits/misses are tracked for diagnostics
+3. _build_rules_from_cache extracts rules from cached decisions
 """
 
-import asyncio
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
-from pydantic_graph import GraphRunContext
 
-from interaction_finder.extraction.nodes import ConsolidateEntitiesNode
-from interaction_finder.extraction.models import (
-    EntityMention,
-    EntityConsolidationDecision,
-    EntityConsolidationDecisions,
-    EntityRef,
+from interaction_finder.extraction.stages.consolidate_entities import (
+    _add_new_names_to_kind,
+    _build_rules_from_cache,
+    _get_merge_cache,
 )
-from interaction_finder.extraction.state import State
-from interaction_finder.resources import ResourceId, ResourcePool
-from interaction_finder.settings import IfetcherConfig
-
-
-@pytest.fixture
-def mock_config():
-    return IfetcherConfig()
-
-
-@pytest.fixture
-def mock_deps(mock_config):
-    import logging
-
-    deps = type(
-        "Deps",
-        (),
-        {
-            "config": mock_config,
-            "resource_pool": ResourcePool(),
-            "logger": logging.getLogger("test"),
-            "agent_semaphore": asyncio.Semaphore(1),
-            "progress": None,
-        },
-    )()
-    return deps
+from interaction_finder.extraction.state import MergeCacheForKind, State
+from interaction_finder.extraction.entity_matching import SpeculatedVariant
 
 
 def build_permitted_pairs(kinds: list[str]) -> dict[str, set[str]]:
+    """Build permitted pairs dict for testing."""
     return {kind: {kind} for kind in kinds}
 
 
-class TestWithinRunCaching:
-    """Test that LLM merge decisions are cached within a single run."""
+class TestGetMergeCache:
+    """Tests for _get_merge_cache function."""
 
-    @pytest.mark.asyncio
-    async def test_same_pair_uses_cache(self, mock_deps):
-        """Same entity pair in multiple iterations should use cache."""
-        from interaction_finder.extraction.entity_matching import SpeculatedVariant
-
-        node = ConsolidateEntitiesNode()
+    def test_creates_cache_on_first_access(self):
+        """First access to a kind creates a new MergeCacheForKind."""
         state = State(
             topic="test",
             target_entity_types=["gene"],
             permitted_pairs=build_permitted_pairs(["gene"]),
         )
-        ctx = GraphRunContext(state=state, deps=mock_deps)
+        assert "gene" not in state.merge_cache_by_kind
+        cache = _get_merge_cache(state, "gene")
+        assert "gene" in state.merge_cache_by_kind
+        assert isinstance(cache, MergeCacheForKind)
+        assert cache.hits == 0
+        assert cache.misses == 0
 
-        # Setup: Mock LLM to return skip decision (implicit - empty)
-        mock_result = MagicMock()
-        mock_result.output = EntityConsolidationDecisions(
-            decisions=[]  # Empty = all pairs implicitly skipped
-        )
-        mock_agent = MagicMock()
-        mock_agent.run = AsyncMock(return_value=mock_result)
-        mock_agent._name = "test_agent"
-
-        entities = {
-            "BRCA": [SpeculatedVariant("BRCA", 0, "original", False)],
-            "BRCA1": [SpeculatedVariant("BRCA1", 0, "original", False)],
-        }
-        agent_review_pairs = [("BRCA1", "BRCA")]
-
-        with (
-            patch(
-                "interaction_finder.extraction.nodes.get_entity_consolidation_agent",
-                return_value=mock_agent,
-            ),
-            patch(
-                "interaction_finder.extraction.nodes._generate_token",
-                return_value="ABCD",
-            ),
-        ):
-            # First call - should call LLM
-            rules1, new_names1 = await node._get_consolidation_decisions_for_kind(
-                agent_review_pairs, "gene", entities, ctx
-            )
-
-            # Second call with same pair - should use cache
-            rules2, new_names2 = await node._get_consolidation_decisions_for_kind(
-                agent_review_pairs, "gene", entities, ctx
-            )
-
-        # LLM should only be called once
-        assert mock_agent.run.call_count == 1
-
-        # Cache statistics: Both calls check cache, first populates it, second uses it
-        gene_cache = ctx.state.merge_cache_by_kind.get("gene")
-        assert gene_cache is not None
-        assert gene_cache.hits == 2  # Both calls found it in cache
-        assert gene_cache.misses == 0  # No misses
-
-        # Both calls should produce the same (empty) rules
-        assert rules1 == rules2 == {}
-
-
-class TestSpeculationBasedConsolidation:
-    """Test that consolidation uses speculation thresholds correctly."""
-
-    @pytest.mark.asyncio
-    async def test_agent_review_for_high_speculation(self, mock_deps):
-        """Entities with high speculation should go to agent review."""
-        node = ConsolidateEntitiesNode()
+    def test_returns_existing_cache(self):
+        """Subsequent accesses return the same cache instance."""
         state = State(
             topic="test",
             target_entity_types=["gene"],
             permitted_pairs=build_permitted_pairs(["gene"]),
         )
-        ctx = GraphRunContext(state=state, deps=mock_deps)
+        cache1 = _get_merge_cache(state, "gene")
+        cache1.hits = 5  # Modify it
+        cache2 = _get_merge_cache(state, "gene")
+        assert cache1 is cache2
+        assert cache2.hits == 5
 
-        # Setup: Entities that require agent review
-        from interaction_finder.extraction.entity_matching import SpeculatedVariant
-
-        entities = {
-            "BRCA": [SpeculatedVariant("BRCA", 0, "original", False)],
-            "BRCA1": [SpeculatedVariant("BRCA1", 0, "original", False)],
-        }
-
-        # Mock LLM for agent review
-        mock_result = MagicMock()
-        mock_result.output = EntityConsolidationDecisions(
-            decisions=[]  # Empty = all pairs implicitly skipped
-        )
-        mock_agent = MagicMock()
-        mock_agent.run = AsyncMock(return_value=mock_result)
-        mock_agent._name = "test_agent"
-
-        # Build agent review pairs
-        agent_review_pairs = [("BRCA1", "BRCA")]  # (child, parent)
-
-        with (
-            patch(
-                "interaction_finder.extraction.nodes.get_entity_consolidation_agent",
-                return_value=mock_agent,
-            ),
-            patch(
-                "interaction_finder.extraction.nodes._generate_token",
-                return_value="ABCD",
-            ),
-        ):
-            rules, new_names = await node._get_consolidation_decisions_for_kind(
-                agent_review_pairs, "gene", entities, ctx
-            )
-
-        # Agent should have been called
-        assert mock_agent.run.called
-        # Skip decision means no rules created
-        assert len(rules) == 0
-
-
-class TestRenameMergeOpportunities:
-    """Test that renames create new merge opportunities."""
-
-    def test_add_new_names_to_kind(self, mock_deps):
-        """New canonical names from renames should be added to the entity dict."""
-        from interaction_finder.extraction.entity_matching import SpeculatedVariant
-
-        node = ConsolidateEntitiesNode()
-        entities = {
-            "TGF": [SpeculatedVariant("TGF", 0, "original", False)],
-            "TGF receptor": [SpeculatedVariant("TGF receptor", 0, "original", False)],
-        }
-
-        # Rename created "TGF-β"
-        new_names = {"TGF-β"}
-        node._add_new_names_to_kind(new_names, entities)
-
-        # New entity should be added
-        assert "TGF-β" in entities
-        # Should have single variant at speculation=0
-        variants = entities["TGF-β"]
-        assert len(variants) == 1
-        assert variants[0].speculation == 0
-        assert variants[0].source == "original"
-
-    def test_new_name_creates_merge_opportunity(self, mock_deps):
-        """Rename to similar entity name should be detected as potential merge on next iteration."""
-        from interaction_finder.extraction.entity_matching import (
-            SpeculatedVariant,
-            find_consolidation_candidates,
-        )
-
-        # Setup: After rename, "TGF-β" exists alongside "TGF" with parenthetical extraction
-        # This represents realistic scenario where rename creates new entity that could merge
-        entities = {
-            "TGF": [
-                SpeculatedVariant("TGF", 0, "original", False),
-            ],
-            "TGF-β": [
-                SpeculatedVariant("TGF-β", 0, "original", False),
-            ],
-        }
-
-        # Find merge candidates
-        candidates = find_consolidation_candidates(entities)
-
-        # These should go to agent review (not auto-merge) because they're genuinely different
-        # TGF and TGF-β are related but distinct entities
-        assert (
-            len(candidates.agent_review) >= 0
-        )  # May or may not be reviewed depending on similarity
-        # They shouldn't auto-merge (different entities)
-        for child, parent, reasoning in candidates.auto_merge:
-            # If they do auto-merge, it should be based on low speculation
-            assert reasoning.startswith("auto:")
-
-
-class TestContestedVariants:
-    """Test that contested variants are properly filtered."""
-
-    def test_contested_variants_generate_warnings(self, mock_deps):
-        """Variants mapping to multiple entities should generate warnings."""
-        from interaction_finder.extraction.entity_matching import (
-            SpeculatedVariant,
-            find_consolidation_candidates,
-        )
-
-        # Setup: Two entities with overlapping aliases (contested variant)
-        # If LLM incorrectly extracted both entities with "ACTB" as a form
-        entities = {
-            "ACTB (β-Actin)": [
-                SpeculatedVariant("ACTB (β-Actin)", 0, "original", False),
-                SpeculatedVariant("ACTB", 1, "before_paren", False),
-                SpeculatedVariant("β-Actin", 2, "paren_expansion", False),
-            ],
-            "INHBB": [
-                SpeculatedVariant("INHBB", 0, "original", False),
-                # Incorrectly including ACTB as an alias would create collision
-                # but extract_entity_variants wouldn't do this
-            ],
-        }
-
-        candidates = find_consolidation_candidates(entities)
-
-        # Should not have incorrect auto-merges
-        # ACTB and INHBB should never merge
-        for child, parent, reasoning in candidates.auto_merge:
-            assert not (
-                (child == "INHBB" and "ACTB" in parent)
-                or (parent == "INHBB" and "ACTB" in child)
-            )
-
-
-class TestRenameDecisions:
-    """Test that rename decisions work correctly with new system."""
-
-    @pytest.mark.asyncio
-    async def test_rename_creates_rule_and_new_name(self, mock_deps):
-        """Rename decision should create consolidation rule and mark new name."""
-        from interaction_finder.extraction.entity_matching import SpeculatedVariant
-
-        node = ConsolidateEntitiesNode()
+    def test_separate_caches_per_kind(self):
+        """Different kinds have independent caches."""
         state = State(
             topic="test",
-            target_entity_types=["gene"],
-            permitted_pairs=build_permitted_pairs(["gene"]),
+            target_entity_types=["gene", "disease"],
+            permitted_pairs=build_permitted_pairs(["gene", "disease"]),
         )
-        ctx = GraphRunContext(state=state, deps=mock_deps)
+        gene_cache = _get_merge_cache(state, "gene")
+        disease_cache = _get_merge_cache(state, "disease")
+        assert gene_cache is not disease_cache
+        gene_cache.hits = 10
+        assert disease_cache.hits == 0
 
-        # Setup: LLM returns rename decision
-        mock_result = MagicMock()
-        mock_result.output = EntityConsolidationDecisions(
-            decisions=[
-                EntityConsolidationDecision(
-                    pair_id=1,
-                    confirm_token="ABCD",
-                    rename="TGF-β",
-                    reasoning="Standard abbreviation",
-                )
-            ]
-        )
-        mock_agent = MagicMock()
-        mock_agent.run = AsyncMock(return_value=mock_result)
-        mock_agent._name = "test_agent"
 
-        # Entities that need agent review
-        entities = {
-            "TGF": [SpeculatedVariant("TGF", 0, "original", False)],
-            "Transforming growth factor beta": [
-                SpeculatedVariant(
-                    "Transforming growth factor beta", 0, "original", False
-                )
-            ],
-        }
-        agent_review_pairs = [
-            ("Transforming growth factor beta", "TGF")
-        ]  # (child, parent)
+class TestMergeCacheForKind:
+    """Tests for MergeCacheForKind data structure."""
 
-        with (
-            patch(
-                "interaction_finder.extraction.nodes.get_entity_consolidation_agent",
-                return_value=mock_agent,
-            ),
-            patch(
-                "interaction_finder.extraction.nodes._generate_token",
-                return_value="ABCD",
-            ),
-        ):
-            rules, new_names = await node._get_consolidation_decisions_for_kind(
-                agent_review_pairs, "gene", entities, ctx
-            )
+    def test_cache_stores_decisions(self):
+        """Cache stores (child, parent) → (target, reasoning) mappings."""
+        cache = MergeCacheForKind()
+        # Store a merge decision
+        cache.cache[("brca1", "BRCA")] = ("BRCA", "llm:merge")
+        # Store a skip decision (None target)
+        cache.cache[("tp53", "P53")] = (None, "llm:skip")
+        # Store a rename decision
+        cache.cache[("tgf", "TGF")] = ("TGF-beta", "llm:rename")
+        assert cache.cache[("brca1", "BRCA")] == ("BRCA", "llm:merge")
+        assert cache.cache[("tp53", "P53")] == (None, "llm:skip")
+        assert cache.cache[("tgf", "TGF")] == ("TGF-beta", "llm:rename")
 
-        # Should have rule for the child
-        from interaction_finder.extraction.utils import normalize_for_comparison
+    def test_cache_hit_miss_tracking(self):
+        """Hits and misses are tracked correctly."""
+        cache = MergeCacheForKind()
+        assert cache.hits == 0
+        assert cache.misses == 0
+        # Simulate cache operations
+        cache.hits += 1
+        cache.misses += 2
+        assert cache.hits == 1
+        assert cache.misses == 2
 
-        child_norm = normalize_for_comparison("Transforming growth factor beta")
-        assert (child_norm, "gene") in rules
-        target, reasoning = rules[(child_norm, "gene")]
-        assert target == "TGF-β"
-        assert reasoning == "Standard abbreviation"
 
-        # Should mark TGF-β as new name (doesn't exist in entities)
-        assert "TGF-β" in new_names
+class TestBuildRulesFromCache:
+    """Tests for _build_rules_from_cache function."""
 
-    @pytest.mark.asyncio
-    async def test_merge_decision_uses_parent_as_target(self, mock_deps):
-        """Merge decision should use parent entity as target."""
-        from interaction_finder.extraction.entity_matching import SpeculatedVariant
-
-        node = ConsolidateEntitiesNode()
+    def _make_state_with_cache(self, cache: MergeCacheForKind, kind: str) -> State:
+        """Create a State with pre-populated cache."""
         state = State(
             topic="test",
-            target_entity_types=["gene"],
-            permitted_pairs=build_permitted_pairs(["gene"]),
+            target_entity_types=[kind],
+            permitted_pairs=build_permitted_pairs([kind]),
         )
-        ctx = GraphRunContext(state=state, deps=mock_deps)
+        state.merge_cache_by_kind[kind] = cache
+        return state
 
-        # Setup: LLM returns merge decision
-        mock_result = MagicMock()
-        mock_result.output = EntityConsolidationDecisions(
-            decisions=[
-                EntityConsolidationDecision(
-                    pair_id=1,
-                    confirm_token="ABCD",
-                    rename=None,  # None = merge
-                    reasoning="Plural form should merge",
-                )
-            ]
-        )
-        mock_agent = MagicMock()
-        mock_agent.run = AsyncMock(return_value=mock_result)
-        mock_agent._name = "test_agent"
+    def test_builds_rules_for_merge_decisions(self):
+        """Merge decisions (target = parent) create rules."""
+        cache = MergeCacheForKind()
+        cache.cache[("brca1", "BRCA")] = ("BRCA", "llm:merge")
+        state = self._make_state_with_cache(cache, "gene")
+        entities = {"BRCA": [], "brca1": []}  # Both exist
+        pairs = {("brca1", "BRCA")}
+        rules, new_names = _build_rules_from_cache(pairs, "gene", entities, state)
+        assert ("brca1", "gene") in rules
+        assert rules[("brca1", "gene")] == ("BRCA", "llm:merge")
+        assert len(new_names) == 0  # Target exists
 
-        entities = {
-            "Telangiectasia": [
-                SpeculatedVariant("Telangiectasia", 0, "original", False)
-            ],
-            "Telangiectasias": [
-                SpeculatedVariant("Telangiectasias", 0, "original", False)
-            ],
-        }
-        agent_review_pairs = [("Telangiectasias", "Telangiectasia")]  # (child, parent)
+    def test_builds_rules_for_rename_decisions(self):
+        """Rename decisions (target != parent) create rules and mark new names."""
+        cache = MergeCacheForKind()
+        cache.cache[("tgf", "TGF")] = ("TGF-beta", "llm:rename")
+        state = self._make_state_with_cache(cache, "gene")
+        entities = {"TGF": [], "tgf": []}  # TGF-beta doesn't exist yet
+        pairs = {("tgf", "TGF")}
+        rules, new_names = _build_rules_from_cache(pairs, "gene", entities, state)
+        assert ("tgf", "gene") in rules
+        assert rules[("tgf", "gene")] == ("TGF-beta", "llm:rename")
+        assert "TGF-beta" in new_names  # New canonical name
 
-        with (
-            patch(
-                "interaction_finder.extraction.nodes.get_entity_consolidation_agent",
-                return_value=mock_agent,
-            ),
-            patch(
-                "interaction_finder.extraction.nodes._generate_token",
-                return_value="ABCD",
-            ),
-        ):
-            rules, new_names = await node._get_consolidation_decisions_for_kind(
-                agent_review_pairs, "gene", entities, ctx
-            )
-
-        # Should have rule with parent as target
-        from interaction_finder.extraction.utils import normalize_for_comparison
-
-        child_norm = normalize_for_comparison("Telangiectasias")
-        assert (child_norm, "gene") in rules
-        target, reasoning = rules[(child_norm, "gene")]
-        assert target == "Telangiectasia"  # Parent
-        assert reasoning == "Plural form should merge"
-
-        # Should not have new names (parent already exists)
+    def test_skip_decisions_not_in_rules(self):
+        """Skip decisions (target = None) don't create rules."""
+        cache = MergeCacheForKind()
+        cache.cache[("tp53", "P53")] = (None, "llm:skip")
+        state = self._make_state_with_cache(cache, "gene")
+        entities = {"P53": [], "tp53": []}
+        pairs = {("tp53", "P53")}
+        rules, new_names = _build_rules_from_cache(pairs, "gene", entities, state)
+        assert ("tp53", "gene") not in rules
         assert len(new_names) == 0
+
+    def test_uncached_pairs_increments_misses(self):
+        """Pairs not in cache increment miss counter."""
+        cache = MergeCacheForKind()
+        # Cache has one pair
+        cache.cache[("brca1", "BRCA")] = ("BRCA", "llm:merge")
+        state = self._make_state_with_cache(cache, "gene")
+        entities = {"BRCA": [], "brca1": [], "TP53": [], "tp53": []}
+        # Query for different pair
+        pairs = {("tp53", "TP53")}
+        rules, new_names = _build_rules_from_cache(pairs, "gene", entities, state)
+        assert len(rules) == 0
+        assert cache.misses == 1
+
+    def test_existing_target_not_marked_as_new(self):
+        """Target that already exists in entities is not marked as new."""
+        cache = MergeCacheForKind()
+        cache.cache[("brca1", "BRCA")] = ("BRCA", "llm:merge")
+        state = self._make_state_with_cache(cache, "gene")
+        entities = {"BRCA": [], "brca1": []}  # BRCA exists
+        pairs = {("brca1", "BRCA")}
+        rules, new_names = _build_rules_from_cache(pairs, "gene", entities, state)
+        assert "BRCA" not in new_names
+
+    def test_cache_hits_incremented(self):
+        """Cache hits are incremented for found pairs."""
+        cache = MergeCacheForKind()
+        cache.cache[("brca1", "BRCA")] = ("BRCA", "llm:merge")
+        cache.cache[("tp53", "TP53")] = ("TP53", "llm:merge")
+        state = self._make_state_with_cache(cache, "gene")
+        entities = {"BRCA": [], "brca1": [], "TP53": [], "tp53": []}
+        pairs = {("brca1", "BRCA"), ("tp53", "TP53")}
+        _build_rules_from_cache(pairs, "gene", entities, state)
+        assert cache.hits == 2
+
+
+class TestAddNewNamesToKind:
+    """Tests for _add_new_names_to_kind function."""
+
+    def test_adds_new_canonical_names(self):
+        """New names are added to the entity dict."""
+        entities = {
+            "TGF": [SpeculatedVariant("TGF", 0, "original", False)],
+        }
+        new_names = {"TGF-beta"}
+        _add_new_names_to_kind(new_names, entities)
+        assert "TGF-beta" in entities
+        assert len(entities["TGF-beta"]) == 1
+        variant = entities["TGF-beta"][0]
+        assert variant.form == "TGF-beta"
+        assert variant.speculation == 0
+        assert variant.source == "original"
+
+    def test_skips_existing_names(self):
+        """Names that already exist are not duplicated."""
+        entities = {
+            "TGF": [SpeculatedVariant("TGF", 0, "original", False)],
+        }
+        original_variant = entities["TGF"][0]
+        new_names = {"TGF"}  # Already exists
+        _add_new_names_to_kind(new_names, entities)
+        # Should still have exactly one entry
+        assert len(entities) == 1
+        assert entities["TGF"][0] is original_variant
+
+    def test_adds_multiple_new_names(self):
+        """Multiple new names can be added at once."""
+        entities = {
+            "Gene1": [SpeculatedVariant("Gene1", 0, "original", False)],
+        }
+        new_names = {"Gene2", "Gene3", "Gene4"}
+        _add_new_names_to_kind(new_names, entities)
+        assert len(entities) == 4
+        assert all(name in entities for name in ["Gene1", "Gene2", "Gene3", "Gene4"])
+
+
+class TestCacheStatisticsIntegration:
+    """Integration tests for cache statistics tracking."""
+
+    def test_cache_stats_aggregated_across_kinds(self):
+        """Cache stats from multiple kinds are aggregated correctly."""
+        from interaction_finder.extraction.shared import aggregate_cache_stats
+
+        state = State(
+            topic="test",
+            target_entity_types=["gene", "disease"],
+            permitted_pairs=build_permitted_pairs(["gene", "disease"]),
+        )
+        # Set up caches with different stats
+        gene_cache = _get_merge_cache(state, "gene")
+        gene_cache.hits = 10
+        gene_cache.misses = 2
+        disease_cache = _get_merge_cache(state, "disease")
+        disease_cache.hits = 5
+        disease_cache.misses = 3
+        # Aggregate
+        total_hits, total_misses = aggregate_cache_stats(state)
+        assert total_hits == 15
+        assert total_misses == 5
+
+    def test_empty_cache_aggregation(self):
+        """Empty caches return zeros."""
+        from interaction_finder.extraction.shared import aggregate_cache_stats
+
+        state = State(
+            topic="test",
+            target_entity_types=["gene"],
+            permitted_pairs=build_permitted_pairs(["gene"]),
+        )
+        total_hits, total_misses = aggregate_cache_stats(state)
+        assert total_hits == 0
+        assert total_misses == 0

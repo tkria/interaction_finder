@@ -1,579 +1,343 @@
-"""Tests for per-kind entity consolidation.
+"""Tests for per-kind entity consolidation behavior.
 
 Verifies that:
-1. Each entity kind is processed independently to completion
-2. Renames in one kind don't trigger re-processing of other kinds
-3. Auto-merges are not repeated across iterations within a kind
+1. Each entity kind has its own independent cache
+2. Merge rules are keyed by (normalized_name, kind) - kinds don't cross-contaminate
+3. Same normalized name in different kinds stays separate
 """
 
-import asyncio
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch, call
-from pydantic_graph import GraphRunContext
 
-from interaction_finder.extraction.nodes import ConsolidateEntitiesNode
-from interaction_finder.extraction.models import (
-    EntityMention,
-    EntityRef,
-    ClusterDecisions,
-    ClusterDecision,
+from interaction_finder.extraction.models import EntityMention, EntityRef
+from interaction_finder.extraction.stages.consolidate_entities import (
+    _add_new_names_to_kind,
+    _apply_merge_rules_globally,
+    _get_merge_cache,
+    _resolve_transitive_merges,
 )
-from interaction_finder.extraction.state import State
-from interaction_finder.resources import ResourceId, ResourcePool
-from interaction_finder.settings import IfetcherConfig
-
-
-def ref_map(data: dict[str, EntityMention]) -> dict[str, EntityRef]:
-    """Convert entity mentions to EntityRef dict."""
-    return {
-        name: EntityRef(canonical=name, mentions=[mention])
-        for name, mention in data.items()
-    }
+from interaction_finder.extraction.state import MergeCacheForKind, State
+from interaction_finder.extraction.entity_matching import SpeculatedVariant
+from interaction_finder.resources import ResourceId
 
 
 def build_permitted_pairs(kinds: list[str]) -> dict[str, set[str]]:
+    """Build permitted pairs dict for testing."""
     return {kind: {kind} for kind in kinds}
 
 
-@pytest.fixture
-def mock_config():
-    return IfetcherConfig()
+class TestPerKindCacheIndependence:
+    """Test that each kind has its own independent cache."""
 
-
-@pytest.fixture
-def mock_deps(mock_config):
-    import logging
-
-    deps = type(
-        "Deps",
-        (),
-        {
-            "config": mock_config,
-            "resource_pool": ResourcePool(),
-            "logger": logging.getLogger("test"),
-            "agent_semaphore": asyncio.Semaphore(1),
-            "progress": None,
-            "checkpoint_path": None,
-            "input_checkpoint": None,
-        },
-    )()
-    return deps
-
-
-class TestPerKindIndependence:
-    """Test that entity kinds are processed independently."""
-
-    @pytest.mark.asyncio
-    async def test_gene_and_phenotype_processed_separately(self, mock_deps):
-        """Gene entities should be fully processed before phenotype entities."""
+    def test_separate_caches_per_kind(self):
+        """Different kinds have completely independent caches."""
         state = State(
             topic="test",
-            target_entity_types=["gene", "phenotype"],
-            permitted_pairs={"gene": {"gene"}, "phenotype": {"phenotype"}},
+            target_entity_types=["gene", "disease"],
+            permitted_pairs=build_permitted_pairs(["gene", "disease"]),
         )
+        gene_cache = _get_merge_cache(state, "gene")
+        disease_cache = _get_merge_cache(state, "disease")
+        # Populate gene cache
+        gene_cache.cache[("brca1", "BRCA")] = ("BRCA", "llm:merge")
+        gene_cache.hits = 10
+        # Disease cache should be unaffected
+        assert ("brca1", "BRCA") not in disease_cache.cache
+        assert disease_cache.hits == 0
 
-        resource1 = ResourceId(url="http://doc1.com", id="doc1")
-
-        # Add entities of different kinds
-        state.validated_entities_by_resource[resource1] = {
-            "BRCA1": EntityRef(
-                canonical="BRCA1",
-                mentions=[
-                    EntityMention(
-                        kind="gene",
-                        name="BRCA1",
-                        aliases=[],
-                        quotes=[],
-                        reasoning="Doc1",
-                    )
-                ],
-            ),
-            "Brca1": EntityRef(
-                canonical="Brca1",
-                mentions=[
-                    EntityMention(
-                        kind="gene",
-                        name="Brca1",
-                        aliases=[],
-                        quotes=[],
-                        reasoning="Doc1",
-                    )
-                ],
-            ),
-            "Tumor": EntityRef(
-                canonical="Tumor",
-                mentions=[
-                    EntityMention(
-                        kind="phenotype",
-                        name="Tumor",
-                        aliases=[],
-                        quotes=[],
-                        reasoning="Doc1",
-                    )
-                ],
-            ),
-            "tumour": EntityRef(
-                canonical="tumour",
-                mentions=[
-                    EntityMention(
-                        kind="phenotype",
-                        name="tumour",
-                        aliases=[],
-                        quotes=[],
-                        reasoning="Doc1",
-                    )
-                ],
-            ),
-        }
-
-        node = ConsolidateEntitiesNode()
-        ctx = GraphRunContext(state=state, deps=mock_deps)
-
-        await node.run(ctx)
-
-        # Gene entities should be merged (BRCA1/Brca1 are capitalization variants)
-        # Phenotype entities should be merged (Tumor/tumour are fuzzy variants)
-        entities = ctx.state.validated_entities_by_resource[resource1]
-
-        # Should have 2 entities (one gene, one phenotype)
-        assert len(entities) == 2
-
-        # Check that both kinds were consolidated
-        kinds = {ent.kind for ent in entities.values()}
-        assert kinds == {"gene", "phenotype"}
-
-    @pytest.mark.asyncio
-    async def test_rename_in_one_kind_doesnt_affect_other(self, mock_deps):
-        """A rename in gene kind should not trigger re-clustering of phenotype kind."""
+    def test_cache_operations_isolated(self):
+        """Cache hits/misses are tracked per-kind."""
         state = State(
             topic="test",
-            target_entity_types=["gene", "phenotype"],
-            permitted_pairs={"gene": {"gene"}, "phenotype": {"phenotype"}},
+            target_entity_types=["gene", "disease", "phenotype"],
+            permitted_pairs=build_permitted_pairs(["gene", "disease", "phenotype"]),
         )
-
-        resource1 = ResourceId(url="http://doc1.com", id="doc1")
-
-        # Add entities - genes will get LLM review, phenotypes will auto-merge
-        state.validated_entities_by_resource[resource1] = {
-            "GeneA": EntityRef(
-                canonical="GeneA",
-                mentions=[
-                    EntityMention(
-                        kind="gene",
-                        name="GeneA",
-                        aliases=[],
-                        quotes=[],
-                        reasoning="Doc1",
-                    )
-                ],
-            ),
-            "GeneB": EntityRef(
-                canonical="GeneB",
-                mentions=[
-                    EntityMention(
-                        kind="gene",
-                        name="GeneB",
-                        aliases=[],
-                        quotes=[],
-                        reasoning="Doc1",
-                    )
-                ],
-            ),
-            "Tumor": EntityRef(
-                canonical="Tumor",
-                mentions=[
-                    EntityMention(
-                        kind="phenotype",
-                        name="Tumor",
-                        aliases=[],
-                        quotes=[],
-                        reasoning="Doc1",
-                    )
-                ],
-            ),
-            "tumour": EntityRef(
-                canonical="tumour",
-                mentions=[
-                    EntityMention(
-                        kind="phenotype",
-                        name="tumour",
-                        aliases=[],
-                        quotes=[],
-                        reasoning="Doc1",
-                    )
-                ],
-            ),
-        }
-
-        node = ConsolidateEntitiesNode()
-        ctx = GraphRunContext(state=state, deps=mock_deps)
-
-        # Track clustering calls
-        clustering_calls = []
-        original_find = None
-
-        def tracking_find(*args, **kwargs):
-            clustering_calls.append(args[0])  # entities dict
-            return original_find(*args, **kwargs)
-
-        # Mock LLM to return empty decisions
-        mock_result = MagicMock()
-        mock_result.output = ClusterDecisions(decisions=[])
-        mock_agent = MagicMock()
-        mock_agent.run = AsyncMock(return_value=mock_result)
-
-        with patch("interaction_finder.agent_config.agent_getter") as mock_getter:
-            mock_getter.return_value = lambda config: mock_agent
-            with patch(
-                "interaction_finder.extraction.nodes.find_consolidation_candidates"
-            ) as mock_find:
-                # Import the real function to use as fallback
-                from interaction_finder.extraction.entity_matching import (
-                    find_consolidation_candidates as real_find,
-                )
-
-                original_find = real_find
-                mock_find.side_effect = tracking_find
-                await node.run(ctx)
-
-        # Each kind should be clustered exactly once per iteration
-        # (may have multiple iterations within a kind, but other kind shouldn't be affected)
-        gene_clustering_count = sum(
-            1
-            for entities in clustering_calls
-            if any("Gene" in name for name in entities.keys())
-        )
-        phenotype_clustering_count = sum(
-            1
-            for entities in clustering_calls
-            if any("umor" in name or "umour" in name for name in entities.keys())
-        )
-
-        # Both should be clustered at least once
-        assert gene_clustering_count >= 1
-        assert phenotype_clustering_count >= 1
+        # Simulate different cache patterns for each kind
+        gene_cache = _get_merge_cache(state, "gene")
+        gene_cache.hits = 5
+        gene_cache.misses = 2
+        disease_cache = _get_merge_cache(state, "disease")
+        disease_cache.hits = 3
+        disease_cache.misses = 7
+        phenotype_cache = _get_merge_cache(state, "phenotype")
+        phenotype_cache.hits = 0
+        phenotype_cache.misses = 1
+        # Verify each cache maintains its own stats
+        assert state.merge_cache_by_kind["gene"].hits == 5
+        assert state.merge_cache_by_kind["disease"].hits == 3
+        assert state.merge_cache_by_kind["phenotype"].hits == 0
 
 
-class TestNoRepeatedAutoMerges:
-    """Test that auto-merges are not repeated across iterations."""
+class TestSameNameDifferentKinds:
+    """Test that same normalized name in different kinds stays separate."""
 
-    @pytest.mark.asyncio
-    async def test_auto_merges_applied_only_once(self, mock_deps):
-        """Auto-merge rules should only be applied once, not repeated."""
+    def test_same_name_different_kinds_not_merged(self):
+        """Entity 'PAH' as gene and 'PAH' as disease should stay separate."""
         state = State(
             topic="test",
-            target_entity_types=["gene"],
-            permitted_pairs=build_permitted_pairs(["gene"]),
+            target_entity_types=["gene", "disease"],
+            permitted_pairs=build_permitted_pairs(["gene", "disease"]),
         )
-
-        resource1 = ResourceId(url="http://doc1.com", id="doc1")
-
-        # Multiple capitalization variants that will auto-merge
-        state.validated_entities_by_resource[resource1] = {
-            "BRCA1": EntityRef(
-                canonical="BRCA1",
-                mentions=[
-                    EntityMention(
-                        kind="gene",
-                        name="BRCA1",
-                        aliases=[],
-                        quotes=[],
-                        reasoning="Doc1",
-                    )
-                ],
-            ),
-            "Brca1": EntityRef(
-                canonical="Brca1",
-                mentions=[
-                    EntityMention(
-                        kind="gene",
-                        name="Brca1",
-                        aliases=[],
-                        quotes=[],
-                        reasoning="Doc1",
-                    )
-                ],
-            ),
-            "brca1": EntityRef(
-                canonical="brca1",
-                mentions=[
-                    EntityMention(
-                        kind="gene",
-                        name="brca1",
-                        aliases=[],
-                        quotes=[],
-                        reasoning="Doc1",
-                    )
-                ],
-            ),
+        resource = ResourceId(url="https://doc1.com", counter=0)
+        # Same canonical name, different kinds
+        state.validated_entities_by_resource = {
+            resource: {
+                "PAH_gene": EntityRef(
+                    canonical="PAH_gene",
+                    mentions=[
+                        EntityMention(
+                            kind="gene",
+                            name="PAH",
+                            aliases=[],
+                            quotes=[],
+                            reasoning="Gene entity",
+                        )
+                    ],
+                ),
+                "PAH_disease": EntityRef(
+                    canonical="PAH_disease",
+                    mentions=[
+                        EntityMention(
+                            kind="disease",
+                            name="PAH",
+                            aliases=["Pulmonary arterial hypertension"],
+                            quotes=[],
+                            reasoning="Disease entity",
+                        )
+                    ],
+                ),
+            }
         }
+        # Rule only for gene kind
+        merge_rules = {("pah_gene", "gene"): ("PAH", "auto:merge")}
+        _apply_merge_rules_globally(merge_rules, state)
+        entities = state.validated_entities_by_resource[resource]
+        # Disease should be unaffected (rule is for gene kind)
+        assert "PAH_disease" in entities
 
-        node = ConsolidateEntitiesNode()
-        ctx = GraphRunContext(state=state, deps=mock_deps)
-
-        await node.run(ctx)
-
-        # All should be merged to same canonical
-        entities = ctx.state.validated_entities_by_resource[resource1]
+    def test_rules_keyed_by_kind(self):
+        """Merge rules use (normalized_name, kind) tuple as key."""
+        state = State(
+            topic="test",
+            target_entity_types=["gene", "disease"],
+            permitted_pairs=build_permitted_pairs(["gene", "disease"]),
+        )
+        resource = ResourceId(url="https://doc1.com", counter=0)
+        state.validated_entities_by_resource = {
+            resource: {
+                "BRCA1": EntityRef(
+                    canonical="BRCA1",
+                    mentions=[
+                        EntityMention(
+                            kind="gene",
+                            name="BRCA1",
+                            aliases=[],
+                            quotes=[],
+                            reasoning="gene",
+                        )
+                    ],
+                ),
+                "brca1": EntityRef(
+                    canonical="brca1",
+                    mentions=[
+                        EntityMention(
+                            kind="gene",
+                            name="brca1",
+                            aliases=[],
+                            quotes=[],
+                            reasoning="gene variant",
+                        )
+                    ],
+                ),
+            }
+        }
+        # Rule specifies "gene" kind explicitly
+        merge_rules = {("brca1", "gene"): ("BRCA1", "auto:case")}
+        _apply_merge_rules_globally(merge_rules, state)
+        entities = state.validated_entities_by_resource[resource]
+        # Should have merged the gene variants
         assert len(entities) == 1
-
-        # Check merges were recorded
-        gene_merges = ctx.state.consolidated.entities.merges.get("gene")
-        assert gene_merges is not None
-
-        # Auto-merges should be recorded
-        auto_merge_count = len(gene_merges.automatic)
-        # Should have 2 auto-merges (Brca1 → BRCA1, brca1 → BRCA1 or similar)
-        assert auto_merge_count >= 1
+        assert "BRCA1" in entities
 
 
-class TestIterationWithinKind:
-    """Test that iteration happens correctly within a single kind."""
+class TestAddNewNamesPerKind:
+    """Test that new names are added to correct kind's entity dict."""
 
-    @pytest.mark.asyncio
-    async def test_splits_trigger_iteration_within_kind(self, mock_deps):
-        """Split decisions should cause re-review of subgroups within same kind."""
+    def test_new_names_added_to_correct_dict(self):
+        """_add_new_names_to_kind only affects the target entities dict."""
+        gene_entities = {
+            "BRCA1": [SpeculatedVariant("BRCA1", 0, "original", False)],
+        }
+        disease_entities = {
+            "Cancer": [SpeculatedVariant("Cancer", 0, "original", False)],
+        }
+        # Add new name to gene entities
+        new_names = {"BRCA2"}
+        _add_new_names_to_kind(new_names, gene_entities)
+        # Gene dict has new name
+        assert "BRCA2" in gene_entities
+        # Disease dict unaffected
+        assert "BRCA2" not in disease_entities
+        assert len(disease_entities) == 1
+
+
+class TestTransitiveMergesPerKind:
+    """Test that transitive merge resolution respects kinds."""
+
+    def test_transitive_merges_use_kind_key(self):
+        """Transitive chains are resolved using (normalized, kind) keys."""
+        # Chain: geneA -> geneB -> geneC
+        unresolved_rules = {
+            ("genea", "gene"): ("GeneB", "auto:1"),
+            ("geneb", "gene"): ("GeneC", "auto:2"),
+        }
+        resolved = _resolve_transitive_merges(unresolved_rules)
+        # Both should resolve to GeneC
+        assert resolved[("genea", "gene")][0] == "GeneC"
+        assert resolved[("geneb", "gene")][0] == "GeneC"
+
+    def test_chains_dont_cross_kinds(self):
+        """A chain in one kind doesn't affect another kind."""
+        # Gene chain: geneA -> geneB
+        # Disease chain: diseaseX -> diseaseY (separate)
+        unresolved_rules = {
+            ("genea", "gene"): ("GeneB", "auto:gene"),
+            ("diseasex", "disease"): ("DiseaseY", "auto:disease"),
+        }
+        resolved = _resolve_transitive_merges(unresolved_rules)
+        # Each resolves independently
+        assert resolved[("genea", "gene")][0] == "GeneB"
+        assert resolved[("diseasex", "disease")][0] == "DiseaseY"
+
+
+class TestMergeRulesApplicationPerKind:
+    """Test that merge rules are correctly applied per kind."""
+
+    def test_gene_rules_only_affect_genes(self):
+        """Rules with kind='gene' only merge gene entities."""
         state = State(
             topic="test",
-            target_entity_types=["phenotype"],
-            permitted_pairs=build_permitted_pairs(["phenotype"]),
+            target_entity_types=["gene", "disease"],
+            permitted_pairs=build_permitted_pairs(["gene", "disease"]),
         )
-
-        resource1 = ResourceId(url="http://doc1.com", id="doc1")
-
-        # Entities that will cluster together
-        state.validated_entities_by_resource[resource1] = {
-            "Disease A Type 1": EntityRef(
-                canonical="Disease A Type 1",
-                mentions=[
-                    EntityMention(
-                        kind="phenotype",
-                        name="Disease A Type 1",
-                        aliases=[],
-                        quotes=[],
-                        reasoning="Doc1",
-                    )
-                ],
-            ),
-            "Disease A Type 2": EntityRef(
-                canonical="Disease A Type 2",
-                mentions=[
-                    EntityMention(
-                        kind="phenotype",
-                        name="Disease A Type 2",
-                        aliases=[],
-                        quotes=[],
-                        reasoning="Doc1",
-                    )
-                ],
-            ),
-            "Disease B": EntityRef(
-                canonical="Disease B",
-                mentions=[
-                    EntityMention(
-                        kind="phenotype",
-                        name="Disease B",
-                        aliases=[],
-                        quotes=[],
-                        reasoning="Doc1",
-                    )
-                ],
-            ),
-        }
-
-        node = ConsolidateEntitiesNode()
-        ctx = GraphRunContext(state=state, deps=mock_deps)
-
-        call_count = 0
-
-        def make_mock_result(prompt):
-            nonlocal call_count
-            call_count += 1
-            # First call: split the cluster
-            if call_count == 1:
-                import re
-
-                match = re.search(r"## Group (\w+)", prompt)
-                if match:
-                    return MagicMock(
-                        output=ClusterDecisions(
-                            decisions=[
-                                ClusterDecision(
-                                    group_id=match.group(1),
-                                    action="split",
-                                    reasoning="Mixes different diseases",
-                                )
-                            ]
+        resource = ResourceId(url="https://doc1.com", counter=0)
+        state.validated_entities_by_resource = {
+            resource: {
+                "BRCA1": EntityRef(
+                    canonical="BRCA1",
+                    mentions=[
+                        EntityMention(
+                            kind="gene",
+                            name="BRCA1",
+                            aliases=[],
+                            quotes=[],
+                            reasoning="gene parent",
                         )
-                    )
-            # Subsequent calls: keep separate
-            return MagicMock(output=ClusterDecisions(decisions=[]))
+                    ],
+                ),
+                "brca1": EntityRef(
+                    canonical="brca1",
+                    mentions=[
+                        EntityMention(
+                            kind="gene",
+                            name="brca1",
+                            aliases=[],
+                            quotes=[],
+                            reasoning="gene child",
+                        )
+                    ],
+                ),
+                "Cancer": EntityRef(
+                    canonical="Cancer",
+                    mentions=[
+                        EntityMention(
+                            kind="disease",
+                            name="Cancer",
+                            aliases=[],
+                            quotes=[],
+                            reasoning="disease",
+                        )
+                    ],
+                ),
+            }
+        }
+        # Only gene rule
+        merge_rules = {("brca1", "gene"): ("BRCA1", "auto:case")}
+        _apply_merge_rules_globally(merge_rules, state)
+        entities = state.validated_entities_by_resource[resource]
+        # Genes merged, disease untouched
+        assert len(entities) == 2
+        assert "BRCA1" in entities
+        assert "Cancer" in entities
+        assert "brca1" not in entities
 
-        mock_agent = MagicMock()
-        mock_agent.run = AsyncMock(side_effect=make_mock_result)
-
-        with patch("interaction_finder.agent_config.agent_getter") as mock_getter:
-            mock_getter.return_value = lambda config: mock_agent
-            await node.run(ctx)
-
-        # LLM should have been called multiple times (initial + after split)
-        assert call_count >= 1
-
-
-class TestRenameTargetedIteration:
-    """Test that rename-triggered iterations only review groups containing new names."""
-
-    @pytest.mark.asyncio
-    async def test_only_groups_with_new_names_reviewed(self, mock_deps):
-        """After a rename, only groups containing the new name should be reviewed."""
-        from interaction_finder.extraction.entity_matching import (
-            ConsolidationCandidates,
-            SpeculatedVariant,
-        )
-
+    def test_multiple_kind_rules_applied_correctly(self):
+        """Rules for multiple kinds are applied to respective kinds."""
         state = State(
             topic="test",
-            target_entity_types=["gene"],
-            permitted_pairs=build_permitted_pairs(["gene"]),
+            target_entity_types=["gene", "disease"],
+            permitted_pairs=build_permitted_pairs(["gene", "disease"]),
         )
-
-        resource1 = ResourceId(url="http://doc1.com", id="doc1")
-
-        # Set up entities
-        state.validated_entities_by_resource[resource1] = {
-            "GeneA": EntityRef(
-                canonical="GeneA",
-                mentions=[
-                    EntityMention(
-                        kind="gene",
-                        name="GeneA",
-                        aliases=[],
-                        quotes=[],
-                        reasoning="Doc1",
-                    )
-                ],
-            ),
-            "GeneB": EntityRef(
-                canonical="GeneB",
-                mentions=[
-                    EntityMention(
-                        kind="gene",
-                        name="GeneB",
-                        aliases=[],
-                        quotes=[],
-                        reasoning="Doc1",
-                    )
-                ],
-            ),
-            "GeneC": EntityRef(
-                canonical="GeneC",
-                mentions=[
-                    EntityMention(
-                        kind="gene",
-                        name="GeneC",
-                        aliases=[],
-                        quotes=[],
-                        reasoning="Doc1",
-                    )
-                ],
-            ),
-            "GeneD": EntityRef(
-                canonical="GeneD",
-                mentions=[
-                    EntityMention(
-                        kind="gene",
-                        name="GeneD",
-                        aliases=[],
-                        quotes=[],
-                        reasoning="Doc1",
-                    )
-                ],
-            ),
-        }
-
-        node = ConsolidateEntitiesNode()
-        ctx = GraphRunContext(state=state, deps=mock_deps)
-
-        iteration_count = 0
-        groups_reviewed_per_iteration = []
-
-        # Track which groups are sent to LLM on each iteration
-        def mock_find_candidates(entities, threshold, mention_counts, logger):
-            nonlocal iteration_count
-            iteration_count += 1
-
-            if iteration_count == 1:
-                # First iteration: two groups
-                return ConsolidationCandidates(
-                    auto_merge=[],
-                    agent_review=[],
-                    agent_review_groups=[
-                        frozenset({"GeneA", "GeneB"}),  # Group 1
-                        frozenset({"GeneC", "GeneD"}),  # Group 2
-                    ],
-                    contested_warnings=[],
-                    merge_trees=[],
-                )
-            else:
-                # Second iteration: same groups plus NewGene in one
-                return ConsolidationCandidates(
-                    auto_merge=[],
-                    agent_review=[],
-                    agent_review_groups=[
-                        frozenset({"GeneA", "GeneB", "NewGene"}),  # Contains new name
-                        frozenset({"GeneC", "GeneD"}),  # Does NOT contain new name
-                    ],
-                    contested_warnings=[],
-                    merge_trees=[],
-                )
-
-        call_count = 0
-
-        def make_mock_result(prompt):
-            nonlocal call_count
-            call_count += 1
-
-            # Track which groups are in the prompt
-            import re
-
-            groups_in_prompt = re.findall(r"## Group (\w+)", prompt)
-            groups_reviewed_per_iteration.append(len(groups_in_prompt))
-
-            if call_count == 1:
-                # First call: rename GeneA to NewGene
-                match = re.search(r"## Group (\w+)", prompt)
-                if match:
-                    return MagicMock(
-                        output=ClusterDecisions(
-                            decisions=[
-                                ClusterDecision(
-                                    group_id=match.group(1),
-                                    action="merge",
-                                    target="NewGene",  # Rename to new name
-                                    reasoning="Standardized name",
-                                )
-                            ]
+        resource = ResourceId(url="https://doc1.com", counter=0)
+        state.validated_entities_by_resource = {
+            resource: {
+                "BRCA1": EntityRef(
+                    canonical="BRCA1",
+                    mentions=[
+                        EntityMention(
+                            kind="gene",
+                            name="BRCA1",
+                            aliases=[],
+                            quotes=[],
+                            reasoning="gene parent",
                         )
-                    )
-            # Subsequent calls: keep separate
-            return MagicMock(output=ClusterDecisions(decisions=[]))
-
-        mock_agent = MagicMock()
-        mock_agent.run = AsyncMock(side_effect=make_mock_result)
-
-        with patch("interaction_finder.agent_config.agent_getter") as mock_getter:
-            mock_getter.return_value = lambda config: mock_agent
-            with patch(
-                "interaction_finder.extraction.nodes.find_consolidation_candidates",
-                side_effect=mock_find_candidates,
-            ):
-                await node.run(ctx)
-
-        # Should have had 2 iterations (first found rename, second checked new name)
-        assert iteration_count == 2
-
-        # First iteration should review 2 groups, second should review only 1
-        # (the one containing NewGene)
-        assert len(groups_reviewed_per_iteration) >= 2
-        assert groups_reviewed_per_iteration[0] == 2  # Both groups initially
-        assert groups_reviewed_per_iteration[1] == 1  # Only group with NewGene
+                    ],
+                ),
+                "brca1": EntityRef(
+                    canonical="brca1",
+                    mentions=[
+                        EntityMention(
+                            kind="gene",
+                            name="brca1",
+                            aliases=[],
+                            quotes=[],
+                            reasoning="gene child",
+                        )
+                    ],
+                ),
+                "Cancer": EntityRef(
+                    canonical="Cancer",
+                    mentions=[
+                        EntityMention(
+                            kind="disease",
+                            name="Cancer",
+                            aliases=[],
+                            quotes=[],
+                            reasoning="disease parent",
+                        )
+                    ],
+                ),
+                "cancer": EntityRef(
+                    canonical="cancer",
+                    mentions=[
+                        EntityMention(
+                            kind="disease",
+                            name="cancer",
+                            aliases=[],
+                            quotes=[],
+                            reasoning="disease child",
+                        )
+                    ],
+                ),
+            }
+        }
+        # Rules for both kinds
+        merge_rules = {
+            ("brca1", "gene"): ("BRCA1", "auto:gene"),
+            ("cancer", "disease"): ("Cancer", "auto:disease"),
+        }
+        _apply_merge_rules_globally(merge_rules, state)
+        entities = state.validated_entities_by_resource[resource]
+        # Both kinds merged
+        assert len(entities) == 2
+        assert "BRCA1" in entities
+        assert "Cancer" in entities

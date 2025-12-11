@@ -277,6 +277,9 @@ class State:
         result = {}
 
         for fld in fields(self):
+            # Skip private fields (e.g., _counter_lock)
+            if fld.name.startswith("_"):
+                continue
             value = getattr(self, fld.name)
 
             if fld.name not in _SERIALIZATION_REGISTRY:

@@ -6,32 +6,45 @@ extraction process from resources to final pairs with provenance.
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 
 from interaction_finder.checkpoint import ExtractionStageData, PipelineCheckpoint
-from interaction_finder.version import get_version_string
 from interaction_finder.extraction.deps import Deps
-from interaction_finder.extraction.graph import graph
-from interaction_finder.extraction.nodes import (
-    ProcessDocumentsNode,
-    ConsolidateEntitiesNode,
-    ConsolidateRelationshipsNode,
-    SweepCoMentionsNode,
-    ConsolidateNewRelationshipsNode,
-    JudgeCrossDocumentNode,
+from interaction_finder.extraction.shared import empty_result
+from interaction_finder.extraction.stages import (
+    consolidate_entities,
+    consolidate_new_relationships,
+    consolidate_relationships,
+    finalize,
+    judge_cross_document,
+    process_documents,
+    sweep_co_mentions,
 )
 from interaction_finder.extraction.state import State
 from interaction_finder.extraction.utils import build_permitted_pairs
-from interaction_finder.logging import logfire, get_logger
+from interaction_finder.logging import get_logger, logfire
 from interaction_finder.settings import IfetcherConfig
+from interaction_finder.version import get_version_string
 
-# Mapping from stage name to next node
-_RESUME_NODE_MAP = {
-    "process_documents": ConsolidateEntitiesNode,
-    "consolidate_entities": ConsolidateRelationshipsNode,
-    "consolidate_relationships": SweepCoMentionsNode,
-    "sweep_co_mentions": ConsolidateNewRelationshipsNode,
-    "consolidate_new_relationships": JudgeCrossDocumentNode,
-}
+# Pipeline stages in execution order. All return bool; False aborts pipeline.
+StageFunc = Callable[[State, Deps], Awaitable[bool]]
+STAGES: list[StageFunc] = [
+    process_documents,
+    consolidate_entities,
+    consolidate_relationships,
+    sweep_co_mentions,
+    consolidate_new_relationships,
+    judge_cross_document,
+]
+STAGE_NAMES = [fn.__name__ for fn in STAGES]
+
+
+def get_resume_stage_index(stage_name: str) -> int:
+    """Get the index of the stage to resume from (the one after the completed stage)."""
+    try:
+        return STAGE_NAMES.index(stage_name) + 1
+    except ValueError:
+        return 0
 
 
 async def run_extraction(
@@ -67,28 +80,19 @@ async def run_extraction(
         >>> print(f"Searches: {len(checkpoint.search.queries)}")
         >>> print(f"Pairs: {len(checkpoint.extraction.judgments)}")
     """
-    # Extract data from input checkpoint
     topic = input_checkpoint.topic
     resource_pool = input_checkpoint.resources
-
     with logfire.span(f"Extraction: {topic}"):
-        # Load config or use defaults
         if config is None:
             config = IfetcherConfig()
-
-        # Initialize logger
         if logger is None:
             logger = get_logger(__name__)
-
-        # Create agent concurrency semaphore
         agent_semaphore = asyncio.Semaphore(
             config.tools.extraction.agent_concurrency_limit
         )
-
-        # Build permitted pairs map from target entity types
         permitted_pairs = build_permitted_pairs(target_entity_types)
-
-        # Check for resumable extraction
+        # Determine starting stage index (0 for fresh start, or index after last completed)
+        start_stage_idx = 0
         if (
             input_checkpoint.extraction
             and input_checkpoint.extraction.metadata
@@ -96,8 +100,6 @@ async def run_extraction(
         ):
             meta = input_checkpoint.extraction.metadata
             logger.info(f"Resuming extraction from: {meta.resume_from}")
-
-            # Deserialize state from checkpoint
             state = State.from_dict(
                 meta.resume_state,
                 topic=topic,
@@ -105,20 +107,13 @@ async def run_extraction(
                 permitted_pairs=permitted_pairs,
                 resource_pool=resource_pool,
             )
-
-            # Determine starting node (next after completed stage)
-            start_node = _RESUME_NODE_MAP[meta.resume_from]()
-
+            start_stage_idx = get_resume_stage_index(meta.resume_from)
         else:
-            # Fresh start
             state = State(
                 topic=topic,
                 target_entity_types=target_entity_types,
                 permitted_pairs=permitted_pairs,
             )
-            start_node = ProcessDocumentsNode()
-
-        # Create dependencies (after state is initialized)
         deps = Deps(
             resource_pool=resource_pool,
             config=config,
@@ -128,23 +123,29 @@ async def run_extraction(
             checkpoint_path=checkpoint_path,
             input_checkpoint=input_checkpoint,
         )
-
-        # Run graph
-        result = await graph.run(start_node, state=state, deps=deps)
-
+        # Run pipeline stages
+        result = await _run_pipeline(state, deps, start_stage_idx)
         # Build unified checkpoint preserving all prior data
         return PipelineCheckpoint(
             topic=topic,
             resources=resource_pool,
             created_by=get_version_string(),
-            keywords=input_checkpoint.keywords,  # PRESERVED
-            search=input_checkpoint.search,  # PRESERVED
+            keywords=input_checkpoint.keywords,
+            search=input_checkpoint.search,
             extraction=ExtractionStageData(
                 target_entity_types=target_entity_types,
                 permitted_pairs=permitted_pairs,
-                judgments=result.output.judgments,
-                metadata=result.output.metadata,
-                consolidated=result.output.consolidated,
-                paper_quality=result.output.paper_quality,
+                judgments=result.judgments,
+                metadata=result.metadata,
+                consolidated=result.consolidated,
+                paper_quality=result.paper_quality,
             ),
         )
+
+
+async def _run_pipeline(state: State, deps: Deps, start_stage_idx: int):
+    """Execute extraction pipeline stages sequentially."""
+    for stage in STAGES[start_stage_idx:]:
+        if not await stage(state, deps):
+            return empty_result(state, deps)
+    return finalize(state, deps)
