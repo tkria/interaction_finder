@@ -3,7 +3,72 @@
 import tempfile
 from pathlib import Path
 import pytest
-from interaction_finder.settings import IfetcherConfig
+from interaction_finder.settings import IfetcherConfig, sanitize_topic_for_filename
+
+
+class TestSanitizeTopicForFilename:
+    """Test topic string sanitization for filenames."""
+
+    def test_simple_topic(self):
+        """Test basic topic sanitization."""
+        assert sanitize_topic_for_filename("cancer") == "cancer"
+
+    def test_multi_word_topic(self):
+        """Test multi-word topics become hyphenated."""
+        assert (
+            sanitize_topic_for_filename("pulmonary arterial hypertension")
+            == "pulmonary-arterial-hypertension"
+        )
+
+    def test_mixed_case(self):
+        """Test that mixed case is lowercased."""
+        assert sanitize_topic_for_filename("BRCA1 Gene") == "brca1-gene"
+
+    def test_special_characters_removed(self):
+        """Test that special characters are removed."""
+        assert (
+            sanitize_topic_for_filename("p53 (tumor suppressor)")
+            == "p53-tumor-suppressor"
+        )
+        assert sanitize_topic_for_filename("gene/protein") == "geneprotein"
+
+    def test_underscores_become_hyphens(self):
+        """Test that underscores become hyphens."""
+        assert (
+            sanitize_topic_for_filename("cell_signaling_pathway")
+            == "cell-signaling-pathway"
+        )
+
+    def test_multiple_spaces_collapsed(self):
+        """Test that multiple spaces collapse to single hyphen."""
+        assert sanitize_topic_for_filename("gene   expression") == "gene-expression"
+
+    def test_leading_trailing_whitespace(self):
+        """Test that leading/trailing whitespace is stripped."""
+        assert sanitize_topic_for_filename("  cancer research  ") == "cancer-research"
+
+    def test_empty_string(self):
+        """Test that empty string returns fallback."""
+        assert sanitize_topic_for_filename("") == "output"
+        assert sanitize_topic_for_filename("   ") == "output"
+
+    def test_only_special_chars(self):
+        """Test that string with only special chars returns fallback."""
+        assert sanitize_topic_for_filename("!@#$%") == "output"
+
+    def test_truncation(self):
+        """Test that long topics are truncated."""
+        long_topic = "a" * 100
+        result = sanitize_topic_for_filename(long_topic)
+        assert len(result) <= 80
+
+    def test_truncation_no_trailing_hyphen(self):
+        """Test that truncation doesn't leave trailing hyphen."""
+        # Create a topic that will have a hyphen near the truncation point
+        topic = "word " * 20  # Creates "word-word-word-..." pattern
+        result = sanitize_topic_for_filename(topic, max_length=20)
+        assert not result.endswith("-")
+        assert len(result) <= 20
 
 
 class TestConfigLoading:
@@ -25,7 +90,7 @@ class TestConfigLoading:
             # Verify loaded values
             assert config.output.cache == "test_cache"
             # Check defaults
-            assert config.output.path == "runs/{mode}/{model}/{repeat}/{term}"
+            assert config.output.path == "{topic}.json"
 
             Path(f.name).unlink()
 
@@ -66,7 +131,7 @@ class TestConfigLoading:
 
         # Check defaults are set
         assert config.output.cache == "cache"
-        assert config.output.path == "runs/{mode}/{model}/{repeat}/{term}"
+        assert config.output.path == "{topic}.json"
         assert config.agents == {}
         assert config.modes == {}
 

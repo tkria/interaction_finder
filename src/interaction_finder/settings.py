@@ -1,10 +1,35 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 import tomli
 from copy import deepcopy
 from pydantic import BaseModel, Field, field_validator
+
+
+def sanitize_topic_for_filename(topic: str, max_length: int = 80) -> str:
+    """Convert a topic string to a safe filename component.
+
+    Args:
+        topic: Research topic string (e.g., "pulmonary arterial hypertension")
+        max_length: Maximum length for the sanitized string
+
+    Returns:
+        Lowercase, hyphen-separated string safe for filenames
+    """
+    # Lowercase and replace whitespace/underscores with hyphens
+    result = re.sub(r"[\s_]+", "-", topic.lower().strip())
+    # Remove any characters that aren't alphanumeric or hyphens
+    result = re.sub(r"[^a-z0-9-]", "", result)
+    # Collapse multiple hyphens
+    result = re.sub(r"-+", "-", result)
+    # Strip leading/trailing hyphens
+    result = result.strip("-")
+    # Truncate if needed
+    if len(result) > max_length:
+        result = result[:max_length].rstrip("-")
+    return result or "output"
 
 
 class IfetcherConfig(BaseModel):
@@ -421,8 +446,8 @@ class IfetcherConfig(BaseModel):
         """File output paths (relative to config file location)."""
 
         path: str = Field(
-            "runs/{mode}/{model}/{repeat}/{term}",
-            description="Output directory template; variables filled at runtime",
+            "{topic}.json",
+            description="Default output filename template; {topic} is replaced with sanitized topic",
         )
         cache: str = Field(
             "cache",

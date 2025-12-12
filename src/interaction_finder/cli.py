@@ -19,7 +19,7 @@ from rich.tree import Tree
 from rich.text import Text
 
 from . import cli_fetch
-from .settings import IfetcherConfig
+from .settings import IfetcherConfig, sanitize_topic_for_filename
 
 
 def _format_json_schema_type(prop: dict) -> str:
@@ -411,6 +411,12 @@ def load_config(
     return config
 
 
+def default_output_path(cfg: IfetcherConfig, topic: str) -> Path:
+    """Derive default output path from config template and topic string."""
+    sanitized = sanitize_topic_for_filename(topic)
+    return cfg.abspath(cfg.output.path.format(topic=sanitized))
+
+
 @app.command()
 def config(
     action: str = typer.Argument(help="Action: 'help', 'info', or 'validate'"),
@@ -456,12 +462,18 @@ def config(
             # Show key settings
             table.add_row("Config Dir", str(cfg._dir) if cfg._dir else "None")
             table.add_row("Cache Path", str(cfg.abspath(cfg.output.cache)))
-            table.add_row("Output Path", cfg.output.path)
-            # Show agent configs
+            table.add_row("Output Template", cfg.output.path)
+            # Show agent configs (handle nested structure)
             if cfg.agents:
-                for agent_name, agent_spec in cfg.agents.items():
-                    if agent_spec.llm:
-                        table.add_row(f"Agent '{agent_name}' LLM", agent_spec.llm)
+                for key, value in cfg.agents.items():
+                    if hasattr(value, "llm") and value.llm:
+                        table.add_row(f"Agent '{key}' LLM", value.llm)
+                    elif isinstance(value, dict):
+                        for subkey, subvalue in value.items():
+                            if hasattr(subvalue, "llm") and subvalue.llm:
+                                table.add_row(
+                                    f"Agent '{key}.{subkey}' LLM", subvalue.llm
+                                )
             console.print(table)
         elif action == "validate":
             cfg = load_config(config_path, overrides, mode)
@@ -705,13 +717,14 @@ def keywords(
         interaction-finder keywords "machine learning" -o keywords.json
     """
     try:
-        # Check output early to fail fast
+        # Get effective options (local flags override global)
+        config_path, mode, verbose, overrides = get_options_with_fallback(
+            config, mode, verbose, overrides
+        )
+        # Load config
+        cfg = load_config(config_path, overrides, mode)
         if not output:
-            console.print(
-                "[red]Error:[/red] Output file required. Use -o/--output to specify where to save results."
-            )
-            raise typer.Exit(1)
-
+            output = default_output_path(cfg, topic)
         # Check if output file exists and has keywords results
         if output.exists() and not force:
             from pydantic import ValidationError
@@ -729,13 +742,6 @@ def keywords(
             except (json.JSONDecodeError, ValidationError):
                 # File exists but is not a valid checkpoint, proceed with warning
                 pass
-
-        # Get effective options (local flags override global)
-        config_path, mode, verbose, overrides = get_options_with_fallback(
-            config, mode, verbose, overrides
-        )
-        # Load config
-        cfg = load_config(config_path, overrides, mode)
         # Apply CLI overrides
         if max_rounds is not None:
             cfg.tools.keywords.max_rounds = max_rounds
@@ -846,17 +852,11 @@ def search(
         )
         cfg = load_config(config_path, overrides, mode)
         checkpoint, topic = load_checkpoint_or_create(checkpoint_or_topic)
-
-        # Check if output is required (topic string with no -o specified)
         input_is_file = (
             Path(checkpoint_or_topic).exists() and Path(checkpoint_or_topic).is_file()
         )
         if not output and not input_is_file:
-            console.print(
-                "[red]Error:[/red] Output file required when using topic string. "
-                "Use -o/--output to specify where to save results."
-            )
-            raise typer.Exit(1)
+            output = default_output_path(cfg, topic)
         # Check if search results already exist
         if checkpoint.search is not None and not force:
             console.print(
@@ -999,17 +999,11 @@ def extract(
         )
         cfg = load_config(config_path, overrides, mode)
         checkpoint, topic = load_checkpoint_or_create(checkpoint_or_topic)
-
-        # Check if output is required (topic string with no -o specified)
         input_is_file = (
             Path(checkpoint_or_topic).exists() and Path(checkpoint_or_topic).is_file()
         )
         if not output and not input_is_file:
-            console.print(
-                "[red]Error:[/red] Output file required when using topic string. "
-                "Use -o/--output to specify where to save results."
-            )
-            raise typer.Exit(1)
+            output = default_output_path(cfg, topic)
         # Block if extraction already complete (incomplete extractions can resume)
         if (
             checkpoint.extraction is not None
