@@ -42,18 +42,18 @@ uv run interaction-finder extract "pulmonary arterial hypertension" -e gene -e d
 # Stage 1: Extract bridging terms (keywords) from review articles
 uv run interaction-finder keywords "pulmonary arterial hypertension" -o research.json
 
-# Stage 2: Wide search (updates research.json in place with search results)
-uv run interaction-finder widesearch research.json
+# Stage 2: Search (updates research.json in place with search results)
+uv run interaction-finder search research.json
 
 # Stage 3: Extract entity associations (updates research.json in place with extraction results)
 uv run interaction-finder extract research.json -e gene -e disease
 
 # Alternative: Start from any stage with topic strings
-uv run interaction-finder widesearch "pulmonary arterial hypertension" -o searches.json
+uv run interaction-finder search "pulmonary arterial hypertension" -o searches.json
 uv run interaction-finder extract "PAH genetics" -e gene -e disease -o results.json
 
 # Alternative: Create separate output files instead of updating in place
-uv run interaction-finder widesearch keywords.json -o searches.json
+uv run interaction-finder search keywords.json -o searches.json
 uv run interaction-finder extract searches.json -e gene -e disease -o results.json
 ```
 
@@ -87,7 +87,7 @@ uv run interaction-finder extract "topic" -e gene \
   -O agents.extraction.judge.llm=openai:gpt-4o
 
 # Use configuration modes
-uv run interaction-finder widesearch "topic" -m development
+uv run interaction-finder search "topic" -m development
 ```
 
 **Additional Commands**:
@@ -99,9 +99,6 @@ uv run interaction-finder fetch --input urls.txt --chunk
 # Configuration management
 uv run interaction-finder config info
 uv run interaction-finder config validate
-
-# List available terms (from training data)
-uv run interaction-finder terms
 
 # Override configuration values and specify backend
 uv run interaction-finder extract "topic" -e gene -b perplexica -O agents.llm=openai:gpt-4o
@@ -212,7 +209,7 @@ overrides = {"agents.llm": "openai:gpt-4o"}
 config = IfetcherConfig.from_path("config.toml", overrides=overrides)
 
 # Resolve paths relative to config file
-path = config.abspath("training_data/{term}.jsonl", term="BRCA1")
+path = config.abspath("output/{name}.json", name="results")
 ```
 
 **Configuration locations checked automatically** (in order):

@@ -26,7 +26,6 @@ class TestConfigLoading:
             assert config.output.cache == "test_cache"
             # Check defaults
             assert config.output.path == "runs/{mode}/{model}/{repeat}/{term}"
-            assert config.training_data == "training_data/{term}.jsonl"
 
             Path(f.name).unlink()
 
@@ -68,7 +67,6 @@ class TestConfigLoading:
         # Check defaults are set
         assert config.output.cache == "cache"
         assert config.output.path == "runs/{mode}/{model}/{repeat}/{term}"
-        assert config.training_data == "training_data/{term}.jsonl"
         assert config.agents == {}
         assert config.modes == {}
 

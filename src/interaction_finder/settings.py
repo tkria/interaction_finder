@@ -349,11 +349,6 @@ class IfetcherConfig(BaseModel):
         description="Configuration for output paths and caching",
     )
 
-    training_data: str = Field(
-        "training_data/{term}.jsonl",
-        description="Training data path template (supports {term})",
-    )
-
     modes: dict[str, dict[str, Any]] = Field(
         default_factory=dict, description="Mode-specific configuration overrides"
     )

@@ -9,19 +9,27 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
-from typing import Annotated, Any, List, Optional
+from typing import Any, List, Optional
 
 import click
 import typer
 from rich.console import Console
 from rich.table import Table
 
-from . import cli_fetch, cli_upgrade
+from . import cli_fetch
 from .settings import IfetcherConfig
 
 app = typer.Typer(
     name="interaction-finder",
-    help="A tool for fetching and processing web content for interaction discovery.",
+    help="""\
+Automated extraction of biological relationships from papers.
+
+\b
+Example:
+  interaction-finder extract "genes associated with hypotension" \\
+    -e gene -e phenotype -o hypotension.json
+  interaction-finder report hypotension.json
+""",
     rich_markup_mode="rich",
     add_completion=False,
 )
@@ -55,11 +63,7 @@ def global_options(
     verbose: bool = verbose_option(),
     overrides: List[str] = overrides_option(),
 ):
-    """
-    A tool for fetching and processing web content for interaction discovery.
-
-    Global options like --config, --mode, --verbose, and --override can be used with any subcommand.
-    """
+    """Global options that can be used with any subcommand."""
     # Store options in the context for use by subcommands
     ctx = click.get_current_context()
     ctx.ensure_object(dict)
@@ -285,89 +289,6 @@ def load_config(
     return config
 
 
-def scan_available_terms(config: IfetcherConfig) -> List[str]:
-    """
-    Scan for available term files in the training data directory.
-
-    Args:
-        config: Configuration with training_data path template
-
-    Returns:
-        List of available term names
-    """
-    # Get training data path template
-    template = config.training_data
-    # Extract directory and pattern
-    template_path = Path(template)
-    if "{term}" not in template:
-        return []
-    # Get the directory to scan (resolve parent path without formatting)
-    parent_template = str(template_path.parent)
-    if "{term}" in parent_template:
-        # Can't scan if term is in the directory path
-        return []
-    directory = config.abspath(parent_template)
-    if not directory.exists():
-        return []
-    # Build glob pattern
-    pattern = template_path.name.replace("{term}", "*")
-    terms = []
-    for file_path in directory.glob(pattern):
-        # Extract term from filename
-        name = file_path.name
-        prefix = template_path.name.split("{term}")[0]
-        suffix = (
-            template_path.name.split("{term}")[1]
-            if "{term}" in template_path.name
-            else ""
-        )
-        if name.startswith(prefix) and name.endswith(suffix):
-            term = name[len(prefix) : -len(suffix) if suffix else None]
-            terms.append(term)
-    return sorted(terms)
-
-
-@app.command()
-def terms(
-    config: Optional[str] = config_option(),
-    mode: Optional[str] = mode_option(),
-    verbose: bool = verbose_option(),
-    overrides: List[str] = overrides_option(),
-):
-    """
-    List available terms found in training data directory.
-    """
-    config_path, mode, verbose, overrides = get_options_with_fallback(
-        config, mode, verbose, overrides
-    )
-    try:
-        cfg = load_config(config_path, overrides, mode)
-        available_terms = scan_available_terms(cfg)
-        if not available_terms:
-            console.print("[yellow]No terms found in training data directory[/yellow]")
-            # Show the directory we searched (without the {term} placeholder)
-            template_path = Path(cfg.training_data)
-            search_dir = cfg.abspath(str(template_path.parent))
-            console.print(f"Searched in: {search_dir}")
-            console.print(f"Pattern: {template_path.name}")
-            return
-        # Display terms in a table
-        table = Table(
-            title="Available Terms", show_header=True, header_style="bold magenta"
-        )
-        table.add_column("Term", style="cyan")
-        table.add_column("File Path", style="dim")
-        for term in available_terms:
-            file_path = cfg.abspath(cfg.training_data, term=term)
-            table.add_row(term, str(file_path))
-        console.print(table)
-    except Exception as e:
-        console.print(f"[red]Error:[/red] {e}")
-        if verbose:
-            console.print_exception()
-        raise typer.Exit(1)
-
-
 @app.command()
 def config(
     action: str = typer.Argument(
@@ -407,7 +328,6 @@ def config(
             table.add_row("Config Dir", str(cfg._dir) if cfg._dir else "None")
             table.add_row("Cache Path", str(cfg.abspath(cfg.output.cache)))
             table.add_row("Output Path", cfg.output.path)
-            table.add_row("Training Data", cfg.training_data)
             # Show agent configs
             if cfg.agents:
                 for agent_name, agent_spec in cfg.agents.items():
@@ -621,78 +541,6 @@ def fetch(
 
 
 @app.command()
-def upgrade(
-    output: Annotated[
-        Path, typer.Option("-o", "--output", help="Output path for upgraded checkpoint")
-    ],
-    keywords: Annotated[
-        Optional[Path],
-        typer.Option("--keywords", "-k", help="Path to old keywords checkpoint file"),
-    ] = None,
-    searches: Annotated[
-        Optional[Path],
-        typer.Option("--searches", "-s", help="Path to old searches checkpoint file"),
-    ] = None,
-    extraction: Annotated[
-        Optional[Path],
-        typer.Option(
-            "--extraction", "-e", help="Path to old extraction checkpoint file"
-        ),
-    ] = None,
-    config: Optional[str] = config_option(),
-    mode: Optional[str] = mode_option(),
-    verbose: bool = verbose_option(),
-    overrides: List[str] = overrides_option(),
-):
-    """
-    Upgrade old checkpoint files to unified PipelineCheckpoint format.
-
-    Combines old-format keywords, searches, and/or extraction files into a single
-    unified checkpoint with all pipeline stages. Automatically enriches resources
-    with DOI and publication dates from cache or OpenAlex API.
-
-    This command can be safely removed once all checkpoints are upgraded.
-
-    Examples:
-        # Upgrade all three stages
-        interaction-finder upgrade -k keywords.json -s searches.json -e extraction.json -o unified.json
-
-        # Upgrade just extraction (most common case)
-        interaction-finder upgrade -e old-extraction.json -o new-extraction.json
-
-        # Upgrade with custom config
-        interaction-finder upgrade -e old.json -o new.json -c custom-config.toml
-    """
-    config_path, mode, verbose, overrides = get_options_with_fallback(
-        config, mode, verbose, overrides
-    )
-
-    try:
-        # Load configuration
-        cfg = load_config(config_path, overrides, mode)
-
-        # Run upgrade process
-        asyncio.run(
-            cli_upgrade.run_upgrade(
-                keywords_path=keywords,
-                searches_path=searches,
-                extraction_path=extraction,
-                output_path=output,
-                config=cfg,
-                console=console,
-                verbose=verbose,
-            )
-        )
-    except SystemExit:
-        raise  # Pass through SystemExit from run_upgrade
-    except Exception as e:
-        console.print(f"[red]Error:[/red] {e}")
-        if verbose:
-            console.print_exception()
-        raise typer.Exit(1)
-
-
-@app.command()
 def keywords(
     topic: str = typer.Argument(help="Research topic to find bridging terms for"),
     output: Optional[Path] = typer.Option(
@@ -818,7 +666,7 @@ def keywords(
 
 
 @app.command()
-def widesearch(
+def search(
     checkpoint_or_topic: str = typer.Argument(
         help="Checkpoint file path OR research topic string"
     ),
@@ -846,17 +694,17 @@ def widesearch(
     overrides: List[str] = overrides_option(),
 ):
     """
-    Execute widesearch with automatic stage progression.
+    Execute search with automatic stage progression.
 
     Accepts either a checkpoint file OR a topic string. Missing stages
     (keywords) are run automatically.
 
     Example:
-        interaction-finder widesearch "cancer genomics" -o results.json
+        interaction-finder search "cancer genomics" -o results.json
 
-        interaction-finder widesearch keywords.json -o results.json
+        interaction-finder search keywords.json -o results.json
 
-        interaction-finder widesearch "cancer" -b perplexica --fetch -o out.json
+        interaction-finder search "cancer" -b perplexica --fetch -o out.json
     """
     try:
         from pydantic import ValidationError
