@@ -254,7 +254,7 @@ async def fetch_and_populate_results(
         dict[str, int] — statistics: total, fetched, cached, failed
     """
     fetcher = PageFetcher(
-        cache_dir=config.abspath(config.output.cache), show_status=False
+        cache_dir=config.abspath(config.output.cache), show_status=True
     )
 
     # Check if search stage data is present
