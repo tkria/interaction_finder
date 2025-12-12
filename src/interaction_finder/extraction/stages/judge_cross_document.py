@@ -128,34 +128,12 @@ def _build_consensus_reasoning(
     if multiple_relationships:
         lines = [
             f"High-confidence consensus across {len(high_conf_assessments)} sources "
-            f"with compatible relationships.\n"
+            f"with compatible relationships:"
         ]
-        all_docs = set()
-        for docs in by_rel.values():
-            all_docs.update(docs)
-        doc_rels: dict[str, set[str]] = defaultdict(set)
-        for rel, docs in by_rel.items():
-            for doc in docs:
-                doc_rels[doc].add(rel)
-        rel_groups: dict[frozenset[str], list[str]] = defaultdict(list)
-        for doc, rels in doc_rels.items():
-            rel_groups[frozenset(rels)].append(doc)
-        for rel_set in sorted(rel_groups.keys(), key=lambda rs: (-len(rs), sorted(rs))):
-            docs = sorted(rel_groups[rel_set])
-            doc_citations = " ".join(f"[{doc}]" for doc in docs)
-            if len(rel_set) == 1:
-                rel_name = next(iter(rel_set))
-                lines.append(
-                    f"Found {len(docs)} document{'s' if len(docs) != 1 else ''} "
-                    f"that support{'s' if len(docs) == 1 else ''} the relationship '{rel_name}': {doc_citations}"
-                )
-            else:
-                rel_list_local = ", ".join(f"'{r}'" for r in sorted(rel_set))
-                lines.append(
-                    f"Found {len(docs)} document{'s' if len(docs) != 1 else ''} "
-                    f"that support{'s' if len(docs) == 1 else ''} the relationships {rel_list_local}: {doc_citations}"
-                )
-        return "\n".join(lines) + "."
+        for rel in sorted(by_rel.keys()):
+            doc_citations = " ".join(f"[{doc}]" for doc in sorted(by_rel[rel]))
+            lines.append(f"- {rel}: {doc_citations}")
+        return "\n".join(lines)
     else:
         doc_ids = sorted(by_rel[selected_relationship])
         doc_citations = " ".join(f"[{doc}]" for doc in doc_ids)
