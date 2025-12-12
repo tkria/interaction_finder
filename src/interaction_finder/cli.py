@@ -1156,15 +1156,19 @@ def report(
 
         from interaction_finder.checkpoint import PipelineCheckpoint
 
-        log_console.print(
-            f"\n[bold]Loading extraction results:[/bold] {extraction_file.name}"
-        )
+        log_console.print(f"Loading {extraction_file}...")
         checkpoint = PipelineCheckpoint.model_validate_json(extraction_file.read_text())
         # Check version and backup if needed
         _check_and_backup_checkpoint(extraction_file, checkpoint.created_by)
         # Ensure extraction stage is present
         if not checkpoint.extraction:
             raise ValueError("Checkpoint does not contain extraction results")
+        # Display summary
+        meta = checkpoint.extraction.metadata
+        log_console.print(f"  Topic: {checkpoint.topic}")
+        log_console.print(
+            f"  Pairs: {meta.pairs_accepted} accepted, {meta.pairs_rejected} rejected | Documents: {meta.resource_count}"
+        )
 
         normalized_format = format.lower()
         supported_formats = {"html", "plain"}
@@ -1187,15 +1191,6 @@ def report(
         elif plain_kind and "accepted" not in parsed_filters:
             parsed_filters["accepted"] = "yes"
 
-        # Display summary
-        log_console.print(f"Topic: {checkpoint.topic}")
-        log_console.print(
-            f"Total pairs: {checkpoint.extraction.metadata.total_pairs_found}"
-        )
-        log_console.print(f"Accepted: {checkpoint.extraction.metadata.pairs_accepted}")
-        log_console.print(f"Rejected: {checkpoint.extraction.metadata.pairs_rejected}")
-        log_console.print(f"Resources: {checkpoint.extraction.metadata.resource_count}")
-
         # Generate output path if not specified
         if output is None:
             suffix = ".html" if normalized_format == "html" else ".txt"
@@ -1206,7 +1201,6 @@ def report(
                 log_console = Console(stderr=True)
 
         # Generate report
-        log_console.print(f"\n[bold]Generating report ({normalized_format})...[/bold]")
         from interaction_finder.report import generate_report
 
         output_path = generate_report(
@@ -1216,20 +1210,8 @@ def report(
             format=normalized_format,
             filters=parsed_filters if parsed_filters else None,
         )
-
         destination_label = "stdout" if str(output_path) == "-" else str(output_path)
-        log_console.print(f"[green]✓[/green] Report generated: {destination_label}")
-
-        # Show statistics (all pairs are included)
-        log_console.print("\n[bold]Report contains:[/bold]")
-        log_console.print(
-            f"  • {checkpoint.extraction.metadata.total_pairs_found} pairs ({checkpoint.extraction.metadata.pairs_accepted} accepted, {checkpoint.extraction.metadata.pairs_rejected} rejected)"
-        )
-        log_console.print(
-            f"  • {checkpoint.extraction.metadata.resource_count} documents"
-        )
-        log_console.print("  • Interactive filtering and search")
-        log_console.print("  • Full provenance tracking")
+        log_console.print(f"[green]✓[/green] Report written to {destination_label}")
 
     except FileNotFoundError as e:
         log_console.print(f"[red]Error:[/red] {e}")
