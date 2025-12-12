@@ -8,9 +8,12 @@ import re
 from typing import Any
 
 from interaction_finder.extraction.entity_matching import select_best_form
-from interaction_finder.extraction.utils import (
-    CITATION_BRACKET_PATTERN,
-    parse_citation_ids,
+from interaction_finder.extraction.utils import parse_citation_ids
+
+# Pattern to match citations with optional "Document(s):" prefix
+# Group 1: the bracketed citation content
+_CITATION_WITH_PREFIX = re.compile(
+    r"(?:[Dd]ocuments?:?\s+)?(\[([^\]]*\d+_[a-z0-9]{4,12}[^\]]*)\])"
 )
 from interaction_finder.text_mapping import NormalizedTextMapper
 
@@ -709,7 +712,9 @@ def _linkify_citations(
         return None
 
     def replace_bracket(match: re.Match) -> str:
-        bracket_text = match.group(0)
+        bracket_text = match.group(
+            1
+        )  # Just the bracketed part, without "Document " prefix
         links = []
         for counter, hash_part in parse_citation_ids(bracket_text):
             resource_id = f"{counter}_{hash_part}"
@@ -717,7 +722,7 @@ def _linkify_citations(
             if link:
                 links.append(link)
         if not links:
-            return _escape_html(bracket_text)
+            return _escape_html(match.group(0))  # Keep original including any prefix
         return " ".join(links)
 
-    return CITATION_BRACKET_PATTERN.sub(replace_bracket, html)
+    return _CITATION_WITH_PREFIX.sub(replace_bracket, html)
