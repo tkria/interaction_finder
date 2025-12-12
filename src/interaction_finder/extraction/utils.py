@@ -97,18 +97,33 @@ def strip_kind_annotation(entity_name: str) -> str:
     return re.sub(r"\s+\([a-zA-Z0-9_\s-]+\)\s*$", "", entity_name).strip()
 
 
+_ROMAN_VALUES = {"I": 1, "V": 5, "X": 10, "L": 50, "C": 100, "D": 500, "M": 1000}
+_ROMAN_PATTERN = re.compile(
+    r"\b(M{0,3}(CM|CD|D?C{0,3})(XC|XL|L?X{0,3})(IX|IV|V?I{0,3}))\b"
+)
+
+
+def _roman_to_arabic(match: re.Match) -> str:
+    """Convert Roman numeral match to Arabic string."""
+    s = match.group()
+    if not s:
+        return s
+    total, prev = 0, 0
+    for c in reversed(s):
+        curr = _ROMAN_VALUES[c]
+        total += curr if curr >= prev else -curr
+        prev = curr
+    return str(total)
+
+
 def normalize_for_comparison(text: str) -> str:
     """Normalize text for entity name comparison.
 
-    Uses the same normalization as fuzzy quote matching to ensure consistent
-    comparison behavior across the pipeline.
-
-    Parameters:
-        text: Text to normalize
-
-    Returns:
-        Normalized lowercase text
+    Converts uppercase Roman numerals to Arabic, then applies base normalization
+    (lowercase, Greek letters, punctuation) for consistent matching of variants
+    like "Type II" and "Type 2".
     """
+    text = _ROMAN_PATTERN.sub(_roman_to_arabic, text)
     return NormalizedTextMapper.normalize(text)
 
 

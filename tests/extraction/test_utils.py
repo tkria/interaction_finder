@@ -175,6 +175,57 @@ class TestNormalizeForComparison:
         # Should be lowercase
         assert normalized.islower() or not normalized.isalpha()
 
+    def test_roman_numeral_conversion(self):
+        """Test Roman numerals are converted to Arabic."""
+        assert normalize_for_comparison("Type II") == "type 2"
+        assert normalize_for_comparison("Type I") == "type 1"
+        assert normalize_for_comparison("Factor VIII") == "factor 8"
+        assert normalize_for_comparison("Collagen IV") == "collagen 4"
+        assert normalize_for_comparison("Class III") == "class 3"
+
+    def test_roman_numeral_in_entity_names(self):
+        """Test Roman numerals in realistic biomedical entity names."""
+        # These should normalize to the same value
+        assert normalize_for_comparison(
+            "Alveolar type II cell"
+        ) == normalize_for_comparison("Alveolar type 2 cell")
+        assert normalize_for_comparison("Type II diabetes") == normalize_for_comparison(
+            "Type 2 diabetes"
+        )
+        assert normalize_for_comparison("MHC Class II") == normalize_for_comparison(
+            "MHC Class 2"
+        )
+
+    def test_roman_numeral_case_sensitive(self):
+        """Test only uppercase Roman numerals are converted."""
+        # Uppercase Roman numerals should convert
+        assert normalize_for_comparison("Type II") == "type 2"
+        # Lowercase "ii" in original text stays as-is (rare in entity names)
+        assert normalize_for_comparison("type ii") == "type ii"
+
+    def test_roman_numeral_preserves_non_roman(self):
+        """Test non-Roman numeral uppercase letters are not converted."""
+        # These contain Roman numeral letters but aren't valid numerals at word boundaries
+        assert normalize_for_comparison("COVID") == "covid"
+        assert normalize_for_comparison("DAVID") == "david"
+        # CD4 - letters are not at word boundaries
+        assert normalize_for_comparison("CD4") == "cd4"
+
+    def test_roman_numeral_rejects_invalid_structure(self):
+        """Test invalid Roman numeral structures are not converted."""
+        # These are all Roman numeral letters but not valid Roman numerals
+        assert normalize_for_comparison("CIVIL") == "civil"
+        assert normalize_for_comparison("MILD") == "mild"
+        assert normalize_for_comparison("LIVID") == "livid"
+        assert normalize_for_comparison("VIM") == "vim"
+        # Note: MIX is actually valid (M=1000 + IX=9 = 1009)
+
+    def test_roman_numeral_larger_values(self):
+        """Test larger Roman numeral values."""
+        assert normalize_for_comparison("Type XII") == "type 12"
+        assert normalize_for_comparison("Phase XIV") == "phase 14"
+        assert normalize_for_comparison("Group XX") == "group 20"
+
 
 class TestIsObviousVariant:
     """Tests for is_obvious_variant function."""
