@@ -147,7 +147,7 @@ class SearchNode(BaseNode[State, Deps, list[SearchResult]]):
             async def execute_search(query_text: str):
                 query = SearchQuery(
                     query=query_text,
-                    max_results=ctx.deps.config.tools.widesearch.results_per_query,
+                    max_results=ctx.deps.config.stage.search.results_per_query,
                 )
                 return await ctx.deps.search_backend.search(query)
 
@@ -203,7 +203,7 @@ class RerankNode(BaseNode[State, Deps, list[SearchResult]]):
                 return SelectResultsNode()
 
             # Check if reranking is enabled (rerank_top_k > 0)
-            top_k = ctx.deps.config.tools.widesearch.rerank_top_k
+            top_k = ctx.deps.config.stage.search.rerank_top_k
 
             if top_k == 0 or ctx.deps.reranker is None:
                 logger.info(
@@ -258,7 +258,7 @@ class SelectResultsNode(BaseNode[State, Deps, list[SearchResult]]):
                 return ReflectNode()
 
             # Determine batching strategy
-            batch_size = ctx.deps.config.tools.widesearch.batch_size
+            batch_size = ctx.deps.config.stage.search.batch_size
             if batch_size == 0 or len(ctx.state.current_results) <= batch_size:
                 # Process all results in a single batch
                 await self._process_batch(

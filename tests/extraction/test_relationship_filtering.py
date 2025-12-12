@@ -318,7 +318,7 @@ class TestFilterIrrelevantAssessments:
         }
         deps = MagicMock()
         deps.logger = MagicMock()
-        deps.config.tools.extraction.filter_irrelevant_relationships = True
+        deps.config.stage.extraction.filter_irrelevant_relationships = True
         _filter_irrelevant_assessments(state, deps)
         # Pair not filtered because one relationship is relevant
         assert len(state.pair_assessments_by_resource[resource]) == 2
@@ -340,7 +340,7 @@ class TestFilterIrrelevantAssessments:
         }
         deps = MagicMock()
         deps.logger = MagicMock()
-        deps.config.tools.extraction.filter_irrelevant_relationships = True
+        deps.config.stage.extraction.filter_irrelevant_relationships = True
         _filter_irrelevant_assessments(state, deps)
         # Pair filtered - assessments removed
         assert len(state.pair_assessments_by_resource[resource]) == 0
@@ -358,7 +358,7 @@ class TestFilterIrrelevantAssessments:
         state.relationship_polarities = {}
         deps = MagicMock()
         deps.logger = MagicMock()
-        deps.config.tools.extraction.filter_irrelevant_relationships = True
+        deps.config.stage.extraction.filter_irrelevant_relationships = True
         _filter_irrelevant_assessments(state, deps)
         # No errors, no judgments created
         assert len(state.pair_judgments) == 0
@@ -376,7 +376,7 @@ class TestFilterIrrelevantAssessments:
         state.relationship_polarities = {}  # No polarity for unknown_relationship
         deps = MagicMock()
         deps.logger = MagicMock()
-        deps.config.tools.extraction.filter_irrelevant_relationships = True
+        deps.config.stage.extraction.filter_irrelevant_relationships = True
         _filter_irrelevant_assessments(state, deps)
         # Not filtered because missing polarity != "irrelevant"
         assert len(state.pair_assessments_by_resource[resource]) == 1
@@ -420,7 +420,7 @@ class TestPolarityFiltering:
         }
         deps = MagicMock()
         deps.logger = MagicMock()
-        deps.config.tools.extraction.filter_irrelevant_relationships = True
+        deps.config.stage.extraction.filter_irrelevant_relationships = True
         _filter_irrelevant_assessments(state, deps)
         # Pair 1 kept (2 assessments), Pair 2 filtered (0 assessments)
         remaining = state.pair_assessments_by_resource[resource]
@@ -451,7 +451,7 @@ class TestPolarityFiltering:
         }
         deps = MagicMock()
         deps.logger = MagicMock()
-        deps.config.tools.extraction.filter_irrelevant_relationships = True
+        deps.config.stage.extraction.filter_irrelevant_relationships = True
         _filter_irrelevant_assessments(state, deps)
         # All 3 assessments kept because pair has at least one relevant
         assert len(state.pair_assessments_by_resource[resource]) == 3
@@ -467,7 +467,7 @@ class TestEndToEndRelationshipConsolidation:
         """Create mock dependencies for async tests."""
         deps = MagicMock()
         deps.config = MagicMock()
-        deps.config.tools.extraction.filter_irrelevant_relationships = True
+        deps.config.stage.extraction.filter_irrelevant_relationships = True
         deps.logger = MagicMock()
         deps.agent_semaphore = AsyncMock()
         deps.agent_semaphore.__aenter__ = AsyncMock(return_value=None)

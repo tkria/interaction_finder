@@ -81,7 +81,7 @@ async def consolidate_relationships(state: State, deps: Deps) -> bool:
             f"{state.relationships_merged} assessments updated"
         )
         # Step 5: Filter irrelevant relationship types (if enabled)
-        if deps.config.tools.extraction.filter_irrelevant_relationships:
+        if deps.config.stage.extraction.filter_irrelevant_relationships:
             _filter_irrelevant_assessments(state, deps)
         # Save checkpoint after relationship consolidation
         await save_checkpoint(state, deps, "consolidate_relationships")

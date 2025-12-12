@@ -218,10 +218,11 @@ path = config.abspath("output/{name}.json", name="results")
 3. `.interaction_finder.toml`
 
 **Key configuration sections**:
+- `stage.keywords` - Keywords stage parameters (max rounds, search backend)
+- `stage.search` - Search stage parameters (max rounds, reranking, backends)
+- `stage.extraction` - Extraction stage parameters (concurrency, clustering)
 - `tools.search` - Search backend configuration (PubMed, Perplexica, OpenAI)
-- `tools.keywords` - Keyword extraction parameters (algorithms, max rounds)
-- `tools.widesearch` - Wide search parameters (max rounds, reranking, backends)
-- `tools.reverse_search` - Reverse search configuration (query construction, clustering)
+- `tools.keywords` - Keyword extraction algorithm configs (RAKE, YAKE, TF-IDF, KeyBERT)
 - `agents.*` - **Multi-tier LLM agent configuration** (see below)
 - `output.*` - Cache paths and output locations
 
@@ -238,7 +239,7 @@ llm = "openai:gpt-4o-mini"
 llm = "openai:gpt-4o"
 ```
 
-**Agent names**: keywords (`query_expander`, `result_selector`, `keyword_evaluator`, `document_summarizer`, `reflector`), widesearch (`goal_planner`, `query_generator`, `result_selector`, `reflector`), extraction (`entity`, `entity_merger`, `proximal_pair`, `pair_judge`, `cross_judge`)
+**Agent names**: keywords (`query_expander`, `result_selector`, `keyword_evaluator`, `document_summarizer`, `reflector`), search (`goal_planner`, `query_generator`, `result_selector`, `reflector`), extraction (`entity`, `entity_merger`, `proximal_pair`, `pair_judge`, `cross_judge`)
 
 **For developers** - define agents with `agent_getter()`:
 ```python

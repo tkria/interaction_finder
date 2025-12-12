@@ -320,7 +320,7 @@ class TestLLMErrorHandling:
         """Create mock dependencies for async tests."""
         deps = MagicMock()
         deps.config = MagicMock()
-        deps.config.tools.extraction.filter_irrelevant_relationships = False
+        deps.config.stage.extraction.filter_irrelevant_relationships = False
         deps.logger = MagicMock()
         deps.agent_semaphore = AsyncMock()
         deps.agent_semaphore.__aenter__ = AsyncMock(return_value=None)

@@ -36,7 +36,7 @@ class IfetcherConfig(BaseModel):
     """Configuration for interaction-finder with validation and path resolution.
 
     Load from TOML file with IfetcherConfig.from_path("config.toml").
-    Override values via CLI: -O tools.search.timeout=120
+    Override values via CLI: -O stage.search.max_rounds=5
     """
 
     _dir: Path | None = None  # Directory of the config file
@@ -46,7 +46,7 @@ class IfetcherConfig(BaseModel):
 
         Modules and their agents:
         - keywords: query_expander, result_selector, keyword_evaluator, document_summarizer, reflector
-        - widesearch: goal_planner, query_generator, result_selector, reflector
+        - search: goal_planner, query_generator, result_selector, reflector
         - extraction: document_analysis, proximal_pair, entity_consolidator, relationship_consolidator,
                       pair_judge, cross_judge, co_mention_region, entity_group_consolidation
         """
@@ -114,7 +114,7 @@ class IfetcherConfig(BaseModel):
     )
 
     class Tools(BaseModel):
-        """Pipeline tool configuration."""
+        """Tool-specific configuration (algorithms, backends)."""
 
         class Crawl4AI(BaseModel):
             """Crawl4AI web scraper for fetching and converting web pages to markdown."""
@@ -180,66 +180,7 @@ class IfetcherConfig(BaseModel):
         )
 
         class Keywords(BaseModel):
-            """Bridging term extraction from review articles (Stage 1)."""
-
-            max_rounds: int = Field(
-                5,
-                ge=1,
-                le=10,
-                description="Search iterations before stopping (each round fetches new documents)",
-            )
-            search_backend: str = Field(
-                "perplexica",
-                description="Backend for finding reviews: 'pubmed', 'perplexica', or 'openai'",
-            )
-            max_results_per_query: int = Field(
-                20,
-                ge=1,
-                le=100,
-                description="Search results to retrieve per query",
-            )
-            max_documents_to_fetch: int = Field(
-                10,
-                ge=1,
-                le=50,
-                description="Documents to fetch full-text for per round",
-            )
-            max_keywords_per_method: int = Field(
-                30,
-                ge=5,
-                le=100,
-                description="Keywords extracted per algorithm (RAKE, YAKE, etc.) before merging",
-            )
-            max_keywords_for_llm: int = Field(
-                50,
-                ge=10,
-                le=100,
-                description="Keywords shown to LLM for evaluation after deduplication",
-            )
-            rerank_top_k: int = Field(
-                0,
-                ge=0,
-                le=200,
-                description="Use semantic reranking to select top-k results (0 = skip reranking, send all to LLM)",
-            )
-            reranker_model: str = Field(
-                "zeroentropy/zerank-1-small",
-                description="HuggingFace model for semantic reranking of search results",
-            )
-            reranker_device: str | None = Field(
-                None,
-                description="Device for reranker: 'cpu', 'cuda', or omit for auto-detect",
-            )
-            llm_model: str = Field(
-                "openai:gpt-4o-mini",
-                description="Model for keyword evaluation (overrides agents.keywords._)",
-            )
-            document_context_chars: int = Field(
-                12000,
-                ge=1000,
-                le=50000,
-                description="Characters of document text to include in LLM prompt",
-            )
+            """Keyword extraction algorithm configuration."""
 
             class RAKEConfig(BaseModel):
                 """RAKE (Rapid Automatic Keyword Extraction) - fast, statistical phrase extraction."""
@@ -320,14 +261,89 @@ class IfetcherConfig(BaseModel):
 
         keywords: Keywords = Field(
             default_factory=Keywords,
+            description="Keyword extraction algorithm settings",
+        )
+
+    tools: Tools = Field(
+        default_factory=Tools,
+        description="Tool-specific configuration (algorithms, backends)",
+    )
+
+    class Stage(BaseModel):
+        """Pipeline stage configuration: keywords → search → extraction."""
+
+        class Keywords(BaseModel):
+            """Bridging term extraction from review articles (Stage 1)."""
+
+            max_rounds: int = Field(
+                5,
+                ge=1,
+                le=10,
+                description="Search iterations before stopping (each round fetches new documents)",
+            )
+            search_backend: str = Field(
+                "perplexica",
+                description="Backend for finding reviews: 'pubmed', 'perplexica', or 'openai'",
+            )
+            max_results_per_query: int = Field(
+                20,
+                ge=1,
+                le=100,
+                description="Search results to retrieve per query",
+            )
+            max_documents_to_fetch: int = Field(
+                10,
+                ge=1,
+                le=50,
+                description="Documents to fetch full-text for per round",
+            )
+            max_keywords_per_method: int = Field(
+                30,
+                ge=5,
+                le=100,
+                description="Keywords extracted per algorithm (RAKE, YAKE, etc.) before merging",
+            )
+            max_keywords_for_llm: int = Field(
+                50,
+                ge=10,
+                le=100,
+                description="Keywords shown to LLM for evaluation after deduplication",
+            )
+            rerank_top_k: int = Field(
+                0,
+                ge=0,
+                le=200,
+                description="Use semantic reranking to select top-k results (0 = skip reranking, send all to LLM)",
+            )
+            reranker_model: str = Field(
+                "zeroentropy/zerank-1-small",
+                description="HuggingFace model for semantic reranking of search results",
+            )
+            reranker_device: str | None = Field(
+                None,
+                description="Device for reranker: 'cpu', 'cuda', or omit for auto-detect",
+            )
+            llm_model: str = Field(
+                "openai:gpt-4o-mini",
+                description="Model for keyword evaluation (overrides agents.keywords._)",
+            )
+            document_context_chars: int = Field(
+                12000,
+                ge=1000,
+                le=50000,
+                description="Characters of document text to include in LLM prompt",
+            )
+
+        keywords: Keywords = Field(
+            default_factory=Keywords,
             description="Bridging term extraction from review articles (Stage 1)",
         )
 
-        class Widesearch(BaseModel):
+        class Search(BaseModel):
             """Query expansion and comprehensive literature discovery (Stage 2)."""
 
             enabled: bool = Field(
-                True, description="Run widesearch stage (disable to skip to extraction)"
+                True, description="Run search stage (disable to skip to extraction)"
             )
             max_rounds: int = Field(
                 8,
@@ -362,15 +378,15 @@ class IfetcherConfig(BaseModel):
             )
             llm_model: str = Field(
                 "openai:gpt-4o-mini",
-                description="Model for query generation and reflection (overrides agents.widesearch._)",
+                description="Model for query generation and reflection (overrides agents.search._)",
             )
             search_backend: str = Field(
                 "pubmed",
                 description="Backend for literature search: 'pubmed', 'perplexica', or 'openai'",
             )
 
-        widesearch: Widesearch = Field(
-            default_factory=Widesearch,
+        search: Search = Field(
+            default_factory=Search,
             description="Query expansion and literature discovery (Stage 2)",
         )
 
@@ -437,9 +453,9 @@ class IfetcherConfig(BaseModel):
             description="Entity-relationship extraction from documents (Stage 3)",
         )
 
-    tools: Tools = Field(
-        default_factory=Tools,
-        description="Pipeline stages: keywords → widesearch → extraction",
+    stage: Stage = Field(
+        default_factory=Stage,
+        description="Pipeline stages: keywords → search → extraction",
     )
 
     class Output(BaseModel):
@@ -468,7 +484,7 @@ class IfetcherConfig(BaseModel):
 
     modes: dict[str, dict[str, Any]] = Field(
         default_factory=dict,
-        description="Named config presets. Define as [modes.NAME] with overrides, activate with -m NAME. Example: [modes.fast] with tools.extraction.agent_concurrency_limit=50",
+        description="Named config presets. Define as [modes.NAME] with overrides, activate with -m NAME. Example: [modes.fast] with stage.extraction.agent_concurrency_limit=50",
     )
 
     def abspath(self, path: str | Path, **kwargs: Any) -> Path:
@@ -499,7 +515,7 @@ class IfetcherConfig(BaseModel):
         4. Empty AgentSpec (all None values)
 
         Parameters:
-            module: Module name (e.g., "keywords", "widesearch", "extraction")
+            module: Module name (e.g., "keywords", "search", "extraction")
             agent: Optional agent name (e.g., "query_expander", "judge")
 
         Returns:

@@ -53,6 +53,17 @@ uv run interaction-finder report results.json
 uv run interaction-finder extract "topic" -e gene -b perplexica -o results.json
 ```
 
+## Quick Test Run
+
+For a fast test with minimal API calls, limit search rounds and results:
+
+```bash
+uv run interaction-finder extract "diabetes genetics" \
+  -e gene -e disease -o results.json \
+  -O stage.search.max_rounds=1 \
+  -O stage.search.results_per_query=2
+```
+
 ## Configuration
 
 Create a `config.toml` to customize LLM models:

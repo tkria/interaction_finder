@@ -20,9 +20,9 @@ def test_config():
     """Config with CPU device to avoid GPU memory issues in tests."""
     config = IfetcherConfig()
     # Force CPU device for reranker to avoid CUDA OOM in tests
-    config.tools.widesearch.reranker_device = "cpu"
+    config.stage.search.reranker_device = "cpu"
     # Disable reranking by default for these tests (rerank_top_k = 0)
-    config.tools.widesearch.rerank_top_k = 0
+    config.stage.search.rerank_top_k = 0
     return config
 
 
@@ -62,7 +62,7 @@ async def test_batch_size_zero_processes_all_at_once(test_config):
     test_model = TestModel()
 
     # Set batch_size to 0 (process all at once)
-    test_config.tools.widesearch.batch_size = 0
+    test_config.stage.search.batch_size = 0
 
     config = IfetcherConfig()
     with (
@@ -101,7 +101,7 @@ async def test_batch_size_splits_results(test_config):
     test_model = TestModel()
 
     # Set batch_size to 10
-    test_config.tools.widesearch.batch_size = 10
+    test_config.stage.search.batch_size = 10
 
     config = IfetcherConfig()
     with (
@@ -140,7 +140,7 @@ async def test_batch_size_larger_than_results(test_config):
     test_model = TestModel()
 
     # Set batch_size larger than result count
-    test_config.tools.widesearch.batch_size = 10
+    test_config.stage.search.batch_size = 10
 
     config = IfetcherConfig()
     with (
@@ -178,8 +178,8 @@ async def test_batching_with_reranking_enabled(test_config):
     test_model = TestModel()
 
     # Enable both reranking and batching
-    test_config.tools.widesearch.rerank_top_k = 20  # Rerank down to 20 results
-    test_config.tools.widesearch.batch_size = 10  # Then process in batches of 10
+    test_config.stage.search.rerank_top_k = 20  # Rerank down to 20 results
+    test_config.stage.search.batch_size = 10  # Then process in batches of 10
 
     config = IfetcherConfig()
     with (
@@ -208,7 +208,7 @@ async def test_batching_empty_results(test_config):
     test_model = TestModel()
 
     # Set batch_size
-    test_config.tools.widesearch.batch_size = 10
+    test_config.stage.search.batch_size = 10
 
     config = IfetcherConfig()
     with (

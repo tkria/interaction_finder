@@ -129,7 +129,7 @@ For each new relationship, provide:
             for label in new_labels:
                 state.relationship_polarities[label] = "neutral"
         # Filter pairs with only irrelevant relationships (if enabled)
-        if deps.config.tools.extraction.filter_irrelevant_relationships:
+        if deps.config.stage.extraction.filter_irrelevant_relationships:
             _filter_irrelevant_pairs(state, deps)
         # Save checkpoint after new relationship consolidation
         await save_checkpoint(state, deps, "consolidate_new_relationships")

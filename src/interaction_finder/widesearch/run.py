@@ -73,12 +73,12 @@ async def run_widesearch(
     if config is None:
         config = IfetcherConfig()
 
-    # Extract widesearch config
-    ws_config = config.tools.widesearch
+    # Extract search stage config
+    search_config = config.stage.search
 
     # Resolve effective values (parameter overrides take precedence)
     effective_max_rounds = (
-        max_rounds if max_rounds is not None else ws_config.max_rounds
+        max_rounds if max_rounds is not None else search_config.max_rounds
     )
 
     # Create or use existing resource pool
@@ -86,10 +86,10 @@ async def run_widesearch(
         resource_pool = ResourcePool()
 
     # Create reranker if enabled (rerank_top_k > 0) and not provided
-    if reranker is None and ws_config.rerank_top_k > 0:
+    if reranker is None and search_config.rerank_top_k > 0:
         reranker = Reranker(
-            model_name=ws_config.reranker_model,
-            device=ws_config.reranker_device,
+            model_name=search_config.reranker_model,
+            device=search_config.reranker_device,
         )
 
     # Handle HTTP client
@@ -178,19 +178,19 @@ async def run_widesearch_with_checkpoint(
     if config is None:
         config = IfetcherConfig()
 
-    # Extract widesearch config
-    ws_config = config.tools.widesearch
+    # Extract search stage config
+    search_config = config.stage.search
 
     # Resolve effective values (parameter overrides take precedence)
     effective_max_rounds = (
-        max_rounds if max_rounds is not None else ws_config.max_rounds
+        max_rounds if max_rounds is not None else search_config.max_rounds
     )
 
     # Create reranker if enabled (rerank_top_k > 0) and not provided
-    if reranker is None and ws_config.rerank_top_k > 0:
+    if reranker is None and search_config.rerank_top_k > 0:
         reranker = Reranker(
-            model_name=ws_config.reranker_model,
-            device=ws_config.reranker_device,
+            model_name=search_config.reranker_model,
+            device=search_config.reranker_device,
         )
 
     # Handle HTTP client

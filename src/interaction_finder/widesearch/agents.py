@@ -156,7 +156,7 @@ IMPORTANT: Require strong evidence before stopping. "Adequate coverage" is not s
 def get_goal_planner_agent(config: IfetcherConfig) -> Agent:
     """Get goal planner agent."""
     return get_agent(
-        config, "widesearch", "goal_planner", SubjectGoalsOut, Deps, GOAL_PLANNER_PROMPT
+        config, "search", "goal_planner", SubjectGoalsOut, Deps, GOAL_PLANNER_PROMPT
     )
 
 
@@ -164,7 +164,7 @@ def get_query_generator_agent(config: IfetcherConfig) -> Agent:
     """Get query generator agent."""
     return get_agent(
         config,
-        "widesearch",
+        "search",
         "query_generator",
         QueryGenerationOut,
         Deps,
@@ -177,7 +177,7 @@ def get_result_selector_agent(config: IfetcherConfig) -> Agent:
     """Get result selector agent."""
     return get_agent(
         config,
-        "widesearch",
+        "search",
         "result_selector",
         ResultSelectionOut,
         Deps,
@@ -188,5 +188,5 @@ def get_result_selector_agent(config: IfetcherConfig) -> Agent:
 def get_reflector_agent(config: IfetcherConfig) -> Agent:
     """Get reflector agent."""
     return get_agent(
-        config, "widesearch", "reflector", ReflectionOut, Deps, REFLECTOR_PROMPT
+        config, "search", "reflector", ReflectionOut, Deps, REFLECTOR_PROMPT
     )

@@ -115,7 +115,7 @@ async def _process_document(resource: Resource, state: State, deps: Deps):
                 deps.progress.set_status("Finding proximal pairs")
             proximal_sets = identify_proximal_sets(
                 validated,
-                deps.config.tools.extraction.proximal_window_chunks,
+                deps.config.stage.extraction.proximal_window_chunks,
                 resource,
             )
             if not proximal_sets:
@@ -130,7 +130,7 @@ async def _process_document(resource: Resource, state: State, deps: Deps):
                 resource,
                 state.topic,
                 state.permitted_pairs,
-                deps.config.tools.extraction.region_padding_chunks,
+                deps.config.stage.extraction.region_padding_chunks,
                 deps.config,
                 deps,
             )
@@ -147,7 +147,7 @@ async def _process_document(resource: Resource, state: State, deps: Deps):
                 state.validated_entities_by_resource[resource.id],
                 resource,
                 state.topic,
-                deps.config.tools.extraction.region_padding_chunks,
+                deps.config.stage.extraction.region_padding_chunks,
                 deps.config,
                 deps,
             )

@@ -25,7 +25,7 @@ def test_config():
     """Config with CPU device to avoid GPU memory issues in tests."""
     config = IfetcherConfig()
     # Force CPU device for reranker to avoid CUDA OOM in tests
-    config.tools.widesearch.reranker_device = "cpu"
+    config.stage.search.reranker_device = "cpu"
     return config
 
 

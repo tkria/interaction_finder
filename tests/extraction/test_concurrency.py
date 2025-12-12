@@ -83,7 +83,7 @@ async def test_semaphore_with_limit_one():
 async def test_config_default_value():
     """Verify default agent_concurrency_limit is 10."""
     config = IfetcherConfig()
-    assert config.tools.extraction.agent_concurrency_limit == 10
+    assert config.stage.extraction.agent_concurrency_limit == 10
 
 
 @pytest.mark.asyncio
@@ -91,7 +91,7 @@ async def test_config_validation_min():
     """Verify agent_concurrency_limit cannot be less than 1."""
     with pytest.raises(ValueError):
         IfetcherConfig.model_validate(
-            {"tools": {"extraction": {"agent_concurrency_limit": 0}}}
+            {"stage": {"extraction": {"agent_concurrency_limit": 0}}}
         )
 
 
@@ -100,7 +100,7 @@ async def test_config_validation_max():
     """Verify agent_concurrency_limit cannot exceed 100."""
     with pytest.raises(ValueError):
         IfetcherConfig.model_validate(
-            {"tools": {"extraction": {"agent_concurrency_limit": 101}}}
+            {"stage": {"extraction": {"agent_concurrency_limit": 101}}}
         )
 
 
@@ -108,9 +108,9 @@ async def test_config_validation_max():
 async def test_config_custom_value():
     """Verify custom agent_concurrency_limit can be set."""
     config = IfetcherConfig.model_validate(
-        {"tools": {"extraction": {"agent_concurrency_limit": 25}}}
+        {"stage": {"extraction": {"agent_concurrency_limit": 25}}}
     )
-    assert config.tools.extraction.agent_concurrency_limit == 25
+    assert config.stage.extraction.agent_concurrency_limit == 25
 
 
 @pytest.mark.asyncio

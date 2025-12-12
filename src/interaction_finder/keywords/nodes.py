@@ -155,7 +155,7 @@ class SearchNode(BaseNode[State, Deps, BridgingTermsOut]):
             for query_text in ctx.state.search_queries:
                 query = SearchQuery(
                     query=query_text,
-                    max_results=ctx.deps.config.tools.keywords.max_results_per_query,
+                    max_results=ctx.deps.config.stage.keywords.max_results_per_query,
                 )
                 results = await ctx.deps.search_backend.search(query)
                 all_results.extend(results)
@@ -202,7 +202,7 @@ class RerankNode(BaseNode[State, Deps, BridgingTermsOut]):
                 )
                 return SelectResultsNode()
             # Check if reranking is enabled (rerank_top_k > 0)
-            top_k = ctx.deps.config.tools.keywords.rerank_top_k
+            top_k = ctx.deps.config.stage.keywords.rerank_top_k
             if top_k == 0 or ctx.deps.reranker is None:
                 logger.info(
                     f"Reranking disabled, passing {len(ctx.state.all_search_results)} results unchanged",
@@ -267,7 +267,7 @@ Select the indices of results that are most likely to be valuable review article
         with rename_agent(agent, "SelectResultsNode"):
             result = await agent.run(prompt, deps=ctx.deps, usage=usage)
         # Get selected results
-        max_to_fetch = ctx.deps.config.tools.keywords.max_documents_to_fetch
+        max_to_fetch = ctx.deps.config.stage.keywords.max_documents_to_fetch
         selected_indices = result.output.selected_indices[:max_to_fetch]
         ctx.state.selected_results = [
             ctx.state.all_search_results[i]
@@ -442,7 +442,7 @@ class ExtractKeywordsNode(BaseNode[State, Deps, BridgingTermsOut]):
             if not resources:
                 logger.info("No resources available, skipping to finalization")
                 return FinalizeNode()
-            max_keywords = ctx.deps.config.tools.keywords.max_keywords_per_method
+            max_keywords = ctx.deps.config.stage.keywords.max_keywords_per_method
             # Track already-processed URLs to avoid re-extraction
             already_processed = set(ctx.state.extracted_keywords.keys())
             new_resources = [r for r in resources if r.id.url not in already_processed]
@@ -511,7 +511,7 @@ async def _evaluate_single_document(
         if not resource:
             return None
         # Clean, deduplicate, and rerank keywords for LLM review
-        max_keywords_for_llm = config.tools.keywords.max_keywords_for_llm
+        max_keywords_for_llm = config.stage.keywords.max_keywords_for_llm
         keywords_text = _clean_and_rerank_keywords_for_display(
             keywords, topic, reranker, max_keywords_for_llm
         )

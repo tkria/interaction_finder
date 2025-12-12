@@ -1,7 +1,7 @@
 """Unified agent configuration and caching system.
 
 Provides a consistent interface for creating and caching LLM agents across
-all pipeline stages (keywords, widesearch, extraction) with multi-tier
+all pipeline stages (keywords, search, extraction) with multi-tier
 configuration resolution.
 """
 
@@ -147,7 +147,7 @@ def get_agent(
 
     Parameters:
         config: IfetcherConfig — configuration object with agents settings
-        module: str — module name (e.g., "keywords", "widesearch", "extraction")
+        module: str — module name (e.g., "keywords", "search", "extraction")
         agent: str — agent name (e.g., "query_expander", "judge")
         output_type: Type[BaseModel] — Pydantic model for structured output
         deps_type: Type — Pydantic type for dependencies

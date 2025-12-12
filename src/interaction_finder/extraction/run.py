@@ -88,7 +88,7 @@ async def run_extraction(
         if logger is None:
             logger = get_logger(__name__)
         agent_semaphore = asyncio.Semaphore(
-            config.tools.extraction.agent_concurrency_limit
+            config.stage.extraction.agent_concurrency_limit
         )
         permitted_pairs = build_permitted_pairs(target_entity_types)
         # Determine starting stage index (0 for fresh start, or index after last completed)

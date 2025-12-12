@@ -35,7 +35,7 @@ async def sweep_co_mentions(state: State, deps: Deps) -> bool:
         deps.progress["Candidates"].activate()
         deps.progress.set_status("Sweeping for missed co-mentions")
         # Check if sweep is enabled
-        if not deps.config.tools.extraction.sweep_co_mentions:
+        if not deps.config.stage.extraction.sweep_co_mentions:
             deps.logger.info("Co-mention sweep disabled")
             return True
         stats = CoMentionSweepStats()
@@ -55,7 +55,7 @@ async def sweep_co_mentions(state: State, deps: Deps) -> bool:
                     aliases = global_aliases.get(name, set())
                     entity_patterns[name] = build_entity_search_pattern(name, aliases)
         # Step 4: Find novel co-mentions in all resources
-        chunk_distance = deps.config.tools.extraction.proximal_window_chunks
+        chunk_distance = deps.config.stage.extraction.proximal_window_chunks
         all_co_mentions = []
         for resource in deps.resource_pool.resources:
             resource_co_mentions = find_novel_co_mentions_in_resource(

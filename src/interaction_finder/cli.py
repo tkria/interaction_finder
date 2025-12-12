@@ -744,10 +744,10 @@ def keywords(
                 pass
         # Apply CLI overrides
         if max_rounds is not None:
-            cfg.tools.keywords.max_rounds = max_rounds
+            cfg.stage.keywords.max_rounds = max_rounds
 
         # Create search backend
-        backend_name = backend if backend else cfg.tools.keywords.search_backend
+        backend_name = backend if backend else cfg.stage.keywords.search_backend
         search_backend = create_search_backend(backend_name, cfg)
 
         # Import keywords pipeline
@@ -865,10 +865,10 @@ def search(
             raise typer.Exit(1)
         # Apply CLI overrides
         if max_rounds is not None:
-            cfg.tools.widesearch.max_rounds = max_rounds
+            cfg.stage.search.max_rounds = max_rounds
 
         # Create search backend
-        backend_name = backend if backend else cfg.tools.widesearch.search_backend
+        backend_name = backend if backend else cfg.stage.search.search_backend
         search_backend = create_search_backend(backend_name, cfg)
 
         # Show PubMed API key warning if applicable
@@ -886,12 +886,12 @@ def search(
 
         # Pre-load reranker if enabled
         reranker = None
-        if cfg.tools.widesearch.rerank_top_k > 0:
+        if cfg.stage.search.rerank_top_k > 0:
             from interaction_finder.widesearch.reranker import Reranker
 
             reranker = Reranker(
-                model_name=cfg.tools.widesearch.reranker_model,
-                device=cfg.tools.widesearch.reranker_device,
+                model_name=cfg.stage.search.reranker_model,
+                device=cfg.stage.search.reranker_device,
             )
             _ = reranker._get_model()
 
@@ -1015,7 +1015,7 @@ def extract(
             )
             raise typer.Exit(1)
         # Create search backend (needed if search stage must run)
-        backend_name = backend if backend else cfg.tools.widesearch.search_backend
+        backend_name = backend if backend else cfg.stage.search.search_backend
         search_backend = create_search_backend(backend_name, cfg)
 
         # Determine checkpoint path (for saving after each stage)

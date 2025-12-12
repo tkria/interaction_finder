@@ -58,10 +58,11 @@ async def run_keyword_research(
     with logfire.span(
         "run_keyword_research",
         topic=topic,
-        max_rounds=config.tools.keywords.max_rounds,
+        max_rounds=config.stage.keywords.max_rounds,
     ):
-        # Extract configuration
-        kw_config = config.tools.keywords
+        # Extract configuration (stage settings and tool/algorithm settings)
+        stage_config = config.stage.keywords
+        tool_config = config.tools.keywords
         # Create async HTTP client
         async with httpx.AsyncClient(timeout=30.0) as http_client:
             # Initialize fetcher
@@ -78,32 +79,32 @@ async def run_keyword_research(
                 )
             # Initialize reranker if enabled (rerank_top_k > 0)
             reranker = None
-            if kw_config.rerank_top_k > 0:
+            if stage_config.rerank_top_k > 0:
                 reranker = Reranker(
-                    model_name=kw_config.reranker_model,
-                    device=kw_config.reranker_device,
+                    model_name=stage_config.reranker_model,
+                    device=stage_config.reranker_device,
                 )
-            # Initialize extractors
+            # Initialize extractors (algorithm configs from tools.keywords)
             extractors = {
                 "rake": RAKEExtractor(
-                    min_length=kw_config.rake.min_length,
-                    max_length=kw_config.rake.max_length,
+                    min_length=tool_config.rake.min_length,
+                    max_length=tool_config.rake.max_length,
                 ),
                 "yake": YAKEExtractor(
-                    n_grams=kw_config.yake.n_grams,
-                    deduplication_threshold=kw_config.yake.deduplication_threshold,
-                    window_size=kw_config.yake.window_size,
+                    n_grams=tool_config.yake.n_grams,
+                    deduplication_threshold=tool_config.yake.deduplication_threshold,
+                    window_size=tool_config.yake.window_size,
                 ),
                 "tfidf": TFIDFExtractor(
-                    max_features=kw_config.tfidf.max_features,
-                    ngram_range=kw_config.tfidf.ngram_range,
-                    min_df=kw_config.tfidf.min_df,
+                    max_features=tool_config.tfidf.max_features,
+                    ngram_range=tool_config.tfidf.ngram_range,
+                    min_df=tool_config.tfidf.min_df,
                 ),
                 "keybert": KeyBERTExtractor(
-                    model_name=kw_config.keybert.model_name,
-                    diversity=kw_config.keybert.diversity,
-                    top_n=kw_config.keybert.top_n,
-                    device=kw_config.keybert.device,
+                    model_name=tool_config.keybert.model_name,
+                    diversity=tool_config.keybert.diversity,
+                    top_n=tool_config.keybert.top_n,
+                    device=tool_config.keybert.device,
                 ),
             }
             # Initialize resource pool
@@ -120,7 +121,7 @@ async def run_keyword_research(
                 progress=progress,
             )
             # Create state
-            state = State(topic=topic, max_rounds=kw_config.max_rounds)
+            state = State(topic=topic, max_rounds=stage_config.max_rounds)
             # Run graph
             result = await graph.run(ExpandQueryNode(), state=state, deps=deps)
             logger.info(

@@ -211,8 +211,8 @@ async def _consolidate_kind_impl(
     deps: Deps,
 ) -> dict[tuple[str, str], tuple[str, str]]:
     """Implementation of per-kind consolidation."""
-    max_iterations = deps.config.tools.extraction.max_rename_iterations
-    threshold = deps.config.tools.extraction.cluster_token_overlap_threshold
+    max_iterations = deps.config.stage.extraction.max_rename_iterations
+    threshold = deps.config.stage.extraction.cluster_token_overlap_threshold
     kind_merges = state.consolidated.entities.merges[kind]
     # Track groups resolved (kept separate) to avoid re-asking
     resolved_groups: set[frozenset[str]] = set()
@@ -442,7 +442,7 @@ async def _get_consolidation_decisions_for_kind(
             uncached.append((child, parent))
     # Get LLM decisions for uncached pairs
     if uncached:
-        batch_size = deps.config.tools.extraction.merge_batch_size
+        batch_size = deps.config.stage.extraction.merge_batch_size
         for i in range(0, len(uncached), batch_size):
             await _process_consolidation_batch(
                 uncached[i : i + batch_size], kind, i // batch_size + 1, state, deps
@@ -550,7 +550,7 @@ async def _get_group_consolidation_decisions(
 
     if not groups:
         return {}, set(), set()
-    max_rounds = deps.config.tools.extraction.cluster_refinement_max_rounds
+    max_rounds = deps.config.stage.extraction.cluster_refinement_max_rounds
     all_rules: dict[tuple[str, str], tuple[str, str]] = {}
     all_new_names: set[str] = set()
     all_resolved: set[frozenset[str]] = set()
@@ -590,7 +590,7 @@ Only return groups that need action (merge/exclude/split). Omit groups that shou
     )
     agent = get_agent(deps.config)
     current_groups = list(groups)
-    batch_size = deps.config.tools.extraction.merge_batch_size
+    batch_size = deps.config.stage.extraction.merge_batch_size
     entity_types_str = ", ".join(state.target_entity_types)
     for round_num in range(1, max_rounds + 1):
         if not current_groups:

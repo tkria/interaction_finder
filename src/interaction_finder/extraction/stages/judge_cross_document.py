@@ -182,7 +182,7 @@ def _build_contentious_prompt(
     pair_key: EntityPairKey, spread: PairSpread, state: State, deps: Deps
 ) -> str:
     """Build prompt for contentious pairs (supporting + refuting evidence)."""
-    padding = getattr(deps.config.tools.extraction, "region_padding_chunks", 1)
+    padding = getattr(deps.config.stage.extraction, "region_padding_chunks", 1)
 
     def format_assessments(assessments: list[PairAssessment], label: str) -> str:
         if not assessments:
@@ -250,7 +250,7 @@ def _build_unidirectional_prompt(
     pair_key: EntityPairKey, spread: PairSpread, state: State, deps: Deps
 ) -> str:
     """Build prompt for unidirectional pairs (no positive+negative conflict)."""
-    padding = getattr(deps.config.tools.extraction, "region_padding_chunks", 1)
+    padding = getattr(deps.config.stage.extraction, "region_padding_chunks", 1)
     all_assessments = spread.positive + spread.negative + spread.neutral
     sorted_assessments = _sort_assessments_by_date(all_assessments, deps)
     document_sections = []

@@ -628,7 +628,7 @@ async def assess_co_mention_region(
     if not region.candidate_pairs:
         return ([], [])
     # Build text region from chunk range with padding
-    padding = config.tools.extraction.region_padding_chunks
+    padding = config.stage.extraction.region_padding_chunks
     start_chunk = max(0, region.chunk_range[0] - padding)
     end_chunk = min(len(resource.chunks) - 1, region.chunk_range[1] + padding)
     text_parts = []
