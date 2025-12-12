@@ -204,6 +204,25 @@ class TestEntityHighlighter:
         assert result == "Some random text"
         assert "<span" not in result
 
+    def test_word_boundary_matching(self):
+        """Should only match whole words, not substrings within words."""
+        highlighter = EntityHighlighter(
+            entity1_terms=["ATI", "PAH"],
+            entity2_terms=["TGF"],
+            entity1_name="ATI",
+            entity2_name="TGF",
+        )
+        # "ATI" should not match inside "relationship", "PAH" not inside "alpha"
+        text = "The relationship between alpha and ATI shows TGF involvement"
+        result = highlighter.highlight(text)
+        # Should only match standalone "ATI" and "TGF"
+        assert result.count('<span class="entity-highlight') == 2
+        assert "relationship" in result  # not broken by highlighting
+        assert "alpha" in result  # not broken by highlighting
+        # The standalone matches should be highlighted
+        assert ">ATI</span>" in result
+        assert ">TGF</span>" in result
+
     def test_adjacent_entities(self):
         """Adjacent entities should both be highlighted."""
         highlighter = EntityHighlighter(

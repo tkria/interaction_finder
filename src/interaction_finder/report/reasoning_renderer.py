@@ -139,7 +139,7 @@ class EntityHighlighter:
         # Find all matches
         for term in all_terms:
             entity_type, canonical = term_map[term.lower()]
-            pattern = re.compile(re.escape(term), re.IGNORECASE)
+            pattern = re.compile(r"\b" + re.escape(term) + r"\b", re.IGNORECASE)
 
             for match in pattern.finditer(text):
                 matches.append(
