@@ -8,38 +8,55 @@ from pydantic import BaseModel, Field, field_validator
 
 
 class IfetcherConfig(BaseModel):
-    """Simplified configuration for interaction finder with validation and path resolution."""
+    """Configuration for interaction-finder with validation and path resolution.
+
+    Load from TOML file with IfetcherConfig.from_path("config.toml").
+    Override values via CLI: -O tools.search.timeout=120
+    """
 
     _dir: Path | None = None  # Directory of the config file
 
     class AgentSpec(BaseModel):
-        """Configuration for AI agent behavior and settings."""
+        """LLM agent settings. Inheritance: agents._ → agents.<module>._ → agents.<module>.<agent>
+
+        Modules and their agents:
+        - keywords: query_expander, result_selector, keyword_evaluator, document_summarizer, reflector
+        - widesearch: goal_planner, query_generator, result_selector, reflector
+        - extraction: document_analysis, proximal_pair, entity_consolidator, relationship_consolidator,
+                      pair_judge, cross_judge, co_mention_region, entity_group_consolidation
+        """
 
         model_config = {"extra": "forbid"}
 
         llm: str | None = Field(
-            None, description="Language model to use for this agent"
+            None,
+            description="Model identifier as 'provider:model' (e.g., 'openai:gpt-4o', 'anthropic:claude-3-sonnet')",
         )
         expertise: str | None = Field(
-            None, description="Domain expertise specification for the agent"
+            None,
+            description="Domain context injected into system prompt (e.g., 'molecular biology')",
         )
         instruction: str | None = Field(
-            None, description="Custom instructions for the agent"
+            None,
+            description="Additional instructions appended to agent's system prompt",
         )
         retries: int | None = Field(
             None,
-            description="Number of retry attempts for failed requests",
+            description="Retry attempts on transient failures (rate limits, timeouts)",
             ge=0,
             le=10,
         )
         instrument: bool = Field(
-            True, description="Enable instrumentation and logging for this agent"
+            True,
+            description="Log agent calls to Logfire for debugging and cost tracking",
         )
         system_prompt: str | None = Field(
-            None, description="Custom system prompt override for the agent"
+            None,
+            description="Complete system prompt override (replaces default prompt entirely)",
         )
         model_settings: dict[str, Any] | None = Field(
-            None, description="Model-specific settings (e.g., parallel_tool_calls)"
+            None,
+            description="Provider-specific options (e.g., {temperature: 0.7, parallel_tool_calls: false})",
         )
 
         def merge_with_parent(
@@ -68,274 +85,349 @@ class IfetcherConfig(BaseModel):
 
     agents: dict[str, dict[str, AgentSpec] | AgentSpec] | AgentSpec = Field(
         default_factory=dict,
-        description="Configuration for AI agents (supports multi-tier: agents._, agents.module._, agents.module.agent)",
+        description="LLM agent config with inheritance: [agents._] for global defaults, [agents.extraction._] for module defaults, [agents.extraction.pair_judge] for specific agents",
     )
 
     class Tools(BaseModel):
-        """Configuration for external tools."""
+        """Pipeline tool configuration."""
 
         class Crawl4AI(BaseModel):
-            """Configuration for Crawl4AI web scraping."""
+            """Crawl4AI web scraper for fetching and converting web pages to markdown."""
 
             timeout: int = Field(
-                30, description="Request timeout in seconds", ge=1, le=600
+                30,
+                description="HTTP request timeout for page fetching (seconds)",
+                ge=1,
+                le=600,
             )
 
         crawl4ai: Crawl4AI = Field(
-            default_factory=Crawl4AI, description="Crawl4AI configuration"
+            default_factory=Crawl4AI,
+            description="Web scraper settings for HTML-to-markdown conversion",
         )
 
         class Fetcher(BaseModel):
-            """Configuration for web content fetching."""
+            """Document fetching and full-text resolution."""
 
             class PubMed(BaseModel):
-                """Configuration for PubMed full-text link following."""
+                """PubMed abstract pages often link to full-text. These settings control link-following."""
 
                 follow_fulltext_links: bool = Field(
-                    True, description="Automatically follow PubMed full-text links"
+                    True,
+                    description="Follow links from PubMed abstracts to full-text sources (PMC, publisher sites)",
                 )
                 max_concurrent_links: int = Field(
                     3,
                     ge=1,
                     le=10,
-                    description="Maximum concurrent full-text link fetches",
+                    description="Parallel full-text link fetches per document",
                 )
                 content_improvement_threshold: float = Field(
                     0.5,
                     ge=0.0,
                     le=1.0,
-                    description="Minimum improvement ratio (0.5 = 50% more content) required to use full-text link",
+                    description="Only use full-text if it has this much more content than abstract (0.5 = 50% longer)",
                 )
 
             pubmed: PubMed = Field(
-                default_factory=PubMed, description="PubMed-specific configuration"
+                default_factory=PubMed,
+                description="Full-text link following for PubMed results",
             )
 
         fetcher: Fetcher = Field(
-            default_factory=Fetcher, description="Fetcher configuration"
+            default_factory=Fetcher,
+            description="Document fetching behavior",
         )
 
         class Search(BaseModel):
-            """Configuration for search backends."""
+            """Search backend configuration (PubMed, Perplexica, OpenAI)."""
 
             timeout: int = Field(
                 60,
-                description="Request timeout in seconds for search operations",
+                description="HTTP timeout for search API calls (seconds)",
                 ge=1,
                 le=600,
             )
 
         search: Search = Field(
-            default_factory=Search, description="Search backend configuration"
+            default_factory=Search,
+            description="Search backend configuration",
         )
 
         class Keywords(BaseModel):
-            """Configuration for keyword research module."""
+            """Bridging term extraction from review articles (Stage 1)."""
 
-            max_rounds: int = Field(5, ge=1, le=10, description="Maximum search rounds")
+            max_rounds: int = Field(
+                5,
+                ge=1,
+                le=10,
+                description="Search iterations before stopping (each round fetches new documents)",
+            )
             search_backend: str = Field(
-                "perplexica", description="Search backend to use"
+                "perplexica",
+                description="Backend for finding reviews: 'pubmed', 'perplexica', or 'openai'",
             )
             max_results_per_query: int = Field(
-                20, ge=1, le=100, description="Maximum results per search query"
+                20,
+                ge=1,
+                le=100,
+                description="Search results to retrieve per query",
             )
             max_documents_to_fetch: int = Field(
-                10, ge=1, le=50, description="Maximum documents to fetch per round"
+                10,
+                ge=1,
+                le=50,
+                description="Documents to fetch full-text for per round",
             )
             max_keywords_per_method: int = Field(
-                30, ge=5, le=100, description="Maximum keywords per extraction method"
+                30,
+                ge=5,
+                le=100,
+                description="Keywords extracted per algorithm (RAKE, YAKE, etc.) before merging",
             )
             max_keywords_for_llm: int = Field(
                 50,
                 ge=10,
                 le=100,
-                description="Maximum keywords to show LLM after deduplication and reranking",
+                description="Keywords shown to LLM for evaluation after deduplication",
             )
             rerank_top_k: int = Field(
                 0,
                 ge=0,
                 le=200,
-                description="Number of top results to keep after reranking (0 = disabled, pass all results to LLM)",
+                description="Use semantic reranking to select top-k results (0 = skip reranking, send all to LLM)",
             )
             reranker_model: str = Field(
                 "zeroentropy/zerank-1-small",
-                description="Reranking model name",
+                description="HuggingFace model for semantic reranking of search results",
             )
             reranker_device: str | None = Field(
                 None,
-                description="Device for reranker model ('cpu', 'cuda', or None for auto)",
+                description="Device for reranker: 'cpu', 'cuda', or omit for auto-detect",
             )
             llm_model: str = Field(
-                "openai:gpt-4o-mini", description="LLM model for agents"
+                "openai:gpt-4o-mini",
+                description="Model for keyword evaluation (overrides agents.keywords._)",
             )
             document_context_chars: int = Field(
                 12000,
                 ge=1000,
                 le=50000,
-                description="Number of characters from document to send to LLM for evaluation",
+                description="Characters of document text to include in LLM prompt",
             )
 
             class RAKEConfig(BaseModel):
-                min_length: int = Field(1, ge=1, description="Minimum phrase length")
-                max_length: int = Field(4, ge=1, description="Maximum phrase length")
+                """RAKE (Rapid Automatic Keyword Extraction) - fast, statistical phrase extraction."""
+
+                min_length: int = Field(
+                    1, ge=1, description="Minimum words per keyphrase"
+                )
+                max_length: int = Field(
+                    4, ge=1, description="Maximum words per keyphrase"
+                )
 
             class YAKEConfig(BaseModel):
-                n_grams: int = Field(3, ge=1, le=5, description="Maximum n-gram size")
-                deduplication_threshold: float = Field(
-                    0.9, ge=0.0, le=1.0, description="Deduplication threshold"
+                """YAKE (Yet Another Keyword Extractor) - unsupervised, position-aware extraction."""
+
+                n_grams: int = Field(
+                    3, ge=1, le=5, description="Maximum words per keyphrase"
                 )
-                window_size: int = Field(1, ge=1, description="Context window size")
+                deduplication_threshold: float = Field(
+                    0.9,
+                    ge=0.0,
+                    le=1.0,
+                    description="Similarity threshold for removing near-duplicate phrases",
+                )
+                window_size: int = Field(
+                    1, ge=1, description="Co-occurrence window for word scoring"
+                )
 
             class TFIDFConfig(BaseModel):
-                max_features: int = Field(50, ge=1, description="Maximum features")
-                ngram_range: tuple[int, int] = Field(
-                    (1, 3), description="N-gram range (min, max)"
+                """TF-IDF - term frequency weighting to find distinctive terms."""
+
+                max_features: int = Field(
+                    50, ge=1, description="Maximum unique terms to extract"
                 )
-                min_df: int = Field(1, ge=1, description="Minimum document frequency")
+                ngram_range: tuple[int, int] = Field(
+                    (1, 3), description="(min, max) words per term"
+                )
+                min_df: int = Field(
+                    1, ge=1, description="Minimum documents a term must appear in"
+                )
 
             class KeyBERTConfig(BaseModel):
+                """KeyBERT - BERT embeddings + MMR for diverse, semantically-relevant keywords."""
+
                 model_name: str = Field(
-                    "all-MiniLM-L6-v2", description="Sentence-transformers model"
+                    "all-MiniLM-L6-v2",
+                    description="Sentence-transformer model for embeddings",
                 )
                 diversity: float = Field(
-                    0.5, ge=0.0, le=1.0, description="MMR diversity parameter"
+                    0.5,
+                    ge=0.0,
+                    le=1.0,
+                    description="MMR diversity: 0=most relevant, 1=most diverse keywords",
                 )
-                top_n: int = Field(20, ge=1, description="Number of candidates")
+                top_n: int = Field(
+                    20, ge=1, description="Candidate keywords before MMR selection"
+                )
                 device: str | None = Field(
                     None,
-                    description="Device for KeyBERT model ('cpu', 'cuda', or None for auto)",
+                    description="Device for embeddings: 'cpu', 'cuda', or omit for auto-detect",
                 )
 
             rake: RAKEConfig = Field(
-                default_factory=RAKEConfig, description="RAKE extractor configuration"
+                default_factory=RAKEConfig,
+                description="RAKE: fast statistical phrase extraction",
             )
             yake: YAKEConfig = Field(
-                default_factory=YAKEConfig, description="YAKE extractor configuration"
+                default_factory=YAKEConfig,
+                description="YAKE: position-aware keyword scoring",
             )
             tfidf: TFIDFConfig = Field(
                 default_factory=TFIDFConfig,
-                description="TF-IDF extractor configuration",
+                description="TF-IDF: distinctive term extraction",
             )
             keybert: KeyBERTConfig = Field(
                 default_factory=KeyBERTConfig,
-                description="KeyBERT extractor configuration",
+                description="KeyBERT: semantic keyword extraction with diversity",
             )
 
         keywords: Keywords = Field(
-            default_factory=Keywords, description="Keyword research configuration"
+            default_factory=Keywords,
+            description="Bridging term extraction from review articles (Stage 1)",
         )
 
         class Widesearch(BaseModel):
-            """Configuration for widesearch query expansion module."""
+            """Query expansion and comprehensive literature discovery (Stage 2)."""
 
-            enabled: bool = Field(True, description="Enable widesearch functionality")
+            enabled: bool = Field(
+                True, description="Run widesearch stage (disable to skip to extraction)"
+            )
             max_rounds: int = Field(
-                8, ge=1, le=15, description="Maximum search rounds before stopping"
+                8,
+                ge=1,
+                le=15,
+                description="Search iterations; LLM decides when coverage is sufficient",
             )
             rerank_top_k: int = Field(
                 0,
                 ge=0,
                 le=200,
-                description="Number of top results to keep after reranking (0 = disabled, pass all results to LLM)",
+                description="Use semantic reranking to select top-k results (0 = skip reranking, send all to LLM)",
             )
             batch_size: int = Field(
                 0,
                 ge=0,
-                description="Split results into batches for LLM selection (0 = process all at once)",
+                description="Results per LLM selection call (0 = all at once; use batching for large result sets)",
             )
             results_per_query: int = Field(
-                100, ge=1, le=300, description="Maximum results to fetch per query"
+                100,
+                ge=1,
+                le=300,
+                description="Maximum results to fetch from search backend per query",
             )
             reranker_model: str = Field(
                 "zeroentropy/zerank-1-small",
-                description="Reranking model name",
+                description="HuggingFace model for semantic reranking of search results",
             )
             reranker_device: str | None = Field(
                 None,
-                description="Device for reranker model ('cpu', 'cuda', or None for auto)",
+                description="Device for reranker: 'cpu', 'cuda', or omit for auto-detect",
             )
             llm_model: str = Field(
-                "openai:gpt-4o-mini", description="LLM model for agents"
+                "openai:gpt-4o-mini",
+                description="Model for query generation and reflection (overrides agents.widesearch._)",
             )
-            search_backend: str = Field("pubmed", description="Search backend to use")
+            search_backend: str = Field(
+                "pubmed",
+                description="Backend for literature search: 'pubmed', 'perplexica', or 'openai'",
+            )
 
         widesearch: Widesearch = Field(
-            default_factory=Widesearch, description="Widesearch configuration"
+            default_factory=Widesearch,
+            description="Query expansion and literature discovery (Stage 2)",
         )
 
         class Extraction(BaseModel):
-            """Configuration for entity-pair extraction module."""
+            """Entity-relationship extraction from documents (Stage 3)."""
 
             proximal_window_chunks: int = Field(
                 2,
                 ge=0,
                 le=10,
-                description="Maximum chunk distance for entities to be considered proximal",
+                description="Max text chunks between entities to consider them related (chunks ~500 chars)",
             )
             region_padding_chunks: int = Field(
                 1,
                 ge=0,
                 le=5,
-                description="Number of chunks to pad around text regions",
+                description="Extra chunks to include around entity mentions for context",
             )
             merge_batch_size: int = Field(
                 20,
                 ge=1,
                 le=200,
-                description="Maximum number of entity consolidation decisions per LLM call",
+                description="Entity pairs to evaluate per LLM call during consolidation",
             )
             max_rename_iterations: int = Field(
                 5,
                 ge=1,
                 le=10,
-                description="Maximum iterations for entity rename re-evaluation loop",
+                description="Rounds of LLM review when standardizing entity names",
             )
             cluster_token_overlap_threshold: float = Field(
                 0.30,
                 ge=0.0,
                 le=1.0,
-                description="Minimum token overlap proportion for clustering entities (0.0-1.0)",
+                description="Word overlap required to group entity mentions (e.g., 'BMPR2' and 'BMPR2 gene')",
             )
             cluster_refinement_max_rounds: int = Field(
                 10,
                 ge=1,
                 le=20,
-                description="Maximum rounds of iterative cluster refinement via LLM review",
+                description="LLM review rounds for merging entity clusters",
             )
             filter_irrelevant_relationships: bool = Field(
                 True,
-                description="Filter relationship types deemed irrelevant to research topic",
+                description="Use LLM to filter out generic relationships (e.g., 'is related to')",
             )
             enable_entity_kind_validation: bool = Field(
-                True, description="Filter entities not matching target kinds"
+                True,
+                description="Filter entities that don't match target kinds (-e gene, -e disease)",
             )
             agent_concurrency_limit: int = Field(
                 10,
                 ge=1,
                 le=100,
-                description="Maximum concurrent LLM agent calls to prevent rate limiting",
+                description="Parallel LLM calls (higher = faster but may hit rate limits)",
             )
             sweep_co_mentions: bool = Field(
                 True,
-                description="Enable co-mention sweep to find missed entity pair evidence",
+                description="Second pass to find entity pairs missed in initial extraction",
             )
 
         extraction: Extraction = Field(
-            default_factory=Extraction, description="Extraction configuration"
+            default_factory=Extraction,
+            description="Entity-relationship extraction from documents (Stage 3)",
         )
 
     tools: Tools = Field(
-        default_factory=Tools, description="External tools configuration"
+        default_factory=Tools,
+        description="Pipeline stages: keywords → widesearch → extraction",
     )
 
     class Output(BaseModel):
-        """Configuration for output file paths and caching."""
+        """File output paths (relative to config file location)."""
 
         path: str = Field(
             "runs/{mode}/{model}/{repeat}/{term}",
-            description="Output path template (supports {mode}, {model}, {repeat}, {term})",
+            description="Output directory template; variables filled at runtime",
         )
-        cache: str = Field("cache", description="Cache directory path")
+        cache: str = Field(
+            "cache",
+            description="Directory for cached web content and API responses",
+        )
 
         @field_validator("path", "cache")
         @classmethod
@@ -346,11 +438,12 @@ class IfetcherConfig(BaseModel):
 
     output: Output = Field(
         default_factory=Output,
-        description="Configuration for output paths and caching",
+        description="Output paths (relative to config file)",
     )
 
     modes: dict[str, dict[str, Any]] = Field(
-        default_factory=dict, description="Mode-specific configuration overrides"
+        default_factory=dict,
+        description="Named config presets. Define as [modes.NAME] with overrides, activate with -m NAME. Example: [modes.fast] with tools.extraction.agent_concurrency_limit=50",
     )
 
     def abspath(self, path: str | Path, **kwargs: Any) -> Path:

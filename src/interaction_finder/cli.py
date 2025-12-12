@@ -15,14 +15,136 @@ import click
 import typer
 from rich.console import Console
 from rich.table import Table
+from rich.tree import Tree
+from rich.text import Text
 
 from . import cli_fetch
 from .settings import IfetcherConfig
+
+
+def _format_json_schema_type(prop: dict) -> str:
+    """Format a JSON Schema property type as a readable string."""
+    if "anyOf" in prop:
+        types = []
+        for option in prop["anyOf"]:
+            # Skip null type - in TOML, optional fields are simply omitted
+            if option.get("type") == "null":
+                continue
+            elif "$ref" in option:
+                types.append(option["$ref"].split("/")[-1])
+            else:
+                types.append(option.get("type", "?"))
+        return " | ".join(types) if types else "any"
+    if "$ref" in prop:
+        return prop["$ref"].split("/")[-1]
+    if "type" in prop:
+        t = prop["type"]
+        if t == "array" and "items" in prop:
+            item_type = _format_json_schema_type(prop["items"])
+            return f"list[{item_type}]"
+        return t
+    return "any"
+
+
+def _format_constraints(prop: dict) -> str | None:
+    """Extract constraint information from JSON Schema property."""
+    constraints = []
+    if "minimum" in prop:
+        constraints.append(f"≥{prop['minimum']}")
+    if "maximum" in prop:
+        constraints.append(f"≤{prop['maximum']}")
+    if "minLength" in prop:
+        constraints.append(f"min_length={prop['minLength']}")
+    if "maxLength" in prop:
+        constraints.append(f"max_length={prop['maxLength']}")
+    # Check inside anyOf for constraints
+    for option in prop.get("anyOf", []):
+        if "minimum" in option:
+            constraints.append(f"≥{option['minimum']}")
+        if "maximum" in option:
+            constraints.append(f"≤{option['maximum']}")
+    return ", ".join(constraints) if constraints else None
+
+
+def _add_schema_to_tree(
+    tree: Tree,
+    schema: dict,
+    defs: dict,
+    prefix: str = "",
+    depth: int = 0,
+    max_depth: int = 10,
+) -> None:
+    """Recursively add JSON Schema properties to a Rich tree."""
+    if depth > max_depth:
+        return
+    properties = schema.get("properties", {})
+    for name, prop in properties.items():
+        toml_key = f"{prefix}.{name}" if prefix else name
+        # Resolve $ref if present
+        if "$ref" in prop:
+            ref_name = prop["$ref"].split("/")[-1]
+            prop = defs.get(ref_name, prop)
+        # Check for nested object (either direct or via anyOf)
+        nested_schema = None
+        if prop.get("type") == "object" and "properties" in prop:
+            nested_schema = prop
+        elif "anyOf" in prop:
+            for option in prop["anyOf"]:
+                if "$ref" in option:
+                    ref_name = option["$ref"].split("/")[-1]
+                    ref_schema = defs.get(ref_name, {})
+                    if ref_schema.get("type") == "object" or "properties" in ref_schema:
+                        nested_schema = ref_schema
+                        break
+        if nested_schema and "properties" in nested_schema:
+            # This is a section with nested properties
+            desc = nested_schema.get("description", prop.get("description", ""))
+            section_text = Text()
+            section_text.append(f"[{toml_key}]", style="bold cyan")
+            if desc:
+                section_text.append(f"  {desc}", style="dim")
+            branch = tree.add(section_text)
+            _add_schema_to_tree(branch, nested_schema, defs, toml_key, depth + 1)
+        else:
+            # This is a leaf field
+            type_str = _format_json_schema_type(prop)
+            default = prop.get("default", "(required)")
+            desc = prop.get("description", "")
+            constraints = _format_constraints(prop)
+            # Build the display line
+            field_text = Text()
+            field_text.append(name, style="green")
+            field_text.append(f" : {type_str}", style="yellow")
+            if default != "(required)":
+                default_str = (
+                    f'"{default}"' if isinstance(default, str) else str(default)
+                )
+                field_text.append(f" = {default_str}", style="blue")
+            if constraints:
+                field_text.append(f" ({constraints})", style="magenta")
+            if desc:
+                field_text.append(f"\n    {desc}", style="dim")
+            tree.add(field_text)
+
+
+def render_config_help() -> Tree:
+    """Render configuration schema as a Rich tree for display."""
+    schema = IfetcherConfig.model_json_schema()
+    defs = schema.get("$defs", {})
+    tree = Tree(Text("interaction-finder configuration", style="bold"))
+    _add_schema_to_tree(tree, schema, defs)
+    return tree
+
 
 app = typer.Typer(
     name="interaction-finder",
     help="""\
 Automated extraction of biological relationships from papers.
+
+\b
+Configuration:
+  Uses config.toml in current directory if present. Override any
+  setting with -O key.path=value. Run 'config help' to see all options.
 
 \b
 Example:
@@ -291,9 +413,7 @@ def load_config(
 
 @app.command()
 def config(
-    action: str = typer.Argument(
-        help="Action to perform: 'info' to show config, 'validate' to check validity"
-    ),
+    action: str = typer.Argument(help="Action: 'help', 'info', or 'validate'"),
     mode: Optional[str] = typer.Option(
         None, "-m", "--mode", help="Configuration mode to use"
     ),
@@ -306,17 +426,26 @@ def config(
     ),
 ):
     """
-    Manage configuration: show info or validate config file.
+    Manage configuration: show schema docs, current config, or validate file.
 
     Actions:
-      info      - Display current configuration
-      validate  - Validate configuration file
+      help      - Display configuration schema with all options and defaults
+      info      - Display current configuration values
+      validate  - Validate configuration file syntax
     """
     config_path, mode, verbose, overrides = get_options_with_fallback(
         config_path, mode, verbose, overrides
     )
     try:
-        if action == "info":
+        if action == "help":
+            # Display configuration schema documentation
+            console.print()
+            console.print("[bold]Configuration Schema[/bold]")
+            console.print("Override any value with: [cyan]-O key.path=value[/cyan]")
+            console.print()
+            tree = render_config_help()
+            console.print(tree)
+        elif action == "info":
             cfg = load_config(config_path, overrides, mode)
             # Display configuration info
             table = Table(
@@ -341,7 +470,7 @@ def config(
                 console.print(cfg.model_dump_json(indent=2))
         else:
             console.print(f"[red]Unknown action:[/red] {action}")
-            console.print("Valid actions: info, validate")
+            console.print("Valid actions: help, info, validate")
             raise typer.Exit(1)
     except Exception as e:
         console.print(f"[red]Error:[/red] {e}")
