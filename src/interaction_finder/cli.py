@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from pathlib import Path
 from typing import Any, List, Optional
 
@@ -19,6 +20,7 @@ from rich.tree import Tree
 from rich.text import Text
 
 from . import cli_fetch
+from .logging import configure_logging, dump_log, error_log_path, setup_log_output
 from .settings import IfetcherConfig, sanitize_topic_for_filename
 
 
@@ -177,6 +179,14 @@ def overrides_option():
     return typer.Option([], "-O", "--override", help="Config overrides")
 
 
+def log_option():
+    return typer.Option(None, "--log", help="Log output file")
+
+
+def loglevel_option():
+    return typer.Option("INFO", "--loglevel", help="Log level for file output")
+
+
 # Global options that apply to all subcommands
 @app.callback()
 def global_options(
@@ -184,8 +194,13 @@ def global_options(
     mode: Optional[str] = mode_option(),
     verbose: bool = verbose_option(),
     overrides: List[str] = overrides_option(),
+    log: Optional[Path] = log_option(),
+    loglevel: str = loglevel_option(),
 ):
     """Global options that can be used with any subcommand."""
+    # Configure logging at startup
+    setup_log_output(log, getattr(logging, loglevel.upper(), logging.INFO))
+    configure_logging(verbose=verbose)
     # Store options in the context for use by subcommands
     ctx = click.get_current_context()
     ctx.ensure_object(dict)
@@ -218,6 +233,32 @@ def get_options_with_fallback(
     )
     effective_overrides = overrides if overrides else ctx.obj.get("overrides", [])
     return effective_config, effective_mode, effective_verbose, effective_overrides
+
+
+def _dump_logs_on_error(output_path: Path | None) -> None:
+    """Dump buffered logs to error log file."""
+    try:
+        written = dump_log(error_log_path(output_path))
+        if written:
+            console.print(f"[dim]Log written to: {written}[/dim]")
+    except Exception:
+        pass  # Don't mask original error
+
+
+def _handle_keyboard_interrupt(output_path: Path | None) -> None:
+    """Handle Ctrl+C: dump logs and exit."""
+    _dump_logs_on_error(output_path)
+    console.print("\n[yellow]Interrupted[/yellow]")
+    raise typer.Exit(130)
+
+
+def _handle_exception(e: Exception, output_path: Path | None, verbose: bool) -> None:
+    """Handle exception: dump logs, display error, and exit."""
+    _dump_logs_on_error(output_path)
+    console.print(f"\n[red]Error:[/red] {e}")
+    if verbose:
+        console.print_exception()
+    raise typer.Exit(1)
 
 
 def _check_and_backup_checkpoint(path: Path, checkpoint_version: str | None) -> None:
@@ -484,11 +525,10 @@ def config(
             console.print(f"[red]Unknown action:[/red] {action}")
             console.print("Valid actions: help, info, validate")
             raise typer.Exit(1)
+    except KeyboardInterrupt:
+        _handle_keyboard_interrupt(None)
     except Exception as e:
-        console.print(f"[red]Error:[/red] {e}")
-        if verbose:
-            console.print_exception()
-        raise typer.Exit(1)
+        _handle_exception(e, None, verbose)
 
 
 @app.command()
@@ -673,12 +713,10 @@ def fetch(
         # Handle file not found errors
         console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(1)
+    except KeyboardInterrupt:
+        _handle_keyboard_interrupt(None)
     except Exception as e:
-        # Handle unexpected errors
-        console.print(f"[red]Error:[/red] {e}")
-        if verbose:
-            console.print_exception()
-        raise typer.Exit(1)
+        _handle_exception(e, None, verbose)
 
 
 @app.command()
@@ -793,11 +831,10 @@ def keywords(
         output.write_text(result_checkpoint.model_dump_json(indent=2))
         console.print(f"\n[dim]Saved to {output}[/dim]")
 
+    except KeyboardInterrupt:
+        _handle_keyboard_interrupt(output)
     except Exception as e:
-        console.print(f"\n[red]Error:[/red] {e}")
-        if verbose:
-            console.print_exception()
-        raise typer.Exit(1)
+        _handle_exception(e, output, verbose)
 
 
 @app.command()
@@ -842,8 +879,6 @@ def search(
         interaction-finder search "cancer" -b perplexica --fetch -o out.json
     """
     try:
-        from pydantic import ValidationError
-
         from interaction_finder.upgrade import ensure_search
 
         # Load config and parse input
@@ -935,16 +970,10 @@ def search(
                 Path(checkpoint_path).write_text(checkpoint.model_dump_json(indent=2))
                 console.print(f"[dim]Saved checkpoint to {checkpoint_path}[/dim]")
 
-    except (json.JSONDecodeError, ValidationError) as e:
-        console.print(f"[red]Invalid checkpoint file:[/red] {e}")
-        if verbose:
-            console.print_exception()
-        raise typer.Exit(1)
+    except KeyboardInterrupt:
+        _handle_keyboard_interrupt(output)
     except Exception as e:
-        console.print(f"\n[red]Error:[/red] {e}")
-        if verbose:
-            console.print_exception()
-        raise typer.Exit(1)
+        _handle_exception(e, output, verbose)
 
 
 @app.command()
@@ -989,8 +1018,6 @@ def extract(
         interaction-finder extract search.json -e gene -e protein -o results.json
     """
     try:
-        from pydantic import ValidationError
-
         from interaction_finder.upgrade import ensure_extraction
 
         # Load config and parse input
@@ -1060,21 +1087,10 @@ def extract(
             if len(accepted_judgments) > 5:
                 console.print(f"  ... and {len(accepted_judgments) - 5} more")
 
-    except (json.JSONDecodeError, ValidationError) as e:
-        console.print(f"[red]Invalid checkpoint file:[/red] {e}")
-        if verbose:
-            console.print_exception()
-        raise typer.Exit(1)
-    except ValueError as e:
-        console.print(f"[red]Error:[/red] {e}")
-        if verbose:
-            console.print_exception()
-        raise typer.Exit(1)
+    except KeyboardInterrupt:
+        _handle_keyboard_interrupt(output)
     except Exception as e:
-        console.print(f"\n[red]Error:[/red] {e}")
-        if verbose:
-            console.print_exception()
-        raise typer.Exit(1)
+        _handle_exception(e, output, verbose)
 
 
 @app.command()
@@ -1123,7 +1139,6 @@ def report(
             raise FileNotFoundError(f"Extraction file not found: {extraction_file}")
 
         # Load extraction checkpoint
-        from pydantic import ValidationError
 
         from interaction_finder.checkpoint import PipelineCheckpoint
 
@@ -1184,24 +1199,10 @@ def report(
         destination_label = "stdout" if str(output_path) == "-" else str(output_path)
         log_console.print(f"[green]✓[/green] Report written to {destination_label}")
 
-    except FileNotFoundError as e:
-        log_console.print(f"[red]Error:[/red] {e}")
-        raise typer.Exit(1)
-    except (json.JSONDecodeError, ValidationError) as e:
-        log_console.print(f"[red]Invalid extraction file:[/red] {e}")
-        if verbose:
-            log_console.print_exception()
-        raise typer.Exit(1)
-    except ValueError as e:
-        log_console.print(f"[red]Error:[/red] {e}")
-        if verbose:
-            log_console.print_exception()
-        raise typer.Exit(1)
+    except KeyboardInterrupt:
+        _handle_keyboard_interrupt(None)
     except Exception as e:
-        log_console.print(f"\n[red]Error:[/red] {e}")
-        if verbose:
-            log_console.print_exception()
-        raise typer.Exit(1)
+        _handle_exception(e, None, verbose)
 
 
 def main():

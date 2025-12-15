@@ -24,7 +24,13 @@ from .upgrade import (
     ensure_search,
     ensure_extraction,
 )
-from .logging import configure_logging, get_logger
+from .logging import (
+    configure_logging,
+    dump_log,
+    error_log_path,
+    get_logger,
+    setup_log_output,
+)
 
 # Rebuild checkpoint models to resolve forward references after imports
 _rebuild_models()
@@ -52,4 +58,7 @@ __all__ = [
     "ensure_extraction",
     "configure_logging",
     "get_logger",
+    "setup_log_output",
+    "dump_log",
+    "error_log_path",
 ]
