@@ -22,6 +22,11 @@ from rich.text import Text
 from . import cli_fetch
 from .logging import configure_logging, dump_log, error_log_path, setup_log_output
 from .settings import IfetcherConfig, sanitize_topic_for_filename
+from .version import (
+    check_checkpoint_version,
+    get_version_string,
+    parse_version_string,
+)
 
 
 def _format_json_schema_type(prop: dict) -> str:
@@ -263,22 +268,40 @@ def _handle_exception(e: Exception, output_path: Path | None, verbose: bool) -> 
 
 def _check_and_backup_checkpoint(path: Path, checkpoint_version: str | None) -> None:
     """Check checkpoint version and create backup if needed."""
-    from interaction_finder.version import check_checkpoint_version, get_version_string
+
+    def colorize_version(version_str: str, ver_color: str) -> str:
+        count, semver, hash_ = parse_version_string(version_str)
+        semver_str = f"{semver[0]}.{semver[1]}.{semver[2]}"
+        parts = [
+            f"[blue]{count}[/blue]" if count else "",
+            f"v[{ver_color}]{semver_str}[/{ver_color}]",
+        ]
+        if hash_:
+            parts.append(f"[dim]#{hash_}[/dim]")
+        return "".join(parts)
 
     is_older, is_breaking = check_checkpoint_version(checkpoint_version)
     current = get_version_string()
+    old_fmt = (
+        colorize_version(checkpoint_version, "yellow")
+        if checkpoint_version
+        else "[yellow]unknown[/yellow]"
+    )
+    new_fmt = colorize_version(current, "green")
     if is_breaking:
         console.print(
-            f"[yellow]⚠ Checkpoint was created with {checkpoint_version} "
-            f"but current version is {current} (breaking change)[/yellow]"
+            f"[yellow]⚠ Checkpoint was created with {old_fmt} "
+            f"but current version is {new_fmt} (breaking change)[/yellow]",
+            highlight=False,
         )
         backup_path = path.with_suffix(path.suffix + ".bak")
         backup_path.write_text(path.read_text())
         console.print(f"[dim]Created backup: {backup_path}[/dim]")
     elif is_older:
         console.print(
-            f"[dim]ℹ Checkpoint was created with older version {checkpoint_version} "
-            f"(current: {current})[/dim]"
+            f"[dim]ℹ Checkpoint was created with older version {old_fmt} "
+            f"(current: {new_fmt})[/dim]",
+            highlight=False,
         )
 
 
