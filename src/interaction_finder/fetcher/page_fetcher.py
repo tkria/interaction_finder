@@ -380,11 +380,10 @@ class PageFetcher:
                     if fail_fast:
                         raise
                     logger.warning(
-                        "Failed to create chunks for URL",
-                        extra={
-                            "url": single_url,
-                            "error": str(exc),
-                        },
+                        "Failed to create chunks for %s (%s: %s)",
+                        single_url,
+                        type(exc).__name__,
+                        exc,
                     )
                     results.append([])
             return results
