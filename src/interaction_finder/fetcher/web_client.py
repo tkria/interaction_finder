@@ -223,6 +223,62 @@ _crawl4ai_html_imports = None
 _crawl4ai_pdf_imports = None
 _quiet_logger = None
 _chunker = None
+_playwright_checked = False
+
+
+class PlaywrightNotInstalledError(RuntimeError):
+    """Raised when Playwright browsers are not installed."""
+
+    pass
+
+
+def _get_playwright_install_command() -> str:
+    """Return the appropriate playwright install command based on available tools."""
+    import shutil
+
+    if shutil.which("uvx"):
+        return "uvx playwright install chromium"
+    elif shutil.which("uv"):
+        return "uv tool run playwright install chromium"
+    else:
+        return "playwright install chromium"
+
+
+async def _ensure_playwright_installed():
+    """Check Playwright browsers are installed on first fetch, raise clear error if not.
+
+    Uses a module-level flag to ensure check runs only once per process.
+    The check verifies that chromium (used by crawl4ai) can be launched.
+    """
+    global _playwright_checked
+    if _playwright_checked:
+        return
+    try:
+        from playwright.async_api import async_playwright
+
+        async with async_playwright() as p:
+            # Launch and immediately close to verify browsers are installed
+            browser = await p.chromium.launch(headless=True)
+            await browser.close()
+    except Exception as e:
+        error_msg = str(e)
+        install_cmd = _get_playwright_install_command()
+        # Provide helpful message based on the error
+        if "Executable doesn't exist" in error_msg or "browserType.launch" in error_msg:
+            raise PlaywrightNotInstalledError(
+                "Playwright browsers are not installed.\n\n"
+                "This tool requires Playwright's Chromium browser for web fetching.\n"
+                f"To install it, run:\n\n"
+                f"    {install_cmd}\n"
+            ) from e
+        else:
+            # Re-raise other errors (network issues, etc.) with context
+            raise PlaywrightNotInstalledError(
+                f"Failed to initialize Playwright browser: {error_msg}\n\n"
+                f"If browsers are not installed, run:\n\n"
+                f"    {install_cmd}\n"
+            ) from e
+    _playwright_checked = True
 
 
 def _get_crawl4ai_imports():
@@ -689,7 +745,7 @@ class WebClient:
         self, url: str, config_key: str, browser_key: str
     ) -> Dict[str, str]:
         """Fetch HTML using specified configuration."""
-
+        await _ensure_playwright_installed()
         (
             AsyncWebCrawler,
             CrawlerRunConfig,
@@ -721,6 +777,7 @@ class WebClient:
 
     async def _fetch_pdf_content(self, url: str) -> Dict[str, str]:
         """Fetch PDF content using crawl4ai."""
+        await _ensure_playwright_installed()
         (
             AsyncWebCrawler,
             CrawlerRunConfig,
