@@ -1,10 +1,43 @@
 """Web client for fetching HTML and PDF content."""
 
+import asyncio
+import sys
+from contextlib import AbstractAsyncContextManager
 from typing import Dict, List
+
 from rich.console import Console
+
 from interaction_finder.logging import logfire, get_logger
 
 logger = get_logger(__name__)
+
+
+# Browser concurrency limiting based on available file descriptors
+def _get_safe_browser_concurrency() -> int:
+    if sys.platform == "win32":
+        return 50
+    import resource
+
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    if soft < 2048:
+        try:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (min(hard, 2048), hard))
+            soft, _ = resource.getrlimit(resource.RLIMIT_NOFILE)
+        except (ValueError, OSError):
+            pass  # couldn't raise, use existing soft limit
+    return max((soft - 100) // 20, 5)
+
+
+_browser_semaphore: asyncio.Semaphore | None = None
+
+
+def _get_browser_semaphore() -> AbstractAsyncContextManager[None]:
+    """Limit concurrent browser instances based on available file descriptors."""
+    global _browser_semaphore
+    if _browser_semaphore is None:
+        _browser_semaphore = asyncio.Semaphore(_get_safe_browser_concurrency())
+    return _browser_semaphore
+
 
 # Web client constants
 STEALTH_RETRY_THRESHOLD = 3000  # characters of raw markdown
@@ -656,6 +689,7 @@ class WebClient:
         self, url: str, config_key: str, browser_key: str
     ) -> Dict[str, str]:
         """Fetch HTML using specified configuration."""
+
         (
             AsyncWebCrawler,
             CrawlerRunConfig,
@@ -668,7 +702,10 @@ class WebClient:
         browser_config = self._crawler_configs[browser_key]
         logger = _get_quiet_logger() if not self.verbose else _get_granular_logger()
 
-        async with AsyncWebCrawler(config=browser_config, logger=logger) as crawler:
+        async with (
+            _get_browser_semaphore(),
+            AsyncWebCrawler(config=browser_config, logger=logger) as crawler,
+        ):
             result = await crawler.arun(url=url, config=crawler_config)
             if not result.success:
                 raise RuntimeError(
