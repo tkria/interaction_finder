@@ -8,13 +8,16 @@ fetch orchestration using PageFetcher for markdown and chunk content retrieval.
 
 from dataclasses import dataclass
 from fnmatch import fnmatch
+from json import JSONDecodeError
 from pathlib import Path
 from typing import List, Optional
 
+from pydantic import ValidationError
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
+from interaction_finder.checkpoint import PipelineCheckpoint
 from interaction_finder.fetcher import PageFetcher, URLCache
 from interaction_finder.settings import IfetcherConfig
 
@@ -48,6 +51,59 @@ def read_urls_from_file(path: Path) -> List[str]:
             if stripped:  # Skip empty lines
                 urls.append(stripped)
 
+    return urls
+
+
+def read_urls_from_path(path: Path) -> List[str]:
+    """
+    Read URLs from a file, auto-detecting checkpoint JSON or text file format.
+
+    Parameters:
+        path: Path to file (checkpoint JSON or text file with one URL per line)
+
+    Returns:
+        List of URLs extracted from the file
+
+    Raises:
+        FileNotFoundError: If file does not exist
+    """
+    if not path.exists():
+        raise FileNotFoundError(f"File not found: {path}")
+    content = path.read_text(encoding="utf-8")
+    # Try parsing as checkpoint JSON (quick check for JSON object)
+    if content.lstrip().startswith("{"):
+        try:
+            checkpoint = PipelineCheckpoint.model_validate_json(content)
+            return [rid.url for rid in checkpoint.resources.resource_map.keys()]
+        except (JSONDecodeError, ValidationError):
+            pass
+    # Fall back to text file (one URL per line)
+    return [line.strip() for line in content.splitlines() if line.strip()]
+
+
+def resolve_urls(args: List[str]) -> List[str]:
+    """
+    Resolve arguments to URLs - existing files are read, non-files are URLs.
+
+    Parameters:
+        args: List of arguments (URLs or file paths)
+
+    Returns:
+        List of URLs (files expanded to their contents)
+
+    Raises:
+        FileNotFoundError: If a file path is given but does not exist
+        ValueError: If no arguments provided
+    """
+    if not args:
+        raise ValueError("No URLs or files provided")
+    urls = []
+    for arg in args:
+        path = Path(arg)
+        if path.is_file():
+            urls.extend(read_urls_from_path(path))
+        else:
+            urls.append(arg)
     return urls
 
 
@@ -152,13 +208,16 @@ async def fetch_urls_markdown(
                 )
             )
         else:
-            # Failure: document is None
+            # Failure: document is None - look up cached failure reason
+            reason = await fetcher.cache.get_failed_reason(url)
+            # Use first line only (reasons can be multiline with stack traces)
+            short_reason = reason.split("\n", 1)[0] if reason else "Failed to fetch URL"
             results.append(
                 FetchResult(
                     url=url,
                     cache_path=None,
                     success=False,
-                    error="Failed to fetch URL",
+                    error=short_reason,
                 )
             )
 
@@ -408,6 +467,25 @@ def print_summary(results: List[FetchResult], console: Console) -> None:
         expand=False,
     )
     console.print(panel)
+
+
+async def clear_failed_urls(cache: URLCache, urls: List[str]) -> int:
+    """
+    Clear failure markers for URLs, allowing them to be re-fetched.
+
+    Parameters:
+        cache: URLCache instance
+        urls: URLs to clear failure markers for
+
+    Returns:
+        Number of failure markers cleared
+    """
+    cleared = 0
+    for url in urls:
+        if await cache.is_failed(url):
+            await cache.clear_failed(url)
+            cleared += 1
+    return cleared
 
 
 def match_url_pattern(url: str, pattern: str) -> bool:

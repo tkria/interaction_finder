@@ -558,13 +558,13 @@ def config(
 def fetch(
     urls: List[str] = typer.Argument(
         default=[],
-        help="URLs to fetch (can specify multiple)",
+        help="URLs or files to fetch (files are expanded to their URLs)",
     ),
-    input_file: Optional[Path] = typer.Option(
-        None,
-        "-i",
-        "--input",
-        help="Read URLs from file (one per line)",
+    retry_failed: bool = typer.Option(
+        False,
+        "-r",
+        "--retry-failed",
+        help="Clear cached failures before fetching",
     ),
     clear_cache: bool = typer.Option(
         False,
@@ -595,7 +595,8 @@ def fetch(
     Fetch web content and cache it using PageFetcher, or clear cache entries.
 
     Downloads HTML/PDF content, converts to markdown, and caches locally.
-    Useful for prefetching content, debugging cache behavior, and scripting workflows.
+    Arguments can be URLs directly, or paths to files containing URLs.
+    File paths are auto-detected (checkpoint JSON or text file with one URL per line).
 
     \b
     Examples:
@@ -605,8 +606,17 @@ def fetch(
       # Fetch multiple URLs
       interaction-finder fetch https://example.com https://example.org
 
-      # Fetch from file
-      interaction-finder fetch --input urls.txt
+      # Fetch URLs from checkpoint file
+      interaction-finder fetch research.json
+
+      # Fetch URLs from text file
+      interaction-finder fetch urls.txt
+
+      # Mix files and URLs
+      interaction-finder fetch research.json https://extra-url.com
+
+      # Retry previously failed URLs
+      interaction-finder fetch research.json --retry-failed
 
       # Show content instead of path
       interaction-finder fetch https://example.com --format content
@@ -620,17 +630,11 @@ def fetch(
       # Clear specific URLs (with or without https://)
       interaction-finder fetch "pmc.ncbi.nlm.nih.gov" --clear-cache
 
-      # Clear URLs from file
-      interaction-finder fetch --input pubmed-urls.txt --clear-cache
-
       # Preview what would be cleared
       interaction-finder fetch pubmed --clear-cache --dry-run
 
       # Clear ALL cached URLs (dangerous!)
       interaction-finder fetch --clear-cache
-
-      # Glob pattern matching
-      interaction-finder fetch "https://pubmed.ncbi.nlm.nih.gov/123*" --clear-cache
 
       # With config override
       interaction-finder fetch https://example.com -O output.cache=custom_cache/
@@ -652,11 +656,7 @@ def fetch(
             console.print(f"\n[bold]Cache directory:[/bold] {cache_dir}")
             # Collect URL patterns (or empty for clear-all)
             try:
-                patterns = (
-                    cli_fetch.collect_urls(urls, input_file)
-                    if (urls or input_file)
-                    else []
-                )
+                patterns = cli_fetch.resolve_urls(urls) if urls else []
             except ValueError:
                 # No URLs provided = clear all
                 patterns = []
@@ -688,8 +688,8 @@ def fetch(
                 "[red]Error:[/red] --dry-run can only be used with --clear-cache"
             )
             raise typer.Exit(1)
-        # Collect URLs from args or file input
-        collected_urls = cli_fetch.collect_urls(urls, input_file)
+        # Resolve URLs from args (files are expanded to their URLs)
+        collected_urls = cli_fetch.resolve_urls(urls)
         # Validate format option
         if format not in ("paths", "content"):
             console.print(
@@ -707,6 +707,15 @@ def fetch(
 
         # Define async implementation
         async def fetch_impl():
+            from interaction_finder.fetcher import URLCache
+
+            # Handle retry-failed: clear failure markers before fetching
+            if retry_failed:
+                cache_dir = cfg.abspath(cfg.output.cache)
+                cache = URLCache(cache_dir)
+                cleared = await cli_fetch.clear_failed_urls(cache, collected_urls)
+                if cleared > 0:
+                    console.print(f"[dim]Cleared {cleared} cached failure(s)[/dim]")
             return await cli_fetch.run_fetch(
                 config=cfg,
                 urls=collected_urls,
