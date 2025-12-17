@@ -236,10 +236,8 @@ def _get_playwright_install_command() -> str:
     """Return the appropriate playwright install command based on available tools."""
     import shutil
 
-    if shutil.which("uvx"):
-        return "uvx playwright install chromium"
-    elif shutil.which("uv"):
-        return "uv tool run playwright install chromium"
+    if shutil.which("uv"):
+        return "uv run crawl4ai-setup"
     else:
         return "playwright install chromium"
 
