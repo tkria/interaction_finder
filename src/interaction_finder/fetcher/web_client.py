@@ -241,29 +241,37 @@ async def ensure_playwright_installed():
     global _playwright_checked
     if _playwright_checked:
         return
-    try:
+
+    # Inner function to attempt browser launch
+    async def try_launch():
         from playwright.async_api import async_playwright
 
         async with async_playwright() as p:
-            # Launch and immediately close to verify browsers are installed
             browser = await p.chromium.launch(headless=True)
             await browser.close()
+
+    # Attempt launch, auto-install if needed
+    try:
+        await try_launch()
     except Exception as e:
         error_msg = str(e)
-        # Provide helpful message based on the error
         if "Executable doesn't exist" in error_msg or "browserType.launch" in error_msg:
             from crawl4ai.install import post_install
 
             logger.info("Attempting to auto-install Playwright browsers...")
             try:
-                post_install()  # Attempt to auto-setup
-            except Exception as e:
-                logger.error(f"Auto-install failed: {e}")
-            raise PlaywrightNotInstalledError(
-                "Playwright browsers are not installed or not functioning correctly."
-            )
+                post_install()
+                # Retry after install to verify it worked
+                await try_launch()
+            except Exception as install_err:
+                logger.error(f"Auto-install or verification failed: {install_err}")
+                raise PlaywrightNotInstalledError(
+                    "Playwright browsers could not be auto-installed.\n\n"
+                    "Try running manually:\n\n"
+                    "    uv run crawl4ai-setup\n"
+                ) from install_err
         else:
-            raise e
+            raise
     _playwright_checked = True
 
 
