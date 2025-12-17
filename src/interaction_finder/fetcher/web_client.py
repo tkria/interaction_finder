@@ -242,7 +242,7 @@ def _get_playwright_install_command() -> str:
         return "playwright install chromium"
 
 
-async def _ensure_playwright_installed():
+async def ensure_playwright_installed():
     """Check Playwright browsers are installed on first fetch, raise clear error if not.
 
     Uses a module-level flag to ensure check runs only once per process.
@@ -743,7 +743,7 @@ class WebClient:
         self, url: str, config_key: str, browser_key: str
     ) -> Dict[str, str]:
         """Fetch HTML using specified configuration."""
-        await _ensure_playwright_installed()
+        await ensure_playwright_installed()
         (
             AsyncWebCrawler,
             CrawlerRunConfig,
@@ -775,7 +775,7 @@ class WebClient:
 
     async def _fetch_pdf_content(self, url: str) -> Dict[str, str]:
         """Fetch PDF content using crawl4ai."""
-        await _ensure_playwright_installed()
+        await ensure_playwright_installed()
         (
             AsyncWebCrawler,
             CrawlerRunConfig,
