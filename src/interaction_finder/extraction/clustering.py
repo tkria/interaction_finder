@@ -99,11 +99,15 @@ class Cluster:
 
 
 def tokenize(text: str) -> frozenset[str]:
-    """Extract normalized tokens ≥2 chars, excluding stopwords."""
+    """Extract normalized tokens, excluding stopwords.
+
+    Single characters are preserved since they carry meaning in biology:
+    "X-linked", "T cells", "B cells", "Type 1 vs Type 2", etc.
+    """
     return frozenset(
         t
         for word in re.split(r"[\s\-/]+", text)
-        if (t := normalize_for_comparison(word)) and len(t) >= 2 and t not in _STOPWORDS
+        if (t := normalize_for_comparison(word)) and t not in _STOPWORDS
     )
 
 

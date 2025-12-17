@@ -568,7 +568,7 @@ You will be given groups of entities that appear related. For each group, decide
 
 **Decision framework:**
 1. Evaluate each group in the context of the research topic
-2. Ask: Does the topic require distinguishing between these entities?
+2. Ask: If a researcher found information about one entity, would they assume it applies to the others? If not, keep them separate.
 3. Apply these principles:
    - Entities differing only by clinical subtypes or modifiers → merge to parent term
      (e.g., "Idiopathic/Familial/Heritable [Disease]" → "[Disease]")
@@ -578,7 +578,7 @@ You will be given groups of entities that appear related. For each group, decide
    - Entities representing genuinely distinct biological phenomena → keep separate
      (e.g., different diseases, different genes)
 
-The research topic determines what distinctions matter. If entities are variants of the same concept relevant to the topic, merge them.
+The research topic tells you what distinctions matter. Merge entities only if a researcher would treat them as interchangeable, not merely because they're related to the topic.
 
 **Actions:**
 - **merge**: All members represent the same entity → specify target (member number, name, or new name)

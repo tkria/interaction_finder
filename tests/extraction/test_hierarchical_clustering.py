@@ -56,7 +56,7 @@ class TestTokenize:
     def test_hyphenated(self):
         """Hyphens split tokens."""
         tokens = tokenize("IL-6")
-        assert tokens == frozenset({"il"})  # "6" is too short
+        assert tokens == frozenset({"il", "6"})
 
     def test_stopwords_filtered(self):
         """Common stopwords are removed."""
@@ -68,17 +68,16 @@ class TestTokenize:
         assert "genetics" in tokens
         assert "disease" in tokens
 
-    def test_short_tokens_filtered(self):
-        """Tokens <2 chars are removed."""
-        tokens = tokenize("A B CD EFG")
-        assert "a" not in tokens
-        assert "b" not in tokens
-        assert "cd" in tokens
+    def test_single_char_non_stopwords_preserved(self):
+        """Single chars preserved unless stopwords (a/i/s/t are stopwords)."""
+        tokens = tokenize("B K EFG")
+        assert "b" in tokens
+        assert "k" in tokens
         assert "efg" in tokens
 
     def test_empty_after_filtering(self):
         """Returns empty set if all tokens filtered."""
-        tokens = tokenize("a b c")
+        tokens = tokenize("the of in")  # all stopwords
         assert tokens == frozenset()
 
     def test_slash_splits_tokens(self):
@@ -495,3 +494,11 @@ class TestIntegration:
         # "hypertension" appears in both, heavily weighted by Common disease
         # "subtype" only in Rare variant with 5 mentions
         assert spec["hypertension"] < spec["subtype"]
+
+    def test_numbered_entities_have_distinct_tokens(self):
+        """Numbers in entity names produce distinct tokens (not filtered)."""
+        tokens1 = tokenize("Type 1")
+        tokens2 = tokenize("Type 2")
+        assert "1" in tokens1
+        assert "2" in tokens2
+        assert tokens1 != tokens2

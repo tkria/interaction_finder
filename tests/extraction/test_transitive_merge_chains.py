@@ -42,27 +42,28 @@ class TestResolveTransitiveMerges:
     def test_llm_chain_with_auto_prefix(self):
         """LLM B→C + LLM C→D + Auto A→B should resolve A→D."""
         merge_rules = {
-            ("gene variant", "gene"): ("Gene X", "auto:2:alternation:exact"),
-            ("gene x", "gene"): ("GeneX", "llm:merge"),
-            ("genex", "gene"): ("GENEX", "llm:rename"),
+            ("gene variant", "gene"): ("Gene Y", "auto:2:alternation:exact"),
+            ("gene y", "gene"): ("GeneY", "llm:merge"),
+            ("geney", "gene"): ("GENEY", "llm:rename"),
         }
         resolved = _resolve_transitive_merges(merge_rules)
-        assert resolved[("gene variant", "gene")][0] == "GENEX"
-        assert resolved[("gene x", "gene")][0] == "GENEX"
-        assert resolved[("genex", "gene")][0] == "GENEX"
+        assert resolved[("gene variant", "gene")][0] == "GENEY"
+        assert resolved[("gene y", "gene")][0] == "GENEY"
+        assert resolved[("geney", "gene")][0] == "GENEY"
         assert resolved[("gene variant", "gene")][1] == "llm:rename"
 
     def test_long_mixed_chain(self):
         """Long chain with alternating auto/LLM decisions."""
+        # Note: avoid C/D/I/L/M/V/X as they're Roman numerals
         merge_rules = {
             ("a", "gene"): ("B", "auto:1:before_paren:exact"),
-            ("b", "gene"): ("C", "llm:merge"),
-            ("c", "gene"): ("D", "auto:3:fuzzy"),
-            ("d", "gene"): ("E", "llm:rename"),
+            ("b", "gene"): ("E", "llm:merge"),
+            ("e", "gene"): ("F", "auto:3:fuzzy"),
+            ("f", "gene"): ("G", "llm:rename"),
         }
         resolved = _resolve_transitive_merges(merge_rules)
-        for key in [("a", "gene"), ("b", "gene"), ("c", "gene"), ("d", "gene")]:
-            assert resolved[key][0] == "E"
+        for key in [("a", "gene"), ("b", "gene"), ("e", "gene"), ("f", "gene")]:
+            assert resolved[key][0] == "G"
             assert resolved[key][1] == "llm:rename"
 
     def test_multiple_chains_independent(self):
