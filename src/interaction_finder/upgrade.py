@@ -19,6 +19,7 @@ from typing import Literal
 from rich.console import Console
 
 from interaction_finder.checkpoint import PipelineCheckpoint
+from interaction_finder.fetcher import ensure_playwright_installed
 from interaction_finder.resources import ResourcePool
 from interaction_finder.search.models import SearchBackend
 from interaction_finder.settings import IfetcherConfig
@@ -82,6 +83,8 @@ async def ensure_keywords(
         from interaction_finder.keywords import run_keyword_research
         from interaction_finder.keywords.progress import create_keywords_progress
 
+        # Ensure Playwright is installed before showing progress table
+        await ensure_playwright_installed()
         keywords_progress = create_keywords_progress()
         with keywords_progress:
             checkpoint = await run_keyword_research(
@@ -155,6 +158,8 @@ async def ensure_search(
         from interaction_finder.widesearch import run_widesearch_with_checkpoint
         from interaction_finder.widesearch.progress import create_widesearch_progress
 
+        # Ensure Playwright is installed before showing progress table
+        await ensure_playwright_installed()
         widesearch_progress = create_widesearch_progress()
         widesearch_progress.set_status("Planning goals")
         with widesearch_progress:
