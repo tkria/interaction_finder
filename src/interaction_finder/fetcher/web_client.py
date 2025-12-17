@@ -232,16 +232,6 @@ class PlaywrightNotInstalledError(RuntimeError):
     pass
 
 
-def _get_playwright_install_command() -> str:
-    """Return the appropriate playwright install command based on available tools."""
-    import shutil
-
-    if shutil.which("uv"):
-        return "uv run crawl4ai-setup"
-    else:
-        return "playwright install chromium"
-
-
 async def ensure_playwright_installed():
     """Check Playwright browsers are installed on first fetch, raise clear error if not.
 
@@ -260,22 +250,18 @@ async def ensure_playwright_installed():
             await browser.close()
     except Exception as e:
         error_msg = str(e)
-        install_cmd = _get_playwright_install_command()
         # Provide helpful message based on the error
         if "Executable doesn't exist" in error_msg or "browserType.launch" in error_msg:
+            from crawl4ai.install import post_install
+            logger.info("Attempting to auto-install Playwright browsers...")
+            try:
+                post_install() # Attempt to auto-setup
+            except Exception as e:
+                logger.error(f"Auto-install failed: {e}")
             raise PlaywrightNotInstalledError(
-                "Playwright browsers are not installed.\n\n"
-                "This tool requires Playwright's Chromium browser for web fetching.\n"
-                f"To install it, run:\n\n"
-                f"    {install_cmd}\n"
-            ) from e
+                "Playwright browsers are not installed or not functioning correctly.")
         else:
-            # Re-raise other errors (network issues, etc.) with context
-            raise PlaywrightNotInstalledError(
-                f"Failed to initialize Playwright browser: {error_msg}\n\n"
-                f"If browsers are not installed, run:\n\n"
-                f"    {install_cmd}\n"
-            ) from e
+            raise e
     _playwright_checked = True
 
 
