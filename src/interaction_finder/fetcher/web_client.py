@@ -253,13 +253,15 @@ async def ensure_playwright_installed():
         # Provide helpful message based on the error
         if "Executable doesn't exist" in error_msg or "browserType.launch" in error_msg:
             from crawl4ai.install import post_install
+
             logger.info("Attempting to auto-install Playwright browsers...")
             try:
-                post_install() # Attempt to auto-setup
+                post_install()  # Attempt to auto-setup
             except Exception as e:
                 logger.error(f"Auto-install failed: {e}")
             raise PlaywrightNotInstalledError(
-                "Playwright browsers are not installed or not functioning correctly.")
+                "Playwright browsers are not installed or not functioning correctly."
+            )
         else:
             raise e
     _playwright_checked = True
@@ -1032,9 +1034,11 @@ class WebClient:
                     return None
 
         # Try all links concurrently
-        tasks = [try_single_link(link) for link in fulltext_links]
-        results = await asyncio.gather(*tasks, return_exceptions=False)
+        from .batch_operations import cancel_on_interrupt
 
+        tasks = [asyncio.create_task(try_single_link(link)) for link in fulltext_links]
+        async with cancel_on_interrupt(tasks):
+            results = await asyncio.gather(*tasks, return_exceptions=False)
         # Filter successful results and find best one (longest content)
         successful_results = [r for r in results if r is not None]
 

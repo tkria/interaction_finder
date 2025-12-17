@@ -1,6 +1,7 @@
 """Batch operations for concurrent URL fetching."""
 
 import asyncio
+from contextlib import asynccontextmanager
 from typing import List, Dict, Any, Callable, Optional, Tuple
 from urllib.parse import urlparse
 from .cache import URLCache
@@ -9,6 +10,23 @@ from .progress_display import StatusDisplay
 from interaction_finder.logging import logfire, get_logger
 
 logger = get_logger(__name__)
+
+
+@asynccontextmanager
+async def cancel_on_interrupt(tasks: List[asyncio.Task]):
+    """Context manager that cancels tasks and awaits them on interrupt.
+
+    Prevents "Future exception was never retrieved" warnings when
+    concurrent operations are interrupted (e.g. Ctrl+C).
+    """
+    try:
+        yield
+    except (asyncio.CancelledError, KeyboardInterrupt):
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
 
 
 def _is_transient_failure(exc: Exception | str | None) -> bool:
@@ -144,23 +162,18 @@ class BatchOperations:
         with self.progress_display.batch_progress(
             len(urls), f"Fetching {content_type}"
         ) as progress:
-            tasks = [fetch_with_semaphore(url) for url in urls]
-
-            # Process results as they complete
+            tasks = [asyncio.create_task(fetch_with_semaphore(url)) for url in urls]
             results = {}
             completed = 0
-            for coro in asyncio.as_completed(tasks):
-                url, result = await coro
-                results[url] = result
-                completed += 1
-                # Format domain for consistent width display
-                domain = self.format_domain(url)
-                progress.update(1, f"Fetching {domain}")
-
-            # Update final status when all complete
+            async with cancel_on_interrupt(tasks):
+                for coro in asyncio.as_completed(tasks):
+                    url, result = await coro
+                    results[url] = result
+                    completed += 1
+                    domain = self.format_domain(url)
+                    progress.update(1, f"Fetching {domain}")
             if completed > 0:
                 progress.update(0, f"Fetched {completed} sites")
-
         return results
 
     async def _check_previous_failures(self, url: str) -> None:
@@ -453,18 +466,18 @@ class BatchOperations:
         with self.progress_display.batch_progress(
             len(urls), "Fetching content"
         ) as progress:
-            tasks = [fetch_markdown_with_semaphore(url) for url in urls]
-
-            # Collect markdown results as they complete
+            tasks = [
+                asyncio.create_task(fetch_markdown_with_semaphore(url)) for url in urls
+            ]
             markdown_results = {}
             completed = 0
-            for coro in asyncio.as_completed(tasks):
-                url, result = await coro
-                markdown_results[url] = result
-                completed += 1
-                domain = self.format_domain(url)
-                progress.update(1, f"Fetching {domain}")
-
+            async with cancel_on_interrupt(tasks):
+                for coro in asyncio.as_completed(tasks):
+                    url, result = await coro
+                    markdown_results[url] = result
+                    completed += 1
+                    domain = self.format_domain(url)
+                    progress.update(1, f"Fetching {domain}")
             if completed > 0:
                 progress.update(0, f"Fetched {completed} sites")
 
@@ -542,18 +555,18 @@ class BatchOperations:
             async with semaphore:
                 return await task
 
-        limited_tasks = [fetch_with_limit(task) for task in tasks]
-
+        limited_tasks = [asyncio.create_task(fetch_with_limit(task)) for task in tasks]
         with self.progress_display.batch_progress(
             len(limited_tasks), "Fetching and chunking documents"
         ) as progress:
             completed = 0
-            for coro in asyncio.as_completed(limited_tasks):
-                await coro  # Wait for completion but ignore result
-                completed += 1
-                progress.update(1, f"Prefetching ({completed}/{len(limited_tasks)})")
-
-            # Update final status when all complete
+            async with cancel_on_interrupt(limited_tasks):
+                for coro in asyncio.as_completed(limited_tasks):
+                    await coro
+                    completed += 1
+                    progress.update(
+                        1, f"Prefetching ({completed}/{len(limited_tasks)})"
+                    )
             if completed > 0:
                 progress.update(0, f"Prefetched {completed} documents")
 

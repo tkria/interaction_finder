@@ -26,6 +26,7 @@ from interaction_finder.fetcher.batch_operations import (
     BatchOperations,
     fetch_urls_with_progress,
     fetch_urls_concurrent_with_progress,
+    cancel_on_interrupt,
     DEFAULT_MAX_CONCURRENT,
 )
 
@@ -746,3 +747,74 @@ class TestErrorHandling:
 
         with pytest.raises(ValueError, match="Unknown content type: invalid"):
             await batch_ops.fetch_multiple(urls, "invalid")
+
+
+class TestCancelOnInterrupt:
+    """Test cancel_on_interrupt context manager."""
+
+    @pytest.mark.anyio
+    async def test_normal_completion_no_interference(self):
+        """Tasks complete normally when no interrupt occurs."""
+        results = []
+
+        async def append_value(val):
+            await asyncio.sleep(0.01)
+            results.append(val)
+            return val
+
+        tasks = [asyncio.create_task(append_value(i)) for i in range(3)]
+        async with cancel_on_interrupt(tasks):
+            await asyncio.gather(*tasks)
+
+        assert sorted(results) == [0, 1, 2]
+
+    @pytest.mark.anyio
+    async def test_cancellation_cleans_up_pending_tasks(self):
+        """Pending tasks are cancelled and awaited on CancelledError."""
+        started = []
+        completed = []
+
+        async def slow_task(val):
+            started.append(val)
+            await asyncio.sleep(10)  # Long enough to not complete
+            completed.append(val)
+            return val
+
+        tasks = [asyncio.create_task(slow_task(i)) for i in range(3)]
+        # Let tasks start
+        await asyncio.sleep(0.05)
+
+        with pytest.raises(asyncio.CancelledError):
+            async with cancel_on_interrupt(tasks):
+                raise asyncio.CancelledError()
+
+        # All tasks should be cancelled (none completed)
+        assert len(started) == 3
+        assert len(completed) == 0
+        # All tasks should be done (not left dangling)
+        assert all(task.done() for task in tasks)
+
+    @pytest.mark.anyio
+    async def test_keyboard_interrupt_cleans_up(self):
+        """KeyboardInterrupt also triggers cleanup."""
+        tasks = [asyncio.create_task(asyncio.sleep(10)) for _ in range(3)]
+        await asyncio.sleep(0.01)  # Let tasks start
+
+        with pytest.raises(KeyboardInterrupt):
+            async with cancel_on_interrupt(tasks):
+                raise KeyboardInterrupt()
+
+        assert all(task.done() for task in tasks)
+
+    @pytest.mark.anyio
+    async def test_exception_in_task_propagates(self):
+        """Non-interrupt exceptions from tasks propagate normally."""
+
+        async def failing_task():
+            raise ValueError("task failed")
+
+        tasks = [asyncio.create_task(failing_task())]
+
+        with pytest.raises(ValueError, match="task failed"):
+            async with cancel_on_interrupt(tasks):
+                await asyncio.gather(*tasks)
