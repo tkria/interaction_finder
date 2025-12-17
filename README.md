@@ -43,6 +43,17 @@ Generate an HTML report:
 uv run interaction-finder report results.json
 ```
 
+## Quick Test Run
+
+For a faster test with minimal API calls, limit search rounds and results:
+
+```bash
+uv run interaction-finder extract "diabetes genetics" \
+  -e gene -e disease -o results.json \
+  -O stage.search.max_rounds=1 \
+  -O stage.search.results_per_query=2
+```
+
 ## Search Backends
 
 - `pubmed` — NCBI PubMed (default, best for biomedical literature)
@@ -51,17 +62,6 @@ uv run interaction-finder report results.json
 
 ```bash
 uv run interaction-finder extract "topic" -e gene -b perplexica -o results.json
-```
-
-## Quick Test Run
-
-For a fast test with minimal API calls, limit search rounds and results:
-
-```bash
-uv run interaction-finder extract "diabetes genetics" \
-  -e gene -e disease -o results.json \
-  -O stage.search.max_rounds=1 \
-  -O stage.search.results_per_query=2
 ```
 
 ## Configuration
@@ -76,4 +76,4 @@ llm = "openai:gpt-4o-mini"
 llm = "openai:gpt-4o"
 ```
 
-Override via CLI with `-O key=value`. Run `uv run interaction-finder config help` for all options.
+Override via CLI with `-O key=value`. See `uv run interaction-finder config help` for all options.
