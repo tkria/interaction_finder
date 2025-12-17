@@ -1,5 +1,13 @@
 """Interaction finder - automated extraction of biological interactions from literature."""
 
+# Import logging first to set LITELLM_LOG before pydantic_ai imports litellm
+from .logging import (
+    configure_logging,
+    dump_log,
+    error_log_path,
+    get_logger,
+    setup_log_output,
+)
 from .fetcher import PageFetcher, URLCache
 from .settings import IfetcherConfig
 from .models import Term
@@ -23,13 +31,6 @@ from .upgrade import (
     ensure_keywords,
     ensure_search,
     ensure_extraction,
-)
-from .logging import (
-    configure_logging,
-    dump_log,
-    error_log_path,
-    get_logger,
-    setup_log_output,
 )
 
 # Rebuild checkpoint models to resolve forward references after imports

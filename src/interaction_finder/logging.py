@@ -14,6 +14,20 @@ import os
 from pathlib import Path
 from typing import Any
 
+# Set LiteLLM log level early, before it's imported
+# This prevents debug spam if litellm is imported before configure_logging() runs
+if "LITELLM_LOG" not in os.environ:
+    os.environ["LITELLM_LOG"] = "WARNING"
+
+# Third-party loggers to route through our handlers
+_THIRD_PARTY_LOGGERS = (
+    "LiteLLM",
+    "LiteLLM Proxy",
+    "LiteLLM Router",
+    "httpx",
+    "httpcore",
+)
+
 
 def configure_logfire(verbose: bool = False) -> None:
     """Configure logfire with console output disabled.
@@ -173,6 +187,13 @@ def configure_logging(console=None, verbose: bool = False) -> None:
     """
     root = logging.getLogger()
     root.setLevel(logging.DEBUG)
+    # Route third-party logs through root (clear their handlers, enable propagation)
+    level = logging.INFO if verbose else logging.WARNING
+    for name in _THIRD_PARTY_LOGGERS:
+        logger = logging.getLogger(name)
+        logger.handlers.clear()
+        logger.propagate = True
+        logger.setLevel(level)
     # Remove existing RichHandler and LogfireLoggingHandler, preserve file/buffer
     try:
         from rich.logging import RichHandler
