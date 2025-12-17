@@ -10,7 +10,8 @@ def test_create_keywords_progress():
     assert progress["Round"] is not None
     assert progress["Searches run"] is not None
     assert progress["Results found"] is not None
-    assert progress["Documents"] is not None
+    assert progress["Fetched"] is not None
+    assert progress["Processed"] is not None
     assert progress["Keywords"] is not None
 
 
@@ -23,8 +24,10 @@ def test_keywords_progress_counters():
     assert progress["Searches run"].in_progress is None
     # Results found is 1-part
     assert progress["Results found"].in_progress is None
-    # Documents is a 3-part counter
-    assert progress["Documents"].in_progress == 0
+    # Fetched is a 3-part counter
+    assert progress["Fetched"].in_progress == 0
+    # Processed is a 3-part counter
+    assert progress["Processed"].in_progress == 0
     # Keywords is a 3-part counter
     assert progress["Keywords"].in_progress == 0
 
@@ -35,7 +38,8 @@ def test_keywords_progress_categories():
     assert progress["Round"].category == "Search"
     assert progress["Searches run"].category == "Search"
     assert progress["Results found"].category == "Search"
-    assert progress["Documents"].category == "Documents"
+    assert progress["Fetched"].category == "Documents"
+    assert progress["Processed"].category == "Documents"
     assert progress["Keywords"].category == "Keywords"
 
 
@@ -43,11 +47,11 @@ def test_keywords_progress_context_manager():
     """Keywords progress works as context manager."""
     progress = create_keywords_progress()
     with progress:
-        progress["Documents"].total = 10
-        progress["Documents"].activate()
-        progress["Documents"].work()
-        progress["Documents"].done()
-    assert progress["Documents"].completed == 1
+        progress["Fetched"].total = 10
+        progress["Fetched"].activate()
+        progress["Fetched"].work()
+        progress["Fetched"].done()
+    assert progress["Fetched"].completed == 1
 
 
 def test_keywords_progress_typical_usage():
@@ -65,14 +69,21 @@ def test_keywords_progress_typical_usage():
     progress["Results found"].add(10)
     assert progress["Searches run"].completed == 1
     assert progress["Results found"].completed == 10
-    # Document processing
-    progress["Documents"].total = 5
-    progress["Documents"].activate()
+    # Document fetching
+    progress["Fetched"].total = 5
+    progress["Fetched"].activate()
     progress.set_status("Fetching documents")
-    progress["Documents"].work()
-    progress["Documents"].done()
-    assert progress["Documents"].completed == 1
-    # Keyword extraction and evaluation
+    progress["Fetched"].work()
+    progress["Fetched"].done()
+    assert progress["Fetched"].completed == 1
+    # Document processing (keyword extraction + evaluation)
+    progress["Processed"].total = 5
+    progress["Processed"].activate()
+    progress.set_status("Processing documents")
+    progress["Processed"].completed = 5
+    progress["Processed"].complete()
+    assert progress["Processed"].completed == 5
+    # Keyword evaluation results
     progress["Keywords"].total = 50
     progress["Keywords"].activate()
     progress.set_status("Evaluating keywords")

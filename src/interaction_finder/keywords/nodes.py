@@ -274,6 +274,10 @@ Select the indices of results that are most likely to be valuable review article
             for i in selected_indices
             if i < len(ctx.state.all_search_results)
         ]
+        # Set Fetched total now that we know how many documents to fetch
+        if ctx.deps.progress:
+            ctx.deps.progress["Fetched"].total = len(ctx.state.selected_results)
+            ctx.deps.progress["Fetched"].activate()
         logger.info(
             f"Selected {len(ctx.state.selected_results)} results from {len(ctx.state.all_search_results)} available",
             selected_titles=[r.title[:60] for r in ctx.state.selected_results],
@@ -294,7 +298,6 @@ class FetchDocumentsNode(BaseNode[State, Deps, BridgingTermsOut]):
         """Fetch documents and add to resource pool."""
         # Update progress to show fetching
         if ctx.deps.progress:
-            ctx.deps.progress["Documents"].activate()
             ctx.deps.progress.set_status("Fetching documents")
         with logfire.span(
             f"Fetch {len(ctx.state.selected_results)} documents",
@@ -303,29 +306,28 @@ class FetchDocumentsNode(BaseNode[State, Deps, BridgingTermsOut]):
             if not ctx.state.selected_results:
                 logger.info("No selected results, skipping to finalization")
                 return FinalizeNode()
-            # Separate new URLs from already-fetched
+            # Separate new URLs from already-fetched (cached in resource pool)
             urls_to_fetch = []
             resource_ids_map = {}
+            cached_count = 0
             for result in ctx.state.selected_results:
                 if result.url not in ctx.deps.resource_pool:
                     # Register new resource
                     rid = ctx.deps.resource_pool.register(result.url)
                     urls_to_fetch.append((result.url, result.title))
                     resource_ids_map[result.url] = rid
+                else:
+                    cached_count += 1
+            # Update progress: cached documents are already complete
+            if ctx.deps.progress and cached_count > 0:
+                ctx.deps.progress["Fetched"].completed = cached_count
             # Skip fetching if all URLs already processed
             if not urls_to_fetch:
                 logger.info(
                     f"All {len(ctx.state.selected_results)} documents cached, proceeding to extraction"
                 )
-                # Update progress for cached documents (all complete immediately)
                 if ctx.deps.progress:
-                    ctx.deps.progress["Documents"].total = len(
-                        ctx.state.selected_results
-                    )
-                    ctx.deps.progress["Documents"].completed = len(
-                        ctx.state.selected_results
-                    )
-                    ctx.deps.progress["Documents"].complete()
+                    ctx.deps.progress["Fetched"].complete()
                 return ExtractKeywordsNode()
             # Fetch only new URLs
             urls = [url for url, _ in urls_to_fetch]
@@ -361,13 +363,10 @@ class FetchDocumentsNode(BaseNode[State, Deps, BridgingTermsOut]):
                     fetched_count += 1
                 else:
                     failed_count += 1
-            # Update progress with total documents (newly fetched + cached)
+            # Update progress: mark fetching complete
             if ctx.deps.progress:
-                total_count = len(ctx.state.selected_results)
-                ctx.deps.progress["Documents"].total = total_count
-                ctx.deps.progress["Documents"].completed = total_count
-                ctx.deps.progress["Documents"].complete()
-            cached_count = len(ctx.state.selected_results) - len(urls_to_fetch)
+                ctx.deps.progress["Fetched"].completed = cached_count + fetched_count
+                ctx.deps.progress["Fetched"].complete()
             logger.info(
                 f"Fetched {fetched_count}/{len(urls_to_fetch)} new documents ({cached_count} from cache, {failed_count} failed)"
             )
@@ -472,8 +471,10 @@ class ExtractKeywordsNode(BaseNode[State, Deps, BridgingTermsOut]):
             total_keywords = sum(
                 len(kws) for kws in ctx.state.extracted_keywords.values()
             )
-            # Update progress with keyword extraction count (set total)
+            # Update progress: set Processed total (documents to evaluate) and Keywords total
             if ctx.deps.progress:
+                ctx.deps.progress["Processed"].total = len(ctx.state.extracted_keywords)
+                ctx.deps.progress["Processed"].activate()
                 ctx.deps.progress["Keywords"].total = total_keywords
                 ctx.deps.progress["Keywords"].activate()
             logger.info(
@@ -637,8 +638,10 @@ class EvaluateKeywordsNode(BaseNode[State, Deps, BridgingTermsOut]):
         # Add summaries to state and update progress
         for summary, _ in successful_results:
             ctx.state.document_summaries.append(summary)
-        # Update progress: mark keywords complete with accepted count
+        # Update progress: mark Processed and Keywords complete
         if ctx.deps.progress:
+            ctx.deps.progress["Processed"].completed = len(successful_results)
+            ctx.deps.progress["Processed"].complete()
             ctx.deps.progress["Keywords"].completed = total_bridging
             ctx.deps.progress["Keywords"].complete()
         failed_count = len(results) - len(successful_results)
