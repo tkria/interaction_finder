@@ -18,6 +18,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.usage import RunUsage
+from pydantic_ai.settings import ModelSettings
 
 from interaction_finder.agent_config import agent_getter
 from interaction_finder.agent_utils import rename_agent
@@ -474,8 +475,8 @@ class ConfirmedPair(BaseModel):
     relationship: str = Field(
         description="Relationship type (e.g., 'activates', 'inhibits', 'associated_with')"
     )
-    evidence: EvidenceQuality = Field(
-        description="Structured assessment of evidence quality"
+    reasoning: str = Field(
+        description="Brief explanation of why this relationship exists"
     )
     topic_relevance: Literal[1, 2, 3, 4, 5] = Field(
         description="""How central is this pair to the research topic?
@@ -488,15 +489,15 @@ class ConfirmedPair(BaseModel):
     supporting_quotes: list[str] = Field(
         description="Exact verbatim quotes from text supporting this relationship"
     )
-    reasoning: str = Field(
-        description="Brief explanation of why this relationship exists"
+    evidence: EvidenceQuality = Field(
+        description="Structured assessment of evidence quality"
     )
 
 
 class RegionAssessmentOut(BaseModel):
     """LLM output for batch co-mention region assessment."""
 
-    confirmed_pairs: list[ConfirmedPair] = Field(
+    pairs: list[ConfirmedPair] = Field(
         default_factory=list,
         description="Only pairs where a relationship was found. "
         "Pairs not listed are implicitly rejected (no relationship or invalid entities).",
@@ -516,7 +517,7 @@ For each pair:
 1. Verify that both entity mentions in the text actually refer to the specified canonical entities (not similarly-named entities or false matches)
 2. If both entities are valid and relevant to the research topic, determine if the text makes any claim about their relationship
 
-Only include a pair in confirmed_pairs if BOTH conditions are met:
+Only include a pair in pairs if BOTH conditions are met:
 - Both entity mentions are valid (refer to the specified entities and are topic-relevant)
 - The text states or strongly implies a relationship between them
 
@@ -537,7 +538,8 @@ Both positive and negative relationships matter - inhibitory effects, contraindi
 - Co-occurrence alone is NOT sufficient - there must be a stated connection
 - The relationship must be about these specific entities, not general statements
 - Provide exact verbatim quotes from the text, not paraphrases
-- If no pairs meet the criteria, return an empty confirmed_pairs list""",
+- If no pairs meet the criteria, return an empty pairs list""",
+    default_model_settings=ModelSettings(parallel_tool_calls=False),
 )
 
 
@@ -711,7 +713,7 @@ Provide supporting quotes for confirmed relationships."""
     assessments: list[PairAssessment] = []
     new_pairs: list[tuple] = []
     resolution_issues: list[str] = []
-    for pair_idx, confirmed in enumerate(result.output.confirmed_pairs, start=1):
+    for pair_idx, confirmed in enumerate(result.output.pairs, start=1):
         # Match entity names using fuzzy matching
         match1 = find_entity_match(
             confirmed.entity1_name, entity_variants, allow_fuzzy=True

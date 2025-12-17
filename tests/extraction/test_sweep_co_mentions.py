@@ -991,7 +991,7 @@ class TestAssessCoMentionRegionDiagnostics:
         mock_agent = MagicMock()
         mock_result = MagicMock()
         mock_result.output = RegionAssessmentOut(
-            confirmed_pairs=[
+            pairs=[
                 ConfirmedPair(
                     entity1_name="UNKNOWN_GENE",  # Not in candidates
                     entity2_name="TP53",
@@ -1079,7 +1079,7 @@ class TestAssessCoMentionRegionDiagnostics:
         mock_agent = MagicMock()
         mock_result = MagicMock()
         mock_result.output = RegionAssessmentOut(
-            confirmed_pairs=[
+            pairs=[
                 ConfirmedPair(
                     entity1_name="BRCA1",
                     entity2_name="UNKNOWN_GENE",  # Not in candidates
@@ -1175,7 +1175,7 @@ class TestAssessCoMentionRegionDiagnostics:
         mock_agent = MagicMock()
         mock_result = MagicMock()
         mock_result.output = RegionAssessmentOut(
-            confirmed_pairs=[
+            pairs=[
                 ConfirmedPair(
                     entity1_name="TP53",
                     entity2_name="breast cancer",
@@ -1276,7 +1276,7 @@ class TestAssessCoMentionRegionDiagnostics:
         mock_agent = MagicMock()
         mock_result = MagicMock()
         mock_result.output = RegionAssessmentOut(
-            confirmed_pairs=[
+            pairs=[
                 # Pair 1: Unknown first entity
                 ConfirmedPair(
                     entity1_name="UNKNOWN1",
@@ -1403,7 +1403,7 @@ class TestAssessCoMentionRegionDiagnostics:
         mock_agent = MagicMock()
         mock_result = MagicMock()
         mock_result.output = RegionAssessmentOut(
-            confirmed_pairs=[
+            pairs=[
                 ConfirmedPair(
                     entity1_name="TGFB1",  # From global aliases, not in validated_entities
                     entity2_name="BRCA1",
@@ -1512,7 +1512,7 @@ class TestAssessCoMentionRegionDiagnostics:
         mock_agent = MagicMock()
         mock_result = MagicMock()
         mock_result.output = RegionAssessmentOut(
-            confirmed_pairs=[
+            pairs=[
                 ConfirmedPair(
                     entity1_name="BMPR2",
                     entity2_name="Familial pulmonary arterial hypertension",
@@ -1611,7 +1611,7 @@ class TestAssessCoMentionRegionDiagnostics:
         mock_agent = MagicMock()
         mock_result = MagicMock()
         mock_result.output = RegionAssessmentOut(
-            confirmed_pairs=[
+            pairs=[
                 ConfirmedPair(
                     entity1_name="TP53",
                     entity2_name="breast cancer",
@@ -1715,7 +1715,7 @@ class TestAssessCoMentionRegionDiagnostics:
         mock_agent = MagicMock()
         mock_result = MagicMock()
         mock_result.output = RegionAssessmentOut(
-            confirmed_pairs=[
+            pairs=[
                 ConfirmedPair(
                     entity1_name="TP53",
                     entity2_name="breast cancer",
