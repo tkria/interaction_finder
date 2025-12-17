@@ -10,7 +10,7 @@ logger = get_logger(__name__)
 
 from interaction_finder.checkpoint import KeywordsStageData, PipelineCheckpoint
 from interaction_finder.version import get_version_string
-from interaction_finder.fetcher import PageFetcher, ensure_playwright_installed
+from interaction_finder.fetcher import PageFetcher
 from interaction_finder.keywords.deps import Deps
 from interaction_finder.keywords.extractors import (
     KeyBERTExtractor,
@@ -55,7 +55,6 @@ async def run_keyword_research(
         >>> checkpoint = await run_keyword_research("pulmonary arterial hypertension", config)
         >>> print(f"Found {len(checkpoint.keywords.terms)} bridging terms")
     """
-    await ensure_playwright_installed()
     with logfire.span(
         "run_keyword_research",
         topic=topic,

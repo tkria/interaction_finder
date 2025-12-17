@@ -823,7 +823,10 @@ def keywords(
         # Import keywords pipeline
         from interaction_finder.keywords import run_keyword_research
         from interaction_finder.keywords.progress import create_keywords_progress
+        from interaction_finder.fetcher import ensure_playwright_installed
 
+        # Ensure Playwright is installed before showing progress table
+        asyncio.run(ensure_playwright_installed())
         # Run keywords stage with progress display
         console.print(f"[bold]Extracting bridging terms for:[/bold] {topic}\n")
         progress_counter = create_keywords_progress()
@@ -970,6 +973,10 @@ def search(
         else:
             checkpoint_path = None
 
+        # Ensure Playwright is installed before showing progress tables
+        from interaction_finder.fetcher import ensure_playwright_installed
+
+        asyncio.run(ensure_playwright_installed())
         # Run pipeline (ensure_search manages progress internally for each stage)
         checkpoint = asyncio.run(
             ensure_search(
