@@ -7,9 +7,9 @@ and classifies them.
 
 from collections import defaultdict
 
-from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.usage import RunUsage
 
+from interaction_finder.agent_config import AGENT_CALL_ERRORS
 from interaction_finder.agent_utils import rename_agent
 from interaction_finder.extraction.consolidate_relationships import (
     get_relationship_consolidation_agent,
@@ -111,7 +111,7 @@ For each new relationship, provide:
                         result.output.consolidations, state
                     )
                     missing = missing - set(state.relationship_polarities.keys())
-                except (TimeoutError, ConnectionError, ValueError, ModelHTTPError) as e:
+                except AGENT_CALL_ERRORS as e:
                     deps.logger.warning(f"Retry {attempt} failed: {type(e).__name__}")
                     break
             # Default any remaining missing labels to neutral
@@ -121,8 +121,8 @@ For each new relationship, provide:
                 )
                 for label in missing:
                     state.relationship_polarities[label] = "neutral"
-        except (TimeoutError, ConnectionError, ValueError, ModelHTTPError) as e:
-            deps.logger.warning(
+        except AGENT_CALL_ERRORS as e:
+            deps.logger.error(
                 f"New relationship consolidation failed: {type(e).__name__}: {e}; "
                 f"defaulting new labels to neutral polarity"
             )

@@ -16,11 +16,10 @@ from dataclasses import dataclass
 from typing import Literal
 
 from pydantic import BaseModel, Field
-from pydantic_ai.exceptions import ModelHTTPError
-from pydantic_ai.usage import RunUsage
 from pydantic_ai.settings import ModelSettings
+from pydantic_ai.usage import RunUsage
 
-from interaction_finder.agent_config import agent_getter
+from interaction_finder.agent_config import AGENT_CALL_ERRORS, agent_getter
 from interaction_finder.agent_utils import rename_agent
 from interaction_finder.extraction.deps import Deps
 from interaction_finder.extraction.models import (
@@ -706,7 +705,7 @@ Provide supporting quotes for confirmed relationships."""
                 if deps.progress:
                     deps.progress["Regions"].work()
                 result = await agent.run(prompt, deps=deps, usage=usage)
-    except (TimeoutError, ConnectionError, ValueError, ModelHTTPError) as e:
+    except AGENT_CALL_ERRORS as e:
         deps.logger.error(f"{diagnostic_prefix} failed: {type(e).__name__}: {e}")
         return ([], [])
     # Process confirmed pairs

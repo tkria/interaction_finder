@@ -14,9 +14,9 @@ import asyncio
 from collections import Counter, defaultdict
 from itertools import combinations
 
-from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.usage import RunUsage
 
+from interaction_finder.agent_config import AGENT_CALL_ERRORS
 from interaction_finder.agent_utils import rename_agent
 from interaction_finder.extraction.deps import Deps
 from interaction_finder.extraction.judge_cross_document import (
@@ -364,7 +364,7 @@ async def _judge_pair(
             topic_relevance = result.output.topic_relevance
             decision_confidence = result.output.decision_confidence
             reasoning = result.output.reasoning
-        except (TimeoutError, ConnectionError, ValueError, ModelHTTPError) as e:
+        except AGENT_CALL_ERRORS as e:
             deps.logger.error(
                 f"Cross-document judgment failed for {pair_key}: "
                 f"{type(e).__name__}: {e}"

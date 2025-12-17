@@ -21,10 +21,9 @@ import secrets
 import string
 from collections import defaultdict
 
-from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.usage import RunUsage
 
-from interaction_finder.agent_config import agent_getter
+from interaction_finder.agent_config import AGENT_CALL_ERRORS, agent_getter
 from interaction_finder.agent_utils import rename_agent
 from interaction_finder.extraction.consolidate_entities import (
     get_entity_consolidation_agent,
@@ -533,8 +532,8 @@ Only return pairs that should merge or be renamed. Omit pairs that should remain
             if pair_id not in returned_ids:
                 cache_key = (child, parent)
                 kind_cache.cache[cache_key] = (None, "implicit_skip")
-    except (TimeoutError, ConnectionError, ValueError, ModelHTTPError) as e:
-        deps.logger.error(f"Entity consolidation failed: {e}")
+    except AGENT_CALL_ERRORS as e:
+        deps.logger.error(f"Entity consolidation failed: {type(e).__name__}: {e}")
 
 
 async def _get_group_consolidation_decisions(
@@ -636,8 +635,17 @@ Examples:
 - Exclude: group_id="def", action="exclude", target="5", reasoning="Member 5 (TAPSE) is a measurement"
 - Split: group_id="ghi", action="split", reasoning="Mixes diseases and measurements"
 """
-            async with deps.agent_semaphore:
-                result = await agent.run(prompt)
+            try:
+                async with deps.agent_semaphore:
+                    result = await agent.run(prompt)
+            except AGENT_CALL_ERRORS as e:
+                deps.logger.error(
+                    f"Entity group consolidation failed for batch: {type(e).__name__}: {e}"
+                )
+                # Treat all groups in this batch as kept separate
+                all_resolved.update(batch)
+                stats["kept_separate"] += len(batch)
+                continue
             # Index decisions by group_id
             id_to_group = {g["id"]: g for g in group_data}
             decisions_by_id: dict[str, list[ClusterDecision]] = {}

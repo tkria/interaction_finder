@@ -9,6 +9,7 @@ from typing import Any, Callable, Type
 
 from pydantic import BaseModel
 from pydantic_ai import Agent
+from pydantic_ai.exceptions import ModelHTTPError, UnexpectedModelBehavior
 from pydantic_ai.models.openai import (
     OpenAIModelProfile,
     OpenAIResponsesModel,
@@ -23,6 +24,17 @@ from interaction_finder.settings import IfetcherConfig
 # Global cache for agent instances
 # Cache key: (module, agent, model, frozen_config_params)
 _agent_cache: dict[tuple[str, str, str, frozenset[tuple[str, Any]]], Agent] = {}
+
+# Standard exceptions to catch when calling LLM agents.
+# These represent recoverable failures where skipping the current item
+# and continuing with the rest of the pipeline is appropriate.
+AGENT_CALL_ERRORS: tuple[type[Exception], ...] = (
+    TimeoutError,
+    ConnectionError,
+    ValueError,
+    ModelHTTPError,
+    UnexpectedModelBehavior,
+)
 
 
 def _resolve_gpt5_model(

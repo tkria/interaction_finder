@@ -16,9 +16,9 @@ This approach ensures:
 
 from collections import defaultdict
 
-from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.usage import RunUsage
 
+from interaction_finder.agent_config import AGENT_CALL_ERRORS
 from interaction_finder.agent_utils import rename_agent
 from interaction_finder.extraction.consolidate_relationships import (
     get_relationship_consolidation_agent,
@@ -121,7 +121,7 @@ For each relationship, provide:
             async with deps.agent_semaphore:
                 result = await agent.run(prompt, deps=deps, usage=usage)
         return result.output.consolidations
-    except (TimeoutError, ConnectionError, ValueError, ModelHTTPError) as e:
+    except AGENT_CALL_ERRORS as e:
         deps.logger.error(f"Relationship consolidation failed: {type(e).__name__}: {e}")
         return []
 
