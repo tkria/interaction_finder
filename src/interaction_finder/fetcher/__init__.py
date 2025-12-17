@@ -7,7 +7,7 @@ Provides the same public API as the original fetcher.py but with improved intern
 # Import the main PageFetcher class and FetchedDocument dataclass
 from .page_fetcher import PageFetcher, FetchedDocument
 
-from .web_client import ensure_playwright_installed
+from .web_client import ensure_playwright_installed, PlaywrightNotInstalledError
 
 # Import standalone utility functions for backward compatibility
 from .batch_operations import (
@@ -37,7 +37,8 @@ __all__ = [
     "URLCache",
     "ChunkData",
     "convert_legacy_chunk_data",
-    "ensure_playwright_installed"
+    "ensure_playwright_installed",
+    "PlaywrightNotInstalledError",
     # Utilities
     "PreviousFailure",
     "fetch_urls_with_progress",

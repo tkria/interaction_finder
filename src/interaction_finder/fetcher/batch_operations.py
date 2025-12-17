@@ -4,11 +4,28 @@ import asyncio
 from typing import List, Dict, Any, Callable, Optional, Tuple
 from urllib.parse import urlparse
 from .cache import URLCache
-from .web_client import WebClient
+from .web_client import WebClient, PlaywrightNotInstalledError
 from .progress_display import StatusDisplay
 from interaction_finder.logging import logfire, get_logger
 
 logger = get_logger(__name__)
+
+
+def _is_transient_failure(exc: Exception | str | None) -> bool:
+    """Check if failure is a transient environment issue (not URL-specific)."""
+    if exc is None:
+        return False
+    if isinstance(exc, PlaywrightNotInstalledError):
+        return True
+    text = str(exc)
+    return any(
+        marker in text
+        for marker in (
+            "Playwright browsers are not installed",
+            "Executable doesn't exist",
+            "browserType.launch",
+        )
+    )
 
 
 class PreviousFailure(Exception):
@@ -147,14 +164,19 @@ class BatchOperations:
         return results
 
     async def _check_previous_failures(self, url: str) -> None:
-        """Check for previous failures and raise PreviousFailure if found."""
+        """Check for previous failures and raise PreviousFailure if found.
+
+        Skips transient environment failures (e.g. Playwright not installed)
+        since those are not URL-specific and should be retried after fixing
+        the environment.
+        """
         # Check original URL
         if await self.cache.is_failed(url):
             reason = await self.cache.get_failed_reason(url)
-            raise PreviousFailure(
-                url, reason or f"Previous failure recorded for URL: {url}"
-            )
-
+            if not _is_transient_failure(reason):
+                raise PreviousFailure(
+                    url, reason or f"Previous failure recorded for URL: {url}"
+                )
         # Follow redirect chain and check each URL for failures
         try:
             visited = set()
@@ -166,10 +188,11 @@ class BatchOperations:
                 visited.add(redir)
                 if await self.cache.is_failed(redir):
                     reason = await self.cache.get_failed_reason(redir)
-                    raise PreviousFailure(
-                        redir,
-                        reason or f"Previous failure recorded for URL: {redir}",
-                    )
+                    if not _is_transient_failure(reason):
+                        raise PreviousFailure(
+                            redir,
+                            reason or f"Previous failure recorded for URL: {redir}",
+                        )
                 current = redir
         except PreviousFailure:
             # Re-raise PreviousFailure exceptions
@@ -192,8 +215,10 @@ class BatchOperations:
         try:
             fetch_result = await self.web_client.fetch_html(url, retry=retry)
         except Exception as e:
-            # Only mark as failed for actual fetch/network errors
-            await self.cache.mark_failed(url, reason=str(e))
+            # Don't cache transient environment failures (e.g. Playwright not installed)
+            # since they're not URL-specific
+            if not _is_transient_failure(e):
+                await self.cache.mark_failed(url, reason=str(e))
             raise
 
         # Post-processing - don't mark as failed on processing errors
@@ -252,8 +277,10 @@ class BatchOperations:
         try:
             fetch_result = await self.web_client.fetch_pdf(url, retry=retry)
         except Exception as e:
-            # Only mark as failed for actual fetch/network errors
-            await self.cache.mark_failed(url, reason=str(e))
+            # Don't cache transient environment failures (e.g. Playwright not installed)
+            # since they're not URL-specific
+            if not _is_transient_failure(e):
+                await self.cache.mark_failed(url, reason=str(e))
             raise
 
         # Post-processing - don't mark as failed on processing errors
@@ -329,8 +356,10 @@ class BatchOperations:
                 else:
                     fetch_result = await self.web_client.fetch_html(url, retry=retry)
             except Exception as e:
-                # Only mark as failed for actual fetch/network errors
-                await self.cache.mark_failed(url, reason=str(e))
+                # Don't cache transient environment failures (e.g. Playwright not installed)
+                # since they're not URL-specific
+                if not _is_transient_failure(e):
+                    await self.cache.mark_failed(url, reason=str(e))
                 raise
 
             # Post-processing - don't mark as failed on processing errors

@@ -16,7 +16,11 @@ from unittest.mock import AsyncMock, Mock
 project_root = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from interaction_finder.fetcher import PageFetcher, PreviousFailure
+from interaction_finder.fetcher import (
+    PageFetcher,
+    PreviousFailure,
+    PlaywrightNotInstalledError,
+)
 from interaction_finder.settings import IfetcherConfig
 
 
@@ -439,3 +443,67 @@ class TestComplexFailureScenarios:
         # This should handle the cache error and refetch
         result2 = await fetcher.get_html(url, retry=True)
         assert "Recovered content" in result2
+
+
+class TestTransientFailureHandling:
+    """Test that transient environment failures (e.g. Playwright not installed) are not cached."""
+
+    @pytest.fixture
+    def setup_pagefetcher(self):
+        """Set up PageFetcher with temporary cache."""
+        temp_dir = tempfile.mkdtemp()
+        config = IfetcherConfig.model_validate(
+            {"cache": {"directory": temp_dir}, "tools": {"crawl4ai": {"timeout": 30}}}
+        )
+        fetcher = PageFetcher(
+            cache_dir=config.abspath(config.output.cache),
+            timeout=config.tools.crawl4ai.timeout,
+            show_status=False,
+        )
+        yield fetcher, config
+        import shutil
+
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+    @pytest.mark.asyncio
+    async def test_transient_errors_not_cached_and_allow_retry(self, setup_pagefetcher):
+        """Transient failures shouldn't create .failed sentinels or block retries."""
+        fetcher, _ = setup_pagefetcher
+        url = "http://transient-test.com"
+        await fetcher.clear_cache(url)
+        # Transient error should not be cached
+        fetcher.web_client.fetch_html = AsyncMock(
+            side_effect=PlaywrightNotInstalledError(
+                "Playwright browsers are not installed"
+            )
+        )
+        with pytest.raises(PlaywrightNotInstalledError):
+            await fetcher.get_html(url)
+        assert not await fetcher.cache.is_failed(url)
+        # Even if manually marked with transient reason, retry should work
+        await fetcher.cache.mark_failed(url, reason="Executable doesn't exist")
+        fetcher.web_client.fetch_html = AsyncMock(
+            return_value={
+                "raw_content": "<html>ok</html>",
+                "markdown_content": "ok",
+                "final_url": url,
+                "doi": "",
+            }
+        )
+        result = await fetcher.get_html(url)  # Should NOT raise PreviousFailure
+        assert "ok" in result
+
+    @pytest.mark.asyncio
+    async def test_non_transient_failures_still_cached(self, setup_pagefetcher):
+        """Regular failures should still be cached and block retries."""
+        fetcher, _ = setup_pagefetcher
+        url = "http://regular-failure.com"
+        await fetcher.clear_cache(url)
+        fetcher.web_client.fetch_html = AsyncMock(
+            side_effect=ConnectionError("Connection refused")
+        )
+        with pytest.raises(ConnectionError):
+            await fetcher.get_html(url)
+        assert await fetcher.cache.is_failed(url)
+        with pytest.raises(PreviousFailure):
+            await fetcher.get_html(url)
