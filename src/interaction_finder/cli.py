@@ -28,6 +28,12 @@ from .version import (
     parse_version_string,
 )
 
+# Disable tokenizer parallelism before any imports that might load HuggingFace models.
+# This prevents "The current process just got forked" warnings when sentence-transformers
+# or similar libraries are used alongside multiprocessing/threading.
+import os
+
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
 def _format_json_schema_type(prop: dict) -> str:
     """Format a JSON Schema property type as a readable string."""
