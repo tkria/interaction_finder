@@ -35,6 +35,7 @@ import os
 
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
+
 def _format_json_schema_type(prop: dict) -> str:
     """Format a JSON Schema property type as a readable string."""
     if "anyOf" in prop:
@@ -157,7 +158,7 @@ Automated extraction of biological relationships from papers.
 \b
 Configuration:
   Uses config.toml in current directory if present. Override any
-  setting with -O key.path=value. Run 'config help' to see all options.
+  setting with -O key.path=value. Run 'config schema' to see all options.
 
 \b
 Example:
@@ -489,7 +490,7 @@ def default_output_path(cfg: IfetcherConfig, topic: str) -> Path:
 
 @app.command()
 def config(
-    action: str = typer.Argument(help="Action: 'help', 'info', or 'validate'"),
+    action: str = typer.Argument(help="Action: 'schema', 'info', or 'validate'"),
     mode: Optional[str] = typer.Option(
         None, "-m", "--mode", help="Configuration mode to use"
     ),
@@ -505,7 +506,7 @@ def config(
     Manage configuration: show schema docs, current config, or validate file.
 
     Actions:
-      help      - Display configuration schema with all options and defaults
+      schema    - Display configuration schema with all options and defaults
       info      - Display current configuration values
       validate  - Validate configuration file syntax
     """
@@ -513,7 +514,7 @@ def config(
         config_path, mode, verbose, overrides
     )
     try:
-        if action == "help":
+        if action == "schema":
             # Display configuration schema documentation
             console.print()
             console.print("[bold]Configuration Schema[/bold]")
@@ -552,7 +553,7 @@ def config(
                 console.print(cfg.model_dump_json(indent=2))
         else:
             console.print(f"[red]Unknown action:[/red] {action}")
-            console.print("Valid actions: help, info, validate")
+            console.print("Valid actions: schema, info, validate")
             raise typer.Exit(1)
     except KeyboardInterrupt:
         _handle_keyboard_interrupt(None)

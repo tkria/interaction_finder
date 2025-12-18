@@ -76,4 +76,4 @@ llm = "openai:gpt-4o-mini"
 llm = "openai:gpt-4o"
 ```
 
-Override via CLI with `-O key=value`. See `uv run interaction-finder config help` for all options.
+Override via CLI with `-O key=value`. See `uv run interaction-finder config schema` for all options.
