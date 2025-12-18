@@ -646,14 +646,17 @@ Examples:
                 all_resolved.update(batch)
                 stats["kept_separate"] += len(batch)
                 continue
-            # Index decisions by group_id
+            # Index decisions by group_id (strip optional "Group " prefix from LLM response)
             id_to_group = {g["id"]: g for g in group_data}
             decisions_by_id: dict[str, list[ClusterDecision]] = {}
             for d in result.output.decisions:
-                if d.group_id not in id_to_group:
+                gid = d.group_id
+                if gid.lower().startswith("group "):
+                    gid = gid[6:].lstrip()
+                if gid not in id_to_group:
                     deps.logger.warning(f"Unknown group_id '{d.group_id}'")
                     continue
-                decisions_by_id.setdefault(d.group_id, []).append(d)
+                decisions_by_id.setdefault(gid, []).append(d)
             # Process decisions
             groups_with_decisions: set[frozenset[str]] = set()
             for gid, decisions in decisions_by_id.items():
