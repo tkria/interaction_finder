@@ -1,6 +1,6 @@
 """External service dependencies for keyword research pipeline."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
@@ -11,6 +11,7 @@ from interaction_finder.keywords.reranker import Reranker
 from interaction_finder.resources import ResourcePool
 from interaction_finder.search.models import SearchBackend
 from interaction_finder.settings import IfetcherConfig
+from interaction_finder.usage import StageUsage
 
 
 @dataclass
@@ -29,3 +30,4 @@ class Deps:
     resource_pool: ResourcePool  # Document pool with provenance tracking
     config: IfetcherConfig  # Full configuration object
     progress: Any | None = None  # Progress tracking (StatusTable or DummyProgress)
+    usage: StageUsage = field(default_factory=dict)  # LLM usage tracking

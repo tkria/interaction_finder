@@ -6,7 +6,7 @@ and passed to agents via ctx.deps.
 
 import asyncio
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 
 from interaction_finder.resources import ResourcePool
 from interaction_finder.settings import IfetcherConfig
+from interaction_finder.usage import StageUsage
 
 
 class ProgressProtocol(Protocol):
@@ -66,3 +67,4 @@ class Deps:
     agent_semaphore: asyncio.Semaphore = None  # type: ignore
     checkpoint_path: str | None = None
     input_checkpoint: "PipelineCheckpoint | None" = None
+    usage: StageUsage = field(default_factory=dict)  # LLM usage tracking

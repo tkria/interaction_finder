@@ -17,10 +17,9 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 from pydantic_ai.settings import ModelSettings
-from pydantic_ai.usage import RunUsage
-
 from interaction_finder.agent_config import AGENT_CALL_ERRORS, agent_getter
 from interaction_finder.agent_utils import rename_agent
+from interaction_finder.usage import record_usage
 from interaction_finder.extraction.deps import Deps
 from interaction_finder.extraction.models import (
     EntityMention,
@@ -696,7 +695,6 @@ Provide supporting quotes for confirmed relationships."""
     agent_name = f"Region assessment {region_index}: {len(region.candidate_pairs)} candidate pairs [{resource.id.url}]"
     diagnostic_prefix = f"Region assessment {region_index}"
     # Call LLM
-    usage = RunUsage()
     agent = get_region_assessment_agent(config)
     try:
         with rename_agent(agent, name=agent_name):
@@ -704,7 +702,8 @@ Provide supporting quotes for confirmed relationships."""
                 # Mark region as in-progress now that we've acquired the semaphore
                 if deps.progress:
                     deps.progress["Regions"].work()
-                result = await agent.run(prompt, deps=deps, usage=usage)
+                result = await agent.run(prompt, deps=deps)
+        record_usage(deps.usage, "region_assessment", agent, result)
     except AGENT_CALL_ERRORS as e:
         deps.logger.error(f"{diagnostic_prefix} failed: {type(e).__name__}: {e}")
         return ([], [])

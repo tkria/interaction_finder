@@ -21,10 +21,9 @@ import secrets
 import string
 from collections import defaultdict
 
-from pydantic_ai.usage import RunUsage
-
 from interaction_finder.agent_config import AGENT_CALL_ERRORS, agent_getter
 from interaction_finder.agent_utils import rename_agent
+from interaction_finder.usage import record_usage
 from interaction_finder.extraction.consolidate_entities import (
     get_entity_consolidation_agent,
 )
@@ -510,7 +509,8 @@ Only return pairs that should merge or be renamed. Omit pairs that should remain
     try:
         with rename_agent(agent, name=f"ConsolidateEntities ({kind}, {batch_num})"):
             async with deps.agent_semaphore:
-                result = await agent.run(prompt, deps=deps, usage=RunUsage())
+                result = await agent.run(prompt, deps=deps)
+        record_usage(deps.usage, "entity_consolidation", agent, result)
         # Process decisions and populate cache
         returned_ids = {d.pair_id for d in result.output.decisions}
         for decision in result.output.decisions:
@@ -637,7 +637,8 @@ Examples:
 """
             try:
                 async with deps.agent_semaphore:
-                    result = await agent.run(prompt)
+                    result = await agent.run(prompt, deps=deps)
+                record_usage(deps.usage, "entity_group_consolidation", agent, result)
             except AGENT_CALL_ERRORS as e:
                 deps.logger.error(
                     f"Entity group consolidation failed for batch: {type(e).__name__}: {e}"

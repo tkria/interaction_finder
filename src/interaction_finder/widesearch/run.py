@@ -9,6 +9,7 @@ from typing import Any
 import httpx
 
 from interaction_finder.checkpoint import PipelineCheckpoint, SearchStageData
+from interaction_finder.usage import PipelineUsage
 from interaction_finder.version import get_version_string
 from interaction_finder.fetcher import PageFetcher
 from interaction_finder.logging import logfire, get_logger
@@ -199,6 +200,14 @@ async def run_widesearch_with_checkpoint(
         http_client = httpx.AsyncClient(timeout=30.0)
 
     try:
+        # Initialize usage from input checkpoint (deep copy to avoid mutation)
+        input_usage = input_checkpoint.usage
+        stage_usage = (
+            {k: v.copy_deep() for k, v in input_usage.search.items()}
+            if input_usage
+            else {}
+        )
+
         # Create dependencies
         deps = Deps(
             http_client=http_client,
@@ -207,6 +216,7 @@ async def run_widesearch_with_checkpoint(
             resource_pool=resource_pool,
             config=config,
             progress=progress,
+            usage=stage_usage,
         )
 
         # Create initial state
@@ -219,11 +229,19 @@ async def run_widesearch_with_checkpoint(
         # Run the graph
         result = await graph.run(PlanGoalsNode(), state=state, deps=deps)
 
+        # Build usage preserving other stages
+        usage = PipelineUsage(
+            keywords=input_usage.keywords if input_usage else {},
+            search=deps.usage,
+            extraction=input_usage.extraction if input_usage else {},
+        )
+
         # Build unified checkpoint preserving keywords data
         return PipelineCheckpoint(
             topic=topic,
             resources=resource_pool,  # Accumulated pool
             created_by=get_version_string(),
+            usage=usage,
             keywords=input_checkpoint.keywords,  # PRESERVED from input
             search=SearchStageData(
                 results=result.output,

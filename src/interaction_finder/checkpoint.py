@@ -15,6 +15,7 @@ from pydantic_core import to_jsonable_python
 
 from interaction_finder.resources import ResourcePool, ResourceQuote
 from interaction_finder.search.models import SearchResult
+from interaction_finder.usage import PipelineUsage
 from interaction_finder.version import get_version_string
 
 if TYPE_CHECKING:
@@ -313,6 +314,10 @@ class PipelineCheckpoint(BaseModel):
     created_by: Optional[str] = Field(
         default=None,
         description="Version of interaction-finder that created this checkpoint",
+    )
+    usage: Optional[PipelineUsage] = Field(
+        default=None,
+        description="LLM token usage tracking across all pipeline stages",
     )
 
     # Optional stage-specific data (added progressively)

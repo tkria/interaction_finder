@@ -14,10 +14,9 @@ import asyncio
 from collections import Counter, defaultdict
 from itertools import combinations
 
-from pydantic_ai.usage import RunUsage
-
 from interaction_finder.agent_config import AGENT_CALL_ERRORS
 from interaction_finder.agent_utils import rename_agent
+from interaction_finder.usage import record_usage
 from interaction_finder.extraction.deps import Deps
 from interaction_finder.extraction.judge_cross_document import (
     get_cross_document_judge_agent,
@@ -341,7 +340,6 @@ async def _judge_pair(
         else:
             prompt = _build_unidirectional_prompt(pair_key, spread, state, deps)
         agent = get_cross_document_judge_agent(deps.config)
-        usage = RunUsage()
         try:
             with rename_agent(
                 agent,
@@ -350,7 +348,8 @@ async def _judge_pair(
                 async with deps.agent_semaphore:
                     if deps.progress:
                         deps.progress["Unique pairs"].work()
-                    result = await agent.run(prompt, deps=deps, usage=usage)
+                    result = await agent.run(prompt, deps=deps)
+            record_usage(deps.usage, "cross_document_judge", agent, result)
             cited_ids = extract_document_citations(result.output.reasoning)
             _, invalid_citations = validate_document_citations(cited_ids, valid_doc_ids)
             if invalid_citations:

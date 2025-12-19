@@ -10,10 +10,9 @@ concurrent per-document processing while maintaining clean separation of concern
 
 import asyncio
 
-from pydantic_ai.usage import RunUsage
-
 from interaction_finder.agent_config import AGENT_CALL_ERRORS
 from interaction_finder.agent_utils import rename_agent
+from interaction_finder.usage import record_usage
 from interaction_finder.extraction.deps import Deps
 from interaction_finder.extraction.extract import get_document_analysis_agent
 from interaction_finder.extraction.extract_proximal_pairs import get_proximal_pair_agent
@@ -132,7 +131,8 @@ For each entity of the specified types relevant to the topic, provide:
             async with deps.agent_semaphore:
                 if deps.progress:
                     deps.progress["Processed"].work()
-                result = await agent.run(prompt, deps=deps, usage=RunUsage())
+                result = await agent.run(prompt, deps=deps)
+        record_usage(deps.usage, "document_analysis", agent, result)
     except AGENT_CALL_ERRORS as e:
         deps.logger.error(
             f"Document analysis failed for {resource.id.url}: {type(e).__name__}: {e}"
@@ -192,8 +192,6 @@ async def extract_pairs_from_proximal_set(
         - quotes_validated: Count of successfully validated quotes
         - quotes_failed: Count of quotes that failed validation
     """
-    usage = RunUsage()
-
     # Build text region spanning proximal set with padding
     chunk_start, chunk_end = proximal_set.chunk_range
     text_region = build_text_region(
@@ -238,7 +236,8 @@ For each binary association between these entities that is clearly stated or imp
     try:
         with rename_agent(agent, name=f"ExtractProximalPairs: {entities_str}"):
             async with deps.agent_semaphore:
-                result = await agent.run(prompt, deps=deps, usage=usage)
+                result = await agent.run(prompt, deps=deps)
+        record_usage(deps.usage, "proximal_pair", agent, result)
     except AGENT_CALL_ERRORS as e:
         deps.logger.error(f"Proximal pair extraction failed: {type(e).__name__}: {e}")
         return ([], 0, 0)
@@ -384,8 +383,6 @@ async def assess_single_pair(
     Returns:
         PairAssessment with evidence quality and reasoning, or None on error
     """
-    usage = RunUsage()
-
     # Build relevant text region around all quotes
     text_region = collect_relevant_text_for_quotes(
         resource, quotes, region_padding_chunks
@@ -430,11 +427,12 @@ Assess evidence for an entity association.
                 if deps.progress:
                     deps.progress["Pairs assessed"].work()
                 try:
-                    result = await agent.run(prompt, deps=deps, usage=usage)
+                    result = await agent.run(prompt, deps=deps)
                 finally:
                     # Mark pair as done when assessment completes or fails
                     if deps.progress:
                         deps.progress["Pairs assessed"].done()
+        record_usage(deps.usage, "pair_judge", agent, result)
     except AGENT_CALL_ERRORS as e:
         deps.logger.error(
             f"Pair assessment failed for {entity1.canonical}-{entity2.canonical}: "

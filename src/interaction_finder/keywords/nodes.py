@@ -9,11 +9,11 @@ import asyncio
 from dataclasses import dataclass
 from typing import Union
 
-from pydantic_ai.usage import RunUsage
 from pydantic_graph import BaseNode, End, GraphRunContext
 
 from interaction_finder.agent_utils import rename_agent
 from interaction_finder.logging import get_logger
+from interaction_finder.usage import record_usage
 
 logger = get_logger(__name__)
 from interaction_finder.keywords.agents import (
@@ -113,13 +113,12 @@ class ExpandQueryNode(BaseNode[State, Deps, BridgingTermsOut]):
             ctx.deps.progress["Round"].activate()
         # Use query expander agent with renamed span
         agent = get_query_expander_agent(ctx.deps.config)
-        usage = RunUsage()
         with rename_agent(agent, f"ExpandQueryNode (round {ctx.state.current_round})"):
             result = await agent.run(
                 f"Generate search queries to find review articles about: {ctx.state.topic}",
                 deps=ctx.deps,
-                usage=usage,
             )
+        record_usage(ctx.deps.usage, "query_expander", agent, result)
         # Store queries in state
         ctx.state.search_queries = result.output.queries
         logger.info(
@@ -263,9 +262,9 @@ Search Results:
 Select the indices of results that are most likely to be valuable review articles."""
         # Use result selector agent with renamed span
         agent = get_result_selector_agent(ctx.deps.config)
-        usage = RunUsage()
         with rename_agent(agent, "SelectResultsNode"):
-            result = await agent.run(prompt, deps=ctx.deps, usage=usage)
+            result = await agent.run(prompt, deps=ctx.deps)
+        record_usage(ctx.deps.usage, "result_selector", agent, result)
         # Get selected results
         max_to_fetch = ctx.deps.config.stage.keywords.max_documents_to_fetch
         selected_indices = result.output.selected_indices[:max_to_fetch]
@@ -582,9 +581,9 @@ Use only concepts supported by the document or widely established in the field; 
 If "no" to either question, exclude it. Select fewer, higher-quality terms rather than reaching for quantity."""
         # Use document summarizer agent with renamed span (include doc title for context)
         agent = get_document_summarizer_agent(config)
-        usage = RunUsage()
         with rename_agent(agent, f"EvaluateKeywordsNode: {resource.title[:60]}"):
-            summary_result = await agent.run(summary_prompt, deps=deps, usage=usage)
+            summary_result = await agent.run(summary_prompt, deps=deps)
+        record_usage(deps.usage, "document_summarizer", agent, summary_result)
         # Return summary and bridging term count
         bridging_count = len(summary_result.output.bridging_terms)
         return (summary_result.output, bridging_count)
@@ -696,12 +695,12 @@ Document Summaries:
 Decide whether coverage is sufficient (stop) or more searches are needed (continue)."""
         # Use reflector agent with renamed span
         agent = get_reflector_agent(ctx.deps.config)
-        usage = RunUsage()
         with rename_agent(
             agent,
             name=f"ReflectNode (round {ctx.state.current_round}/{ctx.state.max_rounds})",
         ):
-            result = await agent.run(prompt, deps=ctx.deps, usage=usage)
+            result = await agent.run(prompt, deps=ctx.deps)
+        record_usage(ctx.deps.usage, "reflector", agent, result)
         # Make decision
         decision = result.output.decision
         logger.info(

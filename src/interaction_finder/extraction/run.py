@@ -10,6 +10,7 @@ from collections.abc import Awaitable, Callable
 
 from interaction_finder.checkpoint import ExtractionStageData, PipelineCheckpoint
 from interaction_finder.extraction.deps import Deps
+from interaction_finder.usage import PipelineUsage
 from interaction_finder.extraction.shared import empty_result
 from interaction_finder.extraction.stages import (
     consolidate_entities,
@@ -114,6 +115,13 @@ async def run_extraction(
                 target_entity_types=target_entity_types,
                 permitted_pairs=permitted_pairs,
             )
+        # Initialize usage from input checkpoint (deep copy to avoid mutation)
+        input_usage = input_checkpoint.usage
+        stage_usage = (
+            {k: v.copy_deep() for k, v in input_usage.extraction.items()}
+            if input_usage
+            else {}
+        )
         deps = Deps(
             resource_pool=resource_pool,
             config=config,
@@ -122,14 +130,22 @@ async def run_extraction(
             agent_semaphore=agent_semaphore,
             checkpoint_path=checkpoint_path,
             input_checkpoint=input_checkpoint,
+            usage=stage_usage,
         )
         # Run pipeline stages
         result = await _run_pipeline(state, deps, start_stage_idx)
+        # Build usage preserving other stages
+        usage = PipelineUsage(
+            keywords=input_usage.keywords if input_usage else {},
+            search=input_usage.search if input_usage else {},
+            extraction=deps.usage,
+        )
         # Build unified checkpoint preserving all prior data
         return PipelineCheckpoint(
             topic=topic,
             resources=resource_pool,
             created_by=get_version_string(),
+            usage=usage,
             keywords=input_checkpoint.keywords,
             search=input_checkpoint.search,
             extraction=ExtractionStageData(

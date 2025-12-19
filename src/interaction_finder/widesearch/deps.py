@@ -4,7 +4,7 @@ Dependencies encapsulate long-lived external services and clients.
 Instantiated once per pipeline run and passed to all nodes/agents.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 import httpx
@@ -12,6 +12,7 @@ import httpx
 from interaction_finder.resources import ResourcePool
 from interaction_finder.search.models import SearchBackend
 from interaction_finder.settings import IfetcherConfig
+from interaction_finder.usage import StageUsage
 from interaction_finder.widesearch.reranker import Reranker
 
 
@@ -53,3 +54,4 @@ class Deps:
     resource_pool: ResourcePool  # Document pool with URL normalization
     config: IfetcherConfig  # Full configuration object
     progress: ProgressProtocol | None = None  # Optional progress counter
+    usage: StageUsage = field(default_factory=dict)  # LLM usage tracking

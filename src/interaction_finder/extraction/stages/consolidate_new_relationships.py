@@ -11,6 +11,7 @@ from pydantic_ai.usage import RunUsage
 
 from interaction_finder.agent_config import AGENT_CALL_ERRORS
 from interaction_finder.agent_utils import rename_agent
+from interaction_finder.usage import record_usage
 from interaction_finder.extraction.consolidate_relationships import (
     get_relationship_consolidation_agent,
 )
@@ -121,6 +122,8 @@ For each new relationship, provide:
                 )
                 for label in missing:
                     state.relationship_polarities[label] = "neutral"
+            # Record accumulated usage from all attempts
+            record_usage(deps.usage, "relationship_consolidation", agent, usage)
         except AGENT_CALL_ERRORS as e:
             deps.logger.error(
                 f"New relationship consolidation failed: {type(e).__name__}: {e}; "

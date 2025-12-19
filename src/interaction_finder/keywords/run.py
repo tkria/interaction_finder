@@ -9,6 +9,7 @@ from interaction_finder.logging import get_logger
 logger = get_logger(__name__)
 
 from interaction_finder.checkpoint import KeywordsStageData, PipelineCheckpoint
+from interaction_finder.usage import PipelineUsage
 from interaction_finder.version import get_version_string
 from interaction_finder.fetcher import PageFetcher
 from interaction_finder.keywords.deps import Deps
@@ -132,11 +133,15 @@ async def run_keyword_research(
             # Snapshot resource URLs at end of keywords stage
             resource_urls = [rid.url for rid in resource_pool.resource_map.keys()]
 
+            # Build usage from deps
+            usage = PipelineUsage(keywords=deps.usage)
+
             # Build unified checkpoint with keywords stage data
             return PipelineCheckpoint(
                 topic=topic,
                 resources=resource_pool,
                 created_by=get_version_string(),
+                usage=usage,
                 keywords=KeywordsStageData(
                     terms=result.output.terms,
                     scores=result.output.scores,

@@ -10,10 +10,9 @@ from dataclasses import dataclass
 from typing import Union
 
 from pydantic_graph import BaseNode, End, GraphRunContext
-from pydantic_ai.usage import RunUsage
-
 from interaction_finder.agent_utils import rename_agent
 from interaction_finder.logging import logfire, get_logger
+from interaction_finder.usage import record_usage
 
 logger = get_logger(__name__)
 from interaction_finder.search.models import SearchQuery, SearchResult
@@ -41,14 +40,14 @@ class PlanGoalsNode(BaseNode[State, Deps, list[SearchResult]]):
         logger.info(f"Planning subject goals for topic: {ctx.state.topic}")
         # Use goal planner agent with renamed span
         agent = get_goal_planner_agent(ctx.deps.config)
-        usage = RunUsage()
         prompt = f"""Research topic: {ctx.state.topic}
 
 Keyphrases available: {", ".join(ctx.state.keyphrases)}
 
 Identify subject areas and research domains that should be covered to ensure comprehensive literature discovery."""
         with rename_agent(agent, "PlanGoalsNode"):
-            result = await agent.run(prompt, deps=ctx.deps, usage=usage)
+            result = await agent.run(prompt, deps=ctx.deps)
+        record_usage(ctx.deps.usage, "goal_planner", agent, result)
         # Store goals in state
         ctx.state.subject_goals = result.output.goals
         logger.info(
@@ -95,11 +94,11 @@ Round {ctx.state.current_round} of {ctx.state.max_rounds}
 Generate search queries that target unsatisfied subject goals and incorporate the keyphrases."""
         # Use query generator agent with renamed span
         agent = get_query_generator_agent(ctx.deps.config)
-        usage = RunUsage()
         with rename_agent(
             agent, name=f"GenerateQueriesNode (round {ctx.state.current_round})"
         ):
-            result = await agent.run(prompt, deps=ctx.deps, usage=usage)
+            result = await agent.run(prompt, deps=ctx.deps)
+        record_usage(ctx.deps.usage, "query_generator", agent, result)
         # Store queries in state
         ctx.state.current_queries = result.output.queries
         ctx.state.all_queries.extend(result.output.queries)
@@ -314,11 +313,11 @@ Search results from round {ctx.state.current_round}:
 Select the most relevant results and summarize what subject areas they cover."""
         # Use result selector agent with renamed span
         agent = get_result_selector_agent(ctx.deps.config)
-        usage = RunUsage()
         with rename_agent(
             agent, name=f"SelectResultsNode (batch {batch_offset // len(batch) + 1})"
         ):
-            result = await agent.run(prompt, deps=ctx.deps, usage=usage)
+            result = await agent.run(prompt, deps=ctx.deps)
+        record_usage(ctx.deps.usage, "result_selector", agent, result)
         # Register selected results with ResourcePool
         selected_urls = []
         registered_count = 0
@@ -428,12 +427,12 @@ Current round: {ctx.state.current_round} of {ctx.state.max_rounds}
 Evaluate coverage and decide whether to continue searching or stop."""
         # Use reflector agent with renamed span
         agent = get_reflector_agent(ctx.deps.config)
-        usage = RunUsage()
         with rename_agent(
             agent,
             name=f"ReflectNode (round {ctx.state.current_round}/{ctx.state.max_rounds})",
         ):
-            result = await agent.run(prompt, deps=ctx.deps, usage=usage)
+            result = await agent.run(prompt, deps=ctx.deps)
+        record_usage(ctx.deps.usage, "reflector", agent, result)
         # Update satisfied goals
         ctx.state.satisfied_goals.extend(result.output.satisfied_goals)
         # Deduplicate satisfied goals
