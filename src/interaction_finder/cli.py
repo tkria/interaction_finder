@@ -354,19 +354,17 @@ def create_search_backend(backend_name: str, config: IfetcherConfig) -> Any:
     timeout = search_config.timeout
     if backend_name == "perplexica":
         perplexica = search_config.perplexica
+
+        def model_dict(spec):
+            return {"providerId": spec.provider_id, "key": spec.key} if spec else None
+
         return PerplexicaBackend(
             config={
                 "timeout": timeout,
                 "base_url": perplexica.base_url,
                 "search_mode": perplexica.search_mode,
-                "chat_model": {
-                    "provider": perplexica.chat_model.provider,
-                    "name": perplexica.chat_model.name,
-                },
-                "embedding_model": {
-                    "provider": perplexica.embedding_model.provider,
-                    "name": perplexica.embedding_model.name,
-                },
+                "chat_model": model_dict(perplexica.chat_model),
+                "embedding_model": model_dict(perplexica.embedding_model),
             }
         )
     elif backend_name == "pubmed":

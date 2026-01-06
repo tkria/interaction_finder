@@ -36,7 +36,26 @@ from interaction_finder.search.models import SearchQuery, SearchResult
 
 @pytest.fixture
 def perplexica_backend():
-    """Create a PerplexicaBackend instance with test configuration."""
+    """Create a PerplexicaBackend instance with test configuration.
+
+    Pre-initializes models to avoid needing to mock /api/providers in every test.
+    """
+    config = {
+        "base_url": "http://localhost:3000",
+        "timeout": 30,
+        "search_mode": "webSearch",
+        "chat_model": {"providerId": "test-provider-id", "key": "test-chat-model"},
+        "embedding_model": {
+            "providerId": "test-provider-id",
+            "key": "test-embed-model",
+        },
+    }
+    return PerplexicaBackend(config)
+
+
+@pytest.fixture
+def perplexica_backend_no_models():
+    """Create a PerplexicaBackend without pre-configured models (for auto-discovery tests)."""
     config = {
         "base_url": "http://localhost:3000",
         "timeout": 30,
@@ -67,13 +86,13 @@ class TestPerplexicaBackendInitialization:
     def test_backend_creation_custom_models(self):
         """Test backend creation with custom model configuration."""
         config = {
-            "chat_model": {"provider": "anthropic", "name": "claude-3"},
-            "embedding_model": {"provider": "cohere", "name": "embed-v3"},
+            "chat_model": {"providerId": "anthropic-uuid", "key": "claude-3"},
+            "embedding_model": {"providerId": "cohere-uuid", "key": "embed-v3"},
         }
         backend = PerplexicaBackend(config)
-
-        assert backend.chat_model["provider"] == "anthropic"
-        assert backend.embedding_model["provider"] == "cohere"
+        assert backend._chat_model["providerId"] == "anthropic-uuid"
+        assert backend._embedding_model["providerId"] == "cohere-uuid"
+        assert backend._models_initialized is True
 
     def test_backend_name_property(self, perplexica_backend):
         """Test that name property returns correct identifier."""
@@ -190,16 +209,25 @@ class TestRequestBuilding:
     """Test search request construction."""
 
     def test_build_search_request_web_mode(self, perplexica_backend):
-        """Test building search request for web search."""
+        """Test building search request for web search with pre-configured models."""
         query = SearchQuery(query="test search", max_results=10)
         request = perplexica_backend._build_search_request(query)
-
         assert request["query"] == "test search"
         assert request["focusMode"] == "webSearch"
         assert request["stream"] is False
-        assert "chatModel" in request
-        assert "embeddingModel" in request
         assert "optimizationMode" in request
+        # Pre-configured models from fixture
+        assert request["chatModel"]["providerId"] == "test-provider-id"
+        assert request["embeddingModel"]["providerId"] == "test-provider-id"
+
+    def test_build_search_request_no_models(self, perplexica_backend_no_models):
+        """Test building search request before auto-discovery (models None)."""
+        query = SearchQuery(query="test search", max_results=10)
+        request = perplexica_backend_no_models._build_search_request(query)
+        assert request["query"] == "test search"
+        # Models are None before _fetch_default_models() is called
+        assert request["chatModel"] is None
+        assert request["embeddingModel"] is None
 
     def test_build_search_request_academic_mode(self):
         """Test building search request for academic search."""
@@ -216,16 +244,16 @@ class TestRequestBuilding:
     def test_build_search_request_custom_models(self):
         """Test building request with custom model configuration."""
         config = {
-            "chat_model": {"provider": "custom", "name": "custom-model"},
-            "embedding_model": {"provider": "custom", "name": "custom-embed"},
+            "chat_model": {"providerId": "test-uuid-123", "key": "custom-model"},
+            "embedding_model": {"providerId": "test-uuid-456", "key": "custom-embed"},
         }
         backend = PerplexicaBackend(config)
         query = SearchQuery(query="test", max_results=5)
-
         request = backend._build_search_request(query)
-
-        assert request["chatModel"]["provider"] == "custom"
-        assert request["embeddingModel"]["provider"] == "custom"
+        assert request["chatModel"]["providerId"] == "test-uuid-123"
+        assert request["chatModel"]["key"] == "custom-model"
+        assert request["embeddingModel"]["providerId"] == "test-uuid-456"
+        assert request["embeddingModel"]["key"] == "custom-embed"
 
 
 class TestResponseParsing:
@@ -616,3 +644,184 @@ class TestEdgeCases:
         results = perplexica_backend._parse_perplexica_response(response_data, query)
 
         assert results == []
+
+
+class TestModelAutoDiscovery:
+    """Test automatic model discovery from /api/providers."""
+
+    @pytest.mark.asyncio
+    async def test_fetch_default_models_success(self, perplexica_backend_no_models):
+        """Test successful auto-discovery of models from providers endpoint."""
+        providers_response = {
+            "providers": [
+                {
+                    "id": "provider-uuid-123",
+                    "name": "OpenAI",
+                    "chatModels": [{"name": "GPT-4", "key": "gpt-4"}],
+                    "embeddingModels": [
+                        {"name": "Embedding", "key": "text-embedding-3-large"}
+                    ],
+                }
+            ]
+        }
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = providers_response
+        with patch.object(
+            perplexica_backend_no_models, "_get_session"
+        ) as mock_get_session:
+            mock_session = AsyncMock()
+            mock_session.get = AsyncMock(return_value=mock_response)
+            mock_get_session.return_value = mock_session
+            await perplexica_backend_no_models._fetch_default_models()
+        assert perplexica_backend_no_models._chat_model == {
+            "providerId": "provider-uuid-123",
+            "key": "gpt-4",
+        }
+        assert perplexica_backend_no_models._embedding_model == {
+            "providerId": "provider-uuid-123",
+            "key": "text-embedding-3-large",
+        }
+        assert perplexica_backend_no_models._models_initialized is True
+
+    @pytest.mark.asyncio
+    async def test_fetch_default_models_different_providers(
+        self, perplexica_backend_no_models
+    ):
+        """Test auto-discovery when chat and embedding are from different providers."""
+        providers_response = {
+            "providers": [
+                {
+                    "id": "chat-provider-id",
+                    "name": "OpenAI",
+                    "chatModels": [{"name": "GPT-4", "key": "gpt-4"}],
+                    "embeddingModels": [],
+                },
+                {
+                    "id": "embed-provider-id",
+                    "name": "Transformers",
+                    "chatModels": [],
+                    "embeddingModels": [{"name": "MiniLM", "key": "all-MiniLM-L6-v2"}],
+                },
+            ]
+        }
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = providers_response
+        with patch.object(
+            perplexica_backend_no_models, "_get_session"
+        ) as mock_get_session:
+            mock_session = AsyncMock()
+            mock_session.get = AsyncMock(return_value=mock_response)
+            mock_get_session.return_value = mock_session
+            await perplexica_backend_no_models._fetch_default_models()
+        assert (
+            perplexica_backend_no_models._chat_model["providerId"] == "chat-provider-id"
+        )
+        assert (
+            perplexica_backend_no_models._embedding_model["providerId"]
+            == "embed-provider-id"
+        )
+
+    @pytest.mark.asyncio
+    async def test_fetch_default_models_no_chat_models(
+        self, perplexica_backend_no_models
+    ):
+        """Test error when no chat models available."""
+        providers_response = {
+            "providers": [
+                {
+                    "id": "provider-id",
+                    "name": "Transformers",
+                    "chatModels": [],
+                    "embeddingModels": [{"name": "MiniLM", "key": "all-MiniLM-L6-v2"}],
+                }
+            ]
+        }
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = providers_response
+        with patch.object(
+            perplexica_backend_no_models, "_get_session"
+        ) as mock_get_session:
+            mock_session = AsyncMock()
+            mock_session.get = AsyncMock(return_value=mock_response)
+            mock_get_session.return_value = mock_session
+            with pytest.raises(RuntimeError, match="No chat models available"):
+                await perplexica_backend_no_models._fetch_default_models()
+
+    @pytest.mark.asyncio
+    async def test_fetch_default_models_no_embedding_models(
+        self, perplexica_backend_no_models
+    ):
+        """Test error when no embedding models available."""
+        providers_response = {
+            "providers": [
+                {
+                    "id": "provider-id",
+                    "name": "OpenAI",
+                    "chatModels": [{"name": "GPT-4", "key": "gpt-4"}],
+                    "embeddingModels": [],
+                }
+            ]
+        }
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = providers_response
+        with patch.object(
+            perplexica_backend_no_models, "_get_session"
+        ) as mock_get_session:
+            mock_session = AsyncMock()
+            mock_session.get = AsyncMock(return_value=mock_response)
+            mock_get_session.return_value = mock_session
+            with pytest.raises(RuntimeError, match="No embedding models available"):
+                await perplexica_backend_no_models._fetch_default_models()
+
+    @pytest.mark.asyncio
+    async def test_fetch_default_models_skips_if_initialized(self, perplexica_backend):
+        """Test that fetch is skipped if models already initialized."""
+        # perplexica_backend fixture has models pre-configured
+        with patch.object(perplexica_backend, "_get_session") as mock_get_session:
+            await perplexica_backend._fetch_default_models()
+            # Should not call _get_session since models are already set
+            mock_get_session.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_fetch_default_models_prefers_gpt4o_mini(
+        self, perplexica_backend_no_models
+    ):
+        """Test that gpt-4o-mini is preferred over other models."""
+        providers_response = {
+            "providers": [
+                {
+                    "id": "openai-uuid",
+                    "name": "OpenAI",
+                    "chatModels": [
+                        {"name": "GPT-3.5", "key": "gpt-3.5-turbo"},
+                        {"name": "GPT-4o mini", "key": "gpt-4o-mini"},
+                        {"name": "GPT-4", "key": "gpt-4"},
+                    ],
+                    "embeddingModels": [
+                        {"name": "Small", "key": "text-embedding-3-small"},
+                        {"name": "Large", "key": "text-embedding-3-large"},
+                    ],
+                }
+            ]
+        }
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = providers_response
+        with patch.object(
+            perplexica_backend_no_models, "_get_session"
+        ) as mock_get_session:
+            mock_session = AsyncMock()
+            mock_session.get = AsyncMock(return_value=mock_response)
+            mock_get_session.return_value = mock_session
+            await perplexica_backend_no_models._fetch_default_models()
+        # Should select gpt-4o-mini (preferred) not gpt-3.5-turbo (first)
+        assert perplexica_backend_no_models._chat_model["key"] == "gpt-4o-mini"
+        # Should select text-embedding-3-large (preferred) not small (first)
+        assert (
+            perplexica_backend_no_models._embedding_model["key"]
+            == "text-embedding-3-large"
+        )

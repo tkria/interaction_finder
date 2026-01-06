@@ -187,15 +187,16 @@ class IfetcherConfig(StrictModel):
                 """Perplexica AI-powered search engine configuration."""
 
                 class ModelSpec(StrictModel):
-                    """LLM or embedding model specification for Perplexica."""
+                    """LLM or embedding model specification for Perplexica.
 
-                    provider: str = Field(
-                        "openai",
-                        description="Model provider (e.g., 'openai', 'ollama')",
+                    Use /api/providers endpoint to get available provider IDs and model keys.
+                    """
+
+                    provider_id: str = Field(
+                        description="Provider UUID from Perplexica's /api/providers endpoint",
                     )
-                    name: str = Field(
-                        ...,
-                        description="Model name (e.g., 'gpt-4o-mini', 'text-embedding-3-large')",
+                    key: str = Field(
+                        description="Model key (e.g., 'gpt-4o-mini', 'text-embedding-3-large')",
                     )
 
                 base_url: str = Field(
@@ -206,17 +207,14 @@ class IfetcherConfig(StrictModel):
                     "webSearch",
                     description="Search focus mode: 'webSearch' or 'academicSearch'",
                 )
-                chat_model: ModelSpec = Field(
-                    default_factory=lambda: IfetcherConfig.Tools.Search.PerplexicaConfig.ModelSpec(
-                        provider="openai", name="gpt-4o-mini"
-                    ),
-                    description="LLM for processing search results",
+                # Model configs are optional - if not set, backend auto-discovers from /api/providers
+                chat_model: ModelSpec | None = Field(
+                    None,
+                    description="LLM for search (auto-discovered from Perplexica if not set)",
                 )
-                embedding_model: ModelSpec = Field(
-                    default_factory=lambda: IfetcherConfig.Tools.Search.PerplexicaConfig.ModelSpec(
-                        provider="openai", name="text-embedding-3-large"
-                    ),
-                    description="Embedding model for semantic search",
+                embedding_model: ModelSpec | None = Field(
+                    None,
+                    description="Embedding model (auto-discovered from Perplexica if not set)",
                 )
 
             perplexica: PerplexicaConfig = Field(

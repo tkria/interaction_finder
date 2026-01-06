@@ -42,17 +42,80 @@ class PerplexicaBackend(SearchBackend):
         self.base_url = config.get("base_url", "http://localhost:3000")
         self.timeout = config.get("timeout", 60)
         self.search_mode = config.get("search_mode", "webSearch")
-
-        # Model configurations
-        self.chat_model = config.get(
-            "chat_model", {"provider": "openai", "name": "gpt-4o-mini"}
-        )
-        self.embedding_model = config.get(
-            "embedding_model", {"provider": "openai", "name": "text-embedding-3-large"}
+        # Model configurations: {providerId: <uuid>, key: <model-key>}
+        # If not provided, will be fetched from /api/providers on first search
+        self._chat_model = config.get("chat_model")
+        self._embedding_model = config.get("embedding_model")
+        self._models_initialized = (
+            self._chat_model is not None and self._embedding_model is not None
         )
 
         # Session for connection reuse
         self._session: Optional[httpx.AsyncClient] = None  # type: ignore[valid-type]
+
+    # Preferred models (first available wins, then falls back to any available)
+    _PREFERRED_CHAT_MODELS = [
+        "gpt-5-mini",
+        "gpt-5",
+        "gpt-4o-mini",
+        "gpt-4o",
+        "gpt-4",
+        "gpt-3.5-turbo",
+    ]
+    _PREFERRED_EMBEDDING_MODELS = [
+        "text-embedding-3-large",
+        "text-embedding-3-small",
+        "Xenova/all-MiniLM-L6-v2",
+    ]
+
+    async def _fetch_default_models(self) -> None:
+        """Fetch default models from Perplexica's /api/providers endpoint."""
+        if self._models_initialized:
+            return
+        session = await self._get_session()
+        try:
+            response = await session.get(f"{self.base_url}/api/providers", timeout=10)
+            if response.status_code != 200:
+                raise RuntimeError(
+                    f"Failed to fetch providers from Perplexica: HTTP {response.status_code}"
+                )
+            providers = response.json().get("providers", [])
+            # Build {model_key: provider_id} lookups
+            chat_models = {}
+            embedding_models = {}
+            for p in providers:
+                if pid := p.get("id"):
+                    for m in p.get("chatModels", []):
+                        if key := m.get("key"):
+                            chat_models.setdefault(key, pid)
+                    for m in p.get("embeddingModels", []):
+                        if key := m.get("key"):
+                            embedding_models.setdefault(key, pid)
+
+            # Select preferred model or first available
+            def select(available: dict, preferred: list, kind: str) -> dict:
+                for key in preferred:
+                    if key in available:
+                        return {"providerId": available[key], "key": key}
+                if available:
+                    key, pid = next(iter(available.items()))
+                    return {"providerId": pid, "key": key}
+                raise RuntimeError(
+                    f"No {kind} models available in Perplexica providers."
+                )
+
+            self._chat_model = select(chat_models, self._PREFERRED_CHAT_MODELS, "chat")
+            self._embedding_model = select(
+                embedding_models, self._PREFERRED_EMBEDDING_MODELS, "embedding"
+            )
+            self._models_initialized = True
+            logger.info(
+                "Auto-configured Perplexica models",
+                chat_model=self._chat_model,
+                embedding_model=self._embedding_model,
+            )
+        except httpx.RequestError as e:  # type: ignore[misc]
+            raise RuntimeError(f"Failed to connect to Perplexica: {e}")
 
     @property
     def name(self) -> str:
@@ -66,23 +129,25 @@ class PerplexicaBackend(SearchBackend):
         return self._session
 
     def _build_search_request(self, query: SearchQuery) -> Dict[str, Any]:
-        """Build the request payload for Perplexica API."""
-        request_data = {
-            "chatModel": self.chat_model,
-            "embeddingModel": self.embedding_model,
+        """Build the request payload for Perplexica API.
+
+        Note: _fetch_default_models() must be called before this method
+        if models were not provided in config.
+        """
+        request_data: Dict[str, Any] = {
             "optimizationMode": "balanced",
             "focusMode": self.search_mode,
             "query": query.query,
             "stream": False,  # Use non-streaming for simpler processing
+            "chatModel": self._chat_model,
+            "embeddingModel": self._embedding_model,
         }
-
         # Add system instructions for academic searches
         if self.search_mode == "academicSearch":
             request_data["systemInstructions"] = (
                 "Focus on peer-reviewed scientific literature, research papers, "
                 "and academic sources."
             )
-
         return request_data
 
     def _parse_perplexica_response(
@@ -142,6 +207,8 @@ class PerplexicaBackend(SearchBackend):
             max_results=query.max_results,
         ):
             try:
+                # Ensure models are configured (fetches from /api/providers if needed)
+                await self._fetch_default_models()
                 request_data = self._build_search_request(query)
                 session = await self._get_session()
                 url = f"{self.base_url}/api/search"
