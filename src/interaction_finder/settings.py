@@ -8,6 +8,15 @@ from copy import deepcopy
 from pydantic import BaseModel, Field, field_validator
 
 
+class StrictModel(BaseModel):
+    """Base model that rejects unknown fields.
+
+    All config models inherit from this to catch typos and invalid config keys.
+    """
+
+    model_config = {"extra": "forbid"}
+
+
 def sanitize_topic_for_filename(topic: str, max_length: int = 80) -> str:
     """Convert a topic string to a safe filename component.
 
@@ -32,7 +41,7 @@ def sanitize_topic_for_filename(topic: str, max_length: int = 80) -> str:
     return result or "output"
 
 
-class IfetcherConfig(BaseModel):
+class IfetcherConfig(StrictModel):
     """Configuration for interaction-finder with validation and path resolution.
 
     Load from TOML file with IfetcherConfig.from_path("config.toml").
@@ -41,7 +50,7 @@ class IfetcherConfig(BaseModel):
 
     _dir: Path | None = None  # Directory of the config file
 
-    class AgentSpec(BaseModel):
+    class AgentSpec(StrictModel):
         """LLM agent settings. Inheritance: agents._ → agents.<module>._ → agents.<module>.<agent>
 
         Modules and their agents:
@@ -113,10 +122,10 @@ class IfetcherConfig(BaseModel):
         description="LLM agent config with inheritance: [agents._] for global defaults, [agents.extraction._] for module defaults, [agents.extraction.pair_judge] for specific agents",
     )
 
-    class Tools(BaseModel):
+    class Tools(StrictModel):
         """Tool-specific configuration (algorithms, backends)."""
 
-        class Crawl4AI(BaseModel):
+        class Crawl4AI(StrictModel):
             """Crawl4AI web scraper for fetching and converting web pages to markdown."""
 
             timeout: int = Field(
@@ -131,10 +140,10 @@ class IfetcherConfig(BaseModel):
             description="Web scraper settings for HTML-to-markdown conversion",
         )
 
-        class Fetcher(BaseModel):
+        class Fetcher(StrictModel):
             """Document fetching and full-text resolution."""
 
-            class PubMed(BaseModel):
+            class PubMed(StrictModel):
                 """PubMed abstract pages often link to full-text. These settings control link-following."""
 
                 follow_fulltext_links: bool = Field(
@@ -164,7 +173,7 @@ class IfetcherConfig(BaseModel):
             description="Document fetching behavior",
         )
 
-        class Search(BaseModel):
+        class Search(StrictModel):
             """Search backend configuration (PubMed, Perplexica, OpenAI)."""
 
             timeout: int = Field(
@@ -179,10 +188,10 @@ class IfetcherConfig(BaseModel):
             description="Search backend configuration",
         )
 
-        class Keywords(BaseModel):
+        class Keywords(StrictModel):
             """Keyword extraction algorithm configuration."""
 
-            class RAKEConfig(BaseModel):
+            class RAKEConfig(StrictModel):
                 """RAKE (Rapid Automatic Keyword Extraction) - fast, statistical phrase extraction."""
 
                 min_length: int = Field(
@@ -192,7 +201,7 @@ class IfetcherConfig(BaseModel):
                     4, ge=1, description="Maximum words per keyphrase"
                 )
 
-            class YAKEConfig(BaseModel):
+            class YAKEConfig(StrictModel):
                 """YAKE (Yet Another Keyword Extractor) - unsupervised, position-aware extraction."""
 
                 n_grams: int = Field(
@@ -208,7 +217,7 @@ class IfetcherConfig(BaseModel):
                     1, ge=1, description="Co-occurrence window for word scoring"
                 )
 
-            class TFIDFConfig(BaseModel):
+            class TFIDFConfig(StrictModel):
                 """TF-IDF - term frequency weighting to find distinctive terms."""
 
                 max_features: int = Field(
@@ -221,7 +230,7 @@ class IfetcherConfig(BaseModel):
                     1, ge=1, description="Minimum documents a term must appear in"
                 )
 
-            class KeyBERTConfig(BaseModel):
+            class KeyBERTConfig(StrictModel):
                 """KeyBERT - BERT embeddings + MMR for diverse, semantically-relevant keywords."""
 
                 model_name: str = Field(
@@ -269,10 +278,10 @@ class IfetcherConfig(BaseModel):
         description="Tool-specific configuration (algorithms, backends)",
     )
 
-    class Stage(BaseModel):
+    class Stage(StrictModel):
         """Pipeline stage configuration: keywords → search → extraction."""
 
-        class Keywords(BaseModel):
+        class Keywords(StrictModel):
             """Bridging term extraction from review articles (Stage 1)."""
 
             max_rounds: int = Field(
@@ -335,7 +344,7 @@ class IfetcherConfig(BaseModel):
             description="Bridging term extraction from review articles (Stage 1)",
         )
 
-        class Search(BaseModel):
+        class Search(StrictModel):
             """Query expansion and comprehensive literature discovery (Stage 2)."""
 
             enabled: bool = Field(
@@ -382,7 +391,7 @@ class IfetcherConfig(BaseModel):
             description="Query expansion and literature discovery (Stage 2)",
         )
 
-        class Extraction(BaseModel):
+        class Extraction(StrictModel):
             """Entity-relationship extraction from documents (Stage 3)."""
 
             proximal_window_chunks: int = Field(
@@ -450,7 +459,7 @@ class IfetcherConfig(BaseModel):
         description="Pipeline stages: keywords → search → extraction",
     )
 
-    class Output(BaseModel):
+    class Output(StrictModel):
         """File output paths (relative to config file location)."""
 
         path: str = Field(
