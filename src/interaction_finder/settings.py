@@ -323,10 +323,6 @@ class IfetcherConfig(BaseModel):
                 None,
                 description="Device for reranker: 'cpu', 'cuda', or omit for auto-detect",
             )
-            llm_model: str = Field(
-                "openai:gpt-4o-mini",
-                description="Model for keyword evaluation (overrides agents.keywords._)",
-            )
             document_context_chars: int = Field(
                 12000,
                 ge=1000,
@@ -375,10 +371,6 @@ class IfetcherConfig(BaseModel):
             reranker_device: str | None = Field(
                 None,
                 description="Device for reranker: 'cpu', 'cuda', or omit for auto-detect",
-            )
-            llm_model: str = Field(
-                "openai:gpt-4o-mini",
-                description="Model for query generation and reflection (overrides agents.search._)",
             )
             search_backend: str = Field(
                 "pubmed",
