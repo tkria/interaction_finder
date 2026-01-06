@@ -341,7 +341,7 @@ def create_search_backend(backend_name: str, config: IfetcherConfig) -> Any:
 
     Parameters:
         backend_name: Backend identifier (pubmed, perplexica, openai)
-        config: Configuration for timeout settings
+        config: Configuration for backend-specific settings
 
     Returns:
         SearchBackend instance
@@ -350,18 +350,49 @@ def create_search_backend(backend_name: str, config: IfetcherConfig) -> Any:
     from interaction_finder.search.backends.perplexica import PerplexicaBackend
     from interaction_finder.search.backends.pubmed import PubMedBackend
 
-    backends = {
-        "pubmed": PubMedBackend,
-        "perplexica": PerplexicaBackend,
-        "openai": OpenAIBackend,
-    }
-
-    backend_class = backends.get(backend_name)
-    if not backend_class:
-        valid = ", ".join(backends.keys())
+    search_config = config.tools.search
+    timeout = search_config.timeout
+    if backend_name == "perplexica":
+        perplexica = search_config.perplexica
+        return PerplexicaBackend(
+            config={
+                "timeout": timeout,
+                "base_url": perplexica.base_url,
+                "search_mode": perplexica.search_mode,
+                "chat_model": {
+                    "provider": perplexica.chat_model.provider,
+                    "name": perplexica.chat_model.name,
+                },
+                "embedding_model": {
+                    "provider": perplexica.embedding_model.provider,
+                    "name": perplexica.embedding_model.name,
+                },
+            }
+        )
+    elif backend_name == "pubmed":
+        pubmed = search_config.pubmed
+        return PubMedBackend(
+            config={
+                "timeout": timeout,
+                "email": pubmed.email,
+                "api_key": pubmed.api_key,
+                "rate_limit": pubmed.rate_limit,
+                "use_mesh": pubmed.use_mesh,
+            }
+        )
+    elif backend_name == "openai":
+        openai = search_config.openai
+        return OpenAIBackend(
+            config={
+                "timeout": timeout,
+                "api_key": openai.api_key,
+                "base_url": openai.base_url,
+                "model": openai.model,
+            }
+        )
+    else:
+        valid = "pubmed, perplexica, openai"
         raise ValueError(f"Unknown backend '{backend_name}'. Valid: {valid}")
-
-    return backend_class(config={"timeout": config.tools.search.timeout})
 
 
 def _parse_filter_options(filter_args: List[str]) -> dict[str, str]:

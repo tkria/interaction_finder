@@ -183,6 +183,95 @@ class IfetcherConfig(StrictModel):
                 le=600,
             )
 
+            class PerplexicaConfig(StrictModel):
+                """Perplexica AI-powered search engine configuration."""
+
+                class ModelSpec(StrictModel):
+                    """LLM or embedding model specification for Perplexica."""
+
+                    provider: str = Field(
+                        "openai",
+                        description="Model provider (e.g., 'openai', 'ollama')",
+                    )
+                    name: str = Field(
+                        ...,
+                        description="Model name (e.g., 'gpt-4o-mini', 'text-embedding-3-large')",
+                    )
+
+                base_url: str = Field(
+                    "http://localhost:3000",
+                    description="Perplexica API base URL",
+                )
+                search_mode: str = Field(
+                    "webSearch",
+                    description="Search focus mode: 'webSearch' or 'academicSearch'",
+                )
+                chat_model: ModelSpec = Field(
+                    default_factory=lambda: IfetcherConfig.Tools.Search.PerplexicaConfig.ModelSpec(
+                        provider="openai", name="gpt-4o-mini"
+                    ),
+                    description="LLM for processing search results",
+                )
+                embedding_model: ModelSpec = Field(
+                    default_factory=lambda: IfetcherConfig.Tools.Search.PerplexicaConfig.ModelSpec(
+                        provider="openai", name="text-embedding-3-large"
+                    ),
+                    description="Embedding model for semantic search",
+                )
+
+            perplexica: PerplexicaConfig = Field(
+                default_factory=PerplexicaConfig,
+                description="Perplexica AI search engine settings",
+            )
+
+            class PubMedConfig(StrictModel):
+                """PubMed/NCBI E-utilities search configuration."""
+
+                email: str | None = Field(
+                    None,
+                    description="Contact email for NCBI (recommended for better rate limits)",
+                )
+                api_key: str | None = Field(
+                    None,
+                    description="NCBI API key for 10 req/sec instead of 3 req/sec (or set NCBI_API_KEY env var)",
+                )
+                rate_limit: float = Field(
+                    3.0,
+                    ge=0.1,
+                    le=10.0,
+                    description="Max requests per second (3 without API key, 10 with)",
+                )
+                use_mesh: bool = Field(
+                    True,
+                    description="Enable MeSH term expansion for broader search results",
+                )
+
+            pubmed: PubMedConfig = Field(
+                default_factory=PubMedConfig,
+                description="PubMed/NCBI search settings",
+            )
+
+            class OpenAIConfig(StrictModel):
+                """OpenAI web search configuration."""
+
+                api_key: str | None = Field(
+                    None,
+                    description="OpenAI API key (or set OPENAI_API_KEY env var)",
+                )
+                base_url: str = Field(
+                    "https://api.openai.com/v1",
+                    description="OpenAI API base URL (for proxies or compatible APIs)",
+                )
+                model: str = Field(
+                    "gpt-4o-mini",
+                    description="Model to use for web search queries",
+                )
+
+            openai: OpenAIConfig = Field(
+                default_factory=OpenAIConfig,
+                description="OpenAI web search settings",
+            )
+
         search: Search = Field(
             default_factory=Search,
             description="Search backend configuration",
