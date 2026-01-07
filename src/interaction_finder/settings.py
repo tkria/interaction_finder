@@ -187,34 +187,35 @@ class IfetcherConfig(StrictModel):
                 """Perplexica AI-powered search engine configuration."""
 
                 class ModelSpec(StrictModel):
-                    """LLM or embedding model specification for Perplexica.
-
-                    Use /api/providers endpoint to get available provider IDs and model keys.
-                    """
+                    """LLM or embedding model specification for Perplexica."""
 
                     provider_id: str = Field(
-                        description="Provider UUID from Perplexica's /api/providers endpoint",
+                        description="Provider UUID from Perplexica's config",
                     )
                     key: str = Field(
                         description="Model key (e.g., 'gpt-4o-mini', 'text-embedding-3-large')",
                     )
 
                 base_url: str = Field(
-                    "http://localhost:3000",
+                    "http://127.0.0.1:3000",
                     description="Perplexica API base URL",
                 )
-                search_mode: str = Field(
-                    "webSearch",
-                    description="Search focus mode: 'webSearch' or 'academicSearch'",
+                sources: list[str] = Field(
+                    ["web"],
+                    description="Search sources: 'web', 'discussions', 'academic'",
+                )
+                optimization_mode: str = Field(
+                    "balanced",
+                    description="Search depth: 'speed' (2 iterations), 'balanced' (6), 'quality' (25)",
                 )
                 # Model configs are optional - if not set, backend auto-discovers from /api/providers
                 chat_model: ModelSpec | None = Field(
                     None,
-                    description="LLM for search (auto-discovered from Perplexica if not set)",
+                    description="LLM for search (auto-discovered if not set)",
                 )
                 embedding_model: ModelSpec | None = Field(
                     None,
-                    description="Embedding model (auto-discovered from Perplexica if not set)",
+                    description="Embedding model (auto-discovered if not set)",
                 )
 
             perplexica: PerplexicaConfig = Field(

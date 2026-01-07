@@ -29,6 +29,8 @@ from ..models import (
 class PerplexicaBackend(SearchBackend):
     """Perplexica search backend using local API instance."""
 
+    VALID_SOURCES = ("web", "discussions", "academic")
+
     def __init__(self, config: Dict[str, Any] = {}):
         """Initialize Perplexica backend with configuration."""
         super().__init__(config)
@@ -41,8 +43,17 @@ class PerplexicaBackend(SearchBackend):
 
         self.base_url = config.get("base_url", "http://localhost:3000")
         self.timeout = config.get("timeout", 60)
-        self.search_mode = config.get("search_mode", "webSearch")
-        # Model configurations: {providerId: <uuid>, key: <model-key>}
+        # Sources: list of source types e.g. ["web"], ["academic"], ["web", "academic"]
+        sources = config.get("sources", ["web"])
+        self.sources: List[str] = sources if isinstance(sources, list) else [sources]
+        for src in self.sources:
+            if src not in self.VALID_SOURCES:
+                raise ValueError(
+                    f"Invalid source '{src}'. Valid sources: {self.VALID_SOURCES}"
+                )
+        # Optimization mode: speed (2 iterations), balanced (6), quality (25)
+        self.optimization_mode = config.get("optimization_mode", "balanced")
+        # Model configurations: {providerId: <provider-name>, key: <model-key>}
         # If not provided, will be fetched from /api/providers on first search
         self._chat_model = config.get("chat_model")
         self._embedding_model = config.get("embedding_model")
@@ -80,26 +91,30 @@ class PerplexicaBackend(SearchBackend):
                     f"Failed to fetch providers from Perplexica: HTTP {response.status_code}"
                 )
             providers = response.json().get("providers", [])
-            # Build {model_key: provider_id} lookups
-            chat_models = {}
-            embedding_models = {}
+            # Build {model_key: provider_id} lookups (provider_id is a UUID)
+            chat_models: Dict[str, str] = {}
+            embedding_models: Dict[str, str] = {}
             for p in providers:
-                if pid := p.get("id"):
-                    for m in p.get("chatModels", []):
-                        if key := m.get("key"):
-                            chat_models.setdefault(key, pid)
-                    for m in p.get("embeddingModels", []):
-                        if key := m.get("key"):
-                            embedding_models.setdefault(key, pid)
+                provider_id = p.get("id")
+                if not provider_id:
+                    continue
+                for m in p.get("chatModels", []):
+                    if key := m.get("key"):
+                        chat_models.setdefault(key, provider_id)
+                for m in p.get("embeddingModels", []):
+                    if key := m.get("key"):
+                        embedding_models.setdefault(key, provider_id)
 
             # Select preferred model or first available
-            def select(available: dict, preferred: list, kind: str) -> dict:
+            def select(
+                available: Dict[str, str], preferred: List[str], kind: str
+            ) -> Dict[str, str]:
                 for key in preferred:
                     if key in available:
                         return {"providerId": available[key], "key": key}
                 if available:
-                    key, pid = next(iter(available.items()))
-                    return {"providerId": pid, "key": key}
+                    key, provider = next(iter(available.items()))
+                    return {"providerId": provider, "key": key}
                 raise RuntimeError(
                     f"No {kind} models available in Perplexica providers."
                 )
@@ -134,21 +149,15 @@ class PerplexicaBackend(SearchBackend):
         Note: _fetch_default_models() must be called before this method
         if models were not provided in config.
         """
-        request_data: Dict[str, Any] = {
-            "optimizationMode": "balanced",
-            "focusMode": self.search_mode,
+        return {
+            "optimizationMode": self.optimization_mode,
+            "sources": self.sources,
             "query": query.query,
-            "stream": False,  # Use non-streaming for simpler processing
+            "stream": False,
             "chatModel": self._chat_model,
             "embeddingModel": self._embedding_model,
+            "history": [],
         }
-        # Add system instructions for academic searches
-        if self.search_mode == "academicSearch":
-            request_data["systemInstructions"] = (
-                "Focus on peer-reviewed scientific literature, research papers, "
-                "and academic sources."
-            )
-        return request_data
 
     def _parse_perplexica_response(
         self, response_data: Dict[str, Any], query: SearchQuery

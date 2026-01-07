@@ -43,10 +43,10 @@ def perplexica_backend():
     config = {
         "base_url": "http://localhost:3000",
         "timeout": 30,
-        "search_mode": "webSearch",
-        "chat_model": {"providerId": "test-provider-id", "key": "test-chat-model"},
+        "sources": ["web"],
+        "chat_model": {"providerId": "test-provider-uuid", "key": "test-chat-model"},
         "embedding_model": {
-            "providerId": "test-provider-id",
+            "providerId": "test-provider-uuid",
             "key": "test-embed-model",
         },
     }
@@ -59,7 +59,7 @@ def perplexica_backend_no_models():
     config = {
         "base_url": "http://localhost:3000",
         "timeout": 30,
-        "search_mode": "webSearch",
+        "sources": ["web"],
     }
     return PerplexicaBackend(config)
 
@@ -74,25 +74,45 @@ class TestPerplexicaBackendInitialization:
         assert backend.name == "perplexica"
         assert backend.base_url == "http://localhost:3000"
         assert backend.timeout == 60
-        assert backend.search_mode == "webSearch"
+        assert backend.sources == ["web"]
+        assert backend.optimization_mode == "balanced"
         assert backend._session is None
 
     def test_backend_creation_with_config(self, perplexica_backend):
         """Test backend creation with custom configuration."""
         assert perplexica_backend.base_url == "http://localhost:3000"
         assert perplexica_backend.timeout == 30
-        assert perplexica_backend.search_mode == "webSearch"
+        assert perplexica_backend.sources == ["web"]
+        assert perplexica_backend.optimization_mode == "balanced"
 
     def test_backend_creation_custom_models(self):
         """Test backend creation with custom model configuration."""
         config = {
-            "chat_model": {"providerId": "anthropic-uuid", "key": "claude-3"},
-            "embedding_model": {"providerId": "cohere-uuid", "key": "embed-v3"},
+            "chat_model": {"providerId": "anthropic-uuid-123", "key": "claude-3"},
+            "embedding_model": {"providerId": "cohere-uuid-456", "key": "embed-v3"},
         }
         backend = PerplexicaBackend(config)
-        assert backend._chat_model["providerId"] == "anthropic-uuid"
-        assert backend._embedding_model["providerId"] == "cohere-uuid"
+        assert backend._chat_model["providerId"] == "anthropic-uuid-123"
+        assert backend._embedding_model["providerId"] == "cohere-uuid-456"
         assert backend._models_initialized is True
+
+    def test_backend_creation_invalid_source(self):
+        """Test that invalid source type raises error."""
+        config = {"sources": ["invalid_source"]}
+        with pytest.raises(ValueError, match="Invalid source"):
+            PerplexicaBackend(config)
+
+    def test_backend_creation_multiple_sources(self):
+        """Test backend creation with multiple sources."""
+        config = {"sources": ["web", "academic"]}
+        backend = PerplexicaBackend(config)
+        assert backend.sources == ["web", "academic"]
+
+    def test_backend_creation_custom_optimization_mode(self):
+        """Test backend creation with custom optimization mode."""
+        config = {"optimization_mode": "speed"}
+        backend = PerplexicaBackend(config)
+        assert backend.optimization_mode == "speed"
 
     def test_backend_name_property(self, perplexica_backend):
         """Test that name property returns correct identifier."""
@@ -208,17 +228,26 @@ class TestSessionManagement:
 class TestRequestBuilding:
     """Test search request construction."""
 
-    def test_build_search_request_web_mode(self, perplexica_backend):
+    def test_build_search_request_web_sources(self, perplexica_backend):
         """Test building search request for web search with pre-configured models."""
         query = SearchQuery(query="test search", max_results=10)
         request = perplexica_backend._build_search_request(query)
         assert request["query"] == "test search"
-        assert request["focusMode"] == "webSearch"
+        assert request["sources"] == ["web"]
         assert request["stream"] is False
-        assert "optimizationMode" in request
+        assert request["history"] == []
+        assert request["optimizationMode"] == "balanced"
         # Pre-configured models from fixture
-        assert request["chatModel"]["providerId"] == "test-provider-id"
-        assert request["embeddingModel"]["providerId"] == "test-provider-id"
+        assert request["chatModel"]["providerId"] == "test-provider-uuid"
+        assert request["embeddingModel"]["providerId"] == "test-provider-uuid"
+
+    def test_build_search_request_speed_mode(self):
+        """Test building search request with speed optimization mode."""
+        config = {"optimization_mode": "speed"}
+        backend = PerplexicaBackend(config)
+        query = SearchQuery(query="test", max_results=5)
+        request = backend._build_search_request(query)
+        assert request["optimizationMode"] == "speed"
 
     def test_build_search_request_no_models(self, perplexica_backend_no_models):
         """Test building search request before auto-discovery (models None)."""
@@ -229,30 +258,35 @@ class TestRequestBuilding:
         assert request["chatModel"] is None
         assert request["embeddingModel"] is None
 
-    def test_build_search_request_academic_mode(self):
+    def test_build_search_request_academic_sources(self):
         """Test building search request for academic search."""
-        config = {"search_mode": "academicSearch"}
+        config = {"sources": ["academic"]}
         backend = PerplexicaBackend(config)
         query = SearchQuery(query="research paper", max_results=10)
-
         request = backend._build_search_request(query)
+        assert request["sources"] == ["academic"]
+        assert request["history"] == []
 
-        assert request["focusMode"] == "academicSearch"
-        assert "systemInstructions" in request
-        assert "peer-reviewed" in request["systemInstructions"]
+    def test_build_search_request_multiple_sources(self):
+        """Test building search request with multiple sources."""
+        config = {"sources": ["web", "academic", "discussions"]}
+        backend = PerplexicaBackend(config)
+        query = SearchQuery(query="test", max_results=5)
+        request = backend._build_search_request(query)
+        assert request["sources"] == ["web", "academic", "discussions"]
 
     def test_build_search_request_custom_models(self):
         """Test building request with custom model configuration."""
         config = {
-            "chat_model": {"providerId": "test-uuid-123", "key": "custom-model"},
-            "embedding_model": {"providerId": "test-uuid-456", "key": "custom-embed"},
+            "chat_model": {"providerId": "anthropic-uuid", "key": "custom-model"},
+            "embedding_model": {"providerId": "cohere-uuid", "key": "custom-embed"},
         }
         backend = PerplexicaBackend(config)
         query = SearchQuery(query="test", max_results=5)
         request = backend._build_search_request(query)
-        assert request["chatModel"]["providerId"] == "test-uuid-123"
+        assert request["chatModel"]["providerId"] == "anthropic-uuid"
         assert request["chatModel"]["key"] == "custom-model"
-        assert request["embeddingModel"]["providerId"] == "test-uuid-456"
+        assert request["embeddingModel"]["providerId"] == "cohere-uuid"
         assert request["embeddingModel"]["key"] == "custom-embed"
 
 
@@ -655,8 +689,7 @@ class TestModelAutoDiscovery:
         providers_response = {
             "providers": [
                 {
-                    "id": "provider-uuid-123",
-                    "name": "OpenAI",
+                    "id": "openai-uuid-123",
                     "chatModels": [{"name": "GPT-4", "key": "gpt-4"}],
                     "embeddingModels": [
                         {"name": "Embedding", "key": "text-embedding-3-large"}
@@ -675,11 +708,11 @@ class TestModelAutoDiscovery:
             mock_get_session.return_value = mock_session
             await perplexica_backend_no_models._fetch_default_models()
         assert perplexica_backend_no_models._chat_model == {
-            "providerId": "provider-uuid-123",
+            "providerId": "openai-uuid-123",
             "key": "gpt-4",
         }
         assert perplexica_backend_no_models._embedding_model == {
-            "providerId": "provider-uuid-123",
+            "providerId": "openai-uuid-123",
             "key": "text-embedding-3-large",
         }
         assert perplexica_backend_no_models._models_initialized is True
@@ -692,14 +725,12 @@ class TestModelAutoDiscovery:
         providers_response = {
             "providers": [
                 {
-                    "id": "chat-provider-id",
-                    "name": "OpenAI",
+                    "id": "openai-uuid",
                     "chatModels": [{"name": "GPT-4", "key": "gpt-4"}],
                     "embeddingModels": [],
                 },
                 {
-                    "id": "embed-provider-id",
-                    "name": "Transformers",
+                    "id": "transformers-uuid",
                     "chatModels": [],
                     "embeddingModels": [{"name": "MiniLM", "key": "all-MiniLM-L6-v2"}],
                 },
@@ -715,12 +746,10 @@ class TestModelAutoDiscovery:
             mock_session.get = AsyncMock(return_value=mock_response)
             mock_get_session.return_value = mock_session
             await perplexica_backend_no_models._fetch_default_models()
-        assert (
-            perplexica_backend_no_models._chat_model["providerId"] == "chat-provider-id"
-        )
+        assert perplexica_backend_no_models._chat_model["providerId"] == "openai-uuid"
         assert (
             perplexica_backend_no_models._embedding_model["providerId"]
-            == "embed-provider-id"
+            == "transformers-uuid"
         )
 
     @pytest.mark.asyncio
@@ -731,8 +760,7 @@ class TestModelAutoDiscovery:
         providers_response = {
             "providers": [
                 {
-                    "id": "provider-id",
-                    "name": "Transformers",
+                    "id": "transformers-uuid",
                     "chatModels": [],
                     "embeddingModels": [{"name": "MiniLM", "key": "all-MiniLM-L6-v2"}],
                 }
@@ -758,8 +786,7 @@ class TestModelAutoDiscovery:
         providers_response = {
             "providers": [
                 {
-                    "id": "provider-id",
-                    "name": "OpenAI",
+                    "id": "openai-uuid",
                     "chatModels": [{"name": "GPT-4", "key": "gpt-4"}],
                     "embeddingModels": [],
                 }
@@ -795,7 +822,6 @@ class TestModelAutoDiscovery:
             "providers": [
                 {
                     "id": "openai-uuid",
-                    "name": "OpenAI",
                     "chatModels": [
                         {"name": "GPT-3.5", "key": "gpt-3.5-turbo"},
                         {"name": "GPT-4o mini", "key": "gpt-4o-mini"},
