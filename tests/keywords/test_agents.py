@@ -38,7 +38,7 @@ class TestQueryExpanderAgent:
     async def test_agent_returns_query_expansion(self, mock_deps):
         """Test agent returns QueryExpansionOut structure."""
         # Get the agent instance and override with TestModel
-        agent = get_query_expander_agent(IfetcherConfig())
+        agent = get_query_expander_agent(IfetcherConfig(), "pubmed")
         test_model = TestModel()
         with agent.override(model=test_model):
             result = await agent.run("pulmonary arterial hypertension", deps=mock_deps)
@@ -50,7 +50,7 @@ class TestQueryExpanderAgent:
     def test_agent_has_correct_output_type(self):
         """Test agent is configured with correct output type."""
         # Get the agent instance and check output_type
-        agent = get_query_expander_agent(IfetcherConfig())
+        agent = get_query_expander_agent(IfetcherConfig(), "pubmed")
         assert hasattr(agent, "_output_type")
 
 
@@ -136,16 +136,14 @@ class TestAgentConfiguration:
     def test_all_agents_have_system_prompts(self):
         """Test all agents are configured with system prompts."""
         config = IfetcherConfig()
-        agent_factories = [
-            get_query_expander_agent,
-            get_result_selector_agent,
-            get_keyword_evaluator_agent,
-            get_document_summarizer_agent,
-            get_reflector_agent,
+        agents = [
+            get_query_expander_agent(config, "pubmed"),
+            get_result_selector_agent(config),
+            get_keyword_evaluator_agent(config),
+            get_document_summarizer_agent(config),
+            get_reflector_agent(config),
         ]
-        for factory in agent_factories:
-            # Get the agent instance from the factory
-            agent = factory(config)
+        for agent in agents:
             # Agents should have system prompts configured
             assert agent._system_prompts is not None
             assert len(agent._system_prompts) > 0  # Has prompts
@@ -153,14 +151,12 @@ class TestAgentConfiguration:
     def test_all_agents_have_deps_type(self):
         """Test all agents are configured with Deps type."""
         config = IfetcherConfig()
-        agent_factories = [
-            get_query_expander_agent,
-            get_result_selector_agent,
-            get_keyword_evaluator_agent,
-            get_document_summarizer_agent,
-            get_reflector_agent,
+        agents = [
+            get_query_expander_agent(config, "pubmed"),
+            get_result_selector_agent(config),
+            get_keyword_evaluator_agent(config),
+            get_document_summarizer_agent(config),
+            get_reflector_agent(config),
         ]
-        for factory in agent_factories:
-            # Get the agent instance from the factory
-            agent = factory(config)
+        for agent in agents:
             assert agent._deps_type == Deps

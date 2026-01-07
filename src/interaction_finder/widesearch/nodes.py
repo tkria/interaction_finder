@@ -92,8 +92,9 @@ Subject goals (unsatisfied): {", ".join(unsatisfied) if unsatisfied else "(all g
 Round {ctx.state.current_round} of {ctx.state.max_rounds}
 
 Generate search queries that target unsatisfied subject goals and incorporate the keyphrases."""
-        # Use query generator agent with renamed span
-        agent = get_query_generator_agent(ctx.deps.config)
+        # Use query generator agent with backend-specific prompt
+        backend_name = ctx.deps.search_backend.name
+        agent = get_query_generator_agent(ctx.deps.config, backend_name)
         with rename_agent(
             agent, name=f"GenerateQueriesNode (round {ctx.state.current_round})"
         ):

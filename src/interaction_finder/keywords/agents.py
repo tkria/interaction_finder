@@ -15,9 +15,10 @@ from interaction_finder.keywords.models import (
     ReflectionOut,
     ResultSelectionOut,
 )
+from interaction_finder.search.models import get_query_directive
 from interaction_finder.settings import IfetcherConfig
 
-QUERY_EXPANDER_PROMPT = """You are an expert at generating search queries for finding review articles and comprehensive summaries.
+QUERY_EXPANDER_PROMPT_BASE = """You are an expert at generating search queries for finding review articles and comprehensive summaries.
 
 Your goal is to create queries that will find review articles, meta-analyses, and comprehensive summaries about the given topic. These articles should discuss the topic broadly and mention related concepts that could serve as "bridging terms" for literature search.
 
@@ -30,7 +31,17 @@ Guidelines:
 
 Focus on finding articles that will help identify bridging terms: related concepts, alternative approaches, and connected research areas that don't appear in the original topic name.
 
-Explain your query strategy and why your queries will find useful review articles."""
+Explain your query strategy and why your queries will find useful review articles.
+
+Query format: {query_directive}"""
+
+
+def get_query_expander_prompt(backend_name: str) -> str:
+    """Build query expander prompt with backend-specific directive."""
+    return QUERY_EXPANDER_PROMPT_BASE.format(
+        query_directive=get_query_directive(backend_name)
+    )
+
 
 RESULT_SELECTOR_PROMPT = """You are an expert at identifying review articles and comprehensive summaries from search results.
 
@@ -100,15 +111,15 @@ Be thoughtful but not overly perfectionistic. The goal is reasonable coverage, n
 # Agent factory functions - thin wrappers over get_agent() using the prompts above
 
 
-def get_query_expander_agent(config: IfetcherConfig) -> Agent:
-    """Get query expander agent."""
+def get_query_expander_agent(config: IfetcherConfig, backend_name: str) -> Agent:
+    """Get query expander agent with backend-specific query formatting."""
     return get_agent(
         config,
         "keywords",
         "query_expander",
         QueryExpansionOut,
         Deps,
-        QUERY_EXPANDER_PROMPT,
+        get_query_expander_prompt(backend_name),
     )
 
 

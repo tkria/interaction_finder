@@ -71,7 +71,7 @@ async def test_run_widesearch_basic(test_config):
     config = IfetcherConfig()
     with (
         get_goal_planner_agent(config).override(model=test_model),
-        get_query_generator_agent(config).override(model=test_model),
+        get_query_generator_agent(config, "mock").override(model=test_model),
         get_result_selector_agent(config).override(model=test_model),
         get_reflector_agent(config).override(model=test_model),
     ):
@@ -109,7 +109,7 @@ async def test_run_widesearch_with_existing_pool(test_config):
     config = IfetcherConfig()
     with (
         get_goal_planner_agent(config).override(model=test_model),
-        get_query_generator_agent(config).override(model=test_model),
+        get_query_generator_agent(config, "mock").override(model=test_model),
         get_result_selector_agent(config).override(model=test_model),
         get_reflector_agent(config).override(model=test_model),
     ):
@@ -144,7 +144,7 @@ async def test_run_widesearch_disable_reranking():
     config = IfetcherConfig()
     with (
         get_goal_planner_agent(config).override(model=test_model),
-        get_query_generator_agent(config).override(model=test_model),
+        get_query_generator_agent(config, "mock").override(model=test_model),
         get_result_selector_agent(config).override(model=test_model),
         get_reflector_agent(config).override(model=test_model),
     ):
@@ -175,7 +175,7 @@ async def test_run_widesearch_custom_max_rounds(test_config):
     config = IfetcherConfig()
     with (
         get_goal_planner_agent(config).override(model=test_model),
-        get_query_generator_agent(config).override(model=test_model),
+        get_query_generator_agent(config, "mock").override(model=test_model),
         get_result_selector_agent(config).override(model=test_model),
         get_reflector_agent(config).override(model=test_model),
     ):
@@ -228,7 +228,7 @@ async def test_run_widesearch_with_checkpoint_basic(test_config):
     config = IfetcherConfig()
     with (
         get_goal_planner_agent(config).override(model=test_model),
-        get_query_generator_agent(config).override(model=test_model),
+        get_query_generator_agent(config, "mock").override(model=test_model),
         get_result_selector_agent(config).override(model=test_model),
         get_reflector_agent(config).override(model=test_model),
     ):
@@ -291,7 +291,7 @@ async def test_checkpoint_serialization(test_config):
     config = IfetcherConfig()
     with (
         get_goal_planner_agent(config).override(model=test_model),
-        get_query_generator_agent(config).override(model=test_model),
+        get_query_generator_agent(config, "mock").override(model=test_model),
         get_result_selector_agent(config).override(model=test_model),
         get_reflector_agent(config).override(model=test_model),
     ):
@@ -371,7 +371,7 @@ async def test_checkpoint_contains_all_data(test_config):
     config = IfetcherConfig()
     with (
         get_goal_planner_agent(config).override(model=test_model),
-        get_query_generator_agent(config).override(model=test_model),
+        get_query_generator_agent(config, "mock").override(model=test_model),
         get_result_selector_agent(config).override(model=test_model),
         get_reflector_agent(config).override(model=test_model),
     ):
@@ -412,7 +412,7 @@ async def test_checkpoint_backward_compatibility(test_config):
     config = IfetcherConfig()
     with (
         get_goal_planner_agent(config).override(model=test_model),
-        get_query_generator_agent(config).override(model=test_model),
+        get_query_generator_agent(config, "mock").override(model=test_model),
         get_result_selector_agent(config).override(model=test_model),
         get_reflector_agent(config).override(model=test_model),
     ):

@@ -8,6 +8,7 @@ from pydantic_ai import Agent
 from pydantic_ai.settings import ModelSettings
 
 from interaction_finder.agent_config import get_agent
+from interaction_finder.search.models import get_query_directive
 from interaction_finder.settings import IfetcherConfig
 from interaction_finder.widesearch.deps import Deps
 from interaction_finder.widesearch.models import (
@@ -79,7 +80,17 @@ Query Generation Guidelines:
 - Consider different angles: methodologies, applications, reviews, comparisons, case studies
 - Avoid redundancy with previous queries
 
+Query format: {query_directive}
+
 Your response will be structured with separate fields for each complexity level. Return all queries in a single structured response."""
+
+
+def get_query_generator_prompt(backend_name: str) -> str:
+    """Build query generator prompt with backend-specific directive."""
+    return QUERY_GENERATOR_PROMPT.format(
+        query_directive=get_query_directive(backend_name)
+    )
+
 
 RESULT_SELECTOR_PROMPT = """You are an expert at identifying relevant research papers for comprehensive literature collection.
 
@@ -160,15 +171,15 @@ def get_goal_planner_agent(config: IfetcherConfig) -> Agent:
     )
 
 
-def get_query_generator_agent(config: IfetcherConfig) -> Agent:
-    """Get query generator agent."""
+def get_query_generator_agent(config: IfetcherConfig, backend_name: str) -> Agent:
+    """Get query generator agent with backend-specific query formatting."""
     return get_agent(
         config,
         "search",
         "query_generator",
         QueryGenerationOut,
         Deps,
-        QUERY_GENERATOR_PROMPT,
+        get_query_generator_prompt(backend_name),
         default_model_settings=ModelSettings(parallel_tool_calls=False),
     )
 

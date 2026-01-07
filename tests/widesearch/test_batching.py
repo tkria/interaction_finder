@@ -67,7 +67,7 @@ async def test_batch_size_zero_processes_all_at_once(test_config):
     config = IfetcherConfig()
     with (
         get_goal_planner_agent(config).override(model=test_model),
-        get_query_generator_agent(config).override(model=test_model),
+        get_query_generator_agent(config, "mock").override(model=test_model),
         get_result_selector_agent(config).override(model=test_model),
         get_reflector_agent(config).override(model=test_model),
     ):
@@ -106,7 +106,7 @@ async def test_batch_size_splits_results(test_config):
     config = IfetcherConfig()
     with (
         get_goal_planner_agent(config).override(model=test_model),
-        get_query_generator_agent(config).override(model=test_model),
+        get_query_generator_agent(config, "mock").override(model=test_model),
         get_result_selector_agent(config).override(model=test_model),
         get_reflector_agent(config).override(model=test_model),
     ):
@@ -145,7 +145,7 @@ async def test_batch_size_larger_than_results(test_config):
     config = IfetcherConfig()
     with (
         get_goal_planner_agent(config).override(model=test_model),
-        get_query_generator_agent(config).override(model=test_model),
+        get_query_generator_agent(config, "mock").override(model=test_model),
         get_result_selector_agent(config).override(model=test_model),
         get_reflector_agent(config).override(model=test_model),
     ):
@@ -184,7 +184,7 @@ async def test_batching_with_reranking_enabled(test_config):
     config = IfetcherConfig()
     with (
         get_goal_planner_agent(config).override(model=test_model),
-        get_query_generator_agent(config).override(model=test_model),
+        get_query_generator_agent(config, "mock").override(model=test_model),
         get_result_selector_agent(config).override(model=test_model),
         get_reflector_agent(config).override(model=test_model),
     ):
@@ -213,7 +213,7 @@ async def test_batching_empty_results(test_config):
     config = IfetcherConfig()
     with (
         get_goal_planner_agent(config).override(model=test_model),
-        get_query_generator_agent(config).override(model=test_model),
+        get_query_generator_agent(config, "mock").override(model=test_model),
         get_result_selector_agent(config).override(model=test_model),
         get_reflector_agent(config).override(model=test_model),
     ):

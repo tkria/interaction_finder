@@ -111,8 +111,9 @@ class ExpandQueryNode(BaseNode[State, Deps, BridgingTermsOut]):
             ctx.deps.progress["Round"].total = ctx.state.max_rounds
             ctx.deps.progress["Round"].completed = ctx.state.current_round
             ctx.deps.progress["Round"].activate()
-        # Use query expander agent with renamed span
-        agent = get_query_expander_agent(ctx.deps.config)
+        # Use query expander agent with backend-specific prompt
+        backend_name = ctx.deps.search_backend.name
+        agent = get_query_expander_agent(ctx.deps.config, backend_name)
         with rename_agent(agent, f"ExpandQueryNode (round {ctx.state.current_round})"):
             result = await agent.run(
                 f"Generate search queries to find review articles about: {ctx.state.topic}",
