@@ -8,7 +8,11 @@ from typing import Any
 
 import httpx
 
-from interaction_finder.checkpoint import PipelineCheckpoint, SearchStageData
+from interaction_finder.checkpoint import (
+    PipelineCheckpoint,
+    SearchStageData,
+    check_config_consistency,
+)
 from interaction_finder.usage import PipelineUsage
 from interaction_finder.version import get_version_string
 from interaction_finder.fetcher import PageFetcher
@@ -178,15 +182,18 @@ async def run_widesearch_with_checkpoint(
     # Load config or use defaults
     if config is None:
         config = IfetcherConfig()
-
+    # Check config consistency and get updated config for checkpoint
+    updated_config, config_warnings = check_config_consistency(
+        input_checkpoint.config, config, "search"
+    )
+    for warning in config_warnings:
+        logger.warning(warning)
     # Extract search stage config
     search_config = config.stage.search
-
     # Resolve effective values (parameter overrides take precedence)
     effective_max_rounds = (
         max_rounds if max_rounds is not None else search_config.max_rounds
     )
-
     # Create reranker if enabled (rerank_top_k > 0) and not provided
     if reranker is None and search_config.rerank_top_k > 0:
         reranker = Reranker(
@@ -242,6 +249,7 @@ async def run_widesearch_with_checkpoint(
             resources=resource_pool,  # Accumulated pool
             created_by=get_version_string(),
             usage=usage,
+            config=updated_config,
             keywords=input_checkpoint.keywords,  # PRESERVED from input
             search=SearchStageData(
                 results=result.output,

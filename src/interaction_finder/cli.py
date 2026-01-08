@@ -275,20 +275,28 @@ def _handle_exception(e: Exception, output_path: Path | None, verbose: bool) -> 
 
 def _check_and_backup_checkpoint(path: Path, checkpoint_version: str | None) -> None:
     """Check checkpoint version and create backup if needed."""
+    is_older, is_breaking = check_checkpoint_version(checkpoint_version)
+    current = get_version_string()
+    # Parse versions to compare semver
+    old_semver = None
+    if checkpoint_version:
+        _, old_semver, _ = parse_version_string(checkpoint_version)
+    _, new_semver, _ = parse_version_string(current)
+    semver_same = old_semver == new_semver
 
-    def colorize_version(version_str: str, ver_color: str) -> str:
+    def colorize_version(version_str: str, count_color: str) -> str:
         count, semver, hash_ = parse_version_string(version_str)
         semver_str = f"{semver[0]}.{semver[1]}.{semver[2]}"
+        # Semver is blue if same, otherwise matches count color
+        ver_color = "blue" if semver_same else count_color
         parts = [
-            f"[blue]{count}[/blue]" if count else "",
+            f"[{count_color}]{count}[/{count_color}]" if count else "",
             f"v[{ver_color}]{semver_str}[/{ver_color}]",
         ]
         if hash_:
             parts.append(f"[dim]#{hash_}[/dim]")
         return "".join(parts)
 
-    is_older, is_breaking = check_checkpoint_version(checkpoint_version)
-    current = get_version_string()
     old_fmt = (
         colorize_version(checkpoint_version, "yellow")
         if checkpoint_version
@@ -306,7 +314,7 @@ def _check_and_backup_checkpoint(path: Path, checkpoint_version: str | None) -> 
         console.print(f"[dim]Created backup: {backup_path}[/dim]")
     elif is_older:
         console.print(
-            f"[dim]ℹ Checkpoint was created with older version {old_fmt} "
+            f"[blue]ℹ[/blue] [dim]Checkpoint was created with older version {old_fmt} "
             f"(current: {new_fmt})[/dim]",
             highlight=False,
         )

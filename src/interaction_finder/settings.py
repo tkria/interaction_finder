@@ -802,3 +802,17 @@ class IfetcherConfig(StrictModel):
             else:
                 items.append((new_key, v))
         return dict(items)
+
+    def to_checkpoint_dict(self) -> dict[str, Any]:
+        """Serialize config for checkpoint storage, redacting secrets.
+
+        Creates a deep copy, replaces API keys with '<redacted>', and returns
+        a JSON-serializable dict. Use this when storing config in checkpoints
+        to avoid leaking credentials.
+        """
+        redacted = self.model_copy(deep=True)
+        if redacted.tools.search.pubmed.api_key:
+            redacted.tools.search.pubmed.api_key = "<redacted>"
+        if redacted.tools.search.openai.api_key:
+            redacted.tools.search.openai.api_key = "<redacted>"
+        return redacted.model_dump(mode="json")

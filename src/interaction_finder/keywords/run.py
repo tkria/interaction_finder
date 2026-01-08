@@ -142,6 +142,7 @@ async def run_keyword_research(
                 resources=resource_pool,
                 created_by=get_version_string(),
                 usage=usage,
+                config=config.to_checkpoint_dict(),
                 keywords=KeywordsStageData(
                     terms=result.output.terms,
                     scores=result.output.scores,

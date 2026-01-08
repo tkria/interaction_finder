@@ -8,7 +8,11 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 
-from interaction_finder.checkpoint import ExtractionStageData, PipelineCheckpoint
+from interaction_finder.checkpoint import (
+    ExtractionStageData,
+    PipelineCheckpoint,
+    check_config_consistency,
+)
 from interaction_finder.extraction.deps import Deps
 from interaction_finder.usage import PipelineUsage
 from interaction_finder.extraction.shared import empty_result
@@ -88,6 +92,12 @@ async def run_extraction(
             config = IfetcherConfig()
         if logger is None:
             logger = get_logger(__name__)
+        # Check config consistency and get updated config for checkpoint
+        updated_config, config_warnings = check_config_consistency(
+            input_checkpoint.config, config, "extraction"
+        )
+        for warning in config_warnings:
+            logger.warning(warning)
         agent_semaphore = asyncio.Semaphore(
             config.stage.extraction.agent_concurrency_limit
         )
@@ -146,6 +156,7 @@ async def run_extraction(
             resources=resource_pool,
             created_by=get_version_string(),
             usage=usage,
+            config=updated_config,
             keywords=input_checkpoint.keywords,
             search=input_checkpoint.search,
             extraction=ExtractionStageData(

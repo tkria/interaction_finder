@@ -8,7 +8,8 @@ while preserving all data from previous stages. A single top-level ResourcePool
 accumulates resources across all stages.
 """
 
-from typing import TYPE_CHECKING, Literal, Optional
+from copy import deepcopy
+from typing import TYPE_CHECKING, Any, Literal, Optional
 
 from pydantic import BaseModel, Field, model_serializer, model_validator
 from pydantic_core import to_jsonable_python
@@ -26,6 +27,76 @@ if TYPE_CHECKING:
         PairJudgment,
         PaperQualityAssessment,
     )
+    from interaction_finder.settings import IfetcherConfig
+
+
+def _diff_dicts(
+    saved: dict[str, Any],
+    live: dict[str, Any],
+    path: str = "",
+) -> list[tuple[str, Any, Any]]:
+    """Recursively compare two dicts, returning list of (path, saved_val, live_val) differences."""
+    diffs = []
+    all_keys = set(saved.keys()) | set(live.keys())
+    for key in all_keys:
+        key_path = f"{path}.{key}" if path else key
+        saved_val = saved.get(key)
+        live_val = live.get(key)
+        if saved_val == live_val:
+            continue
+        # Recurse into nested dicts
+        if isinstance(saved_val, dict) and isinstance(live_val, dict):
+            diffs.extend(_diff_dicts(saved_val, live_val, key_path))
+        else:
+            diffs.append((key_path, saved_val, live_val))
+    return diffs
+
+
+def check_config_consistency(
+    saved: dict[str, Any] | None,
+    live: "IfetcherConfig",
+    active_stage: Literal["keywords", "search", "extraction"],
+) -> tuple[dict[str, Any], list[str]]:
+    """Compare saved config against live, return updated config and warnings.
+
+    Differences in stage.<active_stage> are expected (intentional per-stage tuning)
+    and updated silently. Differences elsewhere generate warnings but processing
+    continues with the live config values.
+
+    Parameters:
+        saved: Config dict from checkpoint (may be None for legacy checkpoints)
+        live: Current IfetcherConfig being used
+        active_stage: The stage currently being run
+
+    Returns:
+        (updated_config, warnings) where updated_config has stage.<active_stage>
+        replaced with live values, and warnings lists unexpected differences
+    """
+    live_dict = live.to_checkpoint_dict()
+    # No saved config (legacy checkpoint) - just use live
+    if saved is None:
+        return live_dict, []
+    # Build updated config: start with saved, replace active stage section
+    updated = deepcopy(saved)
+    stage_key = f"stage.{active_stage}"
+    if "stage" in updated and active_stage in updated["stage"]:
+        updated["stage"][active_stage] = live_dict.get("stage", {}).get(
+            active_stage, {}
+        )
+    # Find all differences
+    diffs = _diff_dicts(saved, live_dict)
+    # Partition: expected (stage.<active_stage>.*) vs unexpected (everything else)
+    warnings = []
+    for path, saved_val, live_val in diffs:
+        if path.startswith(stage_key):
+            continue  # Expected difference, already handled
+        # Format values for display
+        saved_str = repr(saved_val) if saved_val is not None else "unset"
+        live_str = repr(live_val) if live_val is not None else "unset"
+        warnings.append(
+            f"Config mismatch at '{path}': saved={saved_str}, live={live_str}"
+        )
+    return updated, warnings
 
 
 def _get_consolidated_data_default():
@@ -318,6 +389,10 @@ class PipelineCheckpoint(BaseModel):
     usage: Optional[PipelineUsage] = Field(
         default=None,
         description="LLM token usage tracking across all pipeline stages",
+    )
+    config: Optional[dict[str, Any]] = Field(
+        default=None,
+        description="Configuration used to produce this checkpoint (secrets redacted)",
     )
 
     # Optional stage-specific data (added progressively)
