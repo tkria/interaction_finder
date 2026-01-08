@@ -357,44 +357,14 @@ class BatchOperations:
             # Cache the regenerated raw markdown
             await self.cache.set_content(url, "raw_markdown", raw_markdown, final_url)
         else:
-            # Check for previous failures unless retrying
-            if not retry:
-                await self._check_previous_failures(url)
-
-            # Fetch operation - mark as failed only on fetch errors
-            try:
-                # Do fresh fetch to get all data
-                if self.web_client._is_pdf_url(url):
-                    fetch_result = await self.web_client.fetch_pdf(url, retry=retry)
-                else:
-                    fetch_result = await self.web_client.fetch_html(url, retry=retry)
-            except Exception as e:
-                # Don't cache transient environment failures (e.g. Playwright not installed)
-                # since they're not URL-specific
-                if not _is_transient_failure(e):
-                    await self.cache.mark_failed(url, reason=str(e))
-                raise
-
-            # Post-processing - don't mark as failed on processing errors
-            try:
-                raw_markdown = fetch_result["markdown_content"]
-                final_url = fetch_result["final_url"]
-
-                # Cache the raw markdown
-                await self.cache.set_content(
-                    url, "raw_markdown", raw_markdown, final_url
-                )
-
-                # Clear any previous failure markers on success
-                await self.cache.clear_failed(url)
-                if final_url and final_url != url:
-                    await self.cache.clear_failed(final_url)
-
-            except Exception:
-                # Processing errors propagate but don't mark as failed
-                # The content was successfully fetched, just post-processing failed
-                raise
-
+            # Delegate to primary fetchers which handle caching of all raw data
+            if self.web_client._is_pdf_url(url):
+                await self._fetch_pdf_and_cache(url, retry=retry)
+            else:
+                await self._fetch_html_and_cache(url, retry=retry)
+            # Now raw_markdown is cached, retrieve it
+            raw_markdown = await self.cache.get_content(url, "raw_markdown")
+            final_url = await self.cache.get_redirect_info(url)
         # Process the raw markdown content
         from .content_processor import ContentProcessor
 

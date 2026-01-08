@@ -395,24 +395,19 @@ class TestFetcherFunctions:
 
     @pytest.mark.anyio
     async def test_fetch_markdown_and_cache(self, batch_ops):
-        """Test markdown fetching and caching."""
+        """Test markdown fetching and caching delegates to _fetch_html_and_cache."""
         url = "http://example.com"
         raw_markdown = "raw markdown content"
-        fetch_result = {
-            "raw_content": "html content",
-            "markdown_content": raw_markdown,
-            "final_url": "http://example.com/final",
-        }
-
+        final_url = "http://example.com/final"
+        # Mock cache to indicate no cached content
         batch_ops.cache.has_path = AsyncMock(return_value=False)
-        batch_ops.cache.is_failed = AsyncMock(return_value=False)
         batch_ops.web_client._is_pdf_url = Mock(return_value=False)
-        batch_ops.web_client.fetch_html = AsyncMock(return_value=fetch_result)
+        # Mock _fetch_html_and_cache which now handles the actual fetching
+        batch_ops._fetch_html_and_cache = AsyncMock()
+        # After _fetch_html_and_cache runs, raw_markdown should be cached
+        batch_ops.cache.get_content = AsyncMock(return_value=raw_markdown)
+        batch_ops.cache.get_redirect_info = AsyncMock(return_value=final_url)
         batch_ops.cache.set_content = AsyncMock()
-        batch_ops.cache.clear_failed = AsyncMock()
-        batch_ops.cache.mark_failed = AsyncMock()
-        batch_ops.cache.get_redirect_info = AsyncMock(return_value=None)
-
         # Mock the content processor
         with patch(
             "interaction_finder.fetcher.content_processor.ContentProcessor"
@@ -420,13 +415,14 @@ class TestFetcherFunctions:
             mock_processor = mock_processor_class.return_value
             processed_markdown = "processed markdown content"
             mock_processor.refine_article.return_value = processed_markdown
-
             result = await batch_ops._fetch_markdown_and_cache(url)
-
             assert result == processed_markdown
-            batch_ops.web_client.fetch_html.assert_called_once_with(url, retry=False)
-            # Should cache both raw_markdown and processed markdown
-            assert batch_ops.cache.set_content.call_count == 2
+            # Should delegate to _fetch_html_and_cache
+            batch_ops._fetch_html_and_cache.assert_called_once_with(url, retry=False)
+            # Should retrieve raw_markdown from cache after delegation
+            batch_ops.cache.get_content.assert_called_with(url, "raw_markdown")
+            # Should cache processed markdown
+            batch_ops.cache.set_content.assert_called_once()
 
     @pytest.mark.anyio
     async def test_fetch_chunks_and_cache(self, batch_ops):
