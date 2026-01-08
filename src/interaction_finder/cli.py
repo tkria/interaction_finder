@@ -389,8 +389,21 @@ def create_search_backend(backend_name: str, config: IfetcherConfig) -> Any:
                 "model": openai.model,
             }
         )
+    elif backend_name == "searxng":
+        from interaction_finder.search.backends.searxng import SearXNGBackend
+
+        searxng = search_config.searxng
+        return SearXNGBackend(
+            config={
+                "timeout": timeout,
+                "base_url": searxng.base_url,
+                "categories": searxng.categories,
+                "engines": searxng.engines,
+                "language": searxng.language,
+            }
+        )
     else:
-        valid = "pubmed, perplexica, openai"
+        valid = "pubmed, perplexica, openai, searxng"
         raise ValueError(f"Unknown backend '{backend_name}'. Valid: {valid}")
 
 

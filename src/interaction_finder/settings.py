@@ -174,7 +174,7 @@ class IfetcherConfig(StrictModel):
         )
 
         class Search(StrictModel):
-            """Search backend configuration (PubMed, Perplexica, OpenAI)."""
+            """Search backend configuration (PubMed, Perplexica, OpenAI, SearXNG)."""
 
             timeout: int = Field(
                 60,
@@ -269,6 +269,31 @@ class IfetcherConfig(StrictModel):
             openai: OpenAIConfig = Field(
                 default_factory=OpenAIConfig,
                 description="OpenAI web search settings",
+            )
+
+            class SearXNGConfig(StrictModel):
+                """SearXNG meta-search engine configuration."""
+
+                base_url: str = Field(
+                    "http://127.0.0.1:8080",
+                    description="SearXNG instance URL",
+                )
+                categories: list[str] = Field(
+                    ["general", "science"],
+                    description="Search categories: general, science, news, images, etc.",
+                )
+                engines: list[str] | None = Field(
+                    None,
+                    description="Specific engines to use (None = all enabled)",
+                )
+                language: str = Field(
+                    "en",
+                    description="Search language code",
+                )
+
+            searxng: SearXNGConfig = Field(
+                default_factory=SearXNGConfig,
+                description="SearXNG meta-search settings",
             )
 
         search: Search = Field(
@@ -380,7 +405,7 @@ class IfetcherConfig(StrictModel):
             )
             search_backend: str = Field(
                 "perplexica",
-                description="Backend for finding reviews: 'pubmed', 'perplexica', or 'openai'",
+                description="Backend for finding reviews: 'pubmed', 'perplexica', 'openai', or 'searxng'",
             )
             max_results_per_query: int = Field(
                 20,
@@ -471,7 +496,7 @@ class IfetcherConfig(StrictModel):
             )
             search_backend: str = Field(
                 "pubmed",
-                description="Backend for literature search: 'pubmed', 'perplexica', or 'openai'",
+                description="Backend for literature search: 'pubmed', 'perplexica', 'openai', or 'searxng'",
             )
 
         search: Search = Field(

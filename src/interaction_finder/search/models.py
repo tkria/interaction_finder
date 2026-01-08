@@ -9,7 +9,7 @@ class QueryStyle(Enum):
     """Query formatting styles for search backends."""
 
     CONVERSATIONAL = "conversational"
-    BOOLEAN = "boolean"
+    KEYWORD = "keyword"
     PUBMED = "pubmed"
 
 
@@ -18,8 +18,9 @@ STYLE_DIRECTIVES: Dict[QueryStyle, str] = {
     QueryStyle.CONVERSATIONAL: (
         "Use natural language queries. No boolean operators or special syntax."
     ),
-    QueryStyle.BOOLEAN: (
-        "Use boolean operators (AND, OR, NOT) and quoted phrases for precision."
+    QueryStyle.KEYWORD: (
+        "Use keyword search syntax: AND is implicit between terms, "
+        'OR for alternatives, -term to exclude, "quoted phrases" for exact matches.'
     ),
     QueryStyle.PUBMED: (
         "Use PubMed syntax: boolean operators, quoted phrases, "
@@ -32,6 +33,7 @@ BACKEND_STYLES: Dict[str, QueryStyle] = {
     "perplexica": QueryStyle.CONVERSATIONAL,
     "openai": QueryStyle.CONVERSATIONAL,
     "pubmed": QueryStyle.PUBMED,
+    "searxng": QueryStyle.KEYWORD,
 }
 
 
