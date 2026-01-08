@@ -1203,7 +1203,7 @@ def report(
         "html",
         "-f",
         "--format",
-        help="Output format ('html', 'plain', or 'plain:KIND' for entity lists)",
+        help="Output format ('html', 'plain', 'plain:KIND', or 'stats')",
         show_default=True,
     ),
     filters: List[str] = typer.Option(
@@ -1219,13 +1219,16 @@ def report(
     HTML format creates a self-contained interactive explorer with provenance
     tracking. Plain format emits simple "entity, relationship, entity" tuples
     (one per line). Use "plain:KIND" to emit unique entity names of a specific
-    kind (e.g., genes, diseases) one per line. Apply filters with --filter
-    (e.g., --filter confidence:high, --filter accepted:any).
+    kind (e.g., genes, diseases) one per line. Stats format prints pipeline
+    statistics (counts from keywords, search, and extraction stages). Apply
+    filters with --filter (e.g., --filter confidence:high, --filter accepted:any).
 
     Example:
         interaction-finder report results.json -o report.html
 
         interaction-finder report pah-results.json -o pah-report.html --title "PAH Report"
+
+        interaction-finder report results.json -f stats
     """
     output_is_stdout = output is not None and str(output) == "-"
     log_console = console if not output_is_stdout else Console(stderr=True)
@@ -1234,50 +1237,56 @@ def report(
         # Validate extraction file exists
         if not extraction_file.exists():
             raise FileNotFoundError(f"Extraction file not found: {extraction_file}")
-
         # Load extraction checkpoint
-
         from interaction_finder.checkpoint import PipelineCheckpoint
 
-        log_console.print(f"Loading {extraction_file}...")
+        log_console.print(f"[dim]Loading {extraction_file}...[/dim]")
         checkpoint = PipelineCheckpoint.model_validate_json(extraction_file.read_text())
         # Check version and backup if needed
         _check_and_backup_checkpoint(extraction_file, checkpoint.created_by)
-        # Ensure extraction stage is present
-        if not checkpoint.extraction:
-            raise ValueError("Checkpoint does not contain extraction results")
-        # Display summary
-        meta = checkpoint.extraction.metadata
-        log_console.print(f"  Topic: {checkpoint.topic}")
-        log_console.print(
-            f"  Pairs: {meta.pairs_accepted} accepted, {meta.pairs_rejected} rejected | Documents: {meta.resource_count}"
-        )
-
+        # Validate format early
         normalized_format = format.lower()
-        supported_formats = {"html", "plain"}
+        supported_formats = {"html", "plain", "stats"}
         plain_kind = normalized_format.startswith("plain:")
         if normalized_format not in supported_formats and not plain_kind:
             raise typer.BadParameter(
-                "Unsupported format '{format}'. Supported formats: 'html', 'plain', or 'plain:KIND'.".format(
+                "Unsupported format '{format}'. Supported formats: 'html', 'plain', 'plain:KIND', or 'stats'.".format(
                     format=format
                 ),
                 param_hint="--format",
             )
-
+        # Stats format doesn't require extraction results
+        if normalized_format != "stats":
+            if not checkpoint.extraction:
+                raise ValueError("Checkpoint does not contain extraction results")
+            # Display summary for extraction-based formats
+            meta = checkpoint.extraction.metadata
+            log_console.print(f"  Topic: {checkpoint.topic}")
+            log_console.print(
+                f"  Pairs: {meta.pairs_accepted} accepted, {meta.pairs_rejected} rejected | Documents: {meta.resource_count}"
+            )
+        # Filter handling (not applicable to stats)
         parsed_filters = _parse_filter_options(filters)
-        if (
-            normalized_format != "html"
-            and "accepted" not in parsed_filters
-            and not plain_kind
-        ):
-            parsed_filters["accepted"] = "yes"
-        elif plain_kind and "accepted" not in parsed_filters:
-            parsed_filters["accepted"] = "yes"
-
+        if normalized_format != "stats":
+            if (
+                normalized_format != "html"
+                and "accepted" not in parsed_filters
+                and not plain_kind
+            ):
+                parsed_filters["accepted"] = "yes"
+            elif plain_kind and "accepted" not in parsed_filters:
+                parsed_filters["accepted"] = "yes"
         # Generate output path if not specified
         if output is None:
-            suffix = ".html" if normalized_format == "html" else ".txt"
-            output = extraction_file.with_suffix(suffix)
+            if normalized_format == "stats":
+                # Stats default to stdout for quick viewing
+                output = Path("-")
+                output_is_stdout = True
+                log_console = Console(stderr=True)
+            elif normalized_format == "html":
+                output = extraction_file.with_suffix(".html")
+            else:
+                output = extraction_file.with_suffix(".txt")
         else:
             output_is_stdout = str(output) == "-"
             if output_is_stdout:
@@ -1293,8 +1302,9 @@ def report(
             format=normalized_format,
             filters=parsed_filters if parsed_filters else None,
         )
-        destination_label = "stdout" if str(output_path) == "-" else str(output_path)
-        log_console.print(f"[green]✓[/green] Report written to {destination_label}")
+        # Skip success message when writing to stdout
+        if str(output_path) != "-":
+            log_console.print(f"[green]✓[/green] Report written to {output_path}")
 
     except KeyboardInterrupt:
         _handle_keyboard_interrupt(None)

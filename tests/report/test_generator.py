@@ -205,3 +205,105 @@ def test_generate_report_rejects_empty_checkpoint():
 
     with pytest.raises((ValueError, AttributeError)):
         generate_report(checkpoint, "-", format="plain")
+
+
+def test_generate_report_stats_format(tmp_path):
+    """Test stats format report generation."""
+    checkpoint = create_minimal_checkpoint()
+    output_path = tmp_path / "report.stats.txt"
+
+    generate_report(checkpoint, output_path, format="stats")
+
+    assert output_path.exists()
+    content = output_path.read_text()
+
+    # Verify topic and extraction stats
+    assert "test topic" in content
+    assert "Extraction Stage" in content
+    assert "Documents processed: 1" in content
+    assert "Entities found: 2" in content
+    assert "Pairs" in content
+    assert "Total pairs found: 1" in content
+    assert "Accepted: 1" in content
+    assert "Rejected: 0" in content
+
+
+def test_generate_report_stats_stdout(capsys):
+    """Test stats format to stdout (non-TTY falls back to plain text)."""
+    checkpoint = create_minimal_checkpoint()
+
+    generate_report(checkpoint, "-", format="stats")
+
+    captured = capsys.readouterr()
+    assert "test topic" in captured.out
+    assert "Extraction Stage" in captured.out
+    assert "Documents processed: 1" in captured.out
+
+
+def test_generate_report_stats_without_extraction():
+    """Test stats format works without extraction data (shows available stages)."""
+    from interaction_finder.checkpoint import SearchStageData
+    from interaction_finder.search.models import SearchResult
+
+    pool = ResourcePool()
+    checkpoint = PipelineCheckpoint(
+        topic="test topic",
+        resources=pool,
+        search=SearchStageData(
+            results=[
+                SearchResult(
+                    url="https://example.com",
+                    title="Test",
+                    snippet="A snippet",
+                    rank=1,
+                )
+            ],
+            queries=["query1", "query2"],
+            query_results={"query1": ["https://example.com"]},
+            keyphrases=["keyword1"],
+            rounds_completed=2,
+        ),
+    )
+
+    # Should not raise - stats format doesn't require extraction
+    from io import StringIO
+    import sys
+
+    old_stdout = sys.stdout
+    sys.stdout = StringIO()
+    try:
+        generate_report(checkpoint, "-", format="stats")
+        output = sys.stdout.getvalue()
+    finally:
+        sys.stdout = old_stdout
+
+    assert "Search Stage" in output
+    assert "Rounds completed: 2" in output
+    assert "Queries executed: 2" in output
+    assert "Results selected: 1" in output
+    # Should NOT have extraction since it wasn't present
+    assert "Extraction Stage" not in output
+
+
+def test_generate_report_stats_entities_by_kind(tmp_path):
+    """Test that stats includes entity breakdown by kind."""
+    checkpoint = create_minimal_checkpoint()
+    output_path = tmp_path / "report.stats.txt"
+
+    generate_report(checkpoint, output_path, format="stats")
+
+    content = output_path.read_text()
+    assert "Entities by Kind" in content
+    assert "gene:" in content or "disease:" in content
+
+
+def test_generate_report_stats_relationship_types(tmp_path):
+    """Test that stats includes relationship type counts."""
+    checkpoint = create_minimal_checkpoint()
+    output_path = tmp_path / "report.stats.txt"
+
+    generate_report(checkpoint, output_path, format="stats")
+
+    content = output_path.read_text()
+    assert "Relationship Types" in content
+    assert "associated_with: 1" in content
