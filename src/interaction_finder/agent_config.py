@@ -5,17 +5,16 @@ all pipeline stages (keywords, search, extraction) with multi-tier
 configuration resolution.
 """
 
-from typing import Any, Callable, Type
+from typing import Any, Callable, Type, TypeVar, cast
 
 from pydantic import BaseModel
 from pydantic_ai import Agent
 from pydantic_ai.exceptions import ModelHTTPError, UnexpectedModelBehavior
 from pydantic_ai.models.openai import (
-    OpenAIModelProfile,
     OpenAIResponsesModel,
     OpenAIResponsesModelSettings,
 )
-from pydantic_ai.profiles.openai import openai_model_profile
+from pydantic_ai.profiles.openai import OpenAIModelProfile, openai_model_profile
 from pydantic_ai.settings import ModelSettings
 
 from interaction_finder.settings import IfetcherConfig
@@ -23,7 +22,9 @@ from interaction_finder.settings import IfetcherConfig
 
 # Global cache for agent instances
 # Cache key: (module, agent, model, frozen_config_params)
-_agent_cache: dict[tuple[str, str, str, frozenset[tuple[str, Any]]], Agent] = {}
+_agent_cache: dict[
+    tuple[str, str, str, frozenset[tuple[str, Any]]], Agent[Any, Any]
+] = {}
 
 # Standard exceptions to catch when calling LLM agents.
 # These represent recoverable failures where skipping the current item
@@ -81,16 +82,20 @@ def _resolve_gpt5_model(
     return model, model_settings
 
 
+OT = TypeVar("OT")
+DT = TypeVar("DT")
+
+
 def agent_getter(
     module: str,
     agent: str,
-    output_type: Type[BaseModel],
-    deps_type: Type,
+    output_type: Type[OT],
+    deps_type: Type[DT],
     system_prompt: str,
     *,
     default_model: str = "openai:gpt-4o-mini",
     default_model_settings: ModelSettings | None = None,
-) -> Callable[[IfetcherConfig], Agent]:
+) -> Callable[[IfetcherConfig], Agent[DT, OT]]:
     """Create a getter function for an agent with baked-in configuration.
 
     This factory function creates a clean getter that only needs the config object.
@@ -119,7 +124,7 @@ def agent_getter(
         >>> agent = get_entity_extractor_agent(ctx.deps.config)
     """
 
-    def getter(config: IfetcherConfig) -> Agent:
+    def getter(config: IfetcherConfig) -> Agent[DT, OT]:
         return get_agent(
             config,
             module,
@@ -138,15 +143,15 @@ def get_agent(
     config: IfetcherConfig,
     module: str,
     agent: str,
-    output_type: Type[BaseModel],
-    deps_type: Type,
+    output_type: Type[OT],
+    deps_type: Type[DT],
     system_prompt: str,
     *,
     default_model: str = "openai:gpt-4o-mini",
     default_retries: int = 2,
     default_instrument: bool = True,
     default_model_settings: ModelSettings | None = None,
-) -> Agent:
+) -> Agent[DT, OT]:
     """Get or create agent with multi-tier configuration.
 
     Resolves agent configuration using multi-tier fallback:
@@ -204,10 +209,9 @@ def get_agent(
     if gpt5_settings:
         if model_settings:
             # Merge: GPT-5 settings take precedence for reasoning_effort
-            # Both ModelSettings and OpenAIResponsesModelSettings are dict subclasses, not Pydantic models
-            model_settings_dict = dict(model_settings)
-            gpt5_dict = dict(gpt5_settings)
-            model_settings = ModelSettings(**(model_settings_dict | gpt5_dict))
+            # ModelSettings is a TypedDict; cast the merged dict to satisfy type checker
+            merged = dict(model_settings) | dict(gpt5_settings)
+            model_settings = cast(ModelSettings, merged)
         else:
             model_settings = gpt5_settings
     # Build cache key from all configuration parameters
