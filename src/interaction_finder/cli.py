@@ -416,9 +416,12 @@ def create_search_backend(backend_name: str, config: IfetcherConfig) -> Any:
 
 
 def _parse_filter_options(filter_args: List[str]) -> dict[str, str]:
-    parsed: dict[str, str] = {}
-    allowed_keys = {"accepted", "confidence"}
+    """Parse filter arguments into key-value dict.
 
+    Accepts key:value or key=value syntax. Reserved keys (accepted, evidence)
+    are validated here; other keys are passed through as entity kind filters.
+    """
+    parsed: dict[str, str] = {}
     for raw in filter_args:
         if ":" in raw:
             key, value = raw.split(":", 1)
@@ -429,13 +432,11 @@ def _parse_filter_options(filter_args: List[str]) -> dict[str, str]:
                 f"Invalid filter '{raw}'. Use key:value syntax, e.g., --filter accepted:yes",
                 param_hint="--filter",
             )
-
         key = key.strip().lower()
         value = value.strip()
-
-        if not key or key not in allowed_keys:
+        if not key:
             raise typer.BadParameter(
-                f"Unsupported filter '{key}'. Supported keys: accepted, confidence.",
+                "Filter key cannot be empty.",
                 param_hint="--filter",
             )
         if not value:
@@ -443,7 +444,6 @@ def _parse_filter_options(filter_args: List[str]) -> dict[str, str]:
                 f"Filter '{key}' requires a value.",
                 param_hint="--filter",
             )
-
         parsed[key] = value
 
     return parsed
@@ -1209,7 +1209,7 @@ def report(
     filters: List[str] = typer.Option(
         [],
         "--filter",
-        help="Filter pairs (key:value). Supported keys: accepted, confidence",
+        help="Filter pairs (key:value). Keys: accepted, evidence, or ENTITY_KIND",
     ),
     verbose: bool = typer.Option(False, "-v", "--verbose", help="Verbose output"),
 ):
@@ -1220,13 +1220,17 @@ def report(
     tracking. Plain format emits simple "entity, relationship, entity" tuples
     (one per line). Use "plain:KIND" to emit unique entity names of a specific
     kind (e.g., genes, diseases) one per line. Stats format prints pipeline
-    statistics (counts from keywords, search, and extraction stages). Apply
-    filters with --filter (e.g., --filter confidence:high, --filter accepted:any).
+    statistics (counts from keywords, search, and extraction stages).
+
+    Apply filters with --filter:
+      - accepted:yes|no|any - filter by acceptance status
+      - evidence:N or evidence:N+ - minimum evidence level (1-9)
+      - KIND:VALUE - filter by entity (e.g., gene:BRCA1, cellmarker:SOX9)
 
     Example:
         interaction-finder report results.json -o report.html
 
-        interaction-finder report pah-results.json -o pah-report.html --title "PAH Report"
+        interaction-finder report results.json -f plain --filter gene:BMPR2
 
         interaction-finder report results.json -f stats
     """

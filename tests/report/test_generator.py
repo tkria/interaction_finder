@@ -307,3 +307,239 @@ def test_generate_report_stats_relationship_types(tmp_path):
     content = output_path.read_text()
     assert "Relationship Types" in content
     assert "associated_with: 1" in content
+
+
+def test_generate_report_stats_with_entity_filter(tmp_path):
+    """Test stats format with entity kind filter updates all counts."""
+    from interaction_finder.checkpoint import ExtractionStageData
+    from interaction_finder.extraction.models import (
+        ExtractionMetadata,
+        PairAssessment,
+        PairJudgment,
+        PairSpread,
+        SimpleEntity,
+    )
+    from interaction_finder.resources import ResourcePool, ResourceQuote
+
+    pool = ResourcePool()
+    # Create two resources via pool.add()
+    res1 = pool.add(
+        url="https://example.com/doc1",
+        title="Doc 1",
+        document_text="BRCA1 is associated with breast cancer.",
+    )
+    res2 = pool.add(
+        url="https://example.com/doc2",
+        title="Doc 2",
+        document_text="TP53 causes tumor suppression.",
+    )
+
+    # Create two judgments referencing different resources
+    judgment1 = PairJudgment(
+        entity1=SimpleEntity(name="BRCA1", kind="gene", aliases=[]),
+        entity2=SimpleEntity(name="breast cancer", kind="disease", aliases=[]),
+        relationship="associated_with",
+        spread=PairSpread(
+            positive=[
+                PairAssessment(
+                    resource_id=res1.id,
+                    entity1=EntityRef(canonical="BRCA1", mentions=[]),
+                    entity2=EntityRef(canonical="breast cancer", mentions=[]),
+                    relationship="associated_with",
+                    quotes=[
+                        ResourceQuote(resource=res1, query_text="BRCA1", spans=[(0, 5)])
+                    ],
+                    evidence=make_evidence(7),
+                    topic_relevance=4,
+                    reasoning="test",
+                    source="direct",
+                )
+            ]
+        ),
+        accepted=True,
+        evidence=make_evidence(7),
+        topic_relevance=4,
+        decision_confidence=0.9,
+        reasoning="test",
+    )
+    judgment2 = PairJudgment(
+        entity1=SimpleEntity(name="TP53", kind="gene", aliases=[]),
+        entity2=SimpleEntity(name="tumor", kind="phenotype", aliases=[]),
+        relationship="causes",
+        spread=PairSpread(
+            positive=[
+                PairAssessment(
+                    resource_id=res2.id,
+                    entity1=EntityRef(canonical="TP53", mentions=[]),
+                    entity2=EntityRef(canonical="tumor", mentions=[]),
+                    relationship="causes",
+                    quotes=[
+                        ResourceQuote(resource=res2, query_text="TP53", spans=[(0, 4)])
+                    ],
+                    evidence=make_evidence(6),
+                    topic_relevance=3,
+                    reasoning="test",
+                    source="direct",
+                )
+            ]
+        ),
+        accepted=True,
+        evidence=make_evidence(6),
+        topic_relevance=3,
+        decision_confidence=0.8,
+        reasoning="test",
+    )
+
+    checkpoint = PipelineCheckpoint(
+        topic="test topic",
+        resources=pool,
+        extraction=ExtractionStageData(
+            target_entity_types=["gene", "disease", "phenotype"],
+            permitted_pairs={"gene": ["disease", "phenotype"]},
+            judgments=[judgment1, judgment2],
+            metadata=ExtractionMetadata(
+                topic="test topic",
+                resource_count=2,
+                total_entities_found=4,
+                entities_after_validation=4,
+                entities_merged=0,
+                merge_cache_hits=0,
+                merge_cache_misses=0,
+                proximal_sets_found=0,
+                total_pairs_found=2,
+                pairs_accepted=2,
+                pairs_rejected=0,
+                quotes_validated=2,
+                quotes_failed=0,
+            ),
+        ),
+    )
+
+    output_path = tmp_path / "report.stats.txt"
+    # Filter to only BRCA1-related pairs
+    generate_report(checkpoint, output_path, format="stats", filters={"gene": "BRCA1"})
+
+    content = output_path.read_text()
+    # Should have filtered down to 1 document, 1 pair
+    assert "Documents processed: 1" in content
+    assert "Total pairs found: 1" in content
+    assert "Accepted: 1" in content
+    assert "Total in pool: 1" in content
+
+
+def test_filter_checkpoint_prunes_resources():
+    """Test that filter_checkpoint removes unreferenced resources."""
+    from interaction_finder.report.generator import (
+        filter_checkpoint,
+        _normalize_filters,
+    )
+    from interaction_finder.checkpoint import ExtractionStageData
+    from interaction_finder.extraction.models import (
+        ExtractionMetadata,
+        PairAssessment,
+        PairJudgment,
+        PairSpread,
+        SimpleEntity,
+    )
+    from interaction_finder.resources import ResourcePool, ResourceQuote
+
+    pool = ResourcePool()
+    res1 = pool.add(url="https://example.com/1", title="Doc 1", document_text="text 1")
+    res2 = pool.add(url="https://example.com/2", title="Doc 2", document_text="text 2")
+
+    # Judgment 1 references res1 only
+    judgment1 = PairJudgment(
+        entity1=SimpleEntity(name="A", kind="gene", aliases=[]),
+        entity2=SimpleEntity(name="B", kind="disease", aliases=[]),
+        relationship="causes",
+        spread=PairSpread(
+            positive=[
+                PairAssessment(
+                    resource_id=res1.id,
+                    entity1=EntityRef(canonical="A", mentions=[]),
+                    entity2=EntityRef(canonical="B", mentions=[]),
+                    relationship="causes",
+                    quotes=[
+                        ResourceQuote(resource=res1, query_text="A", spans=[(0, 1)])
+                    ],
+                    evidence=make_evidence(5),
+                    topic_relevance=3,
+                    reasoning="test",
+                    source="direct",
+                )
+            ]
+        ),
+        accepted=True,
+        evidence=make_evidence(5),
+        topic_relevance=3,
+        decision_confidence=0.8,
+        reasoning="test",
+    )
+    # Judgment 2 references res2 only
+    judgment2 = PairJudgment(
+        entity1=SimpleEntity(name="C", kind="protein", aliases=[]),
+        entity2=SimpleEntity(name="D", kind="disease", aliases=[]),
+        relationship="inhibits",
+        spread=PairSpread(
+            positive=[
+                PairAssessment(
+                    resource_id=res2.id,
+                    entity1=EntityRef(canonical="C", mentions=[]),
+                    entity2=EntityRef(canonical="D", mentions=[]),
+                    relationship="inhibits",
+                    quotes=[
+                        ResourceQuote(resource=res2, query_text="C", spans=[(0, 1)])
+                    ],
+                    evidence=make_evidence(4),
+                    topic_relevance=2,
+                    reasoning="test",
+                    source="direct",
+                )
+            ]
+        ),
+        accepted=True,
+        evidence=make_evidence(4),
+        topic_relevance=2,
+        decision_confidence=0.7,
+        reasoning="test",
+    )
+
+    checkpoint = PipelineCheckpoint(
+        topic="test",
+        resources=pool,
+        extraction=ExtractionStageData(
+            target_entity_types=["gene", "protein", "disease"],
+            permitted_pairs={"gene": ["disease"], "protein": ["disease"]},
+            judgments=[judgment1, judgment2],
+            metadata=ExtractionMetadata(
+                topic="test",
+                resource_count=2,
+                total_entities_found=4,
+                entities_after_validation=4,
+                entities_merged=0,
+                merge_cache_hits=0,
+                merge_cache_misses=0,
+                proximal_sets_found=0,
+                total_pairs_found=2,
+                pairs_accepted=2,
+                pairs_rejected=0,
+                quotes_validated=2,
+                quotes_failed=0,
+            ),
+        ),
+    )
+
+    # Filter to only gene:A (judgment1)
+    filters = _normalize_filters({"gene": "A"}, {"gene", "protein", "disease"})
+    filtered = filter_checkpoint(checkpoint, filters)
+
+    # Should only have 1 resource now
+    assert len(filtered.resources.resource_map) == 1
+    assert filtered.resources.get("https://example.com/1") is not None
+    assert filtered.resources.get("https://example.com/2") is None
+    # Should only have 1 judgment
+    assert len(filtered.extraction.judgments) == 1
+    assert filtered.extraction.judgments[0].entity1.name == "A"
+    # Metadata should be recalculated
+    assert filtered.extraction.metadata.resource_count == 1
+    assert filtered.extraction.metadata.total_pairs_found == 1
