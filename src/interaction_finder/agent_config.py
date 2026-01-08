@@ -41,44 +41,53 @@ AGENT_CALL_ERRORS: tuple[type[Exception], ...] = (
 def _resolve_gpt5_model(
     model_string: str,
 ) -> tuple[OpenAIResponsesModel | str, OpenAIResponsesModelSettings | None]:
-    """Resolve GPT-5 model strings with optional reasoning effort.
+    """Resolve GPT-5 model strings with optional reasoning effort and service tier.
 
     Handles model strings like:
     - "openai:gpt-5" -> OpenAIResponsesModel with default profile
     - "openai:gpt-5-mini" -> OpenAIResponsesModel with default profile
     - "openai:gpt-5/low" -> OpenAIResponsesModel with low reasoning effort
     - "openai:gpt-5-mini/medium" -> OpenAIResponsesModel with medium reasoning effort
-    - "openai:gpt-5-nano/high" -> OpenAIResponsesModel with high reasoning effort
+    - "openai:gpt-5/high+flex" -> GPT-5 with high effort and flex service tier
+    - "openai:gpt-5-mini+flex" -> GPT-5 mini with flex service tier (no effort specified)
 
     Parameters:
-        model_string: Model string in format "openai:gpt-5[-variant][/effort]"
+        model_string: Model string in format "openai:gpt-5[-variant][/effort][+tier]"
 
     Returns:
-        Tuple of (model, model_settings) where model_settings is OpenAIResponsesModelSettings if reasoning effort specified
+        Tuple of (model, model_settings) where model_settings contains reasoning effort and/or service tier
     """
     # Check if this is a GPT-5 model string
     if not model_string.startswith("openai:gpt-5"):
         return model_string, None
-
-    # Extract the model name and optional reasoning effort
-    parts = model_string.split("/")
-    base_model = parts[0].replace("openai:", "")  # e.g., "gpt-5-mini"
-
+    # Parse: openai:gpt-5[-variant][/effort][+tier]
+    remainder = model_string.replace("openai:", "")
+    # Extract service tier if present
+    service_tier = None
+    if "+" in remainder:
+        remainder, service_tier = remainder.rsplit("+", 1)
+    # Extract reasoning effort if present
+    reasoning_effort = None
+    if "/" in remainder:
+        base_model, effort = remainder.split("/", 1)
+        if effort in ("low", "medium", "high"):
+            reasoning_effort = effort
+    else:
+        base_model = remainder
     # Create the base GPT-5 model with default profile
     model = OpenAIResponsesModel(
         base_model,
         profile=OpenAIModelProfile.from_profile(openai_model_profile("gpt-5")),
     )
-
-    # Handle reasoning effort if specified
+    # Build model settings if any options specified
     model_settings = None
-    if len(parts) > 1:
-        reasoning_effort = parts[1]
-        if reasoning_effort in ("low", "medium", "high"):
-            model_settings = OpenAIResponsesModelSettings(
-                openai_reasoning_effort=reasoning_effort,
-            )
-
+    if reasoning_effort or service_tier:
+        settings_kwargs: dict[str, Any] = {}
+        if reasoning_effort:
+            settings_kwargs["openai_reasoning_effort"] = reasoning_effort
+        if service_tier:
+            settings_kwargs["openai_service_tier"] = service_tier
+        model_settings = OpenAIResponsesModelSettings(**settings_kwargs)
     return model, model_settings
 
 
@@ -217,16 +226,19 @@ def get_agent(
     # Build cache key from all configuration parameters
     parallel_calls = None
     reasoning_effort = None
+    service_tier = None
     if model_settings:
         if isinstance(model_settings, dict):
             parallel_calls = model_settings.get("parallel_tool_calls")
             reasoning_effort = model_settings.get("openai_reasoning_effort")
+            service_tier = model_settings.get("openai_service_tier")
         else:
             parallel_calls = model_settings.parallel_tool_calls
             # Handle OpenAIResponsesModelSettings
             if hasattr(model_settings, "openai_reasoning_effort"):
                 reasoning_effort = model_settings.openai_reasoning_effort
-
+            if hasattr(model_settings, "openai_service_tier"):
+                service_tier = model_settings.openai_service_tier
     # Create cache key - use model_string for consistency
     config_params = frozenset(
         [
@@ -236,6 +248,7 @@ def get_agent(
             ("system_prompt", effective_system_prompt),
             ("parallel_tool_calls", parallel_calls),
             ("reasoning_effort", reasoning_effort),
+            ("service_tier", service_tier),
         ]
     )
     cache_key = (module, agent, model_string, config_params)
