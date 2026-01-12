@@ -1352,14 +1352,27 @@ function initReport() {
     sidebar.querySelectorAll('.pair-card').forEach((card) => {
         const pairId = getPairIdFromCard(card);
         card.addEventListener('click', () => selectPair(pairId));
-        // Add click handlers to entity names for search filtering
+        // Add click handlers to entity names for search filtering (uses KIND:name syntax)
         const entitySpans = card.querySelectorAll('.pair-entities > span');
         entitySpans.forEach((span) => {
             span.addEventListener('click', (e) => {
                 e.stopPropagation();
-                const entityName = span.textContent.trim();
+                const kind = span.dataset.kind || '';
+                const name = span.textContent.trim();
                 const searchInput = document.getElementById('search-input');
-                searchInput.value = entityName;
+                searchInput.value = formatFilterQuery(kind, name);
+                handleSearch({ target: searchInput });
+            });
+        });
+        // Add click handlers to relationship labels for search filtering (uses relation:type syntax)
+        const relLabels = card.querySelectorAll('.relationship-label');
+        relLabels.forEach((label) => {
+            label.style.cursor = 'pointer';
+            label.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const rel = card.dataset.rel || '';
+                const searchInput = document.getElementById('search-input');
+                searchInput.value = formatFilterQuery('relation', rel);
                 handleSearch({ target: searchInput });
             });
         });
@@ -1398,6 +1411,63 @@ function initReport() {
 
     // Set initial history.state so scroll restoration works on first back navigation
     updateURL(false);
+}
+
+// Format a filter query string, quoting if value contains spaces
+function formatFilterQuery(filterName, value) {
+    if (value.includes(' ')) {
+        return `${filterName}:"${value}"`;
+    }
+    return `${filterName}:${value}`;
+}
+
+// Parse search query into structured filters and free text
+// Supports: relation:VALUE, relation:"quoted value", ENTITY_KIND:VALUE, etc.
+function parseSearchQuery(query) {
+    const filters = [];
+    // Match FILTER:VALUE or FILTER:"quoted value" patterns
+    // Filter names are alphanumeric/underscore, values are quoted or unquoted
+    const filterPattern = /(\w+):(?:"([^"]+)"|(\S+))/gi;
+    let match;
+    let lastIndex = 0;
+    const textParts = [];
+    while ((match = filterPattern.exec(query)) !== null) {
+        // Collect text before this match
+        if (match.index > lastIndex) {
+            textParts.push(query.slice(lastIndex, match.index));
+        }
+        lastIndex = filterPattern.lastIndex;
+        const filterName = match[1].toLowerCase();
+        const filterValue = (match[2] || match[3]).toLowerCase();
+        filters.push({ name: filterName, value: filterValue });
+    }
+    // Collect remaining text after last match
+    if (lastIndex < query.length) {
+        textParts.push(query.slice(lastIndex));
+    }
+    const freeText = textParts.join(' ').trim().toLowerCase();
+    return { filters, freeText };
+}
+
+// Check if a pair card matches a structured filter
+function matchesFilter(card, filter) {
+    const { name, value } = filter;
+    if (name === 'relation' || name === 'rel') {
+        // Match relationship exactly (case-insensitive, normalise underscores to spaces)
+        const rel = card.dataset.rel.toLowerCase().replace(/_/g, ' ');
+        const target = value.replace(/_/g, ' ');
+        return rel === target;
+    }
+    // For entity kind filters: match canonical entity name where kind matches
+    const entitySpans = card.querySelectorAll('.pair-entities > span');
+    const e1Kind = (entitySpans[0]?.dataset.kind || '').toLowerCase();
+    const e2Kind = (entitySpans[1]?.dataset.kind || '').toLowerCase();
+    const e1Name = card.dataset.e1.toLowerCase();
+    const e2Name = card.dataset.e2.toLowerCase();
+    // Check if filter name matches either entity's kind
+    if (name === e1Kind && e1Name === value) return true;
+    if (name === e2Kind && e2Name === value) return true;
+    return false;
 }
 
 // Search handler
@@ -1595,18 +1665,27 @@ function getFilteredPairs() {
         if (state.showContentious && card.dataset.contentious !== 'true') {
             return false;
         }
-        // Search filter
+        // Search filter with structured filter support
         if (state.searchQuery) {
-            const q = state.searchQuery;
-            const searchable = [
-                card.dataset.e1,
-                card.dataset.e1a,
-                card.dataset.e2,
-                card.dataset.e2a,
-                card.dataset.rel
-            ].join(' ').toLowerCase();
-            if (!searchable.includes(q)) {
-                return false;
+            const { filters, freeText } = parseSearchQuery(state.searchQuery);
+            // All structured filters must match
+            for (const filter of filters) {
+                if (!matchesFilter(card, filter)) {
+                    return false;
+                }
+            }
+            // Free text must match (substring search across entity names, aliases, relationship)
+            if (freeText) {
+                const searchable = [
+                    card.dataset.e1,
+                    card.dataset.e1a,
+                    card.dataset.e2,
+                    card.dataset.e2a,
+                    card.dataset.rel
+                ].join(' ').toLowerCase();
+                if (!searchable.includes(freeText)) {
+                    return false;
+                }
             }
         }
         return true;
