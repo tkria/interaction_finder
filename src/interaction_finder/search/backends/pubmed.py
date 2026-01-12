@@ -3,11 +3,12 @@ PubMed search backend using NCBI E-utilities API.
 
 This module provides a SearchBackend implementation for querying PubMed/MEDLINE
 using the NCBI E-utilities web API. It handles rate limiting, query formatting,
-result parsing, and automatic retry with exponential backoff for rate limit errors.
+result parsing, and automatic retry with exponential backoff for transient errors.
 
-Rate Limit Handling:
+Retry Handling:
 - Proactive rate limiting: Enforces configurable requests/second before each API call
-- Reactive retry logic: On HTTP 429 errors, retries with exponential backoff
+- Reactive retry logic: Retries on HTTP 429 and transient network errors
+- Network errors retried: timeouts, connection resets, server disconnects
 - Backoff strategy: Initial 1s delay, doubles each retry (1s, 2s, 4s), capped at 60s
 - Max retries: 3 attempts (configurable via MAX_RETRIES constant)
 - Jitter: ±20% randomness to avoid thundering herd
@@ -103,19 +104,37 @@ class PubMedBackend(SearchBackend):
     async def _request_with_retry(
         self, url: str, params: Dict[str, Any], use_post: bool
     ) -> str:
-        """Execute HTTP request with rate limiting and retry on 429 errors."""
+        """Execute HTTP request with rate limiting and retry on transient errors.
+
+        Retries on:
+        - HTTP 429 (rate limit) responses
+        - Network errors (connection reset, server disconnect, timeouts)
+        """
+        last_exception: Optional[Exception] = None
         for attempt in range(MAX_RETRIES + 1):
             await self._enforce_rate_limit()
             session = await self._get_session()
-            response = (
-                await session.post(url, data=params)
-                if use_post
-                else await session.get(url, params=params)
-            )
-
+            # Execute request, retrying on transient network errors
+            try:
+                response = (
+                    await session.post(url, data=params)
+                    if use_post
+                    else await session.get(url, params=params)
+                )
+            except (httpx.TimeoutException, httpx.NetworkError) as e:  # type: ignore[misc]
+                last_exception = e
+                if attempt < MAX_RETRIES:
+                    backoff = self._calculate_backoff(attempt)
+                    logger.warning(
+                        f"PubMed network error ({type(e).__name__}), "
+                        f"retry {attempt + 1}/{MAX_RETRIES} after {backoff:.1f}s"
+                    )
+                    await asyncio.sleep(backoff)
+                    continue
+                raise
+            # Handle HTTP-level errors
             if response.status_code == 200:
                 return response.text
-
             if response.status_code == 429 and attempt < MAX_RETRIES:
                 backoff = self._calculate_backoff(attempt)
                 logger.warning(
@@ -124,7 +143,6 @@ class PubMedBackend(SearchBackend):
                 )
                 await asyncio.sleep(backoff)
                 continue
-
             # Rate limit exhausted or other HTTP error
             error_msg = (
                 f"rate limit exceeded after {MAX_RETRIES} retries"
@@ -132,6 +150,10 @@ class PubMedBackend(SearchBackend):
                 else f"HTTP {response.status_code}: {response.text}"
             )
             raise RuntimeError(f"PubMed API error: {error_msg}")
+        # Should not reach here, but satisfy type checker
+        if last_exception:
+            raise last_exception
+        raise RuntimeError("PubMed API error: max retries exhausted")
 
     def _build_search_params(self, query: SearchQuery) -> Dict[str, str]:
         """Build parameters for ESearch request."""
@@ -149,20 +171,17 @@ class PubMedBackend(SearchBackend):
         return params
 
     async def _esearch(self, query: SearchQuery) -> Dict[str, Any]:
-        """Perform ESearch to get PMIDs with retry on rate limit errors."""
+        """Perform ESearch to get PMIDs."""
         params = self._build_search_params(query)
         url = f"{self.base_url}/esearch.fcgi"
         use_post = len(params.get("term", "")) > 2000
-
         try:
             response_text = await self._request_with_retry(url, params, use_post)
             return self._parse_esearch_response(response_text)
         except httpx.TimeoutException:  # type: ignore[misc]
-            raise RuntimeError(
-                f"PubMed search request timed out for query: {query.query}"
-            )
+            raise RuntimeError(f"PubMed search timed out: {query.query}")
         except httpx.RequestError as e:  # type: ignore[misc]
-            raise RuntimeError(f"PubMed network error: {str(e)}")
+            raise RuntimeError(f"PubMed network error: {e}")
 
     def _parse_esearch_response(self, xml_content: str) -> Dict[str, Any]:
         """Parse ESearch XML response."""
@@ -216,26 +235,23 @@ class PubMedBackend(SearchBackend):
             raise RuntimeError(f"Failed to parse PubMed search response: {str(e)}")
 
     async def _esummary(self, pmids: List[str]) -> List[Dict[str, Any]]:
-        """Fetch summaries for PMIDs using ESummary with retry on rate limit errors."""
+        """Fetch summaries for PMIDs using ESummary."""
         if not pmids:
             return []
-
         params = {"db": "pubmed", "id": ",".join(pmids), "retmode": "xml"}
         if self.email:
             params["email"] = self.email
         if self.api_key:
             params["api_key"] = self.api_key
-
         url = f"{self.base_url}/esummary.fcgi"
         use_post = len(params["id"]) > 2000 or len(pmids) > 200
-
         try:
             response_text = await self._request_with_retry(url, params, use_post)
             return self._parse_esummary_response(response_text)
         except httpx.TimeoutException:  # type: ignore[misc]
-            raise RuntimeError("PubMed summary request timed out")
+            raise RuntimeError("PubMed summary timed out")
         except httpx.RequestError as e:  # type: ignore[misc]
-            raise RuntimeError(f"PubMed network error: {str(e)}")
+            raise RuntimeError(f"PubMed network error: {e}")
 
     def _parse_esummary_response(self, xml_content: str) -> List[Dict[str, Any]]:
         """Parse ESummary XML response."""

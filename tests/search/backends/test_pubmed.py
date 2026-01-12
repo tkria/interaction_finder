@@ -436,6 +436,35 @@ class TestRetryBehavior:
         assert backoff_large <= MAX_BACKOFF_SECONDS * 1.3
 
     @pytest.mark.asyncio
+    async def test_esearch_succeeds_after_network_error(self, pubmed_backend):
+        """Test that ESearch succeeds after transient network error."""
+        query = SearchQuery(query="covid", max_results=10)
+
+        mock_success_response = AsyncMock()
+        mock_success_response.status_code = 200
+        mock_success_response.text = ESEARCH_SUCCESS_XML
+
+        with patch.object(pubmed_backend, "_get_session") as mock_get_session:
+            import httpx
+
+            mock_session = AsyncMock()
+            # First call raises network error, second succeeds
+            mock_session.get = AsyncMock(
+                side_effect=[
+                    httpx.ConnectError("connection reset"),
+                    mock_success_response,
+                ]
+            )
+            mock_get_session.return_value = mock_session
+
+            # Should succeed after one retry
+            result = await pubmed_backend._esearch(query)
+
+            assert result["count"] == 2
+            assert len(result["pmids"]) == 2
+            assert mock_session.get.call_count == 2
+
+    @pytest.mark.asyncio
     async def test_non_429_errors_do_not_retry(self, pubmed_backend):
         """Test that non-429 HTTP errors fail immediately without retry."""
         query = SearchQuery(query="covid", max_results=10)
@@ -722,8 +751,10 @@ class TestESearchAPI:
                 await pubmed_backend._esearch(query)
 
     @pytest.mark.asyncio
-    async def test_esearch_timeout(self, pubmed_backend):
-        """Test ESearch handles timeout errors."""
+    async def test_esearch_timeout_retries_then_fails(self, pubmed_backend):
+        """Test ESearch retries on timeout then fails after MAX_RETRIES."""
+        from interaction_finder.search.backends.pubmed import MAX_RETRIES
+
         query = SearchQuery(query="covid", max_results=10)
 
         with patch.object(pubmed_backend, "_get_session") as mock_get_session:
@@ -736,9 +767,14 @@ class TestESearchAPI:
             with pytest.raises(RuntimeError, match="timed out"):
                 await pubmed_backend._esearch(query)
 
+            # Verify it attempted MAX_RETRIES + 1 times (initial + retries)
+            assert mock_session.get.call_count == MAX_RETRIES + 1
+
     @pytest.mark.asyncio
-    async def test_esearch_network_error(self, pubmed_backend):
-        """Test ESearch handles network errors."""
+    async def test_esearch_network_error_retries_then_fails(self, pubmed_backend):
+        """Test ESearch retries on network errors then fails after MAX_RETRIES."""
+        from interaction_finder.search.backends.pubmed import MAX_RETRIES
+
         query = SearchQuery(query="covid", max_results=10)
 
         with patch.object(pubmed_backend, "_get_session") as mock_get_session:
@@ -746,12 +782,15 @@ class TestESearchAPI:
 
             mock_session = AsyncMock()
             mock_session.get = AsyncMock(
-                side_effect=httpx.RequestError("network error")
+                side_effect=httpx.ConnectError("connection reset")
             )
             mock_get_session.return_value = mock_session
 
             with pytest.raises(RuntimeError, match="network error"):
                 await pubmed_backend._esearch(query)
+
+            # Verify it attempted MAX_RETRIES + 1 times (initial + retries)
+            assert mock_session.get.call_count == MAX_RETRIES + 1
 
 
 class TestESummaryAPI:
@@ -826,8 +865,10 @@ class TestESummaryAPI:
             assert mock_session.get.call_count == MAX_RETRIES + 1
 
     @pytest.mark.asyncio
-    async def test_esummary_timeout(self, pubmed_backend):
-        """Test ESummary handles timeout errors."""
+    async def test_esummary_timeout_retries_then_fails(self, pubmed_backend):
+        """Test ESummary retries on timeout then fails after MAX_RETRIES."""
+        from interaction_finder.search.backends.pubmed import MAX_RETRIES
+
         pmids = ["12345678"]
 
         with patch.object(pubmed_backend, "_get_session") as mock_get_session:
@@ -839,6 +880,9 @@ class TestESummaryAPI:
 
             with pytest.raises(RuntimeError, match="timed out"):
                 await pubmed_backend._esummary(pmids)
+
+            # Verify it attempted MAX_RETRIES + 1 times (initial + retries)
+            assert mock_session.get.call_count == MAX_RETRIES + 1
 
 
 class TestSearchMethod:
