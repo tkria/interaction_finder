@@ -144,14 +144,21 @@ class SearchNode(BaseNode[State, Deps, list[SearchResult]]):
                 ctx.deps.progress.set_status(f"Searching {backend_name}")
 
             # Execute all searches concurrently, tracking progress as they complete
-            async def execute_search(query_text: str):
+            async def execute_search(query_text: str) -> list[SearchResult]:
                 query = SearchQuery(
                     query=query_text,
                     max_results=ctx.deps.config.stage.search.results_per_query,
                 )
-                return await ctx.deps.search_backend.search(query)
+                try:
+                    return await ctx.deps.search_backend.search(query)
+                except Exception as e:
+                    logger.warning(
+                        f"Search failed, skipping query: {query_text!r}",
+                        error=str(e),
+                    )
+                    return []
 
-            all_results = []
+            all_results: list[SearchResult] = []
             tasks = [execute_search(q) for q in ctx.state.current_queries]
             for coro in asyncio.as_completed(tasks):
                 results = await coro
