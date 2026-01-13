@@ -838,6 +838,7 @@ class ExtractionMetadata(BaseModel):
             "consolidate_relationships",
             "sweep_co_mentions",
             "consolidate_new_relationships",
+            "consolidate_by_neighbours",
         ]
         | None
     ) = Field(None, description="Last completed stage (None if complete)")

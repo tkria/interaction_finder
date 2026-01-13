@@ -17,6 +17,9 @@ from interaction_finder.extraction.stages.sweep_co_mentions import sweep_co_ment
 from interaction_finder.extraction.stages.consolidate_new_relationships import (
     consolidate_new_relationships,
 )
+from interaction_finder.extraction.stages.consolidate_by_neighbours import (
+    consolidate_by_neighbours,
+)
 from interaction_finder.extraction.stages.judge_cross_document import (
     judge_cross_document,
 )
@@ -28,6 +31,7 @@ __all__ = [
     "consolidate_relationships",
     "sweep_co_mentions",
     "consolidate_new_relationships",
+    "consolidate_by_neighbours",
     "judge_cross_document",
     "finalize",
 ]

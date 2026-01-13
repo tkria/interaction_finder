@@ -17,6 +17,7 @@ from interaction_finder.extraction.deps import Deps
 from interaction_finder.usage import PipelineUsage
 from interaction_finder.extraction.shared import empty_result
 from interaction_finder.extraction.stages import (
+    consolidate_by_neighbours,
     consolidate_entities,
     consolidate_new_relationships,
     consolidate_relationships,
@@ -39,6 +40,7 @@ STAGES: list[StageFunc] = [
     consolidate_relationships,
     sweep_co_mentions,
     consolidate_new_relationships,
+    consolidate_by_neighbours,
     judge_cross_document,
 ]
 STAGE_NAMES = [fn.__name__ for fn in STAGES]

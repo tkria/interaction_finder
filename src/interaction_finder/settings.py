@@ -561,6 +561,12 @@ class IfetcherConfig(StrictModel):
                 True,
                 description="Second pass to find entity pairs missed in initial extraction",
             )
+            neighbour_cluster_similarity_threshold: float = Field(
+                0.50,
+                ge=0.0,
+                le=1.0,
+                description="Minimum token similarity to cluster neighbours for consolidation review",
+            )
 
         extraction: Extraction = Field(
             default_factory=Extraction,
