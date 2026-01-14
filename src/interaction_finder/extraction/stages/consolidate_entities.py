@@ -281,10 +281,11 @@ async def _consolidate_kind_impl(
         # Log contested warnings
         _log_contested_warnings(candidates.contested_warnings, kind, entities, deps)
         # Process auto-merge decisions (only new ones)
-        iteration_rules: dict[tuple[str, str], tuple[str, str]] = {}
-        for child, parent, reasoning in new_auto_merges:
+        # Rules format: (norm, kind) -> (target, trigger, reasoning)
+        iteration_rules: dict[tuple[str, str], tuple[str, str, str | None]] = {}
+        for child, parent, trigger in new_auto_merges:
             child_norm = normalize_for_comparison(child)
-            iteration_rules[(child_norm, kind)] = (parent, reasoning)
+            iteration_rules[(child_norm, kind)] = (parent, trigger, None)
             applied_auto_merges.add(child_norm)
         # Process agent review pairs
         new_names: set[str] = set()
@@ -422,7 +423,7 @@ async def _get_consolidation_decisions_for_kind(
     entities: dict[str, list[SpeculatedVariant]],
     state: State,
     deps: Deps,
-) -> tuple[dict[tuple[str, str], tuple[str, str]], set[str]]:
+) -> tuple[dict[tuple[str, str], tuple[str, str, str | None]], set[str]]:
     """Query LLM for consolidation decisions, using cache to avoid redundant calls."""
     if not agent_review_pairs:
         return {}, set()
@@ -454,10 +455,13 @@ def _build_rules_from_cache(
     kind: str,
     entities: dict[str, list[SpeculatedVariant]],
     state: State,
-) -> tuple[dict[tuple[str, str], tuple[str, str]], set[str]]:
-    """Build consolidation rules from cached decisions."""
+) -> tuple[dict[tuple[str, str], tuple[str, str, str | None]], set[str]]:
+    """Build consolidation rules from cached decisions.
+
+    Injects trigger="substring" for pairwise LLM decisions.
+    """
     kind_cache = _get_merge_cache(state, kind)
-    rules: dict[tuple[str, str], tuple[str, str]] = {}
+    rules: dict[tuple[str, str], tuple[str, str, str | None]] = {}
     new_names: set[str] = set()
     for cache_key in pairs:
         if cache_key in kind_cache.cache:
@@ -466,7 +470,7 @@ def _build_rules_from_cache(
             if target:  # merge or rename
                 child = cache_key[0]
                 child_norm = normalize_for_comparison(child)
-                rules[(child_norm, kind)] = (target, reasoning)
+                rules[(child_norm, kind)] = (target, "substring", reasoning)
                 if target not in entities:
                     new_names.add(target)
         else:
@@ -543,14 +547,16 @@ async def _get_group_consolidation_decisions(
     entities: dict[str, list[SpeculatedVariant]],
     state: State,
     deps: Deps,
-) -> tuple[dict[tuple[str, str], tuple[str, str]], set[str], set[frozenset[str]]]:
+) -> tuple[
+    dict[tuple[str, str], tuple[str, str, str | None]], set[str], set[frozenset[str]]
+]:
     """Query LLM for group consolidation decisions using tree-based splitting."""
     from interaction_finder.extraction.clustering import Cluster
 
     if not groups:
         return {}, set(), set()
     max_rounds = deps.config.stage.extraction.cluster_refinement_max_rounds
-    all_rules: dict[tuple[str, str], tuple[str, str]] = {}
+    all_rules: dict[tuple[str, str], tuple[str, str, str | None]] = {}
     all_new_names: set[str] = set()
     all_resolved: set[frozenset[str]] = set()
     # Build map from frozenset → tree for splitting
@@ -611,6 +617,9 @@ Only return groups that need action (merge/exclude/split). Omit groups that shou
                     "id": _generate_token(),
                     "entities": g,
                     "members": sorted(g, key=lambda e: (len(e), e)),
+                    "similarity": group_to_tree[g].similarity
+                    if g in group_to_tree
+                    else 0.0,
                 }
                 for g in batch
             ]
@@ -699,11 +708,15 @@ Examples:
                         continue
                     if target not in entities:
                         all_new_names.add(target)
+                    # Build trigger with cluster info
+                    similarity = g["similarity"]
+                    trigger = f"cluster({gid},{similarity:.2f})"
                     for member in remaining:
                         if member != target:
                             all_rules[(normalize_for_comparison(member), kind)] = (
                                 target,
-                                merge.reasoning or f"Group {gid}",
+                                trigger,
+                                merge.reasoning,
                             )
                     stats["merged"] += 1
                 elif splits:
@@ -796,12 +809,13 @@ def _resolve_group_target(
 
 
 def _resolve_transitive_merges(
-    merge_rules: dict[tuple[str, str], tuple[str, str]],
-) -> dict[tuple[str, str], tuple[str, str]]:
+    merge_rules: dict[tuple[str, str], tuple[str, str, str | None]],
+) -> dict[tuple[str, str], tuple[str, str, str | None]]:
     """Resolve transitive merge chains (A→B, B→C becomes A→C, B→C)."""
-    resolved = {}
-    for (child_norm, kind), (target, reasoning) in merge_rules.items():
+    resolved: dict[tuple[str, str], tuple[str, str, str | None]] = {}
+    for (child_norm, kind), (target, trigger, reasoning) in merge_rules.items():
         final_target = target
+        final_trigger = trigger
         final_reasoning = reasoning
         visited = {child_norm}
         while True:
@@ -811,30 +825,34 @@ def _resolve_transitive_merges(
             if target_norm in visited:
                 break
             visited.add(target_norm)
-            final_target, final_reasoning = merge_rules[(target_norm, kind)]
-        resolved[(child_norm, kind)] = (final_target, final_reasoning)
+            final_target, final_trigger, final_reasoning = merge_rules[
+                (target_norm, kind)
+            ]
+        resolved[(child_norm, kind)] = (final_target, final_trigger, final_reasoning)
     return resolved
 
 
 def _apply_merge_rules_globally(
-    rules: dict[tuple[str, str], tuple[str, str]],
+    rules: dict[tuple[str, str], tuple[str, str, str | None]],
     state: State,
 ) -> None:
     """Apply merge/rename rules to all documents."""
     if not rules:
         return
     # Store rules in consolidated structure
-    for (norm_name, kind), (target, reasoning) in rules.items():
-        rule = EntityMergeRule(source=norm_name, target=target, reasoning=reasoning)
+    for (norm_name, kind), (target, trigger, reasoning) in rules.items():
+        rule = EntityMergeRule(
+            source=norm_name, target=target, trigger=trigger, reasoning=reasoning
+        )
         kind_merges = state.consolidated.entities.merges.setdefault(
             kind, EntityKindMerges()
         )
-        if reasoning.startswith("auto:"):
+        if reasoning is None:
             kind_merges.automatic.append(rule)
         else:
             kind_merges.llm_decided.append(rule)
     target_by_norm_and_kind: dict[tuple[str, str], str] = {}
-    for (_norm, kind), (target, _) in rules.items():
+    for (_norm, kind), (target, _, _) in rules.items():
         target_key = (normalize_for_comparison(target), kind)
         target_by_norm_and_kind.setdefault(target_key, target)
     for resource_id, entities in state.validated_entities_by_resource.items():

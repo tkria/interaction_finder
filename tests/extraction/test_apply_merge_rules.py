@@ -43,7 +43,7 @@ class TestApplyMergeRulesGlobally:
                 )
             }
         }
-        rules = {("brca1", "gene"): ("BRCA1", "llm:merge")}
+        rules = {("brca1", "gene"): ("BRCA1", "substring", "merged")}
         _apply_merge_rules_globally(rules, state)
         assert "BRCA1" in state.validated_entities_by_resource[resource]
         assert "brca1" not in state.validated_entities_by_resource[resource]
@@ -104,8 +104,8 @@ class TestApplyMergeRulesGlobally:
         }
         # Chain: A → B → C (unresolved)
         unresolved_rules = {
-            ("gene a", "gene"): ("Gene B", "auto:1"),
-            ("gene b", "gene"): ("Gene C", "llm:merge"),
+            ("gene a", "gene"): ("Gene B", "1:original:exact", None),
+            ("gene b", "gene"): ("Gene C", "substring", "merged"),
         }
         rules = _resolve_transitive_merges(unresolved_rules)
         _apply_merge_rules_globally(rules, state)
@@ -150,7 +150,7 @@ class TestApplyMergeRulesGlobally:
                 ),
             }
         }
-        rules = {("brca1", "gene"): ("BRCA1", "llm:merge")}
+        rules = {("brca1", "gene"): ("BRCA1", "substring", "merged")}
         _apply_merge_rules_globally(rules, state)
         # Should have one entity with two mentions
         assert len(state.validated_entities_by_resource[resource]) == 1
@@ -222,7 +222,7 @@ class TestApplyMergeRulesGlobally:
             }
         }
         assert state.entities_merged == 0
-        rules = {("brca1", "gene"): ("BRCA1", "llm:merge")}
+        rules = {("brca1", "gene"): ("BRCA1", "substring", "merged")}
         _apply_merge_rules_globally(rules, state)
         # Went from 2 entities to 1, so 1 merge
         assert state.entities_merged == 1
@@ -264,7 +264,7 @@ class TestApplyMergeRulesGlobally:
             }
         }
         # Only merge the gene
-        rules = {("brca1", "gene"): ("BRCA1", "llm:merge")}
+        rules = {("brca1", "gene"): ("BRCA1", "substring", "merged")}
         _apply_merge_rules_globally(rules, state)
         assert "BRCA1" in state.validated_entities_by_resource[resource]
         assert "cancer" in state.validated_entities_by_resource[resource]

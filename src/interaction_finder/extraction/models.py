@@ -464,15 +464,18 @@ class RelationshipConsolidations(BaseModel):
 class EntityMergeRule(BaseModel):
     """Single entity merge with provenance.
 
-    Records how one entity name was mapped to another during consolidation,
-    including the reasoning (automatic rule or LLM decision). The entity kind
-    is implicit from the parent container.
+    Records how one entity name was mapped to another during consolidation.
+    The `trigger` field indicates what triggered consideration for merging,
+    while `reasoning` contains the LLM's explanation (None for automatic merges).
+    The entity kind is implicit from the parent container.
     """
 
     source: str = Field(description="Original normalized entity name")
     target: str = Field(description="Target canonical name after consolidation")
-    reasoning: str = Field(
-        description="Reason for merge: 'auto:cap', 'auto:fuzzy', etc. or LLM reasoning"
+    trigger: str = Field(description="What triggered merge consideration")
+    reasoning: str | None = Field(
+        default=None,
+        description="LLM explanation for merge (None for automatic merges)",
     )
 
 

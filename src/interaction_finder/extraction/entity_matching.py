@@ -235,13 +235,13 @@ class EntityMatch:
     def total_speculation(self) -> int:
         return self.matched_variant.speculation + self.match_penalty
 
-    def auto_reason(self) -> str:
-        """Format: auto:<total>:<source>:<match_kind>"""
+    def auto_trigger(self) -> str:
+        """Format: <total>:<source>:<match_kind>"""
         source = self.matched_variant.source
         if self.matched_variant.is_from_alias:
             source = f"alias:{source}"
         match_kind = "exact" if self.match_penalty == PENALTY_EXACT else "fuzzy"
-        return f"auto:{self.total_speculation}:{source}:{match_kind}"
+        return f"{self.total_speculation}:{source}:{match_kind}"
 
 
 @dataclass
@@ -639,15 +639,14 @@ def find_entity_match(
         qv_norm = normalize_for_comparison(qv.form)
         for variant_norm, mapping in variant_map.items():
             shorter_len = min(len(qv_norm), len(variant_norm))
-            # Skip if either string is empty (can't meaningfully fuzzy match)
-            if shorter_len == 0:
-                continue
-            # For non-obvious variants, require minimum length for fuzzy matching
+            dist = osa_distance(qv_norm, variant_norm)
+            similarity = 1 - dist / shorter_len
+
+            # For obvious variants (spelling/hyphenation), allow shorter strings
+            # Otherwise require minimum length for fuzzy matching
             if not is_obvious_variant(qv_norm, variant_norm):
                 if shorter_len < MIN_LENGTH_FOR_FUZZY:
                     continue
-            dist = osa_distance(qv_norm, variant_norm)
-            similarity = 1 - dist / shorter_len
 
             # Calculate length-scaled maximum distance
             max_dist = 1 + shorter_len // 10
@@ -823,7 +822,7 @@ def find_consolidation_candidates(
                 for canonical in affected:
                     if canonical != best_canonical:
                         auto_merge.append(
-                            (canonical, best_canonical, match.auto_reason())
+                            (canonical, best_canonical, match.auto_trigger())
                         )
                         cap_merges.append((canonical, best_canonical))
         else:
@@ -882,7 +881,7 @@ def find_consolidation_candidates(
             for canonical in canonicals:
                 if canonical != mapping.canonical:
                     auto_merge.append(
-                        (canonical, mapping.canonical, match.auto_reason())
+                        (canonical, mapping.canonical, match.auto_trigger())
                     )
                     variant_merges.append((canonical, mapping.canonical))
         else:
@@ -921,7 +920,7 @@ def find_consolidation_candidates(
                         (
                             alias,
                             canonical,
-                            f"auto:{PENALTY_FUZZY}:original:fuzzy(dist={dist})",
+                            f"{PENALTY_FUZZY}:original:fuzzy(dist={dist})",
                         )
                     )
                     fuzzy_merges.append((alias, canonical))

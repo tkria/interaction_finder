@@ -108,7 +108,7 @@ class TestSameNameDifferentKinds:
             }
         }
         # Rule only for gene kind
-        merge_rules = {("pah_gene", "gene"): ("PAH", "auto:merge")}
+        merge_rules = {("pah_gene", "gene"): ("PAH", "0:merge:exact", None)}
         _apply_merge_rules_globally(merge_rules, state)
         entities = state.validated_entities_by_resource[resource]
         # Disease should be unaffected (rule is for gene kind)
@@ -151,7 +151,7 @@ class TestSameNameDifferentKinds:
             }
         }
         # Rule specifies "gene" kind explicitly
-        merge_rules = {("brca1", "gene"): ("BRCA1", "auto:case")}
+        merge_rules = {("brca1", "gene"): ("BRCA1", "0:case:exact", None)}
         _apply_merge_rules_globally(merge_rules, state)
         entities = state.validated_entities_by_resource[resource]
         # Should have merged the gene variants
@@ -187,8 +187,8 @@ class TestTransitiveMergesPerKind:
         """Transitive chains are resolved using (normalized, kind) keys."""
         # Chain: geneA -> geneB -> geneC
         unresolved_rules = {
-            ("genea", "gene"): ("GeneB", "auto:1"),
-            ("geneb", "gene"): ("GeneC", "auto:2"),
+            ("genea", "gene"): ("GeneB", "0:1:exact", None),
+            ("geneb", "gene"): ("GeneC", "0:2:exact", None),
         }
         resolved = _resolve_transitive_merges(unresolved_rules)
         # Both should resolve to GeneC
@@ -200,8 +200,8 @@ class TestTransitiveMergesPerKind:
         # Gene chain: geneA -> geneB
         # Disease chain: diseaseX -> diseaseY (separate)
         unresolved_rules = {
-            ("genea", "gene"): ("GeneB", "auto:gene"),
-            ("diseasex", "disease"): ("DiseaseY", "auto:disease"),
+            ("genea", "gene"): ("GeneB", "0:gene:exact", None),
+            ("diseasex", "disease"): ("DiseaseY", "0:disease:exact", None),
         }
         resolved = _resolve_transitive_merges(unresolved_rules)
         # Each resolves independently
@@ -261,7 +261,7 @@ class TestMergeRulesApplicationPerKind:
             }
         }
         # Only gene rule
-        merge_rules = {("brca1", "gene"): ("BRCA1", "auto:case")}
+        merge_rules = {("brca1", "gene"): ("BRCA1", "0:case:exact", None)}
         _apply_merge_rules_globally(merge_rules, state)
         entities = state.validated_entities_by_resource[resource]
         # Genes merged, disease untouched
@@ -332,8 +332,8 @@ class TestMergeRulesApplicationPerKind:
         }
         # Rules for both kinds
         merge_rules = {
-            ("brca1", "gene"): ("BRCA1", "auto:gene"),
-            ("cancer", "disease"): ("Cancer", "auto:disease"),
+            ("brca1", "gene"): ("BRCA1", "0:gene:exact", None),
+            ("cancer", "disease"): ("Cancer", "0:disease:exact", None),
         }
         _apply_merge_rules_globally(merge_rules, state)
         entities = state.validated_entities_by_resource[resource]

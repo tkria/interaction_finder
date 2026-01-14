@@ -124,8 +124,8 @@ class TestNormalizedRuleKeys:
         # Rules using normalized keys: (normalized_name, kind) -> (target, reasoning)
         # The target is the canonical name to merge into
         merge_rules = {
-            ("brca1", "gene"): ("BRCA", "auto:substring"),
-            ("brca", "gene"): ("BRCA", "auto:alias"),
+            ("brca1", "gene"): ("BRCA", "0:substring:exact", None),
+            ("brca", "gene"): ("BRCA", "0:alias:exact", None),
         }
         _apply_merge_rules_globally(merge_rules, state)
         # All three documents should merge both entities into "BRCA"
@@ -209,7 +209,7 @@ class TestNormalizedRuleKeys:
         # Rule for normalized "tgf beta" matches both TGF-β and TGF-beta
         # First verify that both normalize to the same key
         assert normalize_for_comparison("TGF-β") == normalize_for_comparison("TGF-beta")
-        merge_rules = {("tgf beta", "gene"): ("TGF", "test")}
+        merge_rules = {("tgf beta", "gene"): ("TGF", "0:test:exact", None)}
         _apply_merge_rules_globally(merge_rules, state)
         # Both docs should have merged the beta variant
         for resource_id in [resource1, resource2]:
@@ -255,7 +255,7 @@ class TestNormalizedRuleKeys:
             }
         }
         # Rule uses lowercase normalized key
-        merge_rules = {("child", "gene"): ("Parent", "test")}
+        merge_rules = {("child", "gene"): ("Parent", "0:test:exact", None)}
         _apply_merge_rules_globally(merge_rules, state)
         entities = state.validated_entities_by_resource[resource]
         assert len(entities) == 1
@@ -310,7 +310,7 @@ class TestParentheticalMatching:
         # Rule uses normalized form of full name
         full_name = "Pulmonary arterial hypertension"
         normalized = normalize_for_comparison(full_name)
-        merge_rules = {(normalized, "disease"): ("PAH", "auto")}
+        merge_rules = {(normalized, "disease"): ("PAH", "0:auto:exact", None)}
         _apply_merge_rules_globally(merge_rules, state)
         entities = state.validated_entities_by_resource[resource]
         assert len(entities) == 1
@@ -376,8 +376,8 @@ class TestTransitiveChainNormalization:
         }
         # Chain: A → B → C (unresolved)
         unresolved_rules = {
-            ("gene a", "gene"): ("Gene B", "auto:1"),
-            ("gene b", "gene"): ("Gene C", "llm:merge"),
+            ("gene a", "gene"): ("Gene B", "1:original:exact", None),
+            ("gene b", "gene"): ("Gene C", "substring", "merge"),
         }
         rules = _resolve_transitive_merges(unresolved_rules)
         _apply_merge_rules_globally(rules, state)
@@ -436,8 +436,8 @@ class TestTransitiveChainNormalization:
         }
         # Chain: brca2 → BRCA1 → BRCA (different cases)
         unresolved_rules = {
-            ("brca2", "gene"): ("BRCA1", "auto"),
-            ("brca1", "gene"): ("BRCA", "auto"),
+            ("brca2", "gene"): ("BRCA1", "0:auto:exact", None),
+            ("brca1", "gene"): ("BRCA", "0:auto:exact", None),
         }
         rules = _resolve_transitive_merges(unresolved_rules)
         _apply_merge_rules_globally(rules, state)
@@ -521,10 +521,10 @@ class TestTransitiveChainNormalization:
         }
         # Chain: GeneA → GeneB → GeneC → GeneD → GeneE
         unresolved_rules = {
-            ("genea", "gene"): ("GeneB", "auto"),
-            ("geneb", "gene"): ("GeneC", "auto"),
-            ("genec", "gene"): ("GeneD", "auto"),
-            ("gened", "gene"): ("GeneE", "auto"),
+            ("genea", "gene"): ("GeneB", "0:auto:exact", None),
+            ("geneb", "gene"): ("GeneC", "0:auto:exact", None),
+            ("genec", "gene"): ("GeneD", "0:auto:exact", None),
+            ("gened", "gene"): ("GeneE", "0:auto:exact", None),
         }
         rules = _resolve_transitive_merges(unresolved_rules)
         _apply_merge_rules_globally(rules, state)

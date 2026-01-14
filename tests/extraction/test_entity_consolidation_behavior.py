@@ -80,7 +80,7 @@ class TestCapitalizationVariants:
         }
         # Rule to merge lowercase variant into mixed-case canonical
         norm = normalize_for_comparison("Pulmonary hypertension")
-        merge_rules = {(norm, "phenotype"): ("Pulmonary Hypertension", "auto:case")}
+        merge_rules = {(norm, "phenotype"): ("Pulmonary Hypertension", "0:case:exact", None)}
         _apply_merge_rules_globally(merge_rules, state)
         # Both docs should have same canonical
         canonical1 = list(state.validated_entities_by_resource[resource1].keys())[0]
@@ -135,7 +135,7 @@ class TestCapitalizationVariants:
         # Rules to merge all variants to BRCA1 (the all-caps version common for genes)
         norm = normalize_for_comparison("brca1")
         merge_rules = {
-            (norm, "gene"): ("BRCA1", "auto:case"),
+            (norm, "gene"): ("BRCA1", "0:case:exact", None),
         }
         _apply_merge_rules_globally(merge_rules, state)
         # All docs should have BRCA1
@@ -179,7 +179,7 @@ class TestAliasPreservation:
             }
         }
         norm = normalize_for_comparison("brca1")
-        merge_rules = {(norm, "gene"): ("BRCA1", "auto:case")}
+        merge_rules = {(norm, "gene"): ("BRCA1", "0:case:exact", None)}
         _apply_merge_rules_globally(merge_rules, state)
         # Should have single entity with both mentions
         entities = state.validated_entities_by_resource[resource]
@@ -224,7 +224,7 @@ class TestAliasPreservation:
             ),
         }
         norm = normalize_for_comparison("Brca1")
-        merge_rules = {(norm, "gene"): ("BRCA1", "auto:case")}
+        merge_rules = {(norm, "gene"): ("BRCA1", "0:case:exact", None)}
         _apply_merge_rules_globally(merge_rules, state)
         # Both now have BRCA1
         assert "BRCA1" in state.validated_entities_by_resource[resource1]
@@ -307,7 +307,7 @@ class TestCrossDocumentConsistency:
         }
         # All normalize to same key, so one rule merges them all
         norm = normalize_for_comparison("brca1")
-        merge_rules = {(norm, "gene"): ("BRCA1", "auto:case")}
+        merge_rules = {(norm, "gene"): ("BRCA1", "0:case:exact", None)}
         _apply_merge_rules_globally(merge_rules, state)
         # All documents should have BRCA1
         for resource_id in resources:
@@ -365,8 +365,8 @@ class TestCrossDocumentConsistency:
         }
         # Chain: A -> B -> C
         unresolved = {
-            ("genea", "gene"): ("GeneB", "auto:1"),
-            ("geneb", "gene"): ("GeneC", "auto:2"),
+            ("genea", "gene"): ("GeneB", "0:1:exact", None),
+            ("geneb", "gene"): ("GeneC", "0:2:exact", None),
         }
         resolved = _resolve_transitive_merges(unresolved)
         _apply_merge_rules_globally(resolved, state)
@@ -414,7 +414,7 @@ class TestFuzzyVariantConsolidation:
         }
         # Fuzzy match rule
         norm = normalize_for_comparison("tumour")
-        merge_rules = {(norm, "phenotype"): ("tumor", "auto:spelling")}
+        merge_rules = {(norm, "phenotype"): ("tumor", "0:spelling:exact", None)}
         _apply_merge_rules_globally(merge_rules, state)
         # Both should have 'tumor'
         canonical1 = list(state.validated_entities_by_resource[resource1].keys())[0]
@@ -456,7 +456,7 @@ class TestFuzzyVariantConsolidation:
         }
         # Both normalize to same key
         norm = normalize_for_comparison("TGF-beta")
-        merge_rules = {(norm, "gene"): ("TGF-β", "auto:greek")}
+        merge_rules = {(norm, "gene"): ("TGF-β", "0:greek:exact", None)}
         _apply_merge_rules_globally(merge_rules, state)
         # Both should have 'TGF-β'
         canonical1 = list(state.validated_entities_by_resource[resource1].keys())[0]
@@ -503,7 +503,7 @@ class TestEdgeCases:
             permitted_pairs=build_permitted_pairs(["gene"]),
         )
         state.validated_entities_by_resource = {}
-        merge_rules = {("brca1", "gene"): ("BRCA1", "auto:test")}
+        merge_rules = {("brca1", "gene"): ("BRCA1", "0:test:exact", None)}
         _apply_merge_rules_globally(merge_rules, state)
         # No error, state unchanged
         assert state.validated_entities_by_resource == {}
@@ -530,7 +530,7 @@ class TestEdgeCases:
             )
         }
         # Rule for BRCA1 which doesn't exist
-        merge_rules = {("brca1", "gene"): ("BRCA1", "auto:test")}
+        merge_rules = {("brca1", "gene"): ("BRCA1", "0:test:exact", None)}
         _apply_merge_rules_globally(merge_rules, state)
         # TP53 still there, unchanged
         entities = state.validated_entities_by_resource[resource]

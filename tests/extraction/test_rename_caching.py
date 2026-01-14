@@ -116,7 +116,8 @@ class TestBuildRulesFromCache:
         pairs = {("brca1", "BRCA")}
         rules, new_names = _build_rules_from_cache(pairs, "gene", entities, state)
         assert ("brca1", "gene") in rules
-        assert rules[("brca1", "gene")] == ("BRCA", "llm:merge")
+        # _build_rules_from_cache injects trigger="substring" for pairwise LLM
+        assert rules[("brca1", "gene")] == ("BRCA", "substring", "llm:merge")
         assert len(new_names) == 0  # Target exists
 
     def test_builds_rules_for_rename_decisions(self):
@@ -128,7 +129,8 @@ class TestBuildRulesFromCache:
         pairs = {("tgf", "TGF")}
         rules, new_names = _build_rules_from_cache(pairs, "gene", entities, state)
         assert ("tgf", "gene") in rules
-        assert rules[("tgf", "gene")] == ("TGF-beta", "llm:rename")
+        # _build_rules_from_cache injects trigger="substring" for pairwise LLM
+        assert rules[("tgf", "gene")] == ("TGF-beta", "substring", "llm:rename")
         assert "TGF-beta" in new_names  # New canonical name
 
     def test_skip_decisions_not_in_rules(self):

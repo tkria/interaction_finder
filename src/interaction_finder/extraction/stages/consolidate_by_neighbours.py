@@ -224,7 +224,7 @@ async def _review_neighbour_clusters(
     all_entities: dict[str, list[SpeculatedVariant]],
     state: State,
     deps: Deps,
-) -> dict[tuple[str, str], tuple[str, str]]:
+) -> dict[tuple[str, str], tuple[str, str, str | None]]:
     """Present neighbour clusters to LLM for consolidation decisions."""
     if not candidates:
         return {}
@@ -257,7 +257,7 @@ Only return groups that need action. Omit groups that should remain separate."""
     agent = get_agent(deps.config)
     batch_size = deps.config.stage.extraction.merge_batch_size
     max_rounds = deps.config.stage.extraction.cluster_refinement_max_rounds
-    all_rules: dict[tuple[str, str], tuple[str, str]] = {}
+    all_rules: dict[tuple[str, str], tuple[str, str, str | None]] = {}
     # Key clusters by (frozenset, kind) to track kind through splits
     ClusterKey = tuple[frozenset[str], str]  # (entities, kind)
     # Build maps from cluster key → metadata
@@ -383,18 +383,16 @@ Omit groups that should stay separate. Action defaults to "merge" if omitted.
                         )
                         continue
                     # Use the cluster's known kind (already determined during clustering)
-                    # Build reasoning with provenance prefix
-                    reasoning = (
-                        f"llm:neighbour({anchor}):cluster({gid},{similarity:.2f}):"
-                        f"{merge.reasoning or 'merged'}"
-                    )
+                    # Build trigger with provenance info
+                    trigger = f"neighbour({anchor}):cluster({gid},{similarity:.2f})"
                     for member in remaining:
                         if member != target:
                             all_rules[
                                 (normalize_for_comparison(member), cluster_kind)
                             ] = (
                                 target,
-                                reasoning,
+                                trigger,
+                                merge.reasoning,
                             )
                     stats["merged"] += 1
                 elif splits:
@@ -487,12 +485,13 @@ def _resolve_group_target(
 
 
 def _resolve_transitive_merges(
-    merge_rules: dict[tuple[str, str], tuple[str, str]],
-) -> dict[tuple[str, str], tuple[str, str]]:
+    merge_rules: dict[tuple[str, str], tuple[str, str, str | None]],
+) -> dict[tuple[str, str], tuple[str, str, str | None]]:
     """Resolve transitive merge chains (A→B, B→C becomes A→C, B→C)."""
-    resolved = {}
-    for (child_norm, kind), (target, reasoning) in merge_rules.items():
+    resolved: dict[tuple[str, str], tuple[str, str, str | None]] = {}
+    for (child_norm, kind), (target, trigger, reasoning) in merge_rules.items():
         final_target = target
+        final_trigger = trigger
         final_reasoning = reasoning
         visited = {child_norm}
         while True:
@@ -502,28 +501,32 @@ def _resolve_transitive_merges(
             if target_norm in visited:
                 break
             visited.add(target_norm)
-            final_target, final_reasoning = merge_rules[(target_norm, kind)]
-        resolved[(child_norm, kind)] = (final_target, final_reasoning)
+            final_target, final_trigger, final_reasoning = merge_rules[
+                (target_norm, kind)
+            ]
+        resolved[(child_norm, kind)] = (final_target, final_trigger, final_reasoning)
     return resolved
 
 
 def _apply_merge_rules(
-    rules: dict[tuple[str, str], tuple[str, str]],
+    rules: dict[tuple[str, str], tuple[str, str, str | None]],
     state: State,
 ) -> None:
     """Apply merge rules to validated_entities_by_resource and track in consolidated."""
     if not rules:
         return
     # Store rules in consolidated structure
-    for (norm_name, kind), (target, reasoning) in rules.items():
-        rule = EntityMergeRule(source=norm_name, target=target, reasoning=reasoning)
+    for (norm_name, kind), (target, trigger, reasoning) in rules.items():
+        rule = EntityMergeRule(
+            source=norm_name, target=target, trigger=trigger, reasoning=reasoning
+        )
         kind_merges = state.consolidated.entities.merges.setdefault(
             kind, EntityKindMerges()
         )
         kind_merges.llm_decided.append(rule)
     # Build target lookup
     target_by_norm_and_kind: dict[tuple[str, str], str] = {}
-    for (_norm, kind), (target, _) in rules.items():
+    for (_norm, kind), (target, _, _) in rules.items():
         target_key = (normalize_for_comparison(target), kind)
         target_by_norm_and_kind.setdefault(target_key, target)
     # Apply to each resource
@@ -549,7 +552,7 @@ def _apply_merge_rules(
 
 
 def _update_pair_entity_references(
-    merge_rules: dict[tuple[str, str], tuple[str, str]],
+    merge_rules: dict[tuple[str, str], tuple[str, str, str | None]],
     state: State,
 ) -> None:
     """Update EntityRef references in PairAssessments after merging."""

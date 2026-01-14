@@ -318,8 +318,8 @@ class TestResolveTransitiveMerges:
     def test_resolves_chain(self):
         """A→B, B→C becomes A→C, B→C."""
         rules = {
-            ("a", "cell"): ("B", "reason1"),
-            ("b", "cell"): ("C", "reason2"),
+            ("a", "cell"): ("B", "neighbour(X):cluster(1,0.5)", "reason1"),
+            ("b", "cell"): ("C", "neighbour(X):cluster(1,0.5)", "reason2"),
         }
         resolved = _resolve_transitive_merges(rules)
         assert resolved[("a", "cell")][0] == "C"
@@ -328,12 +328,20 @@ class TestResolveTransitiveMerges:
     def test_preserves_direct_rules(self):
         """Non-chained rules are preserved unchanged."""
         rules = {
-            ("a", "cell"): ("B", "reason1"),
-            ("x", "gene"): ("Y", "reason2"),
+            ("a", "cell"): ("B", "neighbour(X):cluster(1,0.5)", "reason1"),
+            ("x", "gene"): ("Y", "neighbour(X):cluster(1,0.5)", "reason2"),
         }
         resolved = _resolve_transitive_merges(rules)
-        assert resolved[("a", "cell")] == ("B", "reason1")
-        assert resolved[("x", "gene")] == ("Y", "reason2")
+        assert resolved[("a", "cell")] == (
+            "B",
+            "neighbour(X):cluster(1,0.5)",
+            "reason1",
+        )
+        assert resolved[("x", "gene")] == (
+            "Y",
+            "neighbour(X):cluster(1,0.5)",
+            "reason2",
+        )
 
 
 class TestApplyMergeRules:
@@ -351,11 +359,12 @@ class TestApplyMergeRules:
             "+4 cell": make_entity_ref("+4 cell", "cell"),
             "+4 stem cell": make_entity_ref("+4 stem cell", "cell"),
         }
-        # Rules use normalized keys
+        # Rules use normalized keys - format: (target, trigger, reasoning)
         rules = {
             (normalize_for_comparison("+4 cell"), "cell"): (
                 "+4 stem cell",
-                "llm:neighbour(BMI1):merged",
+                "neighbour(BMI1):cluster(abc,0.65)",
+                "merged",
             ),
         }
         _apply_merge_rules(rules, state)
@@ -376,11 +385,12 @@ class TestApplyMergeRules:
             "+4 cell": make_entity_ref("+4 cell", "cell"),
             "+4 stem cell": make_entity_ref("+4 stem cell", "cell"),
         }
-        # Rules use normalized keys
+        # Rules use normalized keys - format: (target, trigger, reasoning)
         rules = {
             (normalize_for_comparison("+4 cell"), "cell"): (
                 "+4 stem cell",
-                "llm:neighbour(BMI1):merged",
+                "neighbour(BMI1):cluster(abc,0.65)",
+                "merged",
             ),
         }
         _apply_merge_rules(rules, state)

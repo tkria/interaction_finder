@@ -83,7 +83,7 @@ class TestPairAssessmentReferenceUpdates:
         )
         state.pair_assessments_by_resource = {resource: [assessment]}
         # Merge child → parent
-        merge_rules = {("brca", "gene"): ("BRCA", "auto:merge")}
+        merge_rules = {("brca", "gene"): ("BRCA", "0:merge:exact", None)}
         _apply_merge_rules_globally(merge_rules, state)
         _update_pair_entity_references(merge_rules, state)
         # Assessment should now reference BRCA for entity1
@@ -138,7 +138,7 @@ class TestPairAssessmentReferenceUpdates:
         )
         state.pair_assessments_by_resource = {resource: [assessment]}
         # Only merge the disease entity
-        merge_rules = {("cancer", "disease"): ("Cancer", "auto:merge")}
+        merge_rules = {("cancer", "disease"): ("Cancer", "0:merge:exact", None)}
         _apply_merge_rules_globally(merge_rules, state)
         _update_pair_entity_references(merge_rules, state)
         # Entity1 unchanged (gene)
@@ -180,7 +180,7 @@ class TestPairAssessmentMergeUpdates:
             }
         }
         # Merge child → parent
-        merge_rules = {("brca", "gene"): ("BRCA", "auto:merge")}
+        merge_rules = {("brca", "gene"): ("BRCA", "0:merge:exact", None)}
         _apply_merge_rules_globally(merge_rules, state)
         # After merge, BRCA should have both mentions
         merged_entity = state.validated_entities_by_resource[resource]["BRCA"]
@@ -218,7 +218,7 @@ class TestPairAssessmentMergeUpdates:
             resource2: {"brca": EntityRef(canonical="brca", mentions=[child_mention])},
         }
         # Merge rule applies to both docs
-        merge_rules = {("brca", "gene"): ("BRCA", "auto:merge")}
+        merge_rules = {("brca", "gene"): ("BRCA", "0:merge:exact", None)}
         _apply_merge_rules_globally(merge_rules, state)
         # Doc1 still has BRCA
         assert "BRCA" in state.validated_entities_by_resource[resource1]
