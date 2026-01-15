@@ -668,10 +668,11 @@ async def assess_co_mention_region(
                 )
             else:
                 entity_variants[name] = extract_entity_variants(name, None)
-    # Build relationships section
+    # Build relationships section (use underscores for consistency with LLM output normalization)
     if known_relationships:
+        underscore_labels = [r.replace(" ", "_") for r in known_relationships]
         relationships_section = (
-            f"\n**Known relationship types:**\n{', '.join(known_relationships)}\n"
+            f"\n**Known relationship types:**\n{', '.join(underscore_labels)}\n"
         )
     else:
         relationships_section = ""
@@ -781,7 +782,7 @@ Provide supporting quotes for confirmed relationships."""
                     resource_id=region.resource_id,
                     entity1=entity1_ref,
                     entity2=entity2_ref,
-                    relationship=confirmed.relationship,
+                    relationship=confirmed.relationship.replace(" ", "_"),
                     quotes=validated_quotes,
                     evidence=confirmed.evidence,
                     topic_relevance=confirmed.topic_relevance,
@@ -815,7 +816,12 @@ Provide supporting quotes for confirmed relationships."""
             continue
         # Valid new pair - add to raw pairs for standard assessment
         new_pairs.append(
-            (matched_e1, matched_e2, [confirmed.relationship], validated_quotes)
+            (
+                matched_e1,
+                matched_e2,
+                [confirmed.relationship.replace(" ", "_")],
+                validated_quotes,
+            )
         )
         deps.logger.debug(
             f"{diagnostic_prefix} discovered new pair: {matched_e1} <-> {matched_e2}"
