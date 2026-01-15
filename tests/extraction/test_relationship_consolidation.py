@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from interaction_finder.extraction.stages.consolidate_relationships import (
-    _collect_unique_relationships,
+    _collect_relationship_counts,
     _apply_consolidations,
     _store_polarity_mappings,
     consolidate_relationships,
@@ -60,8 +60,8 @@ def make_assessment(
     )
 
 
-class TestCollectUniqueRelationships:
-    """Test collecting unique relationship labels from assessments."""
+class TestCollectRelationshipCounts:
+    """Test collecting relationship labels with frequency counts."""
 
     def test_single_document_single_relationship(self):
         """Collects single relationship from one document."""
@@ -74,11 +74,11 @@ class TestCollectUniqueRelationships:
         state.pair_assessments_by_resource[resource] = [
             make_assessment(resource, "associated_with")
         ]
-        unique = _collect_unique_relationships(state)
-        assert unique == {"associated_with"}
+        counts = _collect_relationship_counts(state)
+        assert counts == {"associated_with": 1}
 
     def test_multiple_documents_multiple_relationships(self):
-        """Collects unique relationships across multiple documents."""
+        """Collects relationships with counts across multiple documents."""
         state = State(
             topic="test",
             target_entity_types=["gene", "disease"],
@@ -92,23 +92,23 @@ class TestCollectUniqueRelationships:
         ]
         state.pair_assessments_by_resource[resource2] = [
             make_assessment(resource2, "inhibits"),
-            make_assessment(resource2, "associated_with"),  # Duplicate
+            make_assessment(resource2, "associated_with"),  # Duplicate label
         ]
-        unique = _collect_unique_relationships(state)
-        assert unique == {"associated_with", "regulates", "inhibits"}
+        counts = _collect_relationship_counts(state)
+        assert counts == {"associated_with": 2, "regulates": 1, "inhibits": 1}
 
     def test_empty_assessments(self):
-        """Returns empty set when no assessments."""
+        """Returns empty dict when no assessments."""
         state = State(
             topic="test",
             target_entity_types=["gene"],
             permitted_pairs=build_permitted_pairs(["gene"]),
         )
-        unique = _collect_unique_relationships(state)
-        assert unique == set()
+        counts = _collect_relationship_counts(state)
+        assert counts == {}
 
-    def test_deduplicates_within_document(self):
-        """Same relationship in one document counted once."""
+    def test_counts_multiple_occurrences(self):
+        """Same relationship in one document counted multiple times."""
         state = State(
             topic="test",
             target_entity_types=["gene", "disease"],
@@ -120,8 +120,8 @@ class TestCollectUniqueRelationships:
             make_assessment(resource, "activates"),
             make_assessment(resource, "activates"),
         ]
-        unique = _collect_unique_relationships(state)
-        assert unique == {"activates"}
+        counts = _collect_relationship_counts(state)
+        assert counts == {"activates": 3}
 
 
 class TestApplyConsolidations:

@@ -49,28 +49,30 @@ async def consolidate_relationships(state: State, deps: Deps) -> bool:
     with logfire.span("consolidate_relationships"):
         if deps.progress:
             deps.progress.set_status("Consolidating relationships")
-        # Step 1: Collect unique relationship labels
-        unique_relationships = _collect_unique_relationships(state)
-        if not unique_relationships:
+        # Step 1: Collect relationship labels with counts
+        relationship_counts = _collect_relationship_counts(state)
+        if not relationship_counts:
             deps.logger.info("No relationships to consolidate")
             return True
         # Step 2: Get consolidation + polarity from LLM (unified)
         consolidations = await _consolidate_and_classify(
-            unique_relationships, state, deps
+            relationship_counts, state, deps
         )
         if not consolidations:
             deps.logger.warning(
                 "Relationship consolidation agent returned no data; "
                 "defaulting all relationship polarities to neutral"
             )
-            _ensure_polarities_for_all_relationships(unique_relationships, state)
+            _ensure_polarities_for_all_relationships(
+                set(relationship_counts.keys()), state
+            )
             return True
         # Step 3: Apply consolidations to assessments
         _apply_consolidations(consolidations, state)
         # Step 4: Store polarity mappings
         _store_polarity_mappings(consolidations, state)
         _ensure_polarities_for_all_relationships(
-            unique_relationships, state, deps, log_missing=True
+            set(relationship_counts.keys()), state, deps, log_missing=True
         )
         # Step 4b: Store relationship consolidations in unified structure
         if consolidations:
@@ -87,31 +89,36 @@ async def consolidate_relationships(state: State, deps: Deps) -> bool:
         return True
 
 
-def _collect_unique_relationships(state: State) -> set[str]:
-    """Collect all unique relationship labels from assessments."""
-    relationships = set()
+def _collect_relationship_counts(state: State) -> dict[str, int]:
+    """Collect relationship labels with their frequency counts."""
+    counts: dict[str, int] = {}
     for assessments in state.pair_assessments_by_resource.values():
         for assessment in assessments:
-            relationships.add(assessment.relationship)
-    return relationships
+            counts[assessment.relationship] = counts.get(assessment.relationship, 0) + 1
+    return counts
 
 
 async def _consolidate_and_classify(
-    relationships: set[str], state: State, deps: Deps
+    relationship_counts: dict[str, int], state: State, deps: Deps
 ) -> list[RelationshipConsolidation]:
     """Query LLM for consolidation + polarity classification (unified)."""
-    relationships_list = sorted(relationships)
-    relationships_str = "\n".join(f"- {r!r}" for r in relationships_list)
+    # Sort by frequency (descending) so LLM sees common labels first
+    sorted_relationships = sorted(
+        relationship_counts.items(), key=lambda x: (-x[1], x[0])
+    )
+    relationships_str = "\n".join(
+        f"- {label!r} ({count})" for label, count in sorted_relationships
+    )
     entity_types_str = ", ".join(state.target_entity_types)
     prompt = f"""**Research topic:** {state.topic}
 
 **Target entity types:** {entity_types_str}
 
-**Relationship labels found:**
+**Relationship labels found (with frequency):**
 {relationships_str}
 
 For each relationship, provide:
-1. Consolidated canonical form (may equal original)
+1. Consolidated canonical form (prefer high-frequency labels as canonical forms)
 2. Polarity classification relative to this research topic"""
     agent = get_relationship_consolidation_agent(deps.config)
     try:
