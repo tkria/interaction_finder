@@ -276,6 +276,8 @@ get_entity_agent = agent_getter(
 
 **Testing Approach**: Mock HTTP servers for web fetching, async test patterns with pytest-asyncio, fixtures for temporary directories, comprehensive integration tests with dirty-equals for flexible assertions.
 
+By default, only tests in files marked as changed by git are run. Other tests are skipped. To override this behaviour set `TEST_ALL=1`.
+
 **Test Markers**:
 ```bash
 # Skip slow tests (large LLM calls, network operations)
