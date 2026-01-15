@@ -410,3 +410,70 @@ class TestLLMErrorHandling:
         assert result is True
         # Fallback polarity assigned
         assert state.relationship_polarities["inhibits"] == "neutral"
+
+
+class TestCanonicalRelationshipFiltering:
+    """Test that only canonical relationships are exposed to downstream stages."""
+
+    def test_relationship_mappings_excludes_unconsolidated_from_known(self):
+        """Unconsolidated labels should be filtered from known_relationships for sweep."""
+        from interaction_finder.extraction.utils import normalize_for_comparison
+
+        state = State(
+            topic="test",
+            target_entity_types=["gene", "cell_type"],
+            permitted_pairs=build_permitted_pairs(["gene", "cell_type"]),
+        )
+        # Simulate consolidation: marker_for -> marks, marker_of -> marks
+        state.relationship_polarities = {
+            "marker_for": "neutral",  # unconsolidated (original)
+            "marker_of": "neutral",  # unconsolidated (original)
+            "marks": "neutral",  # canonical
+            "associated_with": "neutral",  # canonical (unchanged)
+            "expressed_in": "neutral",  # canonical
+            "expressed_by": "neutral",  # unconsolidated (original)
+        }
+        state.relationship_mappings = {
+            normalize_for_comparison("marker_for"): "marks",
+            normalize_for_comparison("marker_of"): "marks",
+            normalize_for_comparison("expressed_by"): "expressed_in",
+        }
+        # Filter to only canonical labels (as done in sweep stage)
+        unconsolidated_normalized = set(state.relationship_mappings.keys())
+        known_relationships = sorted(
+            label
+            for label in state.relationship_polarities.keys()
+            if normalize_for_comparison(label) not in unconsolidated_normalized
+        )
+        # Should only include canonical labels
+        assert "marks" in known_relationships
+        assert "associated_with" in known_relationships
+        assert "expressed_in" in known_relationships
+        # Should exclude unconsolidated labels
+        assert "marker_for" not in known_relationships
+        assert "marker_of" not in known_relationships
+        assert "expressed_by" not in known_relationships
+
+    def test_empty_relationship_mappings_keeps_all(self):
+        """When no consolidation happened, all labels should be available."""
+        from interaction_finder.extraction.utils import normalize_for_comparison
+
+        state = State(
+            topic="test",
+            target_entity_types=["gene"],
+            permitted_pairs=build_permitted_pairs(["gene"]),
+        )
+        state.relationship_polarities = {
+            "activates": "positive",
+            "inhibits": "negative",
+            "associated_with": "neutral",
+        }
+        state.relationship_mappings = {}  # No consolidation
+        unconsolidated_normalized = set(state.relationship_mappings.keys())
+        known_relationships = sorted(
+            label
+            for label in state.relationship_polarities.keys()
+            if normalize_for_comparison(label) not in unconsolidated_normalized
+        )
+        # All labels should be included when no consolidation
+        assert known_relationships == ["activates", "associated_with", "inhibits"]

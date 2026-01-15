@@ -13,6 +13,7 @@ from interaction_finder.extraction.deps import Deps
 from interaction_finder.extraction.models import EvidenceQuality, PairAssessment
 from interaction_finder.extraction.shared import save_checkpoint
 from interaction_finder.extraction.state import State
+from interaction_finder.extraction.utils import normalize_for_comparison
 from interaction_finder.extraction.sweep_co_mentions import (
     CoMentionRegion,
     CoMentionSweepStats,
@@ -103,8 +104,15 @@ async def sweep_co_mentions(state: State, deps: Deps) -> bool:
             f"Merged {len(selected)} co-mentions into {len(regions)} regions "
             f"({pairs_to_assess} candidate pairs)"
         )
-        # Collect known relationship types for prompt context
-        known_relationships = sorted(state.relationship_polarities.keys())
+        # Collect canonical relationship types for prompt context (exclude unconsolidated labels)
+        # The relationship_mappings dict maps normalized unconsolidated labels to their canonical forms,
+        # so we exclude any label whose normalized form is a key in that map
+        unconsolidated_normalized = set(state.relationship_mappings.keys())
+        known_relationships = sorted(
+            label
+            for label in state.relationship_polarities.keys()
+            if normalize_for_comparison(label) not in unconsolidated_normalized
+        )
         # Accumulate new pairs by resource
         new_pairs_by_resource: dict[ResourceId, list[tuple]] = defaultdict(list)
 
