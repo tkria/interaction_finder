@@ -538,9 +538,9 @@ class IfetcherConfig(StrictModel):
                 description="Word overlap required to group entity mentions (e.g., 'BMPR2' and 'BMPR2 gene')",
             )
             cluster_refinement_max_rounds: int = Field(
-                10,
+                20,
                 ge=1,
-                le=20,
+                le=50,
                 description="LLM review rounds for merging entity clusters",
             )
             filter_irrelevant_relationships: bool = Field(
