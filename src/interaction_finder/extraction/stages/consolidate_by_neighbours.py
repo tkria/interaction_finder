@@ -25,6 +25,7 @@ from interaction_finder.extraction.clustering import Cluster, cluster_entities
 from interaction_finder.extraction.deps import Deps
 from interaction_finder.extraction.entity_matching import (
     extract_entity_variants,
+    find_consolidation_candidates,
     find_entity_match,
     SpeculatedVariant,
 )
@@ -110,7 +111,7 @@ async def consolidate_by_neighbours(state: State, deps: Deps) -> bool:
             extra={"entities_by_kind": entity_counts},
         )
         # Present clusters to LLM for review
-        all_rules = await _review_neighbour_clusters(
+        all_rules, new_names = await _review_neighbour_clusters(
             unique_candidates, all_entities, state, deps
         )
         # Apply merge rules
@@ -127,6 +128,9 @@ async def consolidate_by_neighbours(state: State, deps: Deps) -> bool:
                 f"Neighbour consolidation: {len(resolved_rules)} merge rules applied",
                 extra={"merges_by_kind": dict(merges_by_kind)},
             )
+            # Consolidate any new names introduced by LLM
+            if new_names:
+                await _consolidate_new_names(new_names, state, deps)
         else:
             deps.logger.info("Neighbour consolidation: no merges needed")
         # Log entity count changes
@@ -277,10 +281,13 @@ async def _review_neighbour_clusters(
     all_entities: dict[str, list[SpeculatedVariant]],
     state: State,
     deps: Deps,
-) -> dict[tuple[str, str], tuple[str, str, str | None]]:
-    """Present neighbour clusters to LLM for consolidation decisions."""
+) -> tuple[dict[tuple[str, str], tuple[str, str, str | None]], set[str]]:
+    """Present neighbour clusters to LLM for consolidation decisions.
+
+    Returns (merge_rules, new_names) where new_names are targets not in all_entities.
+    """
     if not candidates:
-        return {}
+        return {}, set()
     get_agent = agent_getter(
         "extraction",
         "neighbour_consolidation",
@@ -313,6 +320,7 @@ You must return an explicit decision for every group.""",
     batch_size = deps.config.stage.extraction.merge_batch_size
     max_rounds = deps.config.stage.extraction.cluster_refinement_max_rounds
     all_rules: dict[tuple[str, str], tuple[str, str, str | None]] = {}
+    new_names: set[str] = set()  # Targets not in all_entities
     # Key clusters by (frozenset, kind) to track kind through splits
     ClusterKey = tuple[frozenset[str], str]  # (entities, kind)
     # Build maps from cluster key → metadata
@@ -435,6 +443,9 @@ You must return an explicit decision for every group.""",
                             f"Group {gid}: merge target '{target}' was excluded"
                         )
                         continue
+                    # Track new names (targets not in existing entities)
+                    if target not in all_entities:
+                        new_names.add(target)
                     # Build trigger with provenance info
                     trigger = f"neighbour({anchor}):cluster({gid},{similarity:.2f})"
                     for member in remaining:
@@ -491,7 +502,7 @@ You must return an explicit decision for every group.""",
         if not groups_needing_review:
             break
         current_groups = groups_needing_review
-    return all_rules
+    return all_rules, new_names
 
 
 def _resolve_group_target(
@@ -662,3 +673,32 @@ def _rebuild_global_entity_index(state: State) -> None:
     state.global_entities = {
         c: EntityRef(canonical=c, mentions=m) for c, m in mentions_by_canonical.items()
     }
+
+
+async def _consolidate_new_names(new_names: set[str], state: State, deps: Deps) -> None:
+    """Consolidate LLM-introduced names with existing entities via auto-merge rules."""
+    all_entities = _collect_entities_for_clustering(state)
+    for name in new_names:
+        if name not in all_entities:
+            all_entities[name] = extract_entity_variants(name, set())
+    threshold = deps.config.stage.extraction.cluster_token_overlap_threshold
+    candidates = find_consolidation_candidates(all_entities, threshold)
+    # Filter to candidates involving new names
+    involves_new = lambda c, p: c in new_names or p in new_names
+    auto_merge = [(c, p, r) for c, p, r in candidates.auto_merge if involves_new(c, p)]
+    if not auto_merge:
+        return
+    deps.logger.info(
+        f"Consolidating {len(new_names)} new names: {len(auto_merge)} auto-merges"
+    )
+    # Build rules with kind from the existing (non-new) entity in each pair
+    entity_kinds = _build_entity_kind_lookup(state)
+    rules: dict[tuple[str, str], tuple[str, str, str | None]] = {}
+    for child, parent, trigger in auto_merge:
+        kind = entity_kinds.get(child) or entity_kinds.get(parent, "unknown")
+        rules[(normalize_for_comparison(child), kind)] = (parent, trigger, None)
+    resolved = _resolve_transitive_merges(rules)
+    _apply_merge_rules(resolved, state)
+    _update_pair_entity_references(resolved, state)
+    _rebuild_global_entity_index(state)
+    deps.logger.info(f"Applied {len(resolved)} new-name merge rules")
