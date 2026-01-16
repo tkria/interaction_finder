@@ -41,6 +41,7 @@ from interaction_finder.extraction.models import (
     EntityMention,
     EntityMergeRule,
     EntityRef,
+    StageEvent,
 )
 from interaction_finder.extraction.shared import (
     save_checkpoint,
@@ -128,6 +129,10 @@ async def consolidate_entities(state: State, deps: Deps) -> bool:
     with logfire.span("consolidate_entities"):
         if deps.progress:
             deps.progress.set_status("Consolidating entities")
+        # Record stage boundary
+        state.consolidated.entities.stages.append(
+            StageEvent(name="consolidate_entities", event=state.current_event())
+        )
         # Capture initial entity state BEFORE any consolidation (once only)
         if not state.consolidated.entities.initial:
             state.consolidated.entities.initial = snapshot_entity_counts(state)
@@ -842,7 +847,11 @@ def _apply_merge_rules_globally(
     # Store rules in consolidated structure
     for (norm_name, kind), (target, trigger, reasoning) in rules.items():
         rule = EntityMergeRule(
-            source=norm_name, target=target, trigger=trigger, reasoning=reasoning
+            source=norm_name,
+            target=target,
+            trigger=trigger,
+            reasoning=reasoning,
+            event=state.next_event(),
         )
         kind_merges = state.consolidated.entities.merges.setdefault(
             kind, EntityKindMerges()

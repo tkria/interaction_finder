@@ -35,6 +35,7 @@ from interaction_finder.extraction.models import (
     EntityMention,
     EntityMergeRule,
     EntityRef,
+    StageEvent,
 )
 from interaction_finder.extraction.shared import save_checkpoint
 from interaction_finder.extraction.state import State
@@ -73,6 +74,10 @@ async def consolidate_by_neighbours(state: State, deps: Deps) -> bool:
     with logfire.span("consolidate_by_neighbours"):
         if deps.progress:
             deps.progress.set_status("Analyzing neighbour patterns")
+        # Record stage boundary
+        state.consolidated.entities.stages.append(
+            StageEvent(name="consolidate_by_neighbours", event=state.current_event())
+        )
         # Count entities by kind before consolidation
         counts_before = _count_entities_by_kind(state)
         # Build neighbour sets from pair assessments
@@ -569,7 +574,11 @@ def _apply_merge_rules(
     # Store rules in consolidated structure
     for (norm_name, kind), (target, trigger, reasoning) in rules.items():
         rule = EntityMergeRule(
-            source=norm_name, target=target, trigger=trigger, reasoning=reasoning
+            source=norm_name,
+            target=target,
+            trigger=trigger,
+            reasoning=reasoning,
+            event=state.next_event(),
         )
         kind_merges = state.consolidated.entities.merges.setdefault(
             kind, EntityKindMerges()

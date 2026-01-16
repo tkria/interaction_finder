@@ -447,6 +447,10 @@ class RelationshipConsolidation(BaseModel):
         min_length=30,
         description="Explanation of consolidation and polarity classification",
     )
+    event: int = Field(
+        default=-1,
+        description="Global event sequence number for ordering (-1 = not yet assigned)",
+    )
 
 
 class RelationshipConsolidations(BaseModel):
@@ -478,6 +482,7 @@ class EntityMergeRule(BaseModel):
         default=None,
         description="LLM explanation for merge (None for automatic merges)",
     )
+    event: int = Field(description="Global event sequence number for ordering")
 
 
 class EntityKindMerges(BaseModel):
@@ -501,6 +506,17 @@ class EntityKindMerges(BaseModel):
     )
 
 
+class StageEvent(BaseModel):
+    """Records when a pipeline stage began processing.
+
+    Used to track stage boundaries in the global event sequence, enabling
+    reconstruction of which stage produced each merge event.
+    """
+
+    name: str = Field(description="Stage name (e.g., 'consolidate_entities')")
+    event: int = Field(description="Event number at stage start")
+
+
 class EntityConsolidation(BaseModel):
     """Complete entity consolidation provenance.
 
@@ -519,6 +535,10 @@ class EntityConsolidation(BaseModel):
     final: dict[str, dict[str, int]] = Field(
         default_factory=dict,
         description="Entity mention counts after consolidation: {kind: {name: count}}",
+    )
+    stages: list[StageEvent] = Field(
+        default_factory=list,
+        description="Stage boundaries with event numbers for reconstruction",
     )
 
 

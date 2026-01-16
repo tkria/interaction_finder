@@ -29,6 +29,7 @@ from interaction_finder.extraction.models import (
     PairJudgment,
     RelationshipConsolidation,
     SimpleEntity,
+    StageEvent,
 )
 from interaction_finder.extraction.shared import (
     aggregate_evidence,
@@ -49,6 +50,10 @@ async def consolidate_relationships(state: State, deps: Deps) -> bool:
     with logfire.span("consolidate_relationships"):
         if deps.progress:
             deps.progress.set_status("Consolidating relationships")
+        # Record stage boundary
+        state.consolidated.entities.stages.append(
+            StageEvent(name="consolidate_relationships", event=state.current_event())
+        )
         # Step 1: Collect relationship labels with counts
         relationship_counts = _collect_relationship_counts(state)
         if not relationship_counts:
@@ -74,9 +79,10 @@ async def consolidate_relationships(state: State, deps: Deps) -> bool:
         _ensure_polarities_for_all_relationships(
             set(relationship_counts.keys()), state, deps, log_missing=True
         )
-        # Step 4b: Store relationship consolidations in unified structure
-        if consolidations:
-            state.consolidated.relationships.extend(consolidations)
+        # Step 4b: Store relationship consolidations in unified structure with events
+        for cons in consolidations:
+            cons.event = state.next_event()
+            state.consolidated.relationships.append(cons)
         deps.logger.info(
             f"Relationship consolidation: {len(consolidations)} relationships processed, "
             f"{state.relationships_merged} assessments updated"

@@ -260,6 +260,19 @@ class State:
     quotes_failed: int = 0
     quote_failures: list[QuoteValidationFailure] = field(default_factory=list)
 
+    # === Event counter for merge ordering ===
+    _next_event: int = 1
+
+    def next_event(self) -> int:
+        """Get next event number and increment counter."""
+        event = self._next_event
+        self._next_event += 1
+        return event
+
+    def current_event(self) -> int:
+        """Get current event number without incrementing (for stage boundaries)."""
+        return self._next_event
+
     def to_dict(self) -> dict:
         """Serialize to JSON-compatible dict using handler registry.
 
@@ -346,7 +359,8 @@ class State:
             elif handler_type == "pydantic_model":
                 # Pydantic model → JSON dict
                 result[fld.name] = value.model_dump(mode="json")
-
+        # Serialize private fields that need persistence
+        result["_next_event"] = self._next_event
         return result
 
     @classmethod
@@ -501,5 +515,7 @@ class State:
             elif handler_type == "pydantic_model":
                 # JSON dict → Pydantic model
                 setattr(state, fld.name, inner_type.model_validate(value_data))
-
+        # Restore private fields
+        if "_next_event" in data:
+            state._next_event = data["_next_event"]
         return state

@@ -10,7 +10,11 @@ import re
 from collections import defaultdict
 
 from interaction_finder.extraction.deps import Deps
-from interaction_finder.extraction.models import EvidenceQuality, PairAssessment
+from interaction_finder.extraction.models import (
+    EvidenceQuality,
+    PairAssessment,
+    StageEvent,
+)
 from interaction_finder.extraction.shared import save_checkpoint
 from interaction_finder.extraction.state import State
 from interaction_finder.extraction.utils import normalize_for_comparison
@@ -35,6 +39,10 @@ async def sweep_co_mentions(state: State, deps: Deps) -> bool:
     with logfire.span("sweep_co_mentions"):
         deps.progress["Candidates"].activate()
         deps.progress.set_status("Sweeping for missed co-mentions")
+        # Record stage boundary
+        state.consolidated.entities.stages.append(
+            StageEvent(name="sweep_co_mentions", event=state.current_event())
+        )
         # Check if sweep is enabled
         if not deps.config.stage.extraction.sweep_co_mentions:
             deps.logger.info("Co-mention sweep disabled")
