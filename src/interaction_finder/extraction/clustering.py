@@ -195,12 +195,35 @@ def _weighted_similarity(
     return sim, contributing
 
 
+def _compute_cluster_similarity(
+    c1: Cluster,
+    c2: Cluster,
+    get_pair_similarity: callable,
+) -> tuple[float, tuple[tuple[str, float], ...]]:
+    """Compute average-linkage similarity between two clusters."""
+    sims = []
+    all_tokens: dict[str, float] = {}
+    for e1 in c1.entities:
+        for e2 in c2.entities:
+            s, toks = get_pair_similarity(e1, e2)
+            sims.append(s)
+            for token, spec in toks:
+                all_tokens[token] = max(all_tokens.get(token, 0.0), spec)
+    avg_sim = sum(sims) / len(sims) if sims else 0.0
+    agg_tokens = tuple(sorted(all_tokens.items(), key=lambda x: x[1], reverse=True)[:5])
+    return avg_sim, agg_tokens
+
+
 def agglomerative_cluster(
     entities: dict[str, list[SpeculatedVariant]],
     specificity: dict[str, float],
     threshold: float = 0.5,
 ) -> list[Cluster]:
-    """Build hierarchical merge trees using average-linkage agglomerative clustering.
+    """Build hierarchical merge trees using Reliable Agglomerative Clustering (RAC).
+
+    Uses mutual nearest-neighbour constraint: only merges clusters that are each
+    other's best available partner. This improves stability by filtering out
+    fragile merges that depend on slight ordering differences.
 
     Args:
         entities: Dict of canonical_name → list of SpeculatedVariant
@@ -230,64 +253,87 @@ def agglomerative_cluster(
             )
         return sim_cache[key]
 
-    # Initialize singleton clusters with reverse lookup
+    # Initialize singleton clusters
     initial_clusters = [Cluster(frozenset({name})) for name in entities]
     clusters: dict[int, Cluster] = {id(c): c for c in initial_clusters}
     entity_to_cluster_id = {
         name: id(c) for c in initial_clusters for name in c.entities
     }
-    # Priority queue: (-similarity, tiebreaker, id1, id2, tokens)
-    counter = itertools.count()
-    queue: list[tuple[float, int, int, int, tuple[tuple[str, float], ...]]] = []
-    # Compute initial similarities using O(1) lookup
+    # Compute all pairwise cluster similarities above threshold
+    # similarity_map: cluster_id → {other_id → (similarity, tokens)}
+    similarity_map: dict[int, dict[int, tuple[float, tuple]]] = defaultdict(dict)
     entity_list = list(entities.keys())
     for i, e1 in enumerate(entity_list):
         for e2 in entity_list[i + 1 :]:
             sim, tokens = get_pair_similarity(e1, e2)
             if sim >= threshold:
-                c1_id = entity_to_cluster_id[e1]
-                c2_id = entity_to_cluster_id[e2]
-                heappush(queue, (-sim, next(counter), c1_id, c2_id, tokens))
-    # Agglomerative merging
-    while queue:
-        neg_sim, _, id1, id2, tokens = heappop(queue)
-        if id1 not in clusters or id2 not in clusters:
-            continue
-        c1, c2 = clusters[id1], clusters[id2]
-        sim = -neg_sim
-        # Create merged cluster
-        merged = Cluster(
-            entities=c1.entities | c2.entities,
-            left=c1,
-            right=c2,
-            similarity=sim,
-            merge_tokens=tokens,
-        )
-        del clusters[id1]
-        del clusters[id2]
-        merged_id = id(merged)
-        clusters[merged_id] = merged
-        # Compute similarities with remaining clusters (average linkage)
-        for other_id, other in list(clusters.items()):
-            if other_id == merged_id:
+                id1, id2 = entity_to_cluster_id[e1], entity_to_cluster_id[e2]
+                similarity_map[id1][id2] = (sim, tokens)
+                similarity_map[id2][id1] = (sim, tokens)
+    # RAC: iteratively merge mutual nearest neighbours
+    made_progress = True
+    while made_progress:
+        made_progress = False
+        # Find best neighbour for each cluster
+        best_neighbour: dict[int, int] = {}
+        for cid in clusters:
+            if cid not in similarity_map or not similarity_map[cid]:
                 continue
-            # Average all pairwise similarities
-            sims = []
-            all_tokens: dict[str, float] = {}
-            for e1 in merged.entities:
-                for e2 in other.entities:
-                    s, toks = get_pair_similarity(e1, e2)
-                    sims.append(s)
-                    for token, spec in toks:
-                        all_tokens[token] = max(all_tokens.get(token, 0.0), spec)
-            avg_sim = sum(sims) / len(sims) if sims else 0.0
-            if avg_sim >= threshold:
-                agg_tokens = tuple(
-                    sorted(all_tokens.items(), key=lambda x: x[1], reverse=True)[:5]
+            # Find highest similarity neighbour
+            candidates = [
+                (sim, other_id)
+                for other_id, (sim, _) in similarity_map[cid].items()
+                if other_id in clusters
+            ]
+            if candidates:
+                best_sim = max(c[0] for c in candidates)
+                best_neighbour[cid] = max(
+                    (oid for s, oid in candidates if s == best_sim)
                 )
-                heappush(
-                    queue, (-avg_sim, next(counter), merged_id, other_id, agg_tokens)
+        # Find mutual pairs
+        mutual_pairs: list[tuple[int, int]] = []
+        seen: set[int] = set()
+        for id1, id2 in best_neighbour.items():
+            if id1 in seen or id2 in seen:
+                continue
+            if best_neighbour.get(id2) == id1:
+                mutual_pairs.append((id1, id2))
+                seen.add(id1)
+                seen.add(id2)
+        # Merge mutual pairs
+        for id1, id2 in mutual_pairs:
+            c1, c2 = clusters[id1], clusters[id2]
+            sim, tokens = similarity_map[id1][id2]
+            # Create merged cluster
+            merged = Cluster(
+                entities=c1.entities | c2.entities,
+                left=c1,
+                right=c2,
+                similarity=sim,
+                merge_tokens=tokens,
+            )
+            merged_id = id(merged)
+            # Update clusters
+            del clusters[id1]
+            del clusters[id2]
+            clusters[merged_id] = merged
+            # Update similarity map
+            del similarity_map[id1]
+            del similarity_map[id2]
+            for other_id in list(similarity_map.keys()):
+                similarity_map[other_id].pop(id1, None)
+                similarity_map[other_id].pop(id2, None)
+            # Compute new similarities
+            for other_id, other in clusters.items():
+                if other_id == merged_id:
+                    continue
+                avg_sim, agg_tokens = _compute_cluster_similarity(
+                    merged, other, get_pair_similarity
                 )
+                if avg_sim >= threshold:
+                    similarity_map[merged_id][other_id] = (avg_sim, agg_tokens)
+                    similarity_map[other_id][merged_id] = (avg_sim, agg_tokens)
+            made_progress = True
     return list(clusters.values())
 
 
