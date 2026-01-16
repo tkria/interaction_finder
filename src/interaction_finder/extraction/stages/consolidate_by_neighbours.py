@@ -73,6 +73,8 @@ async def consolidate_by_neighbours(state: State, deps: Deps) -> bool:
     with logfire.span("consolidate_by_neighbours"):
         if deps.progress:
             deps.progress.set_status("Analyzing neighbour patterns")
+        # Count entities by kind before consolidation
+        counts_before = _count_entities_by_kind(state)
         # Build neighbour sets from pair assessments
         neighbour_sets = _build_neighbour_sets(state)
         if not neighbour_sets:
@@ -90,9 +92,17 @@ async def consolidate_by_neighbours(state: State, deps: Deps) -> bool:
             return True
         # Deduplicate clusters across anchors
         unique_candidates = _deduplicate_clusters(candidates)
+        # Count unique entities by kind across all clusters
+        entities_by_kind: dict[str, set[str]] = defaultdict(set)
+        for c in unique_candidates:
+            entities_by_kind[c.cluster_kind].update(c.cluster)
+        entity_counts = {k: len(v) for k, v in entities_by_kind.items()}
+        coverage = ", ".join(f"{n} {k}" for k, n in sorted(entity_counts.items()))
         deps.logger.info(
             f"Found {len(unique_candidates)} unique neighbour clusters "
-            f"(from {len(candidates)} total across {len(neighbour_sets)} anchors)"
+            f"(from {len(candidates)} across {len(neighbour_sets)} anchors; "
+            f"covering {coverage})",
+            extra={"entities_by_kind": entity_counts},
         )
         # Present clusters to LLM for review
         all_rules = await _review_neighbour_clusters(
@@ -104,11 +114,19 @@ async def consolidate_by_neighbours(state: State, deps: Deps) -> bool:
             _apply_merge_rules(resolved_rules, state)
             _update_pair_entity_references(resolved_rules, state)
             _rebuild_global_entity_index(state)
+            # Count merges by kind
+            merges_by_kind: dict[str, int] = defaultdict(int)
+            for (_norm, kind), _ in resolved_rules.items():
+                merges_by_kind[kind] += 1
             deps.logger.info(
-                f"Neighbour consolidation: {len(resolved_rules)} merge rules applied"
+                f"Neighbour consolidation: {len(resolved_rules)} merge rules applied",
+                extra={"merges_by_kind": dict(merges_by_kind)},
             )
         else:
             deps.logger.info("Neighbour consolidation: no merges needed")
+        # Log entity count changes
+        counts_after = _count_entities_by_kind(state)
+        _log_entity_count_changes(counts_before, counts_after, deps)
         # Save checkpoint
         await save_checkpoint(state, deps, "consolidate_by_neighbours")
         return True
@@ -201,6 +219,36 @@ def _build_entity_kind_lookup(state: State) -> dict[str, str]:
     return kinds
 
 
+def _count_entities_by_kind(state: State) -> dict[str, int]:
+    """Count unique entities by kind across all resources."""
+    entities_by_kind: dict[str, set[str]] = defaultdict(set)
+    for resource_entities in state.validated_entities_by_resource.values():
+        for name, ref in resource_entities.items():
+            entities_by_kind[ref.kind].add(name)
+    return {kind: len(names) for kind, names in entities_by_kind.items()}
+
+
+def _log_entity_count_changes(
+    before: dict[str, int],
+    after: dict[str, int],
+    deps: Deps,
+) -> None:
+    """Log changes in entity counts by kind."""
+    all_kinds = set(before.keys()) | set(after.keys())
+    changes = []
+    for kind in sorted(all_kinds):
+        b, a = before.get(kind, 0), after.get(kind, 0)
+        if b != a:
+            changes.append(f"{kind}: {b} → {a}")
+    if changes:
+        deps.logger.info(
+            f"Entity counts changed: {', '.join(changes)}",
+            extra={"before": before, "after": after},
+        )
+    else:
+        deps.logger.info("Entity counts unchanged")
+
+
 def _deduplicate_clusters(
     candidates: list[NeighbourClusterCandidate],
 ) -> list[NeighbourClusterCandidate]:
@@ -233,26 +281,28 @@ async def _review_neighbour_clusters(
         "neighbour_consolidation",
         ClusterDecisions,
         Deps,
-        """You are an expert at consolidating biomedical entity names.
+        """You are an expert at consolidating biomedical entity names for systematic literature analysis.
 
 You will be given groups of entities that all connect to the same anchor entity.
-For each group, decide if all members represent the same entity with different names.
+For each group, decide if all members should unify to a single canonical name, based on the research topic.
 
 **Decision framework:**
-1. Consider: these entities all relate to the same anchor in some way
-2. Ask: are these genuinely distinct entities, or different names for the same thing?
+1. Evaluate each group in the context of the research topic
+2. Ask: Are these the same entity, or subtypes that the research topic wouldn't distinguish between? If so, merge. If the distinction matters for this research, reject.
 3. Apply these principles:
    - Different phrasings of the same concept → merge
    - Variant spellings or abbreviations → merge
-   - Genuinely distinct biological entities → keep separate
+   - Subtypes of a concept the topic targets → merge to that concept
+   - Entities whose distinction matters for the research → reject
    - One member doesn't belong → exclude it
 
 **Actions:**
-- **merge**: All members represent the same entity → specify target (member number or canonical name)
+- **merge**: Members should unify → specify target (member number, member name, or a new parent concept)
+- **reject**: Distinction matters for this research → keep them all separate
 - **exclude**: One specific member doesn't belong → specify which one to remove
 - **split**: Cluster mixes unrelated entities → system splits at weakest link
 
-Only return groups that need action. Omit groups that should remain separate.""",
+You must return an explicit decision for every group.""",
     )
     agent = get_agent(deps.config)
     batch_size = deps.config.stage.extraction.merge_batch_size
@@ -278,7 +328,7 @@ Only return groups that need action. Omit groups that should remain separate."""
             f"{len(current_groups)} clusters{batch_suffix}"
         )
         groups_needing_review: list[ClusterKey] = []
-        stats = {"merged": 0, "split": 0, "excluded": 0, "kept_separate": 0}
+        stats = {"merged": 0, "rejected": 0, "split": 0, "excluded": 0, "undecided": 0}
         for batch_start in range(0, len(current_groups), batch_size):
             batch = current_groups[batch_start : batch_start + batch_size]
             # Build prompt
@@ -303,21 +353,16 @@ Only return groups that need action. Omit groups that should remain separate."""
                 )
             groups_text = "\n\n".join(
                 f"## Group {g['id']}\n"
-                f"**Context:** These entities all connect to **{g['anchor']}** ({g['anchor_kind']})\n"
-                f"**Cluster similarity:** {g['similarity']:.2f}\n\n"
+                f"**Context:** These entities all connect to **{g['anchor']}** ({g['anchor_kind']})\n\n"
                 f"Members:\n"
                 + "\n".join(f"  {i + 1}. {m}" for i, m in enumerate(g["members"]))
                 for g in group_data
             )
             prompt = f"""**Research topic:** {state.topic}
 
-**Neighbour clusters to consolidate:**
+**Neighbour clusters to evaluate:**
 
 {groups_text}
-
----
-
-Omit groups that should stay separate. Action defaults to "merge" if omitted.
 """
             try:
                 async with deps.agent_semaphore:
@@ -353,6 +398,7 @@ Omit groups that should stay separate. Action defaults to "merge" if omitted.
                 excludes = [d for d in decisions if d.action == "exclude"]
                 merges = [d for d in decisions if d.action == "merge"]
                 splits = [d for d in decisions if d.action == "split"]
+                rejects = [d for d in decisions if d.action == "reject"]
                 if merges and splits:
                     deps.logger.warning(f"Group {gid}: merge+split conflict")
                     continue
@@ -369,8 +415,10 @@ Omit groups that should stay separate. Action defaults to "merge" if omitted.
                 if len(remaining) <= 1:
                     continue
                 remaining_entities = frozenset(remaining)
-                # Apply merge or split
-                if merges:
+                # Apply merge, reject, or split
+                if rejects:
+                    stats["rejected"] += 1
+                elif merges:
                     merge = merges[0]
                     if not merge.target:
                         continue
@@ -382,7 +430,6 @@ Omit groups that should stay separate. Action defaults to "merge" if omitted.
                             f"Group {gid}: merge target '{target}' was excluded"
                         )
                         continue
-                    # Use the cluster's known kind (already determined during clustering)
                     # Build trigger with provenance info
                     trigger = f"neighbour({anchor}):cluster({gid},{similarity:.2f})"
                     for member in remaining:
@@ -417,6 +464,7 @@ Omit groups that should stay separate. Action defaults to "merge" if omitted.
                                 cluster_to_tree[sub_key] = st
                     stats["split"] += 1
                 elif excludes:
+                    # Excludes without merge/reject/split - re-review the remainder
                     remaining_key = (remaining_entities, cluster_kind)
                     groups_needing_review.append(remaining_key)
                     cluster_to_anchor[remaining_key] = (anchor, g["anchor_kind"])
@@ -425,12 +473,15 @@ Omit groups that should stay separate. Action defaults to "merge" if omitted.
                         st := tree.find_subtree(remaining_entities)
                     ):
                         cluster_to_tree[remaining_key] = st
-            # Groups without decisions are kept separate
-            kept_separate = set(batch) - groups_with_decisions
-            stats["kept_separate"] += len(kept_separate)
+            # Groups without decisions need re-review
+            undecided = set(batch) - groups_with_decisions
+            for cluster_key in undecided:
+                groups_needing_review.append(cluster_key)
+            stats["undecided"] += len(undecided)
         deps.logger.info(
-            f"  Results: {stats['merged']} merged, {stats['split']} split, "
-            f"{stats['excluded']} excluded, {stats['kept_separate']} separate"
+            f"  Results: {stats['merged']} merged, {stats['rejected']} rejected, "
+            f"{stats['split']} split, {stats['excluded']} excluded, "
+            f"{stats['undecided']} undecided"
         )
         if not groups_needing_review:
             break

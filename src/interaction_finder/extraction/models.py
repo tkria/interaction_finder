@@ -280,11 +280,12 @@ class ClusterDecision(BaseModel):
     """
 
     group_id: str = Field(description="Cluster ID from prompt")
-    action: Literal["merge", "split", "exclude"] = Field(
+    action: Literal["merge", "reject", "split", "exclude"] = Field(
         default="merge",
         description=(
             "Decision on this cluster (default: merge):\n"
             "- merge: All members represent the same entity → merge to target\n"
+            "- reject: Members are genuinely distinct → keep them all separate\n"
             "- split: Cluster mixes unrelated entities → split at weakest link\n"
             "- exclude: One specific member doesn't belong → remove it from cluster"
         ),
@@ -295,7 +296,7 @@ class ClusterDecision(BaseModel):
             "Meaning depends on action:\n"
             "- merge: target canonical name (member number, name, or new name)\n"
             "- exclude: member to remove (member number or name)\n"
-            "- split: not used (omit this field)"
+            "- reject/split: not used (omit this field)"
         ),
     )
     reasoning: str = Field(description="Explanation for the decision")
