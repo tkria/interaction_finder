@@ -1,7 +1,7 @@
 """Tests for relationship consolidation and polarity filtering.
 
 Tests cover:
-1. _collect_unique_relationships - deduplication across documents
+1. _collect_relationship_counts - counting across documents
 2. _apply_consolidations - relationship label updates
 3. _store_polarity_mappings - polarity storage
 4. _filter_irrelevant_assessments - filtering logic
@@ -23,7 +23,7 @@ from interaction_finder.extraction.models import (
 )
 from interaction_finder.extraction.stages.consolidate_relationships import (
     _apply_consolidations,
-    _collect_unique_relationships,
+    _collect_relationship_counts,
     _ensure_polarities_for_all_relationships,
     _filter_irrelevant_assessments,
     _store_polarity_mappings,
@@ -90,8 +90,8 @@ def make_assessment(
     )
 
 
-class TestCollectUniqueRelationships:
-    """Tests for _collect_unique_relationships function."""
+class TestCollectRelationshipCounts:
+    """Tests for _collect_relationship_counts function."""
 
     def test_collects_from_single_document(self):
         """Collects relationships from a single document."""
@@ -107,11 +107,13 @@ class TestCollectUniqueRelationships:
                 make_assessment(resource, "causes"),
             ]
         }
-        relationships = _collect_unique_relationships(state)
-        assert relationships == {"associated_with", "causes"}
+        counts = _collect_relationship_counts(state)
+        assert set(counts.keys()) == {"associated_with", "causes"}
+        assert counts["associated_with"] == 1
+        assert counts["causes"] == 1
 
-    def test_deduplicates_across_documents(self):
-        """Same relationship in multiple documents is counted once."""
+    def test_counts_across_documents(self):
+        """Same relationship in multiple documents is counted multiple times."""
         state = State(
             topic="test",
             target_entity_types=["gene", "disease"],
@@ -126,19 +128,21 @@ class TestCollectUniqueRelationships:
                 make_assessment(resource2, "linked_to"),
             ],
         }
-        relationships = _collect_unique_relationships(state)
-        assert relationships == {"associated_with", "linked_to"}
+        counts = _collect_relationship_counts(state)
+        assert set(counts.keys()) == {"associated_with", "linked_to"}
+        assert counts["associated_with"] == 2
+        assert counts["linked_to"] == 1
 
     def test_empty_assessments_returns_empty(self):
-        """Returns empty set when no assessments exist."""
+        """Returns empty dict when no assessments exist."""
         state = State(
             topic="test",
             target_entity_types=["gene", "disease"],
             permitted_pairs=build_permitted_pairs(["gene", "disease"]),
         )
         state.pair_assessments_by_resource = {}
-        relationships = _collect_unique_relationships(state)
-        assert relationships == set()
+        counts = _collect_relationship_counts(state)
+        assert counts == {}
 
 
 class TestApplyConsolidations:

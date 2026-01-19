@@ -136,6 +136,13 @@ async def consolidate_entities(state: State, deps: Deps) -> bool:
         # Capture initial entity state BEFORE any consolidation (once only)
         if not state.consolidated.entities.initial:
             state.consolidated.entities.initial = snapshot_entity_counts(state)
+        # Initialize progress counter
+        initial_count = sum(
+            len(e) for e in state.validated_entities_by_resource.values()
+        )
+        if deps.progress:
+            deps.progress["Entity merges"].total = initial_count
+            deps.progress["Entity merges"].activate()
         # Collect entities once
         entities_by_kind, mentions_by_kind = _collect_entity_variants(state)
         # Pre-initialize shared structures before concurrent execution to avoid races
@@ -168,6 +175,14 @@ async def consolidate_entities(state: State, deps: Deps) -> bool:
         )
         # Build global entity index (aggregate mentions across all resources)
         _build_global_entity_index(state)
+        # Complete progress counter
+        if deps.progress:
+            final_count = sum(
+                len(e) for e in state.validated_entities_by_resource.values()
+            )
+            deps.progress["Entity merges"].completed = final_count
+            deps.progress["Entity merges"].note = f"({initial_count} → {final_count})"
+            deps.progress["Entity merges"].complete()
         # Save checkpoint after entity consolidation
         await save_checkpoint(state, deps, "consolidate_entities")
         return True

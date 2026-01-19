@@ -110,6 +110,10 @@ async def consolidate_by_neighbours(state: State, deps: Deps) -> bool:
             f"covering {coverage})",
             extra={"entities_by_kind": entity_counts},
         )
+        # Initialize progress counter
+        if deps.progress:
+            deps.progress["Neighbour clusters"].total = len(unique_candidates)
+            deps.progress["Neighbour clusters"].activate()
         # Present clusters to LLM for review
         all_rules, new_names = await _review_neighbour_clusters(
             unique_candidates, all_entities, state, deps
@@ -136,6 +140,15 @@ async def consolidate_by_neighbours(state: State, deps: Deps) -> bool:
         # Log entity count changes
         counts_after = _count_entities_by_kind(state)
         _log_entity_count_changes(counts_before, counts_after, deps)
+        # Complete progress counter
+        if deps.progress:
+            # Build per-kind reduction note
+            parts = [
+                f"{counts_before[k]} → {counts_after.get(k, 0)} {k}"
+                for k in sorted(counts_before)
+            ]
+            deps.progress["Neighbour clusters"].note = f"({', '.join(parts)})"
+            deps.progress["Neighbour clusters"].complete()
         # Save checkpoint
         await save_checkpoint(state, deps, "consolidate_by_neighbours")
         return True
@@ -340,6 +353,10 @@ You must return an explicit decision for every group.""",
             f"Neighbour consolidation round {round_num}/{max_rounds}: "
             f"{len(current_groups)} clusters{batch_suffix}"
         )
+        if deps.progress:
+            deps.progress.set_status(
+                f"Neighbour clusters (round {round_num}, {len(current_groups)} clusters)"
+            )
         groups_needing_review: list[ClusterKey] = []
         stats = {"merged": 0, "rejected": 0, "split": 0, "excluded": 0, "undecided": 0}
         for batch_start in range(0, len(current_groups), batch_size):
@@ -494,6 +511,14 @@ You must return an explicit decision for every group.""",
             for cluster_key in undecided:
                 groups_needing_review.append(cluster_key)
             stats["undecided"] += len(undecided)
+            # Progress: count clusters resolved (merged or rejected)
+            if deps.progress:
+                resolved = sum(
+                    1
+                    for decisions in decisions_by_id.values()
+                    if any(d.action in ("merge", "reject") for d in decisions)
+                )
+                deps.progress["Neighbour clusters"].completed += resolved
         deps.logger.info(
             f"  Results: {stats['merged']} merged, {stats['rejected']} rejected, "
             f"{stats['split']} split, {stats['excluded']} excluded, "

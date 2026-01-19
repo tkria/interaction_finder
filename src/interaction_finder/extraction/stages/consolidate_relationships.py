@@ -14,7 +14,7 @@ This approach ensures:
 - Consistency (same canonical label and polarity across all documents)
 """
 
-from collections import defaultdict
+from collections import Counter, defaultdict
 
 from interaction_finder.agent_config import AGENT_CALL_ERRORS
 from interaction_finder.agent_utils import rename_agent
@@ -59,6 +59,10 @@ async def consolidate_relationships(state: State, deps: Deps) -> bool:
         if not relationship_counts:
             deps.logger.info("No relationships to consolidate")
             return True
+        # Initialize progress counter
+        if deps.progress:
+            deps.progress["Relationship labels"].total = len(relationship_counts)
+            deps.progress["Relationship labels"].activate()
         # Step 2: Get consolidation + polarity from LLM (unified)
         consolidations = await _consolidate_and_classify(
             relationship_counts, state, deps
@@ -87,6 +91,13 @@ async def consolidate_relationships(state: State, deps: Deps) -> bool:
             f"Relationship consolidation: {len(consolidations)} relationships processed, "
             f"{state.relationships_merged} assessments updated"
         )
+        # Complete progress counter with polarity breakdown
+        if deps.progress:
+            deps.progress["Relationship labels"].completed = len(consolidations)
+            polarity_counts = Counter(c.polarity for c in consolidations)
+            breakdown = ", ".join(f"{n} {p}" for p, n in polarity_counts.most_common())
+            deps.progress["Relationship labels"].note = f"({breakdown})"
+            deps.progress["Relationship labels"].complete()
         # Step 5: Filter irrelevant relationship types (if enabled)
         if deps.config.stage.extraction.filter_irrelevant_relationships:
             _filter_irrelevant_assessments(state, deps)
