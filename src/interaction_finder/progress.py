@@ -244,24 +244,26 @@ class LiveStatusTable(StatusTable):
 
     def _render(self) -> RenderableType:
         """Render status header and counter table."""
-        # Group counters by category, preserving order
-        categories: dict[str, list[Counter]] = {}
-        for counter in self.counters:
-            categories.setdefault(counter.category, []).append(counter)
-        # Build rows: (label, value, annotation)
+        # Precompute which categories have any active counter
+        active_categories = {
+            c.category for c in self.counters if c.status != "unstarted" and c.category
+        }
+        # Build rows, inserting category headers on transition
         rows: list[tuple[str, str, str]] = []
-        for category, cat_counters in categories.items():
-            # Category activation: any counter not unstarted
-            cat_active = any(c.status != "unstarted" for c in cat_counters)
-            label_style = "bold cyan" if cat_active else "cyan"
-            # Category header (if named)
-            if category:
-                rows.append((f"[{label_style}]{category}[/]", "", ""))
-            # Counter rows
-            for counter in cat_counters:
-                indent = "  " if category else ""
-                label = f"[{label_style}]{indent}{counter.name}[/]"
-                rows.append((label, counter.rich(), counter.note))
+        prev_cat: str | None = None
+        for c in self.counters:
+            # Categorised counters: bold if any counter in category is active
+            # Uncategorised counters: bold based on own status
+            if c.category:
+                active = c.category in active_categories
+            else:
+                active = c.status != "unstarted"
+            style = "bold cyan" if active else "cyan"
+            if c.category and c.category != prev_cat:
+                rows.append((f"[{style}]{c.category}[/]", "", ""))
+            prev_cat = c.category
+            indent = "  " if c.category else ""
+            rows.append((f"[{style}]{indent}{c.name}[/]", c.rich(), c.note))
         # Build two-column table for width measurement (excludes annotations)
         width_table = Table.grid(padding=(0, 2))
         width_table.add_column()
