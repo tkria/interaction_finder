@@ -908,6 +908,8 @@ def get_relationship_polarity(relationship: str, polarity_map: dict[str, str]) -
     Raises:
         KeyError: If relationship not in mapping (indicates consolidation bug)
     """
+    if not relationship:
+        return "irrelevant"  # Defensive: treat empty relationship as irrelevant
     return polarity_map[relationship]
 
 

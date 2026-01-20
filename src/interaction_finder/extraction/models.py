@@ -664,7 +664,8 @@ class PairEvidenceJudgment(BaseModel):
         description="Explanation of evidence assessment and relationship choice",
     )
     relationship: str = Field(
-        description="Selected relationship type (from candidates or new)"
+        min_length=1,
+        description="Selected relationship type (from candidates or new)",
     )
     evidence: EvidenceQuality = Field(
         description="Structured assessment of evidence quality"

@@ -471,7 +471,8 @@ class ConfirmedPair(BaseModel):
     entity1_name: str = Field(description="Canonical name of first entity")
     entity2_name: str = Field(description="Canonical name of second entity")
     relationship: str = Field(
-        description="Relationship type (e.g., 'activates', 'inhibits', 'associated_with')"
+        min_length=1,
+        description="Relationship type (e.g., 'activates', 'inhibits', 'associated_with')",
     )
     reasoning: str = Field(
         description="Brief explanation of why this relationship exists"
