@@ -903,10 +903,13 @@ def find_consolidation_candidates(
         )
 
     # Phase 3: Auto-merge fuzzy spelling variants (tumor/tumour)
+    # Exclude entities that were sources in earlier phases (they're already handled)
+    # Use original names, not normalized - targets can still become sources
+    existing_sources = {child for child, _, _ in auto_merge}
+    phase3_candidates = [e for e in entities if e not in existing_sources]
     if PENALTY_FUZZY <= AUTO_MERGE_THRESHOLD:
-        canonical_list = list(entities.keys())
-        for i, canon1 in enumerate(canonical_list):
-            for canon2 in canonical_list[i + 1 :]:
+        for i, canon1 in enumerate(phase3_candidates):
+            for canon2 in phase3_candidates[i + 1 :]:
                 # Use core matching logic with distance info for diagnostics
                 matched, dist = entity_names_match(canon1, canon2)
                 if matched:
