@@ -201,7 +201,7 @@ class IfetcherConfig(StrictModel):
                     description="Perplexica API base URL",
                 )
                 sources: list[str] = Field(
-                    ["web"],
+                    ["web", "academic"],
                     description="Search sources: 'web', 'discussions', 'academic'",
                 )
                 optimization_mode: str = Field(
@@ -476,7 +476,7 @@ class IfetcherConfig(StrictModel):
                 description="Use semantic reranking to select top-k results (0 = skip reranking, send all to LLM)",
             )
             batch_size: int = Field(
-                0,
+                50,
                 ge=0,
                 description="Results per LLM selection call (0 = all at once; use batching for large result sets)",
             )
@@ -552,9 +552,8 @@ class IfetcherConfig(StrictModel):
                 description="Filter entities that don't match target kinds (-e gene, -e disease)",
             )
             agent_concurrency_limit: int = Field(
-                10,
+                20,
                 ge=1,
-                le=100,
                 description="Parallel LLM calls (higher = faster but may hit rate limits)",
             )
             sweep_co_mentions: bool = Field(
@@ -562,7 +561,7 @@ class IfetcherConfig(StrictModel):
                 description="Second pass to find entity pairs missed in initial extraction",
             )
             neighbour_cluster_similarity_threshold: float = Field(
-                0.50,
+                0.30,
                 ge=0.0,
                 le=1.0,
                 description="Minimum token similarity to cluster neighbours for consolidation review",
