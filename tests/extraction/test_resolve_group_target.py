@@ -69,9 +69,9 @@ class TestResolveGroupTarget:
         assert result == "TP53"
 
     def test_digit_out_of_range(self, sample_members, sample_entities, logger):
-        """Out of range digit returns as new canonical name."""
+        """Out of range digit returns None (invalid target)."""
         result = _resolve_group_target("99", sample_members, sample_entities, logger)
-        assert result == "99"
+        assert result is None
 
     def test_number_dot_name_format(self, sample_members, sample_entities, logger):
         """'2. BRCA2' format resolves using number."""
@@ -128,9 +128,9 @@ class TestResolveGroupTarget:
         assert result == "BRCA1"  # Uses member number
 
     def test_empty_members_list(self, sample_entities, logger):
-        """Empty members list returns target as new canonical."""
+        """Empty members list with digit returns None (out of bounds)."""
         result = _resolve_group_target("1", [], sample_entities, logger)
-        assert result == "1"
+        assert result is None
 
     def test_case_sensitive_exact_match(self, sample_members, sample_entities, logger):
         """Exact match is case-sensitive."""

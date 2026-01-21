@@ -439,7 +439,7 @@ You must return an explicit decision for every group.""",
                         member = _resolve_group_target(
                             exc.target, members, all_entities, deps.logger
                         )
-                        if member in remaining:
+                        if member is not None and member in remaining:
                             remaining.discard(member)
                             stats["excluded"] += 1
                 if len(remaining) <= 1:
@@ -455,6 +455,10 @@ You must return an explicit decision for every group.""",
                     target = _resolve_group_target(
                         merge.target, members, all_entities, deps.logger
                     )
+                    if target is None:
+                        # Invalid target - retry this cluster in next round
+                        groups_needing_review.append(g["cluster_key"])
+                        continue
                     if target in members and target not in remaining:
                         deps.logger.warning(
                             f"Group {gid}: merge target '{target}' was excluded"
@@ -535,14 +539,22 @@ def _resolve_group_target(
     members: list[str],
     entities: dict[str, list[SpeculatedVariant]],
     logger: logging.Logger,
-) -> str:
-    """Resolve target from group decision."""
+) -> str | None:
+    """Resolve target from group decision.
+    Returns None if target cannot be resolved (caller should skip this merge).
+    """
     members_set = set(members)
-    # Case 1: Pure digit
+    # Case 1: Pure digit - must be a valid member index
     if target_spec.isdigit():
         idx = int(target_spec) - 1
         if 0 <= idx < len(members):
             return members[idx]
+        # Out of bounds - reject rather than treat as literal entity name
+        logger.warning(
+            f"Merge target '{target_spec}' is out of bounds "
+            f"(only {len(members)} members in cluster)"
+        )
+        return None
     # Case 2: Number + name format
     match = re.match(r"^\s*(\d+)[).]?\s+(\w.+?)?\s*$", target_spec)
     if match:
