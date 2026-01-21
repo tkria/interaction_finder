@@ -105,8 +105,16 @@ _ROMAN_PATTERN = re.compile(
 
 
 def _roman_to_arabic(match: re.Match) -> str:
-    """Convert Roman numeral match to Arabic string."""
-    s = match.group().upper()  # Normalize to uppercase for lookup
+    """Convert Roman numeral match to Arabic string if value is plausible.
+
+    Only converts if the value is:
+    - Small (1-39): covers typical uses like "Type II", "Collagen IV", "Phase III"
+      (there are ~28 collagen types, factor subtypes go up to ~30)
+    - A year (1900-2100): rare but possible in references
+
+    This avoids false positives like "CD" (400) in "CD45" being converted.
+    """
+    s = match.group().upper()
     if not s:
         return s
     total, prev = 0, 0
@@ -114,7 +122,10 @@ def _roman_to_arabic(match: re.Match) -> str:
         curr = _ROMAN_VALUES[c]
         total += curr if curr >= prev else -curr
         prev = curr
-    return str(total)
+    # Only convert plausible Roman numeral values
+    if total <= 39 or 1900 <= total <= 2100:
+        return str(total)
+    return match.group()  # Return original if not plausible
 
 
 def normalize_for_comparison(text: str) -> str:

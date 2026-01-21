@@ -321,14 +321,21 @@ class NormalizedTextMapper(TextPositionMapper):
         last_was_space = True
         last_delta: Optional[int] = None
 
-        # Helper to check if character should be skipped (contractions, decimals)
+        # Helper to check if character should be skipped (contractions, decimals, hyphens before digits)
         def _should_skip_char(char: str, pos: int) -> bool:
             if pos == 0 or pos >= text_len - 1:
                 return False
             prev_char, next_char = unicode_text[pos - 1], unicode_text[pos + 1]
-            return (char == "'" and prev_char.isalnum() and next_char.isalnum()) or (
-                char == "." and prev_char.isdigit() and next_char.isdigit()
-            )
+            # Skip apostrophes in contractions: don't -> dont
+            if char == "'" and prev_char.isalnum() and next_char.isalnum():
+                return True
+            # Skip decimal points: 3.14 -> 3.14
+            if char == "." and prev_char.isdigit() and next_char.isdigit():
+                return True
+            # Skip hyphens between non-digit and digit: LAIR-1 -> lair1, IL-6 -> il6
+            if char == "-" and not prev_char.isdigit() and next_char.isdigit():
+                return True
+            return False
 
         # Helper to check for spelled-out Greek letter name at position
         def _try_greek_word(pos: int) -> Optional[Tuple[str, int]]:
