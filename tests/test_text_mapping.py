@@ -283,22 +283,27 @@ class TestTextPositionMapper:
 
 
 class TestNormalizedTextMapper:
-    """Tests for NormalizedTextMapper with automatic normalization."""
+    """Tests for NormalizedTextMapper with automatic normalization.
+
+    Greek letters and spelled-out Greek names are collapsed to single ASCII letters:
+    - α, alpha → a
+    - β, beta → b
+    - etc.
+    """
 
     def test_from_text_basic(self):
         """Test creating NormalizedTextMapper from text."""
         text = "TGF-α receptor"
         mapper = NormalizedTextMapper.from_text(text)
-
-        assert mapper.source == "tgf alpha receptor"
+        # Greek α becomes 'a', space before Greek removed
+        assert mapper.source == "tgfa receptor"
         assert mapper.target == text
 
     def test_find_with_auto_normalization(self):
         """Test that find() automatically normalizes search terms."""
         text = "TGF-α receptor regulates growth"
         mapper = NormalizedTextMapper.from_text(text)
-
-        # Search for "TGF-alpha" should find "TGF-α"
+        # Search for "TGF-alpha" should find "TGF-α" (both normalize to "tgfa")
         result = mapper.find("TGF-alpha")
         assert result == (0, 5)
         assert text[0:5] == "TGF-α"
@@ -307,28 +312,26 @@ class TestNormalizedTextMapper:
         """Test searching with Greek letter finds Latin spelling."""
         text = "TGF-alpha receptor"
         mapper = NormalizedTextMapper.from_text(text)
-
-        # Search for "TGF-α" should find "TGF-alpha"
+        # Search for "TGF-α" should find "TGF-alpha" (both normalize to "tgfa")
         result = mapper.find("TGF-α")
         assert result == (0, 9)
         assert text[0:9] == "TGF-alpha"
 
     def test_findall_with_auto_normalization(self):
         """Test that findall() automatically normalizes search terms."""
-        text = "TGF-α and TGF-β receptors"
+        # Use text without 'a' or 'b' in other words to avoid false matches
+        text = "TGF-α plus TGF-β receptors"
         mapper = NormalizedTextMapper.from_text(text)
-
-        # Find all "alpha"
+        # "alpha" normalizes to "a", finds "α" (space before Greek removed)
         results = mapper.findall("alpha")
         assert len(results) == 1
-        assert results[0] == (4, 5)
-        assert text[4:5] == "α"
-
-        # Find all "beta"
+        assert results[0] == (3, 5)  # Position adjusted due to space removal
+        assert text[3:5] == "-α"
+        # "beta" normalizes to "b", finds "β"
         results = mapper.findall("beta")
         assert len(results) == 1
-        assert results[0] == (14, 15)
-        assert text[14:15] == "β"
+        assert results[0] == (14, 16)  # Position adjusted
+        assert text[14:16] == "-β"
 
     def test_findall_bidirectional_greek(self):
         """Test bidirectional Greek letter matching."""
@@ -336,7 +339,6 @@ class TestNormalizedTextMapper:
         text1 = "α receptor"
         mapper1 = NormalizedTextMapper.from_text(text1)
         assert mapper1.findall("alpha") == [(0, 1)]
-
         # Original has Latin, search for Greek
         text2 = "alpha receptor"
         mapper2 = NormalizedTextMapper.from_text(text2)
@@ -346,7 +348,6 @@ class TestNormalizedTextMapper:
         """Test that matching is case-insensitive."""
         text = "BRCA1 Gene"
         mapper = NormalizedTextMapper.from_text(text)
-
         # All case variations should work
         assert mapper.find("brca1") == (0, 5)
         assert mapper.find("BRCA1") == (0, 5)
@@ -356,21 +357,18 @@ class TestNormalizedTextMapper:
         """Test that punctuation is normalized."""
         text = "TGF-α receptor"
         mapper = NormalizedTextMapper.from_text(text)
-
-        # Hyphen should be normalized away, and Greek letter expansion adds spaces
-        assert mapper.find("TGF alpha") == (0, 5)
-        # Note: "TGFalpha" won't match because Greek letter expansion adds spaces
-        # So normalized text is "tgf alpha receptor" not "tgfalpharecept or"
+        # Hyphen becomes space but removed before Greek, α becomes a → "tgfa receptor"
+        assert mapper.find("TGFa") == (0, 5)
+        assert mapper.find("TGF-alpha") == (0, 5)  # Both normalize to "tgfa"
 
     def test_regex_not_normalized(self):
         """Test that regex patterns are NOT normalized."""
         text = "TGF-α receptor"
         mapper = NormalizedTextMapper.from_text(text)
-
         import re
 
-        # Regex must match the normalized space
-        pattern = re.compile(r"tgf alpha")
+        # Regex must match the normalized form exactly: "tgfa receptor"
+        pattern = re.compile(r"tgfa")
         result = mapper.find(pattern)
         assert result == (0, 5)
 
@@ -378,19 +376,20 @@ class TestNormalizedTextMapper:
         """Test text with multiple different Greek letters."""
         text = "α, β, γ, δ proteins"
         mapper = NormalizedTextMapper.from_text(text)
-
-        assert mapper.find("alpha") == (0, 1)
-        assert mapper.find("beta") == (3, 4)
-        assert mapper.find("gamma") == (6, 7)
-        assert mapper.find("delta") == (9, 10)
+        # Each Greek letter normalizes to its single ASCII equivalent
+        # Spaces before Greek letters are removed, so "abgd proteins"
+        assert mapper.find("alpha") == (0, 1)  # "alpha" → "a" finds "α"
+        assert mapper.find("beta") == (1, 4)  # "beta" → "b" finds ", β"
+        assert mapper.find("gamma") == (4, 7)  # "gamma" → "g" finds ", γ"
+        assert mapper.find("delta") == (7, 10)  # "delta" → "d" finds ", δ"
 
     def test_preserves_position_accuracy(self):
         """Test that position mapping is accurate with normalization."""
         text = "The TGFα protein"
         mapper = NormalizedTextMapper.from_text(text)
-
-        # Find "TGF-alpha"
-        result = mapper.find("TGF-alpha")
+        # "TGFα" normalizes to "tgfa" (no space - α directly attached)
+        # Search for same pattern should find it
+        result = mapper.find("TGFα")
         assert result == (4, 8)
         assert text[4:8] == "TGFα"
 

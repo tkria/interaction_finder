@@ -20,12 +20,12 @@ class TextPositionMapper:
 
     Example:
         >>> original = "Hello α-world"
-        >>> normalized = "hello alpha world"
-        >>> offsets = [(0, 0), (6, 0), (11, -4)]  # delta changes at positions 6 and 11
+        >>> normalized = "hello a world"
+        >>> offsets = [(0, 0), (6, 0), (8, 0)]  # delta changes at positions
         >>> mapper = TextPositionMapper(normalized, original, offsets)
-        >>> mapper.targetpos(6)  # 'a' in "alpha" maps to position 6 in original
+        >>> mapper.targetpos(6)  # 'a' (from α) maps to position 6 in original
         6
-        >>> mapper.find("alpha")  # Search in normalized, get original coords
+        >>> mapper.find("a")  # Search in normalized, get original coords
         (6, 7)
     """
 
@@ -170,33 +170,60 @@ class TextPositionMapper:
         return matches
 
 
-# Greek letter mapping for normalization
+# Greek letter mapping for normalization (to single ASCII letter)
 GREEK_LETTER_MAP = {
-    "α": "alpha",
-    "β": "beta",
-    "γ": "gamma",
-    "δ": "delta",
-    "ε": "epsilon",
-    "ζ": "zeta",
-    "η": "eta",
-    "θ": "theta",
-    "ι": "iota",
-    "κ": "kappa",
-    "λ": "lambda",
-    "μ": "mu",
-    "ν": "nu",
-    "ξ": "xi",
-    "ο": "omicron",
-    "π": "pi",
-    "ρ": "rho",
-    "ς": "sigma",
-    "σ": "sigma",
-    "τ": "tau",
-    "υ": "upsilon",
-    "φ": "phi",
-    "χ": "chi",
-    "ψ": "psi",
-    "ω": "omega",
+    "α": "a",
+    "β": "b",
+    "γ": "g",
+    "δ": "d",
+    "ε": "e",
+    "ζ": "z",
+    "η": "h",
+    "θ": "q",  # No direct equivalent, use q
+    "ι": "i",
+    "κ": "k",
+    "λ": "l",
+    "μ": "m",
+    "ν": "n",
+    "ξ": "x",
+    "ο": "o",
+    "π": "p",
+    "ρ": "r",
+    "ς": "s",
+    "σ": "s",
+    "τ": "t",
+    "υ": "u",
+    "φ": "f",
+    "χ": "c",
+    "ψ": "y",  # No direct equivalent, use y
+    "ω": "w",
+}
+# Spelled-out Greek letter names to single ASCII letter (for word replacement)
+GREEK_NAME_MAP = {
+    "alpha": "a",
+    "beta": "b",
+    "gamma": "g",
+    "delta": "d",
+    "epsilon": "e",
+    "zeta": "z",
+    "eta": "h",
+    "theta": "q",
+    "iota": "i",
+    "kappa": "k",
+    "lambda": "l",
+    "mu": "m",
+    "nu": "n",
+    "xi": "x",
+    "omicron": "o",
+    "pi": "p",
+    "rho": "r",
+    "sigma": "s",
+    "tau": "t",
+    "upsilon": "u",
+    "phi": "f",
+    "chi": "c",
+    "psi": "y",
+    "omega": "w",
 }
 
 
@@ -215,8 +242,9 @@ class NormalizedTextMapper(TextPositionMapper):
     def normalize(text: str) -> str:
         """Normalize text for case-insensitive matching with Greek letter support.
 
-        Converts to lowercase, expands Greek letters to ASCII names, removes
-        punctuation (except contractions/decimals), and normalizes whitespace.
+        Converts to lowercase, collapses Greek letters and spelled-out Greek names
+        to single ASCII letters (α/alpha → a, β/beta → b), removes punctuation
+        (except contractions/decimals), and normalizes whitespace.
 
         This is a lightweight method for when you only need normalized text
         without position mapping. For position tracking, use from_text() instead.
@@ -229,7 +257,9 @@ class NormalizedTextMapper(TextPositionMapper):
 
         Example:
             >>> NormalizedTextMapper.normalize("TGF-α receptor")
-            'tgf alpha receptor'
+            'tgfa receptor'
+            >>> NormalizedTextMapper.normalize("TGF-alpha receptor")
+            'tgfa receptor'
         """
         normalized_text, _ = NormalizedTextMapper._build_normalized_offsets(text)
         return normalized_text
@@ -250,7 +280,7 @@ class NormalizedTextMapper(TextPositionMapper):
 
         Example:
             >>> mapper = NormalizedTextMapper.from_text("TGF-α receptor")
-            >>> mapper.find("alpha")  # Automatically finds "α"
+            >>> mapper.find("a")  # Finds "α" (normalized to "a")
             (4, 5)
         """
         if offsets is None:
@@ -266,6 +296,13 @@ class NormalizedTextMapper(TextPositionMapper):
     ) -> Tuple[str, List[Tuple[int, int]]]:
         """Build normalized text and delta-based position offsets.
 
+        Normalizes text by:
+        - Lowercasing
+        - Converting Greek letters (α, β, etc.) to single ASCII letters (a, b, etc.)
+        - Converting spelled-out Greek names (alpha, beta) to single letters
+        - Removing punctuation (except contractions/decimals)
+        - Normalizing whitespace
+
         Args:
             original_text: Original document text
 
@@ -278,15 +315,14 @@ class NormalizedTextMapper(TextPositionMapper):
         unicode_text = "".join(
             c for c in unicode_text if unicodedata.category(c) != "Mn"
         )
-
         normalized = []
         position_offsets = []
         text_len = len(unicode_text)
         last_was_space = True
         last_delta: Optional[int] = None
 
+        # Helper to check if character should be skipped (contractions, decimals)
         def _should_skip_char(char: str, pos: int) -> bool:
-            """Check if character should be skipped (contractions, decimals)."""
             if pos == 0 or pos >= text_len - 1:
                 return False
             prev_char, next_char = unicode_text[pos - 1], unicode_text[pos + 1]
@@ -294,17 +330,65 @@ class NormalizedTextMapper(TextPositionMapper):
                 char == "." and prev_char.isdigit() and next_char.isdigit()
             )
 
+        # Helper to check for spelled-out Greek letter name at position
+        def _try_greek_word(pos: int) -> Optional[Tuple[str, int]]:
+            """Check if a Greek letter name starts at pos. Returns (letter, length) or None.
+
+            Matches Greek names when at a word boundary:
+            - Word start + word end: "alpha" → "a", "TGF-alpha" → "tgf a"
+            - Word start + digit after: "alpha1" → "a1", "alpha2beta1" → "a2b1"
+            - Word end only: "TGFalpha" → "tgfa", "TNFalpha" → "tnfa"
+
+            Does NOT match in the middle of words: "alphabet" stays "alphabet"
+            (alpha at start but followed by letters "bet")
+            """
+            text_lower = unicode_text[pos : pos + 10].lower()
+            for name, letter in GREEK_NAME_MAP.items():
+                if text_lower.startswith(name):
+                    end_pos = pos + len(name)
+                    at_start = pos == 0 or not unicode_text[pos - 1].isalpha()
+                    at_end = end_pos >= text_len or not unicode_text[end_pos].isalpha()
+                    # Match if:
+                    # 1. At word start AND (at word end OR followed by digit)
+                    # 2. OR just at word end (e.g., "TGFalpha")
+                    if at_start and at_end:
+                        return (letter, len(name))
+                    if at_end and not at_start:
+                        # At end only (e.g., "TGFalpha") - still match
+                        return (letter, len(name))
+            return None
+
+        # Helper to remove trailing space and fix offsets
+        def _remove_trailing_space() -> None:
+            nonlocal last_delta
+            if normalized and normalized[-1] == " ":
+                space_pos = len(normalized) - 1
+                normalized.pop()
+                # Remove offset entry if it was for the space position
+                if position_offsets and position_offsets[-1][0] == space_pos:
+                    position_offsets.pop()
+                    # Reset last_delta so next iteration records fresh
+                    last_delta = position_offsets[-1][1] if position_offsets else None
+
         i = 0
         while i < text_len:
             char = unicode_text[i]
             # Calculate delta: target (original) - source (normalized)
             current_delta = i - len(normalized)
-
             # Record delta change (sparse representation)
             if last_delta is None or current_delta != last_delta:
                 position_offsets.append((len(normalized), current_delta))
                 last_delta = current_delta
-
+            # Check for spelled-out Greek letter name (alpha, beta, etc.)
+            if char.isalpha():
+                greek_match = _try_greek_word(i)
+                if greek_match:
+                    letter, length = greek_match
+                    _remove_trailing_space()
+                    normalized.append(letter)
+                    last_was_space = False
+                    i += length
+                    continue
             # Fast path for ASCII alphanumeric
             if "a" <= char <= "z" or "0" <= char <= "9":
                 normalized.append(char)
@@ -312,18 +396,12 @@ class NormalizedTextMapper(TextPositionMapper):
             elif "A" <= char <= "Z":
                 normalized.append(char.lower())
                 last_was_space = False
-            # Greek letters
+            # Greek letters (symbols)
             elif 0x0370 <= ord(char) <= 0x03FF:
                 char_lower = char.lower()
                 if char_lower in GREEK_LETTER_MAP:
-                    # Add space before if needed
-                    if normalized and normalized[-1].isalnum():
-                        normalized.append(" ")
-                    # Add Greek name
-                    normalized.extend(GREEK_LETTER_MAP[char_lower])
-                    # Add space after if needed
-                    if i + 1 < text_len and unicode_text[i + 1].isalnum():
-                        normalized.append(" ")
+                    _remove_trailing_space()
+                    normalized.append(GREEK_LETTER_MAP[char_lower])
                     last_was_space = False
                 else:
                     if char.isalnum():
@@ -343,9 +421,7 @@ class NormalizedTextMapper(TextPositionMapper):
             elif not last_was_space:
                 normalized.append(" ")
                 last_was_space = True
-
             i += 1
-
         normalized_text = "".join(normalized).strip()
         return normalized_text, position_offsets
 
@@ -363,7 +439,7 @@ class NormalizedTextMapper(TextPositionMapper):
 
         Example:
             >>> mapper = NormalizedTextMapper.from_text("TGF-α receptor")
-            >>> mapper.find("TGF-alpha")  # Finds "TGF-α" automatically
+            >>> mapper.find("TGF-alpha")  # Finds "TGF-α" (both normalize to "tgfa")
             (0, 5)
         """
         if isinstance(pattern, str):
@@ -386,9 +462,9 @@ class NormalizedTextMapper(TextPositionMapper):
 
         Example:
             >>> mapper = NormalizedTextMapper.from_text("α and β receptors")
-            >>> mapper.findall("alpha")
+            >>> mapper.findall("alpha")  # "alpha" normalizes to "a", finds "α"
             [(0, 1)]
-            >>> mapper.findall("beta")
+            >>> mapper.findall("beta")  # "beta" normalizes to "b", finds "β"
             [(6, 7)]
         """
         if isinstance(pattern, str):
