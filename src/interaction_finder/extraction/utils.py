@@ -178,7 +178,8 @@ def entity_names_match(a: str, b: str) -> tuple[bool, int]:
     # Check if within fuzzy threshold
     if dist <= max_dist and similarity >= 0.7:
         # Additional safety: reject number-only differences
-        if _only_number_difference(a, b):
+        # Use normalized forms so Greek letters (α→alpha) are handled correctly
+        if _only_number_difference(norm_a, norm_b):
             return (False, dist)
         return (True, dist)
 
@@ -438,20 +439,26 @@ def find_best_entity_match(
 
 
 _NUMBER_RE = re.compile(r"\d+")
+_WHITESPACE_RE = re.compile(r"\s+")
 
 
 def _only_number_difference(a: str, b: str) -> bool:
-    """Check if strings differ only in numeric portions.
+    """Check if strings differ only in numeric portions (ignoring whitespace).
 
     Used to reject fuzzy matches between entities like SMAD1/SMAD2, IL-6/IL-8,
     microRNA-137/microRNA-138 which are distinct entities differing only by number.
+    Whitespace is normalized before comparison to handle cases like
+    "integrin alpha 5" vs "integrin alpha2".
     """
     a_lower, b_lower = a.lower(), b.lower()
     if a_lower == b_lower:
         return False
-    a_masked = _NUMBER_RE.sub("#", a_lower)
-    b_masked = _NUMBER_RE.sub("#", b_lower)
-    return a_masked == b_masked and a_masked != a_lower
+    # Normalize whitespace before masking numbers
+    a_normalized = _WHITESPACE_RE.sub("", a_lower)
+    b_normalized = _WHITESPACE_RE.sub("", b_lower)
+    a_masked = _NUMBER_RE.sub("#", a_normalized)
+    b_masked = _NUMBER_RE.sub("#", b_normalized)
+    return a_masked == b_masked and a_masked != a_normalized
 
 
 def _is_valid_entity_form(form: str) -> bool:
