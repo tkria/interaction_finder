@@ -99,13 +99,14 @@ def strip_kind_annotation(entity_name: str) -> str:
 
 _ROMAN_VALUES = {"I": 1, "V": 5, "X": 10, "L": 50, "C": 100, "D": 500, "M": 1000}
 _ROMAN_PATTERN = re.compile(
-    r"\b(M{0,3}(CM|CD|D?C{0,3})(XC|XL|L?X{0,3})(IX|IV|V?I{0,3}))\b"
+    r"\b(M{0,3}(CM|CD|D?C{0,3})(XC|XL|L?X{0,3})(IX|IV|V?I{0,3}))\b",
+    re.IGNORECASE,
 )
 
 
 def _roman_to_arabic(match: re.Match) -> str:
     """Convert Roman numeral match to Arabic string."""
-    s = match.group()
+    s = match.group().upper()  # Normalize to uppercase for lookup
     if not s:
         return s
     total, prev = 0, 0
@@ -119,9 +120,9 @@ def _roman_to_arabic(match: re.Match) -> str:
 def normalize_for_comparison(text: str) -> str:
     """Normalize text for entity name comparison.
 
-    Converts uppercase Roman numerals to Arabic, then applies base normalization
-    (lowercase, Greek letters, punctuation) for consistent matching of variants
-    like "Type II" and "Type 2".
+    Converts Roman numerals (case-insensitive) to Arabic, then applies base
+    normalization (lowercase, Greek letters, punctuation) for consistent
+    matching of variants like "Type II", "type ii", and "Type 2".
     """
     text = _ROMAN_PATTERN.sub(_roman_to_arabic, text)
     return NormalizedTextMapper.normalize(text)

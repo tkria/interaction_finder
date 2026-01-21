@@ -196,12 +196,14 @@ class TestNormalizeForComparison:
             "MHC Class 2"
         )
 
-    def test_roman_numeral_case_sensitive(self):
-        """Test only uppercase Roman numerals are converted."""
+    def test_roman_numeral_case_insensitive(self):
+        """Test Roman numerals are converted regardless of case."""
         # Uppercase Roman numerals should convert
         assert normalize_for_comparison("Type II") == "type 2"
-        # Lowercase "ii" in original text stays as-is (rare in entity names)
-        assert normalize_for_comparison("type ii") == "type ii"
+        # Lowercase Roman numerals should also convert (e.g., "collagen iv")
+        assert normalize_for_comparison("type ii") == "type 2"
+        assert normalize_for_comparison("collagen iv") == "collagen 4"
+        assert normalize_for_comparison("collagen iii") == "collagen 3"
 
     def test_roman_numeral_preserves_non_roman(self):
         """Test non-Roman numeral uppercase letters are not converted."""
