@@ -322,8 +322,13 @@ For each group, decide if all members should unify to a single canonical name, b
    - One member doesn't belong → exclude it
 
 **Actions:**
-- **merge**: Members should unify → specify target (member number, member name, or a new parent concept)
-- **reject**: Distinction matters for this research → keep them all separate
+- **merge**: Members should unify → specify target (member number, member name, or a new parent concept).
+  When choosing a merge target, select the most specific term that accurately encompasses all
+  members. If a generic term and its subtypes are both present, the generic term should be the
+  target. If all members are peers (e.g., different named syndromes, different gene loci),
+  propose a new encompassing term rather than picking one peer arbitrarily.
+- **reject**: Members are distinct entities that coincidentally share words or an interaction
+  partner → keep them all separate
 - **exclude**: One specific member doesn't belong → specify which one to remove
 - **split**: Cluster mixes unrelated entities → system splits at weakest link
 
