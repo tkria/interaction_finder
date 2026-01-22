@@ -686,10 +686,28 @@ def is_obvious_variant(a: str, b: str) -> bool:
         (spell_a, spell_b) if len(spell_a) <= len(spell_b) else (spell_b, spell_a)
     )
 
-    # Plural patterns
+    # Plural patterns: regular
     if longer == shorter + "s" or longer == shorter + "es":
         return True
     if shorter.endswith("y") and longer == shorter[:-1] + "ies":
+        return True
+    # Plural patterns: Latin/Greek (common in biomedical text)
+    # um→a: bacterium/bacteria, medium/media, datum/data
+    if shorter.endswith("a") and longer == shorter[:-1] + "um":
+        return True
+    # us→i: fungus/fungi, stimulus/stimuli, nucleus/nuclei
+    if shorter.endswith("i") and longer == shorter[:-1] + "us":
+        return True
+    # is→es: axis/axes, hypothesis/hypotheses, analysis/analyses
+    if shorter.endswith("is") and longer == shorter[:-2] + "es":
+        return True
+    # on→a: criterion/criteria, phenomenon/phenomena
+    if shorter.endswith("a") and longer == shorter[:-1] + "on":
+        return True
+    # ex/ix→ices: index/indices, matrix/matrices, appendix/appendices
+    if longer.endswith("ices") and (
+        shorter == longer[:-4] + "ex" or shorter == longer[:-4] + "ix"
+    ):
         return True
 
     # Suffix variants (ise/ize, re/er still need bidirectional check)

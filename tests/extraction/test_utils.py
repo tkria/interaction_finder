@@ -249,6 +249,27 @@ class TestIsObviousVariant:
         assert is_obvious_variant("box", "boxes")
         assert is_obvious_variant("entity", "entities")
 
+    def test_latin_greek_plural_variants(self):
+        """Latin/Greek plural patterns common in biomedical text."""
+        from interaction_finder.extraction.utils import is_obvious_variant
+
+        # um→a
+        assert is_obvious_variant("bacterium", "bacteria")
+        assert is_obvious_variant("medium", "media")
+        # us→i
+        assert is_obvious_variant("fungus", "fungi")
+        assert is_obvious_variant("nucleus", "nuclei")
+        # is→es
+        assert is_obvious_variant("axis", "axes")
+        assert is_obvious_variant("hypothesis", "hypotheses")
+        # on→a
+        assert is_obvious_variant("criterion", "criteria")
+        assert is_obvious_variant("phenomenon", "phenomena")
+        # ex/ix→ices
+        assert is_obvious_variant("index", "indices")
+        assert is_obvious_variant("matrix", "matrices")
+        assert is_obvious_variant("appendix", "appendices")
+
     def test_hyphenation_variants(self):
         """Hyphenation/spacing differences should be recognized."""
         from interaction_finder.extraction.utils import is_obvious_variant
