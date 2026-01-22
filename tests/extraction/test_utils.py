@@ -266,6 +266,64 @@ class TestIsObviousVariant:
         assert not is_obvious_variant("gene", "protein")
 
 
+class TestOnlyNumberDifference:
+    """Tests for _only_number_difference function."""
+
+    def test_number_only_difference(self):
+        """Entities differing only by number should be detected."""
+        from interaction_finder.extraction.utils import _only_number_difference
+
+        assert _only_number_difference("SMAD1", "SMAD2")
+        assert _only_number_difference("IL-6", "IL-8")
+        assert _only_number_difference("BRCA1", "BRCA2")
+        assert _only_number_difference("collagen1", "collagen4")
+
+    def test_digit_letter_swap(self):
+        """Digit-letter substitutions should be detected."""
+        from interaction_finder.extraction.utils import _only_number_difference
+
+        assert _only_number_difference("a5b3", "avb3")  # 5 vs v
+        assert _only_number_difference("a5", "av")
+        assert _only_number_difference("integrina5", "integrinav")
+
+    def test_different_length_numbers(self):
+        """Multi-digit vs single-digit numbers should be handled correctly."""
+        from interaction_finder.extraction.utils import _only_number_difference
+
+        assert _only_number_difference("integrina2b1", "integrina12b1")
+        assert _only_number_difference("a5", "a51")
+        assert _only_number_difference("gene10", "gene100")
+
+    def test_identical_strings(self):
+        """Identical strings should return False."""
+        from interaction_finder.extraction.utils import _only_number_difference
+
+        assert not _only_number_difference("a5b3", "a5b3")
+        assert not _only_number_difference("SMAD1", "SMAD1")
+
+    def test_no_numbers(self):
+        """Strings without numbers should return False."""
+        from interaction_finder.extraction.utils import _only_number_difference
+
+        assert not _only_number_difference("tumor", "tumour")
+        assert not _only_number_difference("abc", "def")
+        assert not _only_number_difference("gene", "protein")
+
+    def test_one_has_number(self):
+        """One string with number, one without, should return False."""
+        from interaction_finder.extraction.utils import _only_number_difference
+
+        assert not _only_number_difference("collagen", "collagen1")
+        assert not _only_number_difference("gene", "gene2")
+
+    def test_whitespace_normalized(self):
+        """Whitespace should be normalized before comparison."""
+        from interaction_finder.extraction.utils import _only_number_difference
+
+        assert _only_number_difference("integrin alpha 5", "integrin alpha2")
+        assert _only_number_difference("IL 6", "IL8")
+
+
 class TestFindSubstringEntities:
     """Tests for find_substring_entities function."""
 

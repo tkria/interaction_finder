@@ -455,22 +455,48 @@ _WHITESPACE_RE = re.compile(r"\s+")
 
 
 def _only_number_difference(a: str, b: str) -> bool:
-    """Check if strings differ only in numeric portions (ignoring whitespace).
+    """Check if strings differ only in numeric portions or have digit-letter swaps.
 
-    Used to reject fuzzy matches between entities like SMAD1/SMAD2, IL-6/IL-8,
-    microRNA-137/microRNA-138 which are distinct entities differing only by number.
-    Whitespace is normalized before comparison to handle cases like
-    "integrin alpha 5" vs "integrin alpha2".
+    Used to reject fuzzy matches between:
+    - Entities differing only by number: SMAD1/SMAD2, IL-6/IL-8, microRNA-137/138
+    - Entities with digit-letter substitutions: α5β3/αvβ3, integrin a5/av
+
+    Walks both strings in parallel, handling multi-digit numbers by advancing
+    pointers independently when number lengths differ.
+    Returns True if either:
+    - All non-numeric portions are identical (only numbers differ)
+    - Any position has a digit in one string and a letter in the other
     """
-    a_lower, b_lower = a.lower(), b.lower()
-    if a_lower == b_lower:
+    a_norm = _WHITESPACE_RE.sub("", a.lower())
+    b_norm = _WHITESPACE_RE.sub("", b.lower())
+    if a_norm == b_norm:
         return False
-    # Normalize whitespace before masking numbers
-    a_normalized = _WHITESPACE_RE.sub("", a_lower)
-    b_normalized = _WHITESPACE_RE.sub("", b_lower)
-    a_masked = _NUMBER_RE.sub("#", a_normalized)
-    b_masked = _NUMBER_RE.sub("#", b_normalized)
-    return a_masked == b_masked and a_masked != a_normalized
+    has_numbers = False
+    i, j = 0, 0
+    while i < len(a_norm) and j < len(b_norm):
+        ca, cb = a_norm[i], b_norm[j]
+        if ca.isdigit() and cb.isdigit():
+            # Both digits - advance based on whether more digits follow
+            has_numbers = True
+            next_a_digit = (i + 1 < len(a_norm)) and a_norm[i + 1].isdigit()
+            next_b_digit = (j + 1 < len(b_norm)) and b_norm[j + 1].isdigit()
+            if next_a_digit or not next_b_digit:
+                i += 1
+            if next_b_digit or not next_a_digit:
+                j += 1
+        elif ca.isdigit() != cb.isdigit():
+            # One is digit, one is letter - digit-letter swap
+            return True
+        else:
+            # Both non-digits - must match for number-only difference
+            if ca != cb:
+                return False
+            i += 1
+            j += 1
+    # Remaining chars mean non-numeric length mismatch
+    if i < len(a_norm) or j < len(b_norm):
+        return False
+    return has_numbers
 
 
 def _is_valid_entity_form(form: str) -> bool:
