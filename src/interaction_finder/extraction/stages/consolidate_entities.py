@@ -606,7 +606,8 @@ You will be given groups of entities that appear related. For each group, decide
 The research topic tells you what distinctions matter. Merge entities only if a researcher would treat them as interchangeable, not merely because they're related to the topic.
 
 **Actions:**
-- **merge**: All members represent the same entity → specify target (member number, name, or new name)
+- **merge**: All members represent the same entity → specify target (member number, name, or new name).
+  Choose the narrowest term that is a parent to all members.
 - **exclude**: One specific member doesn't belong → specify which one to remove (member number or name)
 - **split**: Cluster mixes unrelated entities but can't identify which → system splits at weakest link
 
