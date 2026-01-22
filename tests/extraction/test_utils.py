@@ -233,58 +233,136 @@ class TestIsObviousVariant:
     """Tests for is_obvious_variant function."""
 
     def test_spelling_variants(self):
-        """UK/US spelling variants should be recognized."""
+        """UK/US spelling variants should return 'spelling'."""
         from interaction_finder.extraction.utils import is_obvious_variant
 
         # Inputs already normalized (as per function contract)
-        assert is_obvious_variant("haemorrhagic", "hemorrhagic")
-        assert is_obvious_variant("oestrogen", "estrogen")
-        assert is_obvious_variant("colour", "color")
+        assert is_obvious_variant("haemorrhagic", "hemorrhagic") == "spelling"
+        assert is_obvious_variant("oestrogen", "estrogen") == "spelling"
+        assert is_obvious_variant("colour", "color") == "spelling"
 
     def test_plural_variants(self):
-        """Plural patterns should be recognized."""
+        """Plural patterns should return 'plural'."""
         from interaction_finder.extraction.utils import is_obvious_variant
 
-        assert is_obvious_variant("gene", "genes")
-        assert is_obvious_variant("box", "boxes")
-        assert is_obvious_variant("entity", "entities")
+        assert is_obvious_variant("gene", "genes") == "plural"
+        assert is_obvious_variant("box", "boxes") == "plural"
+        assert is_obvious_variant("entity", "entities") == "plural"
 
     def test_latin_greek_plural_variants(self):
-        """Latin/Greek plural patterns common in biomedical text."""
+        """Latin/Greek plural patterns should return 'plural'."""
         from interaction_finder.extraction.utils import is_obvious_variant
 
         # um→a
-        assert is_obvious_variant("bacterium", "bacteria")
-        assert is_obvious_variant("medium", "media")
+        assert is_obvious_variant("bacterium", "bacteria") == "plural"
+        assert is_obvious_variant("medium", "media") == "plural"
         # us→i
-        assert is_obvious_variant("fungus", "fungi")
-        assert is_obvious_variant("nucleus", "nuclei")
+        assert is_obvious_variant("fungus", "fungi") == "plural"
+        assert is_obvious_variant("nucleus", "nuclei") == "plural"
         # is→es
-        assert is_obvious_variant("axis", "axes")
-        assert is_obvious_variant("hypothesis", "hypotheses")
+        assert is_obvious_variant("axis", "axes") == "plural"
+        assert is_obvious_variant("hypothesis", "hypotheses") == "plural"
         # on→a
-        assert is_obvious_variant("criterion", "criteria")
-        assert is_obvious_variant("phenomenon", "phenomena")
+        assert is_obvious_variant("criterion", "criteria") == "plural"
+        assert is_obvious_variant("phenomenon", "phenomena") == "plural"
         # ex/ix→ices
-        assert is_obvious_variant("index", "indices")
-        assert is_obvious_variant("matrix", "matrices")
-        assert is_obvious_variant("appendix", "appendices")
+        assert is_obvious_variant("index", "indices") == "plural"
+        assert is_obvious_variant("matrix", "matrices") == "plural"
+        assert is_obvious_variant("appendix", "appendices") == "plural"
 
     def test_hyphenation_variants(self):
-        """Hyphenation/spacing differences should be recognized."""
+        """Hyphenation/spacing differences should return 'spacing'."""
         from interaction_finder.extraction.utils import is_obvious_variant
 
         # Normalized forms (hyphens become spaces during normalization)
-        assert is_obvious_variant("venoocular", "veno ocular")
-        assert is_obvious_variant("alphabetagamma", "alpha beta gamma")
-        assert is_obvious_variant("tgf beta", "tgfbeta")
+        assert is_obvious_variant("venoocular", "veno ocular") == "spacing"
+        assert is_obvious_variant("alphabetagamma", "alpha beta gamma") == "spacing"
+        assert is_obvious_variant("tgf beta", "tgfbeta") == "spacing"
 
     def test_not_obvious_variants(self):
-        """Completely different strings should not be recognized."""
+        """Completely different strings should return None."""
         from interaction_finder.extraction.utils import is_obvious_variant
 
-        assert not is_obvious_variant("brca1", "tp53")
+        assert is_obvious_variant("brca1", "tp53") is None
         assert not is_obvious_variant("gene", "protein")
+
+
+class TestEntityNamesMatch:
+    """Tests for entity_names_match function."""
+
+    def test_exact_match(self):
+        """Identical names after normalization should match as 'exact'."""
+        from interaction_finder.extraction.utils import entity_names_match
+
+        matched, dist, kind = entity_names_match("BRCA1", "brca1")
+        assert matched is True
+        assert dist == 0
+        assert kind == "exact"
+
+    def test_spelling_variant(self):
+        """UK/US spelling variants should match as 'spelling'."""
+        from interaction_finder.extraction.utils import entity_names_match
+
+        matched, dist, kind = entity_names_match("haemorrhagic", "hemorrhagic")
+        assert matched is True
+        assert kind == "spelling"
+
+    def test_plural_variant(self):
+        """Plural forms should match as 'plural'."""
+        from interaction_finder.extraction.utils import entity_names_match
+
+        matched, dist, kind = entity_names_match("receptor", "receptors")
+        assert matched is True
+        assert kind == "plural"
+
+        matched, dist, kind = entity_names_match("bacterium", "bacteria")
+        assert matched is True
+        assert kind == "plural"
+
+    def test_spacing_variant(self):
+        """Spacing/hyphenation variants should match as 'spacing'."""
+        from interaction_finder.extraction.utils import entity_names_match
+
+        # Use words that don't get collapsed by Greek letter mapping
+        matched, dist, kind = entity_names_match("veno ocular", "venoocular")
+        assert matched is True
+        assert kind == "spacing"
+
+    def test_fuzzy_match(self):
+        """Fuzzy matches should return 'fuzzy' kind."""
+        from interaction_finder.extraction.utils import entity_names_match
+
+        # Long enough for fuzzy matching, spelling difference
+        matched, dist, kind = entity_names_match(
+            "pulmonary hypertension", "pulmonary hypertnsion"
+        )
+        assert matched is True
+        assert kind == "fuzzy"
+        assert dist > 0
+
+    def test_no_match(self):
+        """Non-matching names should return None for kind."""
+        from interaction_finder.extraction.utils import entity_names_match
+
+        matched, dist, kind = entity_names_match("BRCA1", "TP53")
+        assert matched is False
+        assert kind is None
+
+    def test_number_difference_rejected(self):
+        """Names differing only by number should not match."""
+        from interaction_finder.extraction.utils import entity_names_match
+
+        matched, dist, kind = entity_names_match("SMAD1", "SMAD2")
+        assert matched is False
+        assert kind is None
+
+    def test_digit_letter_swap_rejected(self):
+        """Digit-letter swaps should not match."""
+        from interaction_finder.extraction.utils import entity_names_match
+
+        matched, dist, kind = entity_names_match("alpha5 beta3", "alphav beta3")
+        assert matched is False
+        assert kind is None
 
 
 class TestOnlyNumberDifference:

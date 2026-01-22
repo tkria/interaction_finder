@@ -529,7 +529,7 @@ def are_safe_capitalization_variants(names: set[str]) -> bool:
     # Check all pairs match using core matching logic (includes all safety checks)
     for i, n1 in enumerate(names_list):
         for n2 in names_list[i + 1 :]:
-            matched, _ = entity_names_match(n1, n2)
+            matched, _, _ = entity_names_match(n1, n2)
             if not matched:
                 return False
 
@@ -911,7 +911,7 @@ def find_consolidation_candidates(
         for i, canon1 in enumerate(phase3_candidates):
             for canon2 in phase3_candidates[i + 1 :]:
                 # Use core matching logic with distance info for diagnostics
-                matched, dist = entity_names_match(canon1, canon2)
+                matched, dist, match_kind = entity_names_match(canon1, canon2)
                 if matched:
                     # Prefer shorter/simpler name as canonical (general over specific)
                     canonical, alias = min(
@@ -923,7 +923,7 @@ def find_consolidation_candidates(
                         (
                             alias,
                             canonical,
-                            f"{PENALTY_FUZZY}:original:fuzzy(dist={dist})",
+                            f"{PENALTY_FUZZY}:original:{match_kind}(dist={dist})",
                         )
                     )
                     fuzzy_merges.append((alias, canonical))

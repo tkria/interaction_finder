@@ -149,7 +149,7 @@ def fold_spelling(text: str) -> str:
     return text
 
 
-def entity_names_match(a: str, b: str) -> tuple[bool, int]:
+def entity_names_match(a: str, b: str) -> tuple[bool, int, str | None]:
     """Check if entity names match: normalize → obvious variants → fuzzy + validation.
 
     Args:
@@ -157,45 +157,39 @@ def entity_names_match(a: str, b: str) -> tuple[bool, int]:
         b: Second entity name
 
     Returns:
-        Tuple of (matched, edit_distance) where:
+        Tuple of (matched, edit_distance, match_kind) where:
         - matched: True if entities match
         - edit_distance: OSA distance between normalized forms (0 for exact match)
+        - match_kind: Type of match ("exact", "spelling", "plural", "spacing",
+          "fuzzy") or None if no match
     """
     # Normalize both
     norm_a = normalize_for_comparison(a)
     norm_b = normalize_for_comparison(b)
-
     # Check if identical after normalization
     if norm_a == norm_b:
-        return (True, 0)
-
+        return (True, 0, "exact")
     # Check if obvious variant (handles spelling + simple variations)
-    if is_obvious_variant(norm_a, norm_b):
-        # Calculate distance for diagnostic purposes
+    variant_type = is_obvious_variant(norm_a, norm_b)
+    if variant_type:
         dist = osa_distance(norm_a, norm_b)
-        return (True, dist)
-
+        return (True, dist, variant_type)
     # Fuzzy matching with full validation
     dist = osa_distance(norm_a, norm_b)
     shorter_len = min(len(norm_a), len(norm_b))
-
     # Too short for fuzzy matching
     if shorter_len < 10:
-        return (False, dist)
-
+        return (False, dist, None)
     # Calculate thresholds
     similarity = 1 - dist / shorter_len
     max_dist = 1 + shorter_len // 10
-
     # Check if within fuzzy threshold
     if dist <= max_dist and similarity >= 0.7:
         # Additional safety: reject number-only differences
-        # Use normalized forms so Greek letters (α→alpha) are handled correctly
         if _only_number_difference(norm_a, norm_b):
-            return (False, dist)
-        return (True, dist)
-
-    return (False, dist)
+            return (False, dist, None)
+        return (True, dist, "fuzzy")
+    return (False, dist, None)
 
 
 def osa_distance(a: str, b: str) -> int:
@@ -632,8 +626,8 @@ def extract_all_forms(entity_name: str, aliases: list[str]) -> list[str]:
     return sorted(expanded)
 
 
-def is_obvious_variant(a: str, b: str) -> bool:
-    """Check if strings are obvious variants (spelling or simple variations).
+def is_obvious_variant(a: str, b: str) -> str | None:
+    """Identify the type of variant relationship between two strings.
 
     Applies spelling folding first, then checks for simple variations
     like plurals or suffix differences. This handles multiple spelling
@@ -642,85 +636,70 @@ def is_obvious_variant(a: str, b: str) -> bool:
 
     Detects:
     - UK/US spelling: ae↔e, oe↔e, our↔or (via fold_spelling)
-    - Plural patterns: +s, +es, y→ies
+    - Plural patterns: +s, +es, y→ies, and Latin/Greek forms
     - Suffix variants: ise↔ize, re↔er
-    - Hyphenation/spacing: venoocular ↔ veno ocular, alphabetagamma ↔ alpha beta gamma
+    - Hyphenation/spacing: venoocular ↔ veno ocular
 
     Parameters:
         a: First string (already normalized with normalize_for_comparison)
         b: Second string (already normalized with normalize_for_comparison)
 
     Returns:
-        True if they match known variant patterns
+        String describing variant type ("spelling", "plural", "spacing"),
+        or None if not a recognized variant
 
     Examples:
         >>> is_obvious_variant("telangiectasia", "telangiectasias")
-        True
+        'plural'
         >>> is_obvious_variant("haemorrhagic", "hemorrhagic")
-        True
-        >>> is_obvious_variant("haemorrhagic behaviour", "hemorrhagic behavior")
-        True
-        >>> is_obvious_variant("colour", "color")
-        True
+        'spelling'
         >>> is_obvious_variant("venoocular", "veno ocular")
-        True
+        'spacing'
         >>> is_obvious_variant("cat", "dog")
-        False
+        None
     """
     # Apply spelling folding first (handles multiple spelling differences)
     spell_a = fold_spelling(a)
     spell_b = fold_spelling(b)
-
     # After spelling normalization, they should be equal or simple variants
     if spell_a == spell_b:
-        return True
-
+        return "spelling"
     # Check for hyphenation/spacing differences: remove all whitespace and compare
-    # This handles "veno ocular" ↔ "venoocular" and "alpha beta gamma" ↔ "alphabetagamma"
     dehyphen_a = spell_a.replace(" ", "")
     dehyphen_b = spell_b.replace(" ", "")
-    if dehyphen_a == dehyphen_b and dehyphen_a:  # Non-empty after removing spaces
-        return True
-
+    if dehyphen_a == dehyphen_b and dehyphen_a:
+        return "spacing"
     shorter, longer = (
         (spell_a, spell_b) if len(spell_a) <= len(spell_b) else (spell_b, spell_a)
     )
-
     # Plural patterns: regular
     if longer == shorter + "s" or longer == shorter + "es":
-        return True
+        return "plural"
     if shorter.endswith("y") and longer == shorter[:-1] + "ies":
-        return True
+        return "plural"
     # Plural patterns: Latin/Greek (common in biomedical text)
-    # um→a: bacterium/bacteria, medium/media, datum/data
     if shorter.endswith("a") and longer == shorter[:-1] + "um":
-        return True
-    # us→i: fungus/fungi, stimulus/stimuli, nucleus/nuclei
+        return "plural"
     if shorter.endswith("i") and longer == shorter[:-1] + "us":
-        return True
-    # is→es: axis/axes, hypothesis/hypotheses, analysis/analyses
+        return "plural"
     if shorter.endswith("is") and longer == shorter[:-2] + "es":
-        return True
-    # on→a: criterion/criteria, phenomenon/phenomena
+        return "plural"
     if shorter.endswith("a") and longer == shorter[:-1] + "on":
-        return True
-    # ex/ix→ices: index/indices, matrix/matrices, appendix/appendices
+        return "plural"
     if longer.endswith("ices") and (
         shorter == longer[:-4] + "ex" or shorter == longer[:-4] + "ix"
     ):
-        return True
-
-    # Suffix variants (ise/ize, re/er still need bidirectional check)
+        return "plural"
+    # Suffix variants (ise/ize, re/er)
     if spell_a.endswith("ise") and spell_b == spell_a[:-3] + "ize":
-        return True
+        return "spelling"
     if spell_b.endswith("ise") and spell_a == spell_b[:-3] + "ize":
-        return True
+        return "spelling"
     if spell_a.endswith("re") and len(spell_a) > 3 and spell_b == spell_a[:-2] + "er":
-        return True
+        return "spelling"
     if spell_b.endswith("re") and len(spell_b) > 3 and spell_a == spell_b[:-2] + "er":
-        return True
-
-    return False
+        return "spelling"
+    return None
 
 
 def find_substring_entities(
