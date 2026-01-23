@@ -50,3 +50,6 @@ class State:
         default_factory=dict
     )  # url -> SearchResult mapping for preserving metadata
     should_continue: bool = True  # Early stopping flag (set by Reflect)
+    new_urls_this_round: int = (
+        0  # New unique URLs registered this round (reset each round)
+    )

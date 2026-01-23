@@ -68,8 +68,9 @@ class GenerateQueriesNode(BaseNode[State, Deps, list[SearchResult]]):
 
     async def run(self, ctx: GraphRunContext[State, Deps]) -> "SearchNode":
         """Generate queries for current round."""
-        # Increment round counter
+        # Increment round counter and reset per-round tracking
         ctx.state.current_round += 1
+        ctx.state.new_urls_this_round = 0
         # Reset per-round counters and update progress display
         if ctx.deps.progress:
             ctx.deps.progress["Searches run"].completed = 0
@@ -343,6 +344,8 @@ Select the most relevant results and summarize what subject areas they cover."""
                 except ValueError:
                     # URL already registered, skip
                     pass
+        # Track new URLs for early stopping check
+        ctx.state.new_urls_this_round += registered_count
         # Update progress display with selected count
         if ctx.deps.progress:
             ctx.deps.progress["Results selected"].add(
@@ -392,23 +395,43 @@ class ReflectNode(BaseNode[State, Deps, list[SearchResult]]):
     or stop. Enforces max_rounds limit.
     """
 
+    def _collect_final_results(
+        self, ctx: GraphRunContext[State, Deps]
+    ) -> list[SearchResult]:
+        """Collect all unique results for returning."""
+        all_registered = [
+            url for urls in ctx.state.selected_results.values() for url in urls
+        ]
+        unique_urls = list(set(all_registered))
+        return [ctx.state.selected_search_results[url] for url in unique_urls]
+
     async def run(
         self, ctx: GraphRunContext[State, Deps]
     ) -> Union["GenerateQueriesNode", End[list[SearchResult]]]:
         """Reflect on coverage and decide next action."""
-        # Check if we've reached max_rounds
+        total_results = len(ctx.state.selected_search_results)
+        # Check early stopping conditions before LLM reflection
+        # 1. Max rounds reached
         if ctx.state.current_round >= ctx.state.max_rounds:
             logger.info(f"Reached max_rounds ({ctx.state.max_rounds}), stopping")
-            # Return all unique results collected, preserving metadata
-            all_registered = [
-                url for urls in ctx.state.selected_results.values() for url in urls
-            ]
-            unique_urls = list(set(all_registered))
-            # Retrieve full SearchResult objects from state
-            final_results = [
-                ctx.state.selected_search_results[url] for url in unique_urls
-            ]
-            return End(final_results)
+            return End(self._collect_final_results(ctx))
+        # 2. No new results this round (saturation)
+        if (
+            ctx.deps.config.stage.search.stop_after_no_new_results
+            and ctx.state.current_round > 1
+            and ctx.state.new_urls_this_round == 0
+        ):
+            logger.info(
+                f"No new URLs registered in round {ctx.state.current_round}, stopping (saturation)"
+            )
+            return End(self._collect_final_results(ctx))
+        # 3. Max results reached
+        max_results = ctx.deps.config.stage.search.max_results
+        if max_results > 0 and total_results >= max_results:
+            logger.info(
+                f"Reached max_results ({total_results} >= {max_results}), stopping"
+            )
+            return End(self._collect_final_results(ctx))
         # Prepare context for agent
         satisfied_str = (
             ", ".join(ctx.state.satisfied_goals)
@@ -465,16 +488,8 @@ Evaluate coverage and decide whether to continue searching or stop."""
         if result.output.should_continue:
             return GenerateQueriesNode()
         else:
-            # Return all unique results collected, preserving metadata
-            all_registered = [
-                url for urls in ctx.state.selected_results.values() for url in urls
-            ]
-            unique_urls = list(set(all_registered))
-            # Retrieve full SearchResult objects from state
-            final_results = [
-                ctx.state.selected_search_results[url] for url in unique_urls
-            ]
+            final_results = self._collect_final_results(ctx)
             logger.info(
-                f"Search complete: collected {len(unique_urls)} unique URLs across {ctx.state.current_round} rounds"
+                f"Search complete: collected {len(final_results)} unique URLs across {ctx.state.current_round} rounds"
             )
             return End(final_results)

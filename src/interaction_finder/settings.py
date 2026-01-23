@@ -498,6 +498,15 @@ class IfetcherConfig(StrictModel):
                 "pubmed",
                 description="Backend for literature search: 'pubmed', 'perplexica', 'openai', or 'searxng'",
             )
+            max_results: int = Field(
+                0,
+                ge=0,
+                description="Stop after collecting this many unique results (0 = unlimited, use max_rounds only)",
+            )
+            stop_after_no_new_results: bool = Field(
+                True,
+                description="Stop early if a complete round adds no new unique results",
+            )
 
         search: Search = Field(
             default_factory=Search,
