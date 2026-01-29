@@ -464,7 +464,7 @@ class IfetcherConfig(StrictModel):
                 True, description="Run search stage (disable to skip to extraction)"
             )
             max_rounds: int = Field(
-                8,
+                3,
                 ge=1,
                 le=15,
                 description="Search iterations; LLM decides when coverage is sufficient",
