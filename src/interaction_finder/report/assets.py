@@ -1427,7 +1427,7 @@ function parseSearchQuery(query) {
     const filters = [];
     // Match FILTER:VALUE or FILTER:"quoted value" patterns
     // Filter names are alphanumeric/underscore, values are quoted or unquoted
-    const filterPattern = /(\w+):(?:"([^"]+)"|(\S+))/gi;
+    const filterPattern = /(\\w+):(?:"([^"]+)"|(\\S+))/gi;
     let match;
     let lastIndex = 0;
     const textParts = [];
