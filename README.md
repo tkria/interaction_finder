@@ -31,8 +31,8 @@ The pipeline has three stages: **keywords** (find bridging terms from reviews), 
 Extract gene-disease associations for a research topic:
 
 ```bash
-uv run interaction-finder extract "diabetes genetics" \
-  -e gene -e disease -o results.json
+uv run interaction-finder extract "Inhibitors of IL-23" \
+  -e antibody -e target -o results.json
 ```
 
 The `-e` flag specifies entity types to extract (e.g., `gene`, `disease`, `phenotype`, `drug`). Pairs are formed between the specified types.
@@ -48,8 +48,8 @@ uv run interaction-finder report results.json
 For a faster test with minimal API calls, limit search rounds and results:
 
 ```bash
-uv run interaction-finder extract "diabetes genetics" \
-  -e gene -e disease -o results.json \
+uv run interaction-finder extract "Inhibitors of IL-23" \
+  -e antibody -e target -o results.json \
   -O stage.search.max_rounds=1 \
   -O stage.search.results_per_query=2
 ```
@@ -72,7 +72,7 @@ Create a `config.toml` to customize LLM models:
 [agents._]
 llm = "openai:gpt-4o-mini"
 
-[agents.extraction.judge]
+[agents.extraction.pair_judge]
 llm = "openai:gpt-4o"
 ```
 
