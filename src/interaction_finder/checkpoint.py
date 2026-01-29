@@ -460,3 +460,8 @@ def _rebuild_models():
     )
 
     ExtractionStageData.model_rebuild()
+
+
+# Rebuild models when checkpoint module is imported to resolve forward references.
+# The imports inside _rebuild_models() are deferred, so this is safe.
+_rebuild_models()

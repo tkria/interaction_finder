@@ -19,9 +19,14 @@ from rich.table import Table
 from rich.tree import Tree
 from rich.text import Text
 
-from . import cli_fetch
-from .logging import configure_logging, dump_log, error_log_path, setup_log_output
-from .settings import IfetcherConfig, sanitize_topic_for_filename
+from interaction_finder import (
+    IfetcherConfig,
+    configure_logging,
+    dump_log,
+    error_log_path,
+    setup_log_output,
+)
+from .settings import sanitize_topic_for_filename
 from .version import (
     check_checkpoint_version,
     get_version_string,
@@ -697,6 +702,8 @@ def fetch(
       # With config override
       interaction-finder fetch https://example.com -O output.cache=custom_cache/
     """
+    from . import cli_fetch
+
     # Get effective options with fallback to global options
     config_path, mode, verbose, overrides = get_options_with_fallback(
         config, mode, verbose, overrides

@@ -266,13 +266,25 @@ class _NoOpLogfire:
         return decorator
 
 
-# Try to configure logfire, fall back to no-op if unavailable
-try:
-    import logfire as _logfire
+# Lazy logfire proxy - defers import until first method call to keep CLI startup fast
+class _LazyLogfire:
+    _instance = None
 
-    # Check verbose flag from environment variable
-    verbose = os.environ.get("LOGFIRE_VERBOSE", "").lower() in ("1", "true", "yes")
-    configure_logfire(verbose=verbose)
-    logfire = _logfire
-except ImportError:
-    logfire = _NoOpLogfire()
+    def __getattr__(self, name):
+        if _LazyLogfire._instance is None:
+            try:
+                import logfire as _logfire
+
+                verbose = os.environ.get("LOGFIRE_VERBOSE", "").lower() in (
+                    "1",
+                    "true",
+                    "yes",
+                )
+                configure_logfire(verbose=verbose)
+                _LazyLogfire._instance = _logfire
+            except ImportError:
+                _LazyLogfire._instance = _NoOpLogfire()
+        return getattr(_LazyLogfire._instance, name)
+
+
+logfire = _LazyLogfire()
