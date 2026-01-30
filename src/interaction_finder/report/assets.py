@@ -1089,7 +1089,7 @@ const state = {
     searchQuery: '',
     showRejected: false,
     // Filter/sort state
-    sortField: 'evidence',    // 'evidence', 'relevance', 'docs', 'quotes', 'entity'
+    sortField: 'docs',        // 'evidence', 'relevance', 'docs', 'quotes', 'entity'
     sortDir: 'desc',          // 'asc', 'desc'
     evidenceMin: 0,           // 0 = any, 1-9 = specific
     evidenceMax: 10,          // 10 = any, 1-9 = specific
@@ -1117,7 +1117,7 @@ function getStateFromURL() {
         rejected: params.get('rejected') === '1',
         scroll: scroll,
         // Filter/sort params
-        sortField: params.get('sort') || 'evidence',
+        sortField: params.get('sort') || 'docs',
         sortDir: params.get('dir') || 'desc',
         evidenceMin: params.has('emin') ? parseInt(params.get('emin'), 10) : 0,
         evidenceMax: params.has('emax') ? parseInt(params.get('emax'), 10) : 10,
@@ -1498,7 +1498,7 @@ function toggleFilterPanel() {
 // Check if any non-default filters are active
 function hasNonDefaultFilters() {
     return (
-        state.sortField !== 'evidence' ||
+        state.sortField !== 'docs' ||
         state.sortDir !== 'desc' ||
         state.evidenceMin > 0 ||
         state.evidenceMax < 10 ||

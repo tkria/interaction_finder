@@ -304,13 +304,13 @@ def prepare_report_data(
     # Sort pairs by: accepted status > evidence level > doc count > lexicographic
     def pair_sort_key(pair):
         # Primary: accepted status (accepted first)
-        # Secondary: evidence level (higher is better, so negate)
-        # Tertiary: number of supporting documents (more is better, so negate)
+        # Secondary: number of supporting documents (more is better, so negate)
+        # Tertiary: evidence level (higher is better, so negate)
         # Quaternary: entity names lexicographically
         return (
             not pair["accepted"],  # False (accepted) sorts before True (rejected)
-            -pair["overall"],  # Negate to sort descending (9 first)
             -pair["doc_count"],  # Negate to sort descending
+            -pair["overall"],  # Negate to sort descending (9 first)
             pair["entity1"]["name"].lower(),
             pair["entity2"]["name"].lower(),
         )

@@ -232,9 +232,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             <div class="filter-group">
                 <label for="sort-field">Sort:</label>
                 <select id="sort-field">
-                    <option value="evidence" selected>Evidence</option>
+                    <option value="evidence">Evidence</option>
                     <option value="relevance">Relevance</option>
-                    <option value="docs">Documents</option>
+                    <option value="docs" selected>Documents</option>
                     <option value="quotes">Quotes</option>
                     <option value="entity">Entity name</option>
                 </select>
