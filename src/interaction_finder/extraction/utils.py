@@ -278,59 +278,180 @@ def osa_distance(a: str, b: str) -> int:
 
 
 def _expand_slash(text: str) -> list[str]:
-    """Expand slash patterns in biological names.
+    """Expand slash patterns in biological entity names.
 
-    Handles suffix patterns (GDF1/2 → GDF1, GDF2), prefix patterns
-    (a/b suffix → a suffix, b suffix, a), and simple alternation (TGF-β/BMP).
+    Uses structure-based heuristics to determine the correct expansion:
 
-    Returns deduplicated list (first mentions kept).
+    1. Spaced slash at top level (" / " outside parens) → simple alternation
+       "ERBB2 / ERBB3" → ["ERBB2 / ERBB3", "ERBB2", "ERBB3"]
 
-    Suffix pattern detected when right side is short (≤3 chars) or Roman numerals,
-    and left side ends with digits or Roman numerals that form the prefix.
+    2. Slash inside parentheses → don't expand (handled by parenthetical extraction)
+       "CD271 (p75 / LNGFR)" → ["CD271 (p75 / LNGFR)"]
 
-    Prefix pattern detected when slash appears in first token and text has
-    additional words after it.
+    3. Multi-word with slash in token → distribute prefix/suffix words
+       "type I/II alveolar cells" → ["...", "type I alveolar cells", "type II alveolar cells"]
+       "stem/progenitor cells" → ["...", "stem cells", "progenitor cells"]
+
+    4. Type-matched suffix replacement → find trailing pattern matching right's type
+       "GDF1/2" → ["GDF1/2", "GDF1", "GDF2"] (digits)
+       "HuC/D" → ["HuC/D", "HuC", "HuD"] (single letter)
+       "Lamin A/C" → ["Lamin A/C", "Lamin A", "Lamin C"] (single letter)
+
+    5. Common prefix detection → both sides already complete forms
+       "ROCK1/ROCK2" → ["ROCK1/ROCK2", "ROCK1", "ROCK2"]
+
+    6. Fallback → simple alternation
+       "C/EBP" → ["C/EBP", "C", "EBP"]
+
+    Returns deduplicated list with original first.
     """
     if text.count("/") != 1:
         return [text]
-
-    # Check for prefix pattern first: "variant1/variant2 remaining_words"
+    # Don't expand if slash is inside parentheses - parenthetical extraction handles it
+    if _is_slash_inside_parens(text):
+        return [text]
+    # Spaced slash at top level → simple alternation
+    if " / " in text:
+        left, right = text.split(" / ", 1)
+        left, right = left.strip(), right.strip()
+        if left and right:
+            return [text, left, right]
+        return [text]
+    # Multi-word: find token containing slash and distribute context
     tokens = text.split()
-    if len(tokens) >= 2 and "/" in tokens[0]:
-        slash_token = tokens[0]
-        shared_suffix = " ".join(tokens[1:])
-        variants = slash_token.split("/")
-        if len(variants) == 2:
-            v1, v2 = variants[0].strip(), variants[1].strip()
-            if v1 and v2 and shared_suffix:
-                # Distribution: "a suffix", "b suffix"
-                # Alternation: "a" (not "b" - not a unit in expression)
-                # Deduplicate with dict.fromkeys for order preservation
-                return list(
-                    dict.fromkeys(
-                        [
-                            text,
-                            f"{v1} {shared_suffix}",
-                            f"{v2} {shared_suffix}",
-                            v1,
-                        ]
-                    )
-                )
+    if len(tokens) >= 2:
+        for i, tok in enumerate(tokens):
+            if "/" in tok:
+                prefix_words = " ".join(tokens[:i])
+                suffix_words = " ".join(tokens[i + 1 :])
+                left_var, right_var = tok.split("/")
+                expanded = _expand_slash_simple(left_var, right_var)
 
-    # Existing suffix/alternation logic
+                def build(variant: str) -> str:
+                    parts = [prefix_words, variant, suffix_words]
+                    return " ".join(p for p in parts if p)
+
+                forms = [text] + [build(f) for f in expanded]
+                return list(dict.fromkeys(forms))
+    # Simple single-token case
     left, right = (s.strip() for s in text.split("/"))
     if not left or not right:
         return [text]
-    # Check for suffix pattern: short right side or Roman numerals
-    is_suffix = len(right) <= 3 or re.fullmatch(r"[IVX]+", right)
-    if is_suffix:
-        # Extract prefix from left: "GDF1" → ("GDF", "1")
-        match = re.match(r"^(.+?)(\d+|[IVX]+)$", left)
-        if match:
-            prefix = match.group(1)
-            return [text, left, prefix + right]
-    # Simple alternation
-    return [text, left, right]
+    expanded = _expand_slash_simple(left, right)
+    return list(dict.fromkeys([text] + expanded))
+
+
+def _is_slash_inside_parens(text: str) -> bool:
+    """Check if the slash in text is inside parentheses."""
+    depth = 0
+    for c in text:
+        if c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+        elif c == "/" and depth > 0:
+            return True
+    return False
+
+
+# Pattern types for suffix matching
+_TRAILING_PATTERNS = {
+    "digits": re.compile(r"\d+$"),
+    "letters": re.compile(r"[A-Za-z]+$"),
+    "roman": re.compile(r"[IVX]+$"),
+    "greek": re.compile(r"[αβγδεζηθικλμνξοπρστυφχψω]+$", re.IGNORECASE),
+}
+
+
+def _classify_suffix_type(s: str) -> str | None:
+    """Classify a string's type for suffix matching."""
+    s = s.strip()
+    if not s:
+        return None
+    if re.fullmatch(r"\d+", s):
+        return "digits"
+    if re.fullmatch(r"[A-Z]", s, re.IGNORECASE):
+        return "single_letter"
+    if re.fullmatch(r"[A-Z]{2,}", s, re.IGNORECASE):
+        return "letters"
+    if re.fullmatch(r"[IVX]+", s):
+        return "roman"
+    if re.fullmatch(r"[αβγδεζηθικλμνξοπρστυφχψω]", s, re.IGNORECASE):
+        return "greek_single"
+    return None
+
+
+def _find_trailing_pattern(
+    text: str, pattern_type: str, exact_length: int | None = None
+) -> tuple[str, str] | None:
+    """Find trailing pattern of given type in text.
+
+    Returns (prefix, suffix) or None if no match.
+    If exact_length is specified, only match that many characters from the end.
+    """
+    pattern = _TRAILING_PATTERNS.get(pattern_type)
+    if not pattern:
+        return None
+    match = pattern.search(text)
+    if match:
+        if exact_length and len(match.group()) >= exact_length:
+            return (text[:-exact_length], text[-exact_length:])
+        return (text[: match.start()], match.group())
+    return None
+
+
+def _longest_common_prefix(a: str, b: str) -> str:
+    """Return the longest common prefix of two strings."""
+    i = 0
+    while i < min(len(a), len(b)) and a[i] == b[i]:
+        i += 1
+    return a[:i]
+
+
+def _expand_slash_simple(left: str, right: str) -> list[str]:
+    """Core slash expansion logic for A/B patterns.
+
+    Determines whether to apply suffix replacement or simple alternation:
+
+    1. If left and right share ≥50% common prefix (and ≥2 chars), they're
+       already complete forms → return both as alternation
+
+    2. Classify right's type (digits, letter, letters, roman, greek)
+
+    3. Find trailing pattern of matching type in left
+
+    4. If found with non-empty prefix → replace suffix with right
+
+    5. Otherwise → simple alternation
+    """
+    right_type = _classify_suffix_type(right)
+    # Check for substantial common prefix → both already complete forms
+    common = _longest_common_prefix(left, right)
+    min_len = min(len(left), len(right))
+    if min_len > 0 and len(common) / min_len >= 0.5 and len(common) >= 2:
+        return [left, right]
+    # Map right type to pattern to search for in left
+    # single_letter: replace exactly 1 letter (HuC/D → HuC, HuD)
+    # letters: replace all trailing letters
+    # digits: replace all trailing digits (GDF1/2 → GDF1, GDF2)
+    # roman: replace all trailing roman numerals
+    # greek_single: replace exactly 1 greek letter
+    type_mapping: dict[str, tuple[str, int | None]] = {
+        "single_letter": ("letters", 1),
+        "letters": ("letters", None),
+        "digits": ("digits", None),
+        "roman": ("roman", None),
+        "greek_single": ("greek", 1),
+    }
+    if right_type not in type_mapping:
+        return [left, right]
+    match_type, exact_len = type_mapping[right_type]
+    result = _find_trailing_pattern(left, match_type, exact_len)
+    if result:
+        prefix, _ = result
+        if len(prefix) >= 1:  # Prefix must be non-empty
+            return [left, prefix + right]
+    return [left, right]
 
 
 def _extract_query_variants(query: str) -> list[str]:
@@ -493,6 +614,51 @@ def _only_number_difference(a: str, b: str) -> bool:
     return has_numbers
 
 
+def is_list_entity(text: str) -> bool:
+    """Check if text looks like a list of entities rather than a single entity.
+
+    Detects patterns like:
+    - "CD73, CD90, CD105 (MSC markers)" - multiple items with 2+ commas
+    - "HDAC1, HDAC2, HDAC3" - enumeration of similar entities
+    - "Type I, II, and III collagen" - list with "and"
+
+    These should not be processed as single entities because they would
+    create spurious token overlap between unrelated entities.
+
+    Parameters:
+        text: Entity name to check
+
+    Returns:
+        True if text appears to be a list of entities
+
+    Examples:
+        >>> is_list_entity("CD73, CD90, CD105 (MSC markers)")
+        True
+        >>> is_list_entity("HDAC1, HDAC2, HDAC3")
+        True
+        >>> is_list_entity("Type I, II, and III collagen")
+        True
+        >>> is_list_entity("TNF receptor 1 (TNFR1, p55)")
+        False
+        >>> is_list_entity("BRCA1")
+        False
+    """
+    # Count commas - lists typically have 2+ items (so 2+ commas for 3+ items)
+    comma_count = text.count(",")
+    if comma_count >= 2:
+        return True
+    # Check for patterns like "X, Y, and Z" or "X, Y (description)"
+    if comma_count == 1:
+        # If there's a parenthetical after the comma section, likely a list
+        # e.g., "CD73, CD90, CD105 (MSC markers)" but also catches "X, Y (desc)"
+        if re.search(r",\s*[^,]+\s*\([^)]+\)\s*$", text):
+            return True
+        # Check for "and" after comma - "X, Y and Z" pattern
+        if re.search(r",\s+and\s+", text):
+            return True
+    return False
+
+
 def _is_valid_entity_form(form: str) -> bool:
     """Check if a form is valid as a standalone entity name.
 
@@ -502,6 +668,7 @@ def _is_valid_entity_form(form: str) -> bool:
     - Forms with list separators (commas, semicolons, multiple slashes)
     - Forms without sufficient alphabetic content or starting with numbers
     - Forms with parenthetical content (should be expanded separately)
+    - List entities (multiple comma-separated items)
 
     Parameters:
         form: Entity form to validate
