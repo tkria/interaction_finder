@@ -409,6 +409,52 @@ class TestNormalizedTextMapper:
         assert mapper.find("test") == (7, 11)
         assert mapper.findall("test") == [(7, 11)]
 
+    def test_unicode_hyphen_normalization(self):
+        """Unicode hyphen variants should normalize to ASCII hyphen."""
+        # Non-breaking hyphen (U+2011) - common in copy-pasted scientific text
+        text_nonbreaking = "SSEA\u20114"  # SSEA‑4
+        mapper = NormalizedTextMapper.from_text(text_nonbreaking)
+        # After normalization: hyphen before digit is removed → "ssea4"
+        assert mapper.source == "ssea4"
+        # En dash (U+2013) - common in ranges but sometimes used as hyphen
+        text_endash = "TGF\u2013β"  # TGF–β
+        mapper = NormalizedTextMapper.from_text(text_endash)
+        # After normalization: "tgfb" (dash becomes hyphen, Greek β→b, hyphen before letter→space removed)
+        assert mapper.source == "tgfb"
+
+    def test_unicode_hyphen_ascii_hyphen_equivalence(self):
+        """Unicode and ASCII hyphens should produce identical normalized forms."""
+        # Test various Unicode hyphen variants against ASCII hyphen
+        ascii_form = "IGF-1"
+        unicode_forms = [
+            "IGF\u20101",  # HYPHEN
+            "IGF\u20111",  # NON-BREAKING HYPHEN
+            "IGF\u20121",  # FIGURE DASH
+            "IGF\u20131",  # EN DASH
+        ]
+        expected = NormalizedTextMapper.normalize(ascii_form)
+        for unicode_form in unicode_forms:
+            result = NormalizedTextMapper.normalize(unicode_form)
+            assert result == expected, (
+                f"{unicode_form!r} → {result!r}, expected {expected!r}"
+            )
+
+    def test_unicode_hyphen_in_complex_terms(self):
+        """Unicode hyphens in biological terms normalize correctly."""
+        # TGF-β1 with non-breaking hyphen
+        text = "TGF\u2011β1"  # TGF‑β1
+        normalized = NormalizedTextMapper.normalize(text)
+        assert normalized == "tgfb1"
+        # MMP-1 with en dash
+        text = "MMP\u20131"  # MMP–1
+        normalized = NormalizedTextMapper.normalize(text)
+        assert normalized == "mmp1"
+        # VEGF-A with figure dash
+        text = "VEGF\u2012A"  # VEGF‒A
+        normalized = NormalizedTextMapper.normalize(text)
+        # Hyphen before letter becomes space (not skipped like hyphen before digit)
+        assert normalized == "vegf a"
+
 
 # Import at the end to avoid issues
 from interaction_finder.text_mapping import NormalizedTextMapper

@@ -225,6 +225,18 @@ GREEK_NAME_MAP = {
     "psi": "y",
     "omega": "w",
 }
+# Unicode hyphen/dash variants that should be treated as ASCII hyphen
+# These are often inserted by word processors and PDF converters
+UNICODE_HYPHENS = {
+    "\u2010",  # HYPHEN
+    "\u2011",  # NON-BREAKING HYPHEN
+    "\u2012",  # FIGURE DASH
+    "\u2013",  # EN DASH
+    "\u2014",  # EM DASH
+    "\u2015",  # HORIZONTAL BAR
+    "\u2212",  # MINUS SIGN
+    "\u00ad",  # SOFT HYPHEN
+}
 
 
 class NormalizedTextMapper(TextPositionMapper):
@@ -315,6 +327,8 @@ class NormalizedTextMapper(TextPositionMapper):
         unicode_text = "".join(
             c for c in unicode_text if unicodedata.category(c) != "Mn"
         )
+        # Normalize Unicode hyphen variants to ASCII hyphen
+        unicode_text = "".join("-" if c in UNICODE_HYPHENS else c for c in unicode_text)
         normalized = []
         position_offsets = []
         text_len = len(unicode_text)

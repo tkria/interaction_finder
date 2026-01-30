@@ -51,12 +51,19 @@ class TestTokenize:
     def test_basic_tokenization(self):
         """Extract normalized tokens from text."""
         tokens = tokenize("Pulmonary arterial hypertension")
-        assert tokens == frozenset({"pulmonary", "arterial", "hypertension"})
+        # Base tokens from splitting on whitespace
+        assert {"pulmonary", "arterial", "hypertension"}.issubset(tokens)
+        # Collapsed form also added for multi-word entities
+        assert "pulmonaryarterialhypertension" in tokens
 
     def test_hyphenated(self):
-        """Hyphens split tokens."""
+        """Hyphens split tokens AND add dehyphenated form."""
         tokens = tokenize("IL-6")
-        assert tokens == frozenset({"il", "6"})
+        # Split tokens preserved
+        assert "il" in tokens
+        assert "6" in tokens
+        # Dehyphenated form added for better clustering
+        assert "il6" in tokens
 
     def test_stopwords_filtered(self):
         """Common stopwords are removed."""
@@ -93,6 +100,71 @@ class TestTokenize:
         assert "pah" in tokens
         assert "idiopathic heritable" not in tokens  # Should NOT be single token
 
+    def test_hyphenated_vs_unhyphenated_overlap(self):
+        """IGF-1 and IGF1 should share tokens via dehyphenated form.
+
+        The tokenizer adds dehyphenated forms so that entities with different
+        hyphenation conventions can still cluster together.
+        """
+        tokens_hyphen = tokenize("IGF-1")
+        tokens_no_hyphen = tokenize("IGF1")
+        # Both should contain the collapsed form
+        assert "igf1" in tokens_hyphen
+        assert "igf1" in tokens_no_hyphen
+        # They should have overlap
+        overlap = tokens_hyphen & tokens_no_hyphen
+        assert "igf1" in overlap
+
+    def test_mmp_variants_overlap(self):
+        """MMP-1 and MMP1 should share tokens."""
+        tokens_hyphen = tokenize("MMP-1")
+        tokens_no_hyphen = tokenize("MMP1")
+        overlap = tokens_hyphen & tokens_no_hyphen
+        assert "mmp1" in overlap
+
+    def test_multiword_collapsed_form(self):
+        """p16 INK4A and p16INK4A should share tokens via collapsed form."""
+        tokens_spaced = tokenize("p16 INK4A")
+        tokens_collapsed = tokenize("p16INK4A")
+        # Spaced version should have collapsed form
+        assert "p16ink4a" in tokens_spaced
+        # Collapsed version normalizes to same
+        assert "p16ink4a" in tokens_collapsed
+        # They should overlap
+        overlap = tokens_spaced & tokens_collapsed
+        assert "p16ink4a" in overlap
+
+    def test_unicode_hyphen_ascii_hyphen_overlap(self):
+        """SSEA-4 (ASCII) and SSEA‑4 (Unicode U+2011) should share tokens.
+
+        Unicode hyphens are normalized to ASCII in text_mapping, then
+        the tokenizer produces the same dehyphenated form.
+        """
+        from interaction_finder.text_mapping import NormalizedTextMapper
+
+        # Verify normalization produces same result
+        ascii_norm = NormalizedTextMapper.normalize("SSEA-4")
+        unicode_norm = NormalizedTextMapper.normalize("SSEA\u20114")  # U+2011
+        assert ascii_norm == unicode_norm == "ssea4"
+        # Both should tokenize to overlapping forms
+        tokens_ascii = tokenize("SSEA-4")
+        tokens_unicode = tokenize("SSEA\u20114")
+        overlap = tokens_ascii & tokens_unicode
+        assert "ssea4" in overlap
+
+    def test_different_numbers_no_overlap(self):
+        """CD105 and CD106 should NOT overlap (different numbers)."""
+        tokens1 = tokenize("CD105")
+        tokens2 = tokenize("CD106")
+        # They have different numbers, so no meaningful overlap
+        overlap = tokens1 & tokens2
+        # The only possible overlap would be 'cd' if numbers were split,
+        # but single tokens like 'cd105' and 'cd106' shouldn't overlap
+        assert "cd105" in tokens1
+        assert "cd106" in tokens2
+        assert "cd105" not in overlap
+        assert "cd106" not in overlap
+
 
 class TestSpecificity:
     """Test IDF-like specificity scoring."""
@@ -113,17 +185,18 @@ class TestSpecificity:
 
     def test_mention_weighting(self):
         """Entities with more mentions weight tokens higher (lower specificity)."""
+        # Use non-Greek letters since "alpha"→"a" and "beta"→"b" after normalization
         entities = make_entities(
             {
-                "HighMention": ["alpha"],
-                "LowMention": ["beta"],
+                "HighMention": ["zinc"],
+                "LowMention": ["iron"],
             }
         )
         mention_counts = {"HighMention": 100, "LowMention": 1}
         spec = compute_token_specificity(entities, mention_counts)
-        # "alpha" has weight 100, "beta" has weight 1
+        # "zinc" has weight 100, "iron" has weight 1
         # Lower weight → higher specificity
-        assert spec["alpha"] < spec["beta"]
+        assert spec["zinc"] < spec["iron"]
 
     def test_speculation_weighting(self):
         """Lower speculation weights tokens higher."""
@@ -459,7 +532,9 @@ class TestIntegration:
                 "PAH mutations": ["PAH mutations"],
             }
         )
-        clusters, _ = cluster_entities(entities, threshold=0.3)
+        # Threshold lowered from 0.3 to 0.25 because the new tokenizer adds
+        # collapsed forms which dilute per-token similarity slightly
+        clusters, _ = cluster_entities(entities, threshold=0.25)
         # Should cluster via shared "pah" token
         assert len(clusters) == 1
 

@@ -99,16 +99,41 @@ class Cluster:
 
 
 def tokenize(text: str) -> frozenset[str]:
-    """Extract normalized tokens, excluding stopwords.
+    """Extract normalized tokens with formatting variants, excluding stopwords.
 
     Single characters are preserved since they carry meaning in biology:
     "X-linked", "T cells", "B cells", "Type 1 vs Type 2", etc.
+
+    Produces multiple token variants to handle formatting differences:
+    - Base tokens from splitting on whitespace, hyphens, and slashes
+    - Dehyphenated forms for hyphenated words: "IGF-1" → also adds "igf1"
+    - Collapsed form for multi-word entities: "p16 INK4A" → also adds "p16ink4a"
+
+    This ensures entities like "IGF-1" and "IGF1", or "p16 INK4A" and "p16INK4A"
+    share tokens and cluster correctly.
     """
-    return frozenset(
-        t
-        for word in re.split(r"[\s\-/]+", text)
-        if (t := normalize_for_comparison(word)) and t not in _STOPWORDS
-    )
+    tokens: set[str] = set()
+    # Split on whitespace, hyphens, and slashes (original behavior)
+    parts = re.split(r"[\s\-/]+", text)
+    for part in parts:
+        norm_part = normalize_for_comparison(part)
+        if norm_part and norm_part not in _STOPWORDS:
+            tokens.add(norm_part)
+    # Also add dehyphenated forms for hyphenated words within text
+    # This handles "IGF-1" → "igf1" when the entity is "IGF-1" (single word)
+    for word in text.split():
+        if "-" in word:
+            dehyphen = normalize_for_comparison(word.replace("-", ""))
+            if dehyphen and dehyphen not in _STOPWORDS:
+                tokens.add(dehyphen)
+    # Add fully collapsed form (no spaces, no hyphens, no slashes) for multi-word entities
+    # This catches "p16 INK4A" ↔ "p16INK4A" and similar
+    # Only add if: has separators, we have non-stopword tokens, and result differs
+    if re.search(r"[\s\-/]", text) and tokens:
+        collapsed = normalize_for_comparison(re.sub(r"[\s\-/]+", "", text))
+        if collapsed and collapsed not in _STOPWORDS and collapsed not in tokens:
+            tokens.add(collapsed)
+    return frozenset(tokens)
 
 
 def compute_token_specificity(
