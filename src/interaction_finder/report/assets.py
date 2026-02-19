@@ -1138,7 +1138,7 @@ function getScrollPositions() {
     ];
 }
 
-function updateURL(usePushState = false) {
+function updateURL(usePushState = false, outgoingScroll = null) {
     const params = new URLSearchParams();
     if (state.selectedPairId !== null) {
         params.set('pair', state.selectedPairId);
@@ -1185,7 +1185,7 @@ function updateURL(usePushState = false) {
         cancelPendingScrollUpdate();
         const prev = history.state;
         if (prev) {
-            history.replaceState({ ...prev, scroll: getScrollPositions() }, '');
+            history.replaceState({ ...prev, scroll: outgoingScroll || getScrollPositions() }, '');
         }
         // Push new state with previous pair/doc for back-detection
         history.pushState({
@@ -1296,6 +1296,12 @@ function applyPendingScroll() {
     state.pendingScroll = null;
 }
 
+function ensureSelectedPairVisible() {
+    if (state.selectedPairId === null) return;
+    const card = document.getElementById(`pair-${state.selectedPairId}`);
+    if (card) card.scrollIntoView({ block: 'nearest' });
+}
+
 function getPairIdFromCard(card) {
     if (!card || !card.id) return NaN;
     const parts = card.id.split('-');
@@ -1387,6 +1393,8 @@ function initReport() {
         renderContent();
         renderReasoning(false);  // Don't reset scroll - applyPendingScroll will restore it
         applyPendingScroll();
+        // Ensure selected pair card is visible (scroll position may be stale after filter changes)
+        ensureSelectedPairVisible();
     });
 
     // Add scroll listeners for URL updates (debounced)
@@ -1472,10 +1480,13 @@ function matchesFilter(card, filter) {
 
 // Search handler
 function handleSearch(e, usePushState = false) {
+    // Snapshot scroll before display changes so the outgoing history entry
+    // remembers where the user was, not where the sidebar ended up post-filter
+    const scrollBeforeChange = usePushState ? getScrollPositions() : null;
     state.searchQuery = e.target.value.toLowerCase();
     updateHeaderCounts();
     updatePairListDisplay();  // May clear selection if pair no longer matches filter
-    updateURL(usePushState);
+    updateURL(usePushState, scrollBeforeChange);
     renderContent();
     renderReasoning();
 }
