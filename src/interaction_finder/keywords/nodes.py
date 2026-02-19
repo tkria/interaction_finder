@@ -150,14 +150,21 @@ class SearchNode(BaseNode[State, Deps, BridgingTermsOut]):
             topic=ctx.state.topic,
             num_queries=len(ctx.state.search_queries),
         ):
-            # Execute all searches
+            # Execute all searches, skipping queries that fail
             all_results = []
             for query_text in ctx.state.search_queries:
                 query = SearchQuery(
                     query=query_text,
                     max_results=ctx.deps.config.stage.keywords.max_results_per_query,
                 )
-                results = await ctx.deps.search_backend.search(query)
+                try:
+                    results = await ctx.deps.search_backend.search(query)
+                except Exception as e:
+                    logger.warning(
+                        f"Search failed, skipping query: {query_text!r}",
+                        error=str(e),
+                    )
+                    results = []
                 all_results.extend(results)
                 # Update progress counters
                 if ctx.deps.progress:

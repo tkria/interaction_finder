@@ -385,6 +385,52 @@ class TestFinalizeNode:
         assert "BMP signaling pathway" in called_terms
 
 
+class TestSearchNodeResilience:
+    """Test SearchNode handles backend failures gracefully."""
+
+    @pytest.mark.asyncio
+    async def test_search_failure_skips_query(self, mock_deps):
+        """A failing search query should be skipped, not crash the pipeline."""
+        from unittest.mock import AsyncMock
+        from interaction_finder.search.models import SearchResult
+
+        # Configure backend: first call fails, second succeeds
+        good_result = SearchResult(
+            title="Good result", url="http://example.com/good", snippet="ok"
+        )
+        mock_deps.search_backend.search = AsyncMock(
+            side_effect=[
+                RuntimeError("PubMed network error: Server disconnected"),
+                [good_result],
+            ]
+        )
+        # Set up state with two queries
+        state = State(topic="test topic", max_rounds=1)
+        state.search_queries = ["failing query", "working query"]
+        ctx = GraphRunContext(state=state, deps=mock_deps)
+        # Run SearchNode — should not raise
+        node = SearchNode()
+        await node.run(ctx)
+        # The successful query's results should be preserved
+        assert len(ctx.state.all_search_results) == 1
+        assert ctx.state.all_search_results[0].url == "http://example.com/good"
+
+    @pytest.mark.asyncio
+    async def test_all_searches_fail_yields_empty(self, mock_deps):
+        """If every search fails, results should be empty, not an exception."""
+        from unittest.mock import AsyncMock
+
+        mock_deps.search_backend.search = AsyncMock(
+            side_effect=RuntimeError("Server disconnected")
+        )
+        state = State(topic="test topic", max_rounds=1)
+        state.search_queries = ["q1", "q2", "q3"]
+        ctx = GraphRunContext(state=state, deps=mock_deps)
+        node = SearchNode()
+        await node.run(ctx)
+        assert ctx.state.all_search_results == []
+
+
 class TestConcurrentExtraction:
     """Test concurrent keyword extraction with multiple resources and extractors."""
 
