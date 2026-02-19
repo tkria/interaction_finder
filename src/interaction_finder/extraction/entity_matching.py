@@ -36,7 +36,9 @@ from interaction_finder.extraction.utils import (
     osa_distance,
     entity_names_match,
 )
+from interaction_finder.logging import get_logger
 
+logger = get_logger(__name__)
 
 # ============================================================================
 # Speculation Constants
@@ -551,6 +553,12 @@ def build_variant_map(
     for canonical, variants in entities.items():
         for sv in variants:
             norm = normalize_for_comparison(sv.form)
+            if not norm:
+                logger.warning(
+                    f"Entity variant normalizes to empty string: {sv.form!r}",
+                    canonical=canonical,
+                )
+                continue
             norm_to_mappings.setdefault(norm, []).append((canonical, sv))
 
     # Filter contested, keep best uncontested
@@ -637,6 +645,12 @@ def find_entity_match(
 
     for qv in query_variants:
         qv_norm = normalize_for_comparison(qv.form)
+        if not qv_norm:
+            logger.warning(
+                f"Entity variant normalizes to empty string: {qv.form!r}",
+                query=query,
+            )
+            continue
         for variant_norm, mapping in variant_map.items():
             shorter_len = min(len(qv_norm), len(variant_norm))
             dist = osa_distance(qv_norm, variant_norm)
