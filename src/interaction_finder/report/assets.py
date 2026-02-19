@@ -1320,7 +1320,7 @@ function clearSearch() {
     const searchInput = document.getElementById('search-input');
     if (!searchInput.value) return;
     searchInput.value = '';
-    handleSearch({ target: searchInput });
+    handleSearch({ target: searchInput }, true);
 }
 
 // Initialize report
@@ -1361,7 +1361,7 @@ function initReport() {
                 const name = span.textContent.trim();
                 const searchInput = document.getElementById('search-input');
                 searchInput.value = formatFilterQuery(kind, name);
-                handleSearch({ target: searchInput });
+                handleSearch({ target: searchInput }, true);
             });
         });
         // Add click handlers to relationship labels for search filtering (uses relation:type syntax)
@@ -1373,7 +1373,7 @@ function initReport() {
                 const rel = card.dataset.rel || '';
                 const searchInput = document.getElementById('search-input');
                 searchInput.value = formatFilterQuery('relation', rel);
-                handleSearch({ target: searchInput });
+                handleSearch({ target: searchInput }, true);
             });
         });
     });
@@ -1471,11 +1471,11 @@ function matchesFilter(card, filter) {
 }
 
 // Search handler
-function handleSearch(e) {
+function handleSearch(e, usePushState = false) {
     state.searchQuery = e.target.value.toLowerCase();
     updateHeaderCounts();
     updatePairListDisplay();  // May clear selection if pair no longer matches filter
-    updateURL(false);  // replaceState after state is finalized
+    updateURL(usePushState);
     renderContent();
     renderReasoning();
 }
