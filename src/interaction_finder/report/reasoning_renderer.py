@@ -18,6 +18,68 @@ _CITATION_WITH_PREFIX = re.compile(
 from interaction_finder.text_mapping import NormalizedTextMapper
 
 
+def _spans_overlap(a: list[list[int]], b: list[list[int]]) -> bool:
+    """Check whether two span lists cover essentially the same text region.
+
+    Returns True when every span pair overlaps and the total covered range
+    differs by at most 2 characters (e.g. trailing punctuation).
+    """
+    if len(a) != len(b):
+        return False
+    for (a_start, a_end), (b_start, b_end) in zip(a, b):
+        # Spans must overlap
+        if a_end <= b_start or b_end <= a_start:
+            return False
+    # Total coverage must be nearly identical
+    a_total = sum(end - start for start, end in a)
+    b_total = sum(end - start for start, end in b)
+    return abs(a_total - b_total) <= 2
+
+
+def _merge_overlapping_quotes(
+    quotes: list[dict[str, Any]],
+    quote_assessments: dict[tuple, list[int]],
+) -> tuple[list[dict[str, Any]], dict[tuple, list[int]]]:
+    """Merge consecutive quotes that cover the same region.
+
+    After position-sorting, quotes that differ only by trailing punctuation
+    appear adjacent. This merges them into a single entry, keeping the longer
+    text and unioning their assessment indices.
+
+    Args:
+        quotes: Position-sorted quote dicts
+        quote_assessments: Mapping of quote_key -> assessment indices (1-indexed)
+
+    Returns:
+        (merged_quotes, merged_assessments) with duplicates collapsed
+    """
+    if len(quotes) <= 1:
+        return quotes, quote_assessments
+    merged: list[dict[str, Any]] = [quotes[0]]
+    for quote in quotes[1:]:
+        prev = merged[-1]
+        if _spans_overlap(prev["spans"], quote["spans"]):
+            prev_key = _quote_key_for_id(prev)
+            curr_key = _quote_key_for_id(quote)
+            # Keep the longer text as representative
+            if len(quote["text"]) > len(prev["text"]):
+                merged[-1] = quote
+                keep_key, drop_key = curr_key, prev_key
+            else:
+                keep_key, drop_key = prev_key, curr_key
+            # Union assessment indices into the kept entry
+            combined = sorted(
+                set(
+                    quote_assessments.get(prev_key, [])
+                    + quote_assessments.get(curr_key, [])
+                )
+            )
+            quote_assessments[keep_key] = combined
+        else:
+            merged.append(quote)
+    return merged, quote_assessments
+
+
 def _quote_key_for_id(quote: dict[str, Any]) -> tuple:
     """Generate lookup key for quote ID mapping.
 
@@ -356,6 +418,13 @@ class ReasoningTemplateRenderer:
                     quote_assessments[key] = []
                     all_quotes.append(quote)
                 quote_assessments[key].append(assess_idx + 1)  # 1-indexed for display
+        # Sort quotes by document position (start of first span)
+        all_quotes.sort(key=lambda q: q["spans"][0][0] if q["spans"] else 0)
+        # Merge near-duplicate quotes that cover the same region but differ
+        # only by trailing punctuation (off-by-one span end)
+        all_quotes, quote_assessments = _merge_overlapping_quotes(
+            all_quotes, quote_assessments
+        )
         if len(assessments) == 1:
             # Single assessment: render without box wrapper
             assessments_html = render_single_assessment(assessments[0])
