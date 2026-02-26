@@ -323,7 +323,7 @@ class PubMedBackend(SearchBackend):
         """Perform a search with the given query."""
         query_text = query.query
         with logfire.span(
-            f"PubMed: {query_text}",
+            "PubMed: {query}",
             query=query_text,
             max_results=query.max_results,
         ):

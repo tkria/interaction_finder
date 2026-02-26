@@ -216,7 +216,7 @@ async def _consolidate_kind(
     deps: Deps,
 ) -> dict[tuple[str, str], tuple[str, str]]:
     """Process a single entity kind to completion."""
-    with logfire.span(f"Consolidate {kind} entities", kind=kind):
+    with logfire.span("Consolidate {kind} entities", kind=kind):
         return await _consolidate_kind_impl(kind, entities, mention_counts, state, deps)
 
 

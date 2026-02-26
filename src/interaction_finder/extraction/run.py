@@ -89,7 +89,7 @@ async def run_extraction(
     """
     topic = input_checkpoint.topic
     resource_pool = input_checkpoint.resources
-    with logfire.span(f"Extraction: {topic}"):
+    with logfire.span("Extraction: {topic}", topic=topic):
         if config is None:
             config = IfetcherConfig()
         if logger is None:
