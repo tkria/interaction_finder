@@ -613,6 +613,8 @@ def config(
             raise typer.Exit(1)
     except KeyboardInterrupt:
         _handle_keyboard_interrupt(None)
+    except click.exceptions.Exit:
+        raise
     except Exception as e:
         _handle_exception(e, None, verbose)
 
@@ -812,6 +814,8 @@ def fetch(
         raise typer.Exit(1)
     except KeyboardInterrupt:
         _handle_keyboard_interrupt(None)
+    except click.exceptions.Exit:
+        raise
     except Exception as e:
         _handle_exception(e, None, verbose)
 
@@ -933,6 +937,8 @@ def keywords(
 
     except KeyboardInterrupt:
         _handle_keyboard_interrupt(output)
+    except click.exceptions.Exit:
+        raise
     except Exception as e:
         _handle_exception(e, output, verbose)
 
@@ -1076,6 +1082,8 @@ def search(
 
     except KeyboardInterrupt:
         _handle_keyboard_interrupt(output)
+    except click.exceptions.Exit:
+        raise
     except Exception as e:
         _handle_exception(e, output, verbose)
 
@@ -1144,7 +1152,7 @@ def extract(
             console.print(
                 "[yellow]⚠ Extraction already complete. Use --force to replace.[/yellow]"
             )
-            raise typer.Exit(1)
+            raise typer.Exit(80)
         # Create search backend (needed if search stage must run)
         backend_name = backend if backend else cfg.stage.search.search_backend
         search_backend = create_search_backend(backend_name, cfg)
@@ -1193,6 +1201,8 @@ def extract(
 
     except KeyboardInterrupt:
         _handle_keyboard_interrupt(output)
+    except click.exceptions.Exit:
+        raise
     except Exception as e:
         _handle_exception(e, output, verbose)
 
@@ -1319,6 +1329,8 @@ def report(
 
     except KeyboardInterrupt:
         _handle_keyboard_interrupt(None)
+    except click.exceptions.Exit:
+        raise
     except Exception as e:
         _handle_exception(e, None, verbose)
 
