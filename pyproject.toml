@@ -1,6 +1,6 @@
 [project]
 name = "interaction-finder"
-version = "0.1.0"
+version = "1.0.0"
 description = "Add your description here"
 readme = "README.md"
 authors = [{ name = "TEC", email = "git@tecosaur.net" }]
