@@ -1710,6 +1710,12 @@ function getFilteredPairs() {
         // Secondary: user-selected sort field
         let comparison = 0;
         switch (state.sortField) {
+            case 'default':
+                // Rank-sum fusion of pair_topic_rel and age_w: lower = better.
+                // Invert the subtraction so the direction toggle works the
+                // same way as the other (higher = better) fields.
+                comparison = parseFloat(b.dataset.rankScore) - parseFloat(a.dataset.rankScore);
+                break;
             case 'evidence':
                 comparison = parseInt(a.dataset.overall, 10) - parseInt(b.dataset.overall, 10);
                 break;

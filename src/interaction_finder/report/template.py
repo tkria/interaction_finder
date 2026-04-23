@@ -144,6 +144,7 @@ def _render_pair_cards(pairs: list[dict[str, Any]]) -> str:
              data-doc-count="{pair["doc_count"]}"
              data-quote-count="{pair["quote_count"]}"
              data-relevance="{pair.get("topic_relevance", 3)}"
+             data-rank-score="{pair.get("rank_sum_score", 0)}"
              data-doc-groups='{doc_groups_data}'>
             <div class="pair-entities">
                 <span title="{_escape_html(entity1_aliases_display)}" data-kind="{_escape_html(pair["entity1"]["kind"])}">
@@ -232,9 +233,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             <div class="filter-group">
                 <label for="sort-field">Sort:</label>
                 <select id="sort-field">
+                    <option value="default" selected>Default</option>
                     <option value="evidence">Evidence</option>
                     <option value="relevance">Relevance</option>
-                    <option value="docs" selected>Documents</option>
+                    <option value="docs">Documents</option>
                     <option value="quotes">Quotes</option>
                     <option value="entity">Entity name</option>
                 </select>

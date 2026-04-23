@@ -5,6 +5,8 @@ No JSON generation - all data embedded in HTML structure.
 """
 
 from collections import defaultdict
+from datetime import date
+from math import sqrt
 from typing import Any
 
 from rich.progress import (
@@ -29,6 +31,48 @@ from interaction_finder.report.reasoning_renderer import (
 )
 
 POLARITY_ORDER = ("positive", "negative", "neutral", "irrelevant")
+
+
+def _parse_pub_year(pub_date: str | None) -> int | None:
+    """Extract the year from an ISO-format YYYY-MM-DD string, or None."""
+    if not pub_date:
+        return None
+    try:
+        return date.fromisoformat(pub_date[:10]).year
+    except ValueError:
+        return None
+
+
+def _attach_rank_sum_score(pairs: list[dict[str, Any]]) -> None:
+    """Compute the within-topic rank-sum ranking score and store it in-place.
+
+    The score combines the ranks of ``topic_relevance`` (higher = better) and
+    ``age_w`` (higher = better), assigning each pair the average rank among
+    tied values (fractional ranking). Lower score = better. See the
+    supplementary "Default Sort in the Interactive Report".
+    """
+
+    def fractional_ranks_descending(values: list[float]) -> list[float]:
+        """Rank positions (1 = largest) with ties given the average rank."""
+        order = sorted(range(len(values)), key=lambda i: -values[i])
+        ranks = [0.0] * len(values)
+        i = 0
+        while i < len(order):
+            j = i
+            while j + 1 < len(order) and values[order[j + 1]] == values[order[i]]:
+                j += 1
+            avg = (i + j) / 2 + 1  # +1 because ranks start at 1
+            for k in range(i, j + 1):
+                ranks[order[k]] = avg
+            i = j + 1
+        return ranks
+
+    topic_rel_ranks = fractional_ranks_descending(
+        [float(p["topic_relevance"]) for p in pairs]
+    )
+    age_w_ranks = fractional_ranks_descending([float(p["age_w"]) for p in pairs])
+    for pair, r_topic, r_age in zip(pairs, topic_rel_ranks, age_w_ranks):
+        pair["rank_sum_score"] = r_topic + r_age
 
 
 def _quote_key_for_id(
@@ -97,6 +141,8 @@ def _build_pair_entry(
 ) -> dict[str, Any]:
     """Convert a PairJudgment into the lightweight dict used by the report."""
     doc_ids: set[str] = set()
+    # Publication year of each unique supporting document, if parseable.
+    doc_pub_years: dict[str, int | None] = {}
     total_quotes = 0
     polarity_counts = {polarity: 0 for polarity in POLARITY_ORDER}
     polarity_best_level = {polarity: 0 for polarity in POLARITY_ORDER}
@@ -111,6 +157,12 @@ def _build_pair_entry(
         resource = resource_pool.get(assessment.resource_id)
         if resource is None:
             continue
+        # Cache publication year for the age-weighted ranking sum; fall back to
+        # None if the date is missing or unparseable.
+        if assessment.resource_id.id not in doc_pub_years:
+            doc_pub_years[assessment.resource_id.id] = _parse_pub_year(
+                resource.publication_date
+            )
         quote_data = [
             {
                 "text": quote.query_text,
@@ -136,6 +188,15 @@ def _build_pair_entry(
             polarity_best_level[polarity] = evidence.overall
     # Get judgment-level evidence
     evidence = judgment.evidence
+    # Recency-weighted sum of supporting documents: one term per unique doc
+    # with a parseable publication date, weight = 1/sqrt(age + 1), where age
+    # is years between the doc's publication and report generation.
+    current_year = date.today().year
+    age_w = sum(
+        1.0 / sqrt(max(0, current_year - y) + 1)
+        for y in doc_pub_years.values()
+        if y is not None
+    )
     return {
         "entity1": {
             "name": judgment.entity1.name,
@@ -153,6 +214,7 @@ def _build_pair_entry(
         "accepted": judgment.accepted,
         "reasoning": judgment.reasoning,
         "doc_count": len(doc_ids),
+        "age_w": age_w,
         "quote_count": total_quotes,
         "assessments": assessments,
         "polarity_counts": polarity_counts,
@@ -300,16 +362,16 @@ def prepare_report_data(
         pair_entries.append((key, judgment, pair_data))
 
     pairs = [entry[2] for entry in pair_entries]
+    _attach_rank_sum_score(pairs)
 
-    # Sort pairs by: accepted status > evidence level > doc count > lexicographic
+    # Sort pairs by: accepted status > rank-sum score > evidence level > lexicographic.
+    # rank_sum_score combines within-topic ranks of pair_topic_rel and age_w
+    # (lower is better); see supplementary "Default Sort in the Interactive Report"
+    # for the empirical basis.
     def pair_sort_key(pair):
-        # Primary: accepted status (accepted first)
-        # Secondary: number of supporting documents (more is better, so negate)
-        # Tertiary: evidence level (higher is better, so negate)
-        # Quaternary: entity names lexicographically
         return (
             not pair["accepted"],  # False (accepted) sorts before True (rejected)
-            -pair["doc_count"],  # Negate to sort descending
+            pair["rank_sum_score"],  # Ascending (lower rank-sum first)
             -pair["overall"],  # Negate to sort descending (9 first)
             pair["entity1"]["name"].lower(),
             pair["entity2"]["name"].lower(),
