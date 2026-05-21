@@ -214,15 +214,34 @@ def test_no_json_embedded():
     # (Allow small config JSON, but not data)
     import json
 
-    # Look for large object literals that might be JSON
-    # If we find `{` followed by many lines and `}`, that's suspicious
+    # Look for large object literals that might be JSON.
+    # We track brace-balanced top-level blocks; JS function/class bodies are
+    # excluded since they grow with feature work and aren't JSON data.
+    # An embedded data blob would be thousands of lines.
     lines = html.split("\n")
     in_large_object = False
+    is_code_block = False  # function/class/control-flow body, not a data blob
     object_depth = 0
     object_lines = 0
+    code_block_keywords = (
+        "function",
+        "class ",
+        "if ",
+        "if(",
+        "for ",
+        "for(",
+        "while ",
+        "while(",
+        "switch ",
+        "switch(",
+        "=>",
+    )
 
     for line in lines:
         if "{" in line and not line.strip().startswith("//"):
+            if object_depth == 0:
+                stripped = line.strip()
+                is_code_block = any(kw in stripped for kw in code_block_keywords)
             object_depth += line.count("{")
             if object_depth > 0:
                 in_large_object = True
@@ -233,15 +252,14 @@ def test_no_json_embedded():
         if "}" in line:
             object_depth -= line.count("}")
             if object_depth == 0:
-                # End of object - check if it was large
-                if object_lines > 100:
-                    # Large object literal found - likely embedded data
+                if not is_code_block and object_lines > 100:
                     pytest.fail(
                         f"Large object literal found ({object_lines} lines) - "
                         "possible embedded JSON data"
                     )
                 object_lines = 0
                 in_large_object = False
+                is_code_block = False
 
 
 @pytest.mark.skipif(not HAS_BS4, reason="BeautifulSoup4 not installed")

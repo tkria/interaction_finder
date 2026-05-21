@@ -171,12 +171,54 @@ body {
     padding: 0;
     display: grid;
     grid-template-areas:
-        "header header header"
-        "sidebar content rightbar";
-    grid-template-columns: 320px 1fr 320px;
+        "header  header     header  header     header"
+        "sidebar resizer-l  content resizer-r  rightbar";
+    grid-template-columns: 320px 6px 1fr 6px 320px;
     grid-template-rows: auto 1fr;
     height: 100vh;
     overflow: hidden;
+}
+body.col-resizing {
+    cursor: col-resize;
+    user-select: none;
+}
+body.col-resizing * {
+    cursor: col-resize !important;
+}
+
+/* Column resizers */
+.col-resizer {
+    background: transparent;
+    cursor: col-resize;
+    position: relative;
+    z-index: 2;
+    transition: background 0.15s;
+}
+#resizer-left { grid-area: resizer-l; }
+#resizer-right { grid-area: resizer-r; }
+.col-resizer::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 50%;
+    width: 1px;
+    background: var(--pico-muted-border-color);
+    transform: translateX(-50%);
+    transition: opacity 0.15s;
+}
+.col-resizer:hover,
+.col-resizer.dragging,
+.col-resizer:focus-visible {
+    background: var(--pico-primary-focus, rgba(99, 102, 241, 0.2));
+}
+.col-resizer:hover::before,
+.col-resizer.dragging::before,
+.col-resizer:focus-visible::before {
+    opacity: 0;
+}
+.col-resizer:focus-visible {
+    outline: none;
 }
 
 /* Header */
@@ -266,8 +308,8 @@ header {
     color: var(--pico-color);
 }
 
-/* Filter toggle button */
-#filter-toggle {
+/* Header icon buttons (filter gear, export, etc.) */
+.icon-btn {
     position: relative;
     width: 2.5rem;
     height: 2.5rem;
@@ -276,10 +318,30 @@ header {
     flex-shrink: 0;
     align-self: center;
 }
-.gear-icon {
+.icon-btn-svg {
     width: 1.2rem;
     height: 1.2rem;
     fill: currentColor;
+}
+/* Gear icon rotates 60° when the filter panel opens, back when it closes. */
+#filter-toggle .icon-btn-svg {
+    transition: transform 0.25s ease-out;
+}
+#filter-toggle[aria-expanded="true"] .icon-btn-svg {
+    transform: rotate(60deg);
+}
+.icon-btn-borderless {
+    background: transparent;
+    border: none;
+    color: var(--pico-muted-color);
+    box-shadow: none;
+}
+.icon-btn-borderless:hover,
+.icon-btn-borderless:focus-visible {
+    background: transparent;
+    border: none;
+    color: var(--pico-primary);
+    box-shadow: none;
 }
 
 /* Active filter indicator dot */
@@ -351,6 +413,16 @@ header {
     margin: 0;
 }
 
+/* Clear-filters icon button: right-flushed within the filter panel */
+.filter-clear-btn {
+    margin: 0 0 0 auto;
+    color: var(--pico-color-red-550);
+}
+.filter-clear-btn:hover,
+.filter-clear-btn:focus-visible {
+    color: var(--pico-color-red-550);
+}
+
 /* Horizontal layout for wider screens */
 @media (min-width: 1200px) {
     .header-content {
@@ -384,7 +456,6 @@ header {
     grid-area: sidebar;
     overflow-y: auto;
     padding: var(--spacing-card);
-    border-right: 1px solid var(--pico-muted-border-color);
     background: var(--pico-background-color);
     display: flex;
     flex-direction: column;
@@ -422,7 +493,8 @@ header {
 
 .pair-entities {
     display: grid;
-    grid-template-columns: 1fr auto 1fr;
+    grid-template-columns: minmax(0, max-content) minmax(0, max-content);
+    justify-content: space-between;
     gap: var(--spacing-compact);
     align-items: center;
     margin-bottom: 0.25rem;
@@ -467,6 +539,10 @@ header {
     font-style: italic;
     font-size: 0.7rem;
     color: var(--pico-muted-color);
+    cursor: pointer;
+}
+.relationship-label:hover {
+    color: var(--pico-primary);
 }
 
 .pair-relationship-only {
@@ -834,7 +910,6 @@ header {
     grid-area: rightbar;
     overflow-y: auto;
     padding: var(--spacing-card);
-    border-left: 1px solid var(--pico-muted-border-color);
     background: var(--pico-background-color);
 }
 
@@ -1055,6 +1130,92 @@ header {
     display: none !important;
 }
 
+/* Export dialog */
+.export-modal {
+    width: min(720px, 95vw);
+    max-width: none;
+    max-height: 90vh;
+    overflow-y: auto;
+}
+.export-modal > footer {
+    display: flex;
+    gap: 0.5rem;
+    justify-content: flex-end;
+}
+.export-modal fieldset {
+    margin-bottom: 1rem;
+}
+.export-modal fieldset:last-of-type {
+    margin-bottom: 0;
+}
+.export-json-hint {
+    display: block;
+    margin: 0.5rem 0 0.35rem;
+    color: var(--pico-muted-color);
+    font-style: italic;
+}
+.export-col-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.25rem 1rem;
+}
+.export-col-grid label {
+    margin: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.9rem;
+}
+.export-col-grid[data-disabled="true"] label {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+.export-preview-section {
+    margin-top: 1rem;
+}
+.export-preview-section > strong {
+    display: block;
+    margin-bottom: 0.4rem;
+}
+.export-preview-wrap {
+    max-height: 220px;
+    overflow: auto;
+    border: 1px solid var(--pico-muted-border-color);
+    border-radius: var(--pico-border-radius);
+}
+#export-preview-table {
+    margin: 0;
+    font-size: 0.8rem;
+    white-space: nowrap;
+}
+#export-preview-table th,
+#export-preview-table td {
+    padding: 0.3rem 0.5rem;
+}
+#export-row-count {
+    display: block;
+    margin-top: 0.4rem;
+    color: var(--pico-muted-color);
+}
+.export-toast {
+    position: fixed;
+    bottom: 1.5rem;
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--pico-primary);
+    color: var(--pico-primary-inverse, white);
+    padding: 0.5rem 1rem;
+    border-radius: var(--pico-border-radius);
+    z-index: 10000;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    opacity: 0;
+    transition: opacity 0.2s;
+    pointer-events: none;
+}
+.export-toast.visible {
+    opacity: 1;
+}
+
 /* Scrollbar styling */
 ::-webkit-scrollbar {
     width: 8px;
@@ -1089,7 +1250,7 @@ const state = {
     searchQuery: '',
     showRejected: false,
     // Filter/sort state
-    sortField: 'docs',        // 'evidence', 'relevance', 'docs', 'quotes', 'entity'
+    sortField: 'default',     // 'default', 'evidence', 'relevance', 'docs', 'quotes', 'entity'
     sortDir: 'desc',          // 'asc', 'desc'
     evidenceMin: 0,           // 0 = any, 1-9 = specific
     evidenceMax: 10,          // 10 = any, 1-9 = specific
@@ -1117,7 +1278,7 @@ function getStateFromURL() {
         rejected: params.get('rejected') === '1',
         scroll: scroll,
         // Filter/sort params
-        sortField: params.get('sort') || 'docs',
+        sortField: params.get('sort') || 'default',
         sortDir: params.get('dir') || 'desc',
         evidenceMin: params.has('emin') ? parseInt(params.get('emin'), 10) : 0,
         evidenceMax: params.has('emax') ? parseInt(params.get('emax'), 10) : 10,
@@ -1153,7 +1314,7 @@ function updateURL(usePushState = false, outgoingScroll = null) {
         params.set('rejected', '1');
     }
     // Filter/sort params (only when non-default)
-    if (state.sortField !== 'evidence') {
+    if (state.sortField !== 'default') {
         params.set('sort', state.sortField);
     }
     if (state.sortDir !== 'desc') {
@@ -1329,8 +1490,26 @@ function clearSearch() {
     handleSearch({ target: searchInput }, true);
 }
 
+// DEBUG: Trace all sidebar scroll changes
+let _debugTraceScroll = false;
+{
+    const sidebarEl = document.getElementById('sidebar');
+    if (sidebarEl) {
+        sidebarEl.addEventListener('scroll', () => {
+            if (_debugTraceScroll) {
+                console.trace('[scroll trace] sidebar scrollTop:', sidebarEl.scrollTop);
+            }
+        });
+    }
+}
+
 // Initialize report
 function initReport() {
+    // Restore column widths and wire up the resizer handles.
+    initColumnResizers();
+    // Wire up the export dialog (Pico modal).
+    initExportDialog();
+
     // Set up event listeners
     const searchInput = document.getElementById('search-input');
     searchInput.addEventListener('input', handleSearch);
@@ -1352,6 +1531,7 @@ function initReport() {
     document.getElementById('relevance-min').addEventListener('change', handleRelevanceMinChange);
     document.getElementById('relevance-max').addEventListener('change', handleRelevanceMaxChange);
     document.getElementById('contentious-only').addEventListener('change', handleToggleContentious);
+    document.getElementById('filter-clear').addEventListener('click', clearAllFilters);
 
     // Add click handlers to pre-rendered pair cards
     const sidebar = document.getElementById('sidebar');
@@ -1373,7 +1553,6 @@ function initReport() {
         // Add click handlers to relationship labels for search filtering (uses relation:type syntax)
         const relLabels = card.querySelectorAll('.relationship-label');
         relLabels.forEach((label) => {
-            label.style.cursor = 'pointer';
             label.addEventListener('click', (e) => {
                 e.stopPropagation();
                 const rel = card.dataset.rel || '';
@@ -1386,15 +1565,15 @@ function initReport() {
 
     // Handle browser back/forward navigation
     window.addEventListener('popstate', (event) => {
-        // Prefer scroll from history.state (captured at pushState time) over URL params
+        _debugTraceScroll = true;
         restoreStateFromURL(event.state?.scroll);
         updateHeaderCounts();
         updatePairListDisplay();
         renderContent();
-        renderReasoning(false);  // Don't reset scroll - applyPendingScroll will restore it
+        renderReasoning(false);
         applyPendingScroll();
-        // Ensure selected pair card is visible (scroll position may be stale after filter changes)
         ensureSelectedPairVisible();
+        setTimeout(() => { _debugTraceScroll = false; }, 1000);
     });
 
     // Add scroll listeners for URL updates (debounced)
@@ -1419,6 +1598,11 @@ function initReport() {
 
     // Set initial history.state so scroll restoration works on first back navigation
     updateURL(false);
+
+    // Clear startup-busy indicators. The content placeholder has already been
+    // overwritten by renderContent() (which inserts its own non-busy
+    // placeholder); the header title carries the busy spinner until now.
+    document.querySelector('.header-title')?.removeAttribute('aria-busy');
 }
 
 // Format a filter query string, quoting if value contains spaces
@@ -1509,7 +1693,7 @@ function toggleFilterPanel() {
 // Check if any non-default filters are active
 function hasNonDefaultFilters() {
     return (
-        state.sortField !== 'docs' ||
+        state.sortField !== 'default' ||
         state.sortDir !== 'desc' ||
         state.evidenceMin > 0 ||
         state.evidenceMax < 10 ||
@@ -1520,14 +1704,38 @@ function hasNonDefaultFilters() {
     );
 }
 
-// Update filter active indicator on gear button
+// Update filter active indicator on gear button, and show/hide the
+// "Clear filters" button accordingly.
 function updateFilterActiveIndicator() {
-    const toggle = document.getElementById('filter-toggle');
-    if (hasNonDefaultFilters()) {
-        toggle.classList.add('has-active-filters');
-    } else {
-        toggle.classList.remove('has-active-filters');
-    }
+    const active = hasNonDefaultFilters();
+    document.getElementById('filter-toggle').classList.toggle('has-active-filters', active);
+    document.getElementById('filter-clear').hidden = !active;
+}
+
+// Reset every filter/sort control to its default and re-render.
+function clearAllFilters() {
+    state.searchQuery = '';
+    state.showRejected = false;
+    state.showContentious = false;
+    state.sortField = 'default';
+    state.sortDir = 'desc';
+    state.evidenceMin = 0;
+    state.evidenceMax = 10;
+    state.relevanceMin = 0;
+    state.relevanceMax = 6;
+    // Sync UI controls with state.
+    document.getElementById('search-input').value = '';
+    document.getElementById('show-rejected').checked = false;
+    document.getElementById('contentious-only').checked = false;
+    document.getElementById('sort-field').value = 'default';
+    document.getElementById('sort-dir-toggle').dataset.dir = 'desc';
+    document.getElementById('evidence-min').value = '0';
+    document.getElementById('evidence-max').value = '10';
+    document.getElementById('relevance-min').value = '0';
+    document.getElementById('relevance-max').value = '6';
+    updateRangeFilterOptions();
+    applyFiltersAndSort();
+    updateURL(true);
 }
 
 // Sort field change handler
@@ -2214,6 +2422,771 @@ function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+}
+
+// ---------------------------------------------------------------------------
+// Column resizing
+// ---------------------------------------------------------------------------
+
+const COLUMN_WIDTH_STORAGE_KEY = 'if-report-column-widths';
+const COLUMN_MIN_PX = 180;
+const COLUMN_CONTENT_MIN_PX = 240;
+const COLUMN_RESIZER_PX = 6;
+const COLUMN_KEY_STEP_PX = 24;
+
+function readStoredColumnWidths() {
+    try {
+        const raw = localStorage.getItem(COLUMN_WIDTH_STORAGE_KEY);
+        if (!raw) return null;
+        const parsed = JSON.parse(raw);
+        const left = Number(parsed.left);
+        const right = Number(parsed.right);
+        if (!Number.isFinite(left) || !Number.isFinite(right)) return null;
+        return { left, right };
+    } catch (e) {
+        return null;
+    }
+}
+
+function writeStoredColumnWidths(left, right) {
+    try {
+        localStorage.setItem(
+            COLUMN_WIDTH_STORAGE_KEY,
+            JSON.stringify({ left, right })
+        );
+    } catch (e) {
+        // Storage may be unavailable (private mode, quota); ignore.
+    }
+}
+
+function applyColumnWidths(left, right) {
+    const viewport = window.innerWidth;
+    const reservedForContent = COLUMN_CONTENT_MIN_PX + 2 * COLUMN_RESIZER_PX;
+    const maxSide = Math.max(COLUMN_MIN_PX, viewport - reservedForContent - COLUMN_MIN_PX);
+    const clampedLeft = Math.min(maxSide, Math.max(COLUMN_MIN_PX, left));
+    const clampedRight = Math.min(maxSide, Math.max(COLUMN_MIN_PX, right));
+    document.body.style.gridTemplateColumns =
+        `${clampedLeft}px ${COLUMN_RESIZER_PX}px 1fr ${COLUMN_RESIZER_PX}px ${clampedRight}px`;
+    return { left: clampedLeft, right: clampedRight };
+}
+
+function getCurrentColumnWidths() {
+    const sidebar = document.getElementById('sidebar');
+    const rightbar = document.getElementById('rightbar');
+    return {
+        left: sidebar ? sidebar.getBoundingClientRect().width : COLUMN_MIN_PX,
+        right: rightbar ? rightbar.getBoundingClientRect().width : COLUMN_MIN_PX,
+    };
+}
+
+function initColumnResizers() {
+    // Restore persisted widths (clamped to viewport).
+    const stored = readStoredColumnWidths();
+    if (stored) {
+        applyColumnWidths(stored.left, stored.right);
+    }
+
+    const leftResizer = document.getElementById('resizer-left');
+    const rightResizer = document.getElementById('resizer-right');
+    if (!leftResizer || !rightResizer) return;
+
+    function startDrag(side, startEvent) {
+        const startX = startEvent.clientX;
+        const initial = getCurrentColumnWidths();
+        const resizer = side === 'left' ? leftResizer : rightResizer;
+        resizer.classList.add('dragging');
+        document.body.classList.add('col-resizing');
+
+        function onMove(moveEvent) {
+            const dx = moveEvent.clientX - startX;
+            let left = initial.left;
+            let right = initial.right;
+            if (side === 'left') {
+                left = initial.left + dx;
+            } else {
+                right = initial.right - dx;
+            }
+            applyColumnWidths(left, right);
+        }
+
+        function onUp() {
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+            resizer.classList.remove('dragging');
+            document.body.classList.remove('col-resizing');
+            const final = getCurrentColumnWidths();
+            writeStoredColumnWidths(final.left, final.right);
+        }
+
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+        startEvent.preventDefault();
+    }
+
+    leftResizer.addEventListener('mousedown', (e) => startDrag('left', e));
+    rightResizer.addEventListener('mousedown', (e) => startDrag('right', e));
+
+    // Double-click to reset to default width.
+    leftResizer.addEventListener('dblclick', () => {
+        const cur = getCurrentColumnWidths();
+        const applied = applyColumnWidths(320, cur.right);
+        writeStoredColumnWidths(applied.left, applied.right);
+    });
+    rightResizer.addEventListener('dblclick', () => {
+        const cur = getCurrentColumnWidths();
+        const applied = applyColumnWidths(cur.left, 320);
+        writeStoredColumnWidths(applied.left, applied.right);
+    });
+
+    // Keyboard support for accessibility.
+    function handleKey(side, event) {
+        const isLeftArrow = event.key === 'ArrowLeft';
+        const isRightArrow = event.key === 'ArrowRight';
+        if (!isLeftArrow && !isRightArrow) return;
+        event.preventDefault();
+        const cur = getCurrentColumnWidths();
+        const delta = (isRightArrow ? 1 : -1) * COLUMN_KEY_STEP_PX;
+        let left = cur.left;
+        let right = cur.right;
+        if (side === 'left') {
+            left = cur.left + delta;
+        } else {
+            right = cur.right - delta;
+        }
+        const applied = applyColumnWidths(left, right);
+        writeStoredColumnWidths(applied.left, applied.right);
+    }
+    leftResizer.addEventListener('keydown', (e) => handleKey('left', e));
+    rightResizer.addEventListener('keydown', (e) => handleKey('right', e));
+
+    // Re-clamp on window resize so columns don't push content below its minimum.
+    window.addEventListener('resize', () => {
+        const cur = getCurrentColumnWidths();
+        const applied = applyColumnWidths(cur.left, cur.right);
+        if (applied.left !== cur.left || applied.right !== cur.right) {
+            writeStoredColumnWidths(applied.left, applied.right);
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Export feature
+// ---------------------------------------------------------------------------
+
+const EXPORT_MODAL_ANIMATION_MS = 400;
+
+// Column definitions. `id` is the JSON key and the fallback label; `label`
+// is the checkbox label and CSV header (after kind-substitution for the
+// entity columns). `jsonOnly` columns are disabled when CSV/TSV is selected
+// and render in the second section. `default` controls the initial state.
+// Array/object values are flattened with `|` for delimited formats and
+// preserved as-is in JSON.
+const EXPORT_PAIR_COLUMNS = [
+    { id: 'entity1', label: 'Entity 1', default: true, get: (p) => p.e1 },
+    { id: 'entity1_kind', label: 'Entity 1 kind',
+      get: (p) => p.e1Kind, onlyWhenMixedSide: 'e1' },
+    { id: 'entity2', label: 'Entity 2', default: true, get: (p) => p.e2 },
+    { id: 'entity2_kind', label: 'Entity 2 kind',
+      get: (p) => p.e2Kind, onlyWhenMixedSide: 'e2' },
+    { id: 'relationship', label: 'Relationship', default: true, get: (p) => p.rel },
+    { id: 'evidence', label: 'Evidence', get: (p) => p.overall },
+    { id: 'evidence_label', label: 'Evidence label', get: (p) => p.evidenceLabel },
+    { id: 'topic_relevance', label: 'Topic relevance', default: true, get: (p) => p.relevance },
+    { id: 'doc_count', label: 'Document count', default: true, get: (p) => p.docCount },
+    { id: 'quote_count', label: 'Quote count', default: true, get: (p) => p.quoteCount },
+    { id: 'polarity_counts', label: 'Polarity counts', get: (p) => p.polarityCounts },
+    { id: 'document_urls', label: 'Document URLs',
+      get: (p) => p.docs.map((d) => d.url).filter(Boolean) },
+    { id: 'document_dois', label: 'Document DOIs',
+      get: (p) => p.docs.map((d) => d.doi).filter(Boolean) },
+    { id: 'entity1_aliases', label: 'Entity 1 aliases', jsonOnly: true, default: true,
+      get: (p) => p.e1Aliases, onlyWhenAliasesPresent: 'e1' },
+    { id: 'entity2_aliases', label: 'Entity 2 aliases', jsonOnly: true, default: true,
+      get: (p) => p.e2Aliases, onlyWhenAliasesPresent: 'e2' },
+];
+
+// Cached map of doc_idx -> { title, url, doi }. Populated lazily on first
+// export by parsing the document templates.
+let exportDocLinksCache = null;
+
+function buildDocLinksCache() {
+    if (exportDocLinksCache) return exportDocLinksCache;
+    exportDocLinksCache = {};
+    document.querySelectorAll('#document-templates template').forEach((tpl) => {
+        const idMatch = tpl.id.match(/^doc-template-(\\d+)$/);
+        if (!idMatch) return;
+        const docIdx = Number(idMatch[1]);
+        const content = tpl.content;
+        const titleEl = content.querySelector('.document-title')?.cloneNode(true);
+        titleEl?.querySelector('.document-date')?.remove();
+        const title = titleEl?.textContent.trim() || '';
+        const url = content.querySelector('a.document-url-badge')?.getAttribute('href') || '';
+        // DOI lives in the link's href as "https://doi.org/{doi}" — parsing
+        // the href avoids whitespace artefacts from the rendered text content.
+        const doiHref = content.querySelector('a.document-doi-link')?.getAttribute('href') || '';
+        const doi = doiHref.replace(/^https?:\\/\\/doi\\.org\\//, '');
+        exportDocLinksCache[docIdx] = { title, url, doi };
+    });
+    return exportDocLinksCache;
+}
+
+function readDocGroups(card) {
+    try {
+        return JSON.parse(card.dataset.docGroups || '[]');
+    } catch (e) {
+        return [];
+    }
+}
+
+// Return the unique supporting-document records for this card, in display order.
+function getDocsForCard(card) {
+    const byIdx = buildDocLinksCache();
+    const docs = [];
+    const seen = new Set();
+    for (const group of readDocGroups(card)) {
+        if (seen.has(group.doc_idx)) continue;
+        seen.add(group.doc_idx);
+        const entry = byIdx[group.doc_idx];
+        if (entry) docs.push(entry);
+    }
+    return docs;
+}
+
+function formatKindForHeader(kind) {
+    return kind ? kind.charAt(0).toUpperCase() + kind.slice(1) : '';
+}
+
+function formatPolarityCounts(card) {
+    const counts = { positive: 0, negative: 0, neutral: 0, irrelevant: 0 };
+    for (const g of readDocGroups(card)) {
+        if (g.polarity in counts) counts[g.polarity] += g.assessment_count || 1;
+    }
+    return counts;
+}
+
+// Read a normalised pair record from a card. Aliases come back as arrays.
+function readPairFromCard(card) {
+    const aliasList = (s) => (s || '').split(',').filter((x) => x);
+    return {
+        e1: card.dataset.e1 || '',
+        e1Kind: card.querySelector('.pair-entities > span:first-child')?.dataset.kind || '',
+        e1Aliases: aliasList(card.dataset.e1a),
+        e2: card.dataset.e2 || '',
+        e2Kind: card.querySelector('.pair-entities > span:last-child')?.dataset.kind || '',
+        e2Aliases: aliasList(card.dataset.e2a),
+        rel: card.dataset.rel || '',
+        overall: Number(card.dataset.overall) || 0,
+        evidenceLabel: card.querySelector('.evidence-badge')?.textContent.trim() || '',
+        relevance: Number(card.dataset.relevance) || 0,
+        docCount: Number(card.dataset.docCount) || 0,
+        quoteCount: Number(card.dataset.quoteCount) || 0,
+        polarityCounts: formatPolarityCounts(card),
+        docs: getDocsForCard(card),
+    };
+}
+
+// Inspect the cards currently being exported and decide which columns are
+// applicable: entity-kind columns appear only when that side has >1 kind;
+// alias columns appear only when at least one card on that side has aliases.
+function buildExportContext(cards) {
+    const e1Kinds = new Set();
+    const e2Kinds = new Set();
+    let e1HasAliases = false;
+    let e2HasAliases = false;
+    for (const card of cards) {
+        const span1 = card.querySelector('.pair-entities > span:first-child');
+        const span2 = card.querySelector('.pair-entities > span:last-child');
+        if (span1?.dataset.kind) e1Kinds.add(span1.dataset.kind);
+        if (span2?.dataset.kind) e2Kinds.add(span2.dataset.kind);
+        if ((card.dataset.e1a || '').length > 0) e1HasAliases = true;
+        if ((card.dataset.e2a || '').length > 0) e2HasAliases = true;
+    }
+    const e1Mixed = e1Kinds.size > 1;
+    const e2Mixed = e2Kinds.size > 1;
+    return {
+        e1Mixed,
+        e2Mixed,
+        e1SoleKind: e1Mixed ? null : [...e1Kinds][0] || null,
+        e2SoleKind: e2Mixed ? null : [...e2Kinds][0] || null,
+        e1HasAliases,
+        e2HasAliases,
+        allKinds: new Set([...e1Kinds, ...e2Kinds]),
+    };
+}
+
+// Resolve a column header label given the export context (substituting kind
+// names for "Entity 1/2" when only one kind is present on that side).
+function columnHeaderLabel(col, ctx) {
+    if (col.id === 'entity1' && ctx.e1SoleKind) return formatKindForHeader(ctx.e1SoleKind);
+    if (col.id === 'entity2' && ctx.e2SoleKind) return formatKindForHeader(ctx.e2SoleKind);
+    if (col.id === 'entity1_aliases' && ctx.e1SoleKind)
+        return `${formatKindForHeader(ctx.e1SoleKind)} aliases`;
+    if (col.id === 'entity2_aliases' && ctx.e2SoleKind)
+        return `${formatKindForHeader(ctx.e2SoleKind)} aliases`;
+    return col.label;
+}
+
+// Return columns applicable to the current report (after side-mixing filter).
+function applicableColumns(ctx) {
+    return EXPORT_PAIR_COLUMNS.filter((col) => {
+        if (col.onlyWhenMixedSide === 'e1' && !ctx.e1Mixed) return false;
+        if (col.onlyWhenMixedSide === 'e2' && !ctx.e2Mixed) return false;
+        if (col.onlyWhenAliasesPresent === 'e1' && !ctx.e1HasAliases) return false;
+        if (col.onlyWhenAliasesPresent === 'e2' && !ctx.e2HasAliases) return false;
+        return true;
+    });
+}
+
+function getExportCards() {
+    const applyFilters = document.getElementById('export-apply-filters').checked;
+    if (applyFilters) {
+        return getFilteredPairs();  // already an array of cards
+    }
+    return Array.from(document.querySelectorAll('#sidebar .pair-card'));
+}
+
+// Mode selection. Radio values are 'pairs' or 'entities:<kind>'.
+function getExportModeValue() {
+    const checked = document.querySelector('input[name="export-mode"]:checked');
+    return checked ? checked.value : 'pairs';
+}
+
+function getExportMode() {
+    return getExportModeValue().startsWith('entities:') ? 'entities' : 'pairs';
+}
+
+function getSelectedEntityKind() {
+    const value = getExportModeValue();
+    return value.startsWith('entities:') ? value.slice('entities:'.length) : null;
+}
+
+function getExportFormat() {
+    const checked = document.querySelector('input[name="export-format"]:checked');
+    return checked ? checked.value : 'csv';
+}
+
+// Rebuild the column checkbox lists based on the current export context.
+// Preserves user check state for columns that still exist.
+function rebuildColumnControls(ctx) {
+    const standardGrid = document.querySelector('.export-col-grid[data-section="standard"]');
+    const jsonGrid = document.querySelector('.export-col-grid[data-section="json"]');
+    const existing = {};
+    document.querySelectorAll('input[name="export-col"]').forEach((cb) => {
+        existing[cb.value] = cb.checked;
+    });
+    standardGrid.innerHTML = '';
+    jsonGrid.innerHTML = '';
+    for (const col of applicableColumns(ctx)) {
+        const checked = col.id in existing ? existing[col.id] : !!col.default;
+        const label = document.createElement('label');
+        const input = document.createElement('input');
+        input.type = 'checkbox';
+        input.name = 'export-col';
+        input.value = col.id;
+        if (checked) input.checked = true;
+        label.appendChild(input);
+        label.appendChild(document.createTextNode(' ' + columnHeaderLabel(col, ctx)));
+        (col.jsonOnly ? jsonGrid : standardGrid).appendChild(label);
+    }
+    const hint = document.querySelector('.export-json-hint');
+    const showJson = jsonGrid.children.length > 0;
+    jsonGrid.style.display = showJson ? '' : 'none';
+    hint.style.display = showJson ? '' : 'none';
+}
+
+function updateColumnsSectionVisibility() {
+    const isEntities = getExportMode() === 'entities';
+    document.getElementById('export-columns-pairs').style.display = isEntities ? 'none' : '';
+    document.getElementById('export-columns-entities').style.display = isEntities ? '' : 'none';
+}
+
+function updateJsonOnlyAvailability() {
+    const isJson = getExportFormat() === 'json';
+    const jsonGrid = document.querySelector('.export-col-grid[data-section="json"]');
+    jsonGrid.dataset.disabled = isJson ? 'false' : 'true';
+    jsonGrid.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
+        cb.disabled = !isJson;
+    });
+}
+
+// Render the mode radios as a flat list: 'Pairs' + one entry per detected
+// kind. Preserves selection across rebuilds when possible.
+function rebuildModeControls(ctx) {
+    const fieldset = document.getElementById('export-mode-fieldset');
+    const previous = getExportModeValue();
+    fieldset.querySelectorAll('input, label').forEach((el) => el.remove());
+    const kinds = [...ctx.allKinds].sort();
+    const values = ['pairs', ...kinds.map((k) => `entities:${k}`)];
+    const selected = values.includes(previous) ? previous : 'pairs';
+    for (const value of values) {
+        const id = `export-mode-${value.replace(/[^a-z0-9-]/gi, '-')}`;
+        const input = document.createElement('input');
+        input.type = 'radio';
+        input.name = 'export-mode';
+        input.id = id;
+        input.value = value;
+        if (value === selected) input.checked = true;
+        const label = document.createElement('label');
+        label.htmlFor = id;
+        label.textContent = value === 'pairs'
+            ? 'Pairs'
+            : `${formatKindForHeader(value.slice('entities:'.length))}s`;
+        fieldset.appendChild(input);
+        fieldset.appendChild(label);
+    }
+}
+
+
+// Are any filters narrowing the visible set (excluding sort order)?
+function hasActiveExportFilters() {
+    return (
+        state.searchQuery.length > 0 ||
+        state.evidenceMin > 0 ||
+        state.evidenceMax < 10 ||
+        state.relevanceMin > 0 ||
+        state.relevanceMax < 6 ||
+        state.showRejected ||
+        state.showContentious
+    );
+}
+
+function updateScopeCount() {
+    const fieldset = document.getElementById('export-filters-fieldset');
+    if (!hasActiveExportFilters()) {
+        // No filters narrow the set, so the toggle is meaningless: hide it.
+        // Leave `checked = true` so the export pulls from getFilteredPairs(),
+        // which returns the same full set when no filters are active.
+        fieldset.style.display = 'none';
+        document.getElementById('export-apply-filters').checked = true;
+        return;
+    }
+    fieldset.style.display = '';
+}
+
+// Build the array of row objects to be exported, given the current settings.
+function buildExportRows(cards, ctx) {
+    return getExportMode() === 'entities' ? buildEntityRows(cards) : buildPairRows(cards, ctx);
+}
+
+function selectedColumnIds() {
+    const ids = [];
+    document.querySelectorAll('input[name="export-col"]:checked').forEach((cb) => {
+        if (cb.disabled) return;
+        ids.push(cb.value);
+    });
+    return ids;
+}
+
+// JSON-only attribute IDs that get hoisted to top-level keys in the JSON
+// payload rather than appearing on individual rows. Rows reference the
+// hoisted data instead (documents by index, aliases by entity name).
+const HOISTED_DOC_COLS = new Set(['document_urls', 'document_dois']);
+const HOISTED_ALIAS_COLS = new Set(['entity1_aliases', 'entity2_aliases']);
+
+function buildPairRows(cards, ctx) {
+    const selectedIds = new Set(selectedColumnIds());
+    const activeCols = applicableColumns(ctx).filter((c) => selectedIds.has(c.id));
+    const headers = activeCols.map((c) => columnHeaderLabel(c, ctx));
+    // For JSON: top-level `documents` array (deduplicated) referenced by
+    // index from each row, and a top-level `aliases` map keyed by entity name.
+    const wantDocs = selectedIds.has('document_urls') || selectedIds.has('document_dois');
+    const includeUrl = selectedIds.has('document_urls');
+    const includeDoi = selectedIds.has('document_dois');
+    const wantE1Aliases = selectedIds.has('entity1_aliases');
+    const wantE2Aliases = selectedIds.has('entity2_aliases');
+    const docIndex = new Map();
+    const documents = [];
+    function indexDoc(d) {
+        const key = `${d.title}\\u0000${d.url}\\u0000${d.doi}`;
+        if (docIndex.has(key)) return docIndex.get(key);
+        const entry = { title: d.title || null };
+        if (includeUrl) entry.url = d.url || null;
+        if (includeDoi) entry.doi = d.doi || null;
+        documents.push(entry);
+        docIndex.set(key, documents.length - 1);
+        return documents.length - 1;
+    }
+    const aliases = {};
+    const rows = [];
+    const jsonRows = [];
+    for (const card of cards) {
+        const pair = readPairFromCard(card);
+        const row = {};
+        const jsonRow = {};
+        for (const col of activeCols) {
+            const label = columnHeaderLabel(col, ctx);
+            const value = col.get(pair);
+            row[label] = value;
+            // Hoisted attributes are omitted from the JSON row and emitted at
+            // the top level instead.
+            if (!HOISTED_DOC_COLS.has(col.id) && !HOISTED_ALIAS_COLS.has(col.id)) {
+                jsonRow[label] = value;
+            }
+        }
+        if (wantDocs) jsonRow.documents = pair.docs.map(indexDoc);
+        if (wantE1Aliases && pair.e1Aliases.length) aliases[pair.e1] = pair.e1Aliases;
+        if (wantE2Aliases && pair.e2Aliases.length) aliases[pair.e2] = pair.e2Aliases;
+        rows.push(row);
+        jsonRows.push(jsonRow);
+    }
+    return { headers, rows, sidecar: { jsonRows, documents, aliases } };
+}
+
+function buildEntityRows(cards) {
+    const selectedKind = getSelectedEntityKind();
+    if (!selectedKind) return { headers: [], rows: [], sidecar: null };
+    const includeAliases = document.getElementById('export-entity-include-aliases')?.checked;
+    const seen = new Map();  // canonical name -> { name, aliases }
+    for (const card of cards) {
+        const span1 = card.querySelector('.pair-entities > span:first-child');
+        const span2 = card.querySelector('.pair-entities > span:last-child');
+        const candidates = [
+            { name: card.dataset.e1, kind: span1?.dataset.kind || '',
+              aliases: (card.dataset.e1a || '').split(',').filter((s) => s) },
+            { name: card.dataset.e2, kind: span2?.dataset.kind || '',
+              aliases: (card.dataset.e2a || '').split(',').filter((s) => s) },
+        ];
+        for (const c of candidates) {
+            if (c.kind !== selectedKind || !c.name || seen.has(c.name)) continue;
+            seen.set(c.name, c);
+        }
+    }
+    const kindLabel = formatKindForHeader(selectedKind);
+    const sorted = [...seen.values()].sort((a, b) => a.name.localeCompare(b.name));
+    // Delimited rows: name (+ pipe-joined aliases column if requested).
+    const headers = includeAliases ? [kindLabel, 'Aliases'] : [kindLabel];
+    const rows = sorted.map((e) => includeAliases
+        ? { [kindLabel]: e.name, Aliases: e.aliases }
+        : { [kindLabel]: e.name });
+    // JSON sidecar: top-level aliases map (only when requested) plus rows of names.
+    const aliases = {};
+    if (includeAliases) {
+        for (const e of sorted) {
+            if (e.aliases.length) aliases[e.name] = e.aliases;
+        }
+    }
+    // JSON `rows` is a bare list of names for entity-only exports.
+    const jsonRows = sorted.map((e) => e.name);
+    return { headers, rows, sidecar: { jsonRows, documents: [], aliases } };
+}
+
+// CSV / TSV serialisation.
+function csvEscape(value, sep) {
+    const str = value === null || value === undefined ? '' : String(value);
+    if (str.includes(sep) || str.includes('"') || str.includes('\\n') || str.includes('\\r')) {
+        return '"' + str.replace(/"/g, '""') + '"';
+    }
+    return str;
+}
+
+const POLARITY_SHORT = { positive: '+', negative: '-', neutral: 'N', irrelevant: 'I' };
+
+function flattenCellForCsv(value) {
+    if (value == null) return '';
+    if (Array.isArray(value)) return value.join('|');
+    if (typeof value === 'object') {
+        return Object.entries(value)
+            .filter(([, v]) => v > 0)
+            .map(([k, v]) => `${POLARITY_SHORT[k] || k}:${v}`)
+            .join('|');
+    }
+    return value;
+}
+
+function formatRowsAsDelimited({ headers, rows }, sep) {
+    const out = [headers.map((h) => csvEscape(h, sep)).join(sep)];
+    for (const row of rows) {
+        const line = headers.map((h) => csvEscape(flattenCellForCsv(row[h]), sep)).join(sep);
+        out.push(line);
+    }
+    return out.join('\\n');
+}
+
+function formatRowsAsJson({ sidecar }) {
+    const jsonRows = sidecar?.jsonRows || [];
+    const payload = {
+        topic: document.body.dataset.topic || '',
+        exported_at: new Date().toISOString(),
+        row_count: jsonRows.length,
+        filtered: document.getElementById('export-apply-filters').checked,
+    };
+    if (sidecar?.documents?.length) payload.documents = sidecar.documents;
+    if (sidecar && Object.keys(sidecar.aliases || {}).length) payload.aliases = sidecar.aliases;
+    payload.rows = jsonRows;
+    return JSON.stringify(payload, null, 2);
+}
+
+function serialiseExport(data, format) {
+    if (format === 'csv') return formatRowsAsDelimited(data, ',');
+    if (format === 'tsv') return formatRowsAsDelimited(data, '\\t');
+    if (format === 'json') return formatRowsAsJson(data);
+    return '';
+}
+
+function renderExportPreview() {
+    const cards = getExportCards();
+    const ctx = buildExportContext(cards);
+    // Rebuild controls that depend on context (re-render is idempotent).
+    rebuildModeControls(ctx);
+    rebuildColumnControls(ctx);
+    updateJsonOnlyAvailability();
+    updateColumnsSectionVisibility();
+    updateScopeCount();
+    const data = buildExportRows(cards, ctx);
+    const table = document.getElementById('export-preview-table');
+    const previewLimit = 5;
+    const preview = { headers: data.headers, rows: data.rows.slice(0, previewLimit) };
+    let html = '<thead><tr>';
+    for (const h of preview.headers) {
+        html += `<th scope="col">${escapeHtml(h)}</th>`;
+    }
+    html += '</tr></thead><tbody>';
+    if (!preview.rows.length) {
+        html += `<tr><td colspan="${Math.max(1, preview.headers.length)}" style="text-align:center; color:var(--pico-muted-color);">No rows match the current settings</td></tr>`;
+    } else {
+        for (const row of preview.rows) {
+            html += '<tr>';
+            for (const h of preview.headers) {
+                const cell = flattenCellForCsv(row[h]);
+                html += `<td>${escapeHtml(String(cell))}</td>`;
+            }
+            html += '</tr>';
+        }
+    }
+    html += '</tbody>';
+    table.innerHTML = html;
+    const rowCount = document.getElementById('export-row-count');
+    rowCount.textContent = `Will export ${data.rows.length} row${data.rows.length === 1 ? '' : 's'}.`;
+}
+
+function slugifyTopic(topic) {
+    return (topic || 'extraction')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, 60) || 'extraction';
+}
+
+function exportFilename() {
+    const topic = slugifyTopic(document.body.dataset.topic || '');
+    const mode = getExportMode();
+    const format = getExportFormat();
+    const date = new Date().toISOString().slice(0, 10);
+    let suffix = 'pairs';
+    if (mode === 'entities') {
+        const kind = getSelectedEntityKind() || 'entities';
+        suffix = `${kind}s`;
+    }
+    return `${topic}-${suffix}-${date}.${format}`;
+}
+
+let exportToastTimer = null;
+function showExportToast(message) {
+    let toast = document.querySelector('.export-toast');
+    if (!toast) {
+        toast = document.createElement('div');
+        toast.className = 'export-toast';
+        document.body.appendChild(toast);
+    }
+    toast.textContent = message;
+    requestAnimationFrame(() => toast.classList.add('visible'));
+    clearTimeout(exportToastTimer);
+    exportToastTimer = setTimeout(() => toast.classList.remove('visible'), 1800);
+}
+
+function getExportPayload() {
+    const cards = getExportCards();
+    const ctx = buildExportContext(cards);
+    const format = getExportFormat();
+    const data = buildExportRows(cards, ctx);
+    return { text: serialiseExport(data, format), format };
+}
+
+function downloadExport() {
+    const { text, format } = getExportPayload();
+    const mime = format === 'json' ? 'application/json' :
+                 format === 'tsv' ? 'text/tab-separated-values' : 'text/csv';
+    const blob = new Blob([text], { type: `${mime};charset=utf-8` });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = exportFilename();
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    showExportToast(`Downloaded ${a.download}`);
+}
+
+async function copyExportToClipboard() {
+    const { text } = getExportPayload();
+    try {
+        await navigator.clipboard.writeText(text);
+        showExportToast('Copied to clipboard');
+    } catch (e) {
+        // Fallback for older browsers.
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        try {
+            document.execCommand('copy');
+            showExportToast('Copied to clipboard');
+        } catch (e2) {
+            showExportToast('Copy failed; please download instead');
+        }
+        document.body.removeChild(ta);
+    }
+}
+
+// Pico modal lifecycle, adapted from picocss.com's reference implementation.
+function openExportDialog() {
+    const dialog = document.getElementById('export-dialog');
+    const html = document.documentElement;
+    const scrollbarWidth = window.innerWidth - html.clientWidth;
+    if (scrollbarWidth) {
+        html.style.setProperty('--pico-scrollbar-width', `${scrollbarWidth}px`);
+    }
+    html.classList.add('modal-is-open', 'modal-is-opening');
+    setTimeout(() => html.classList.remove('modal-is-opening'), EXPORT_MODAL_ANIMATION_MS);
+    dialog.showModal();
+    renderExportPreview();
+}
+
+function closeExportDialog() {
+    const dialog = document.getElementById('export-dialog');
+    if (!dialog.open) return;
+    const html = document.documentElement;
+    html.classList.add('modal-is-closing');
+    setTimeout(() => {
+        html.classList.remove('modal-is-closing', 'modal-is-open');
+        html.style.removeProperty('--pico-scrollbar-width');
+        dialog.close();
+    }, EXPORT_MODAL_ANIMATION_MS);
+}
+
+function initExportDialog() {
+    const toggle = document.getElementById('export-toggle');
+    const dialog = document.getElementById('export-dialog');
+    if (!toggle || !dialog) return;
+    toggle.addEventListener('click', openExportDialog);
+    dialog.querySelector('button[rel="prev"]').addEventListener('click', closeExportDialog);
+    // Backdrop click: <dialog> exposes its backdrop as itself; clicks on the
+    // <article> child propagate with target=article, so check the target.
+    dialog.addEventListener('click', (e) => {
+        if (e.target === dialog) closeExportDialog();
+    });
+    // ESC: native <dialog> closes itself but bypasses our animation/cleanup.
+    dialog.addEventListener('cancel', (e) => {
+        e.preventDefault();
+        closeExportDialog();
+    });
+    // Live updates on every form change.
+    dialog.addEventListener('change', renderExportPreview);
+    document.getElementById('export-download-btn').addEventListener('click', downloadExport);
+    document.getElementById('export-copy-btn').addEventListener('click', copyExportToClipboard);
 }
 
 // Initialize on load

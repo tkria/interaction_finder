@@ -178,12 +178,12 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 {{ css }}
     </style>
 </head>
-<body>
+<body data-topic="{{ metadata.topic }}">
     <!-- Header -->
     <header>
         <div class="header-content">
             <div class="header-info">
-                <h1 class="header-title">{{ title }}</h1>
+                <h1 class="header-title" aria-busy="true">{{ title }}</h1>
                 <div class="header-stats">
                     <span class="stat-item">
                         <span class="stat-label">Pairs:</span>
@@ -217,14 +217,22 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     </div>
                     <button type="button"
                             id="filter-toggle"
-                            class="outline secondary"
+                            class="outline secondary icon-btn"
                             aria-expanded="false"
                             aria-controls="filter-panel"
                             aria-label="Toggle filter options">
-                        <svg class="gear-icon" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                        <svg class="icon-btn-svg" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
                             <path d="M12 15.5A3.5 3.5 0 0 1 8.5 12 3.5 3.5 0 0 1 12 8.5a3.5 3.5 0 0 1 3.5 3.5 3.5 3.5 0 0 1-3.5 3.5m7.43-2.53c.04-.32.07-.64.07-.97 0-.33-.03-.66-.07-1l2.11-1.63c.19-.15.24-.42.12-.64l-2-3.46c-.12-.22-.39-.31-.61-.22l-2.49 1c-.52-.39-1.06-.73-1.69-.98l-.37-2.65A.506.506 0 0 0 14 2h-4c-.25 0-.46.18-.5.42l-.37 2.65c-.63.25-1.17.59-1.69.98l-2.49-1c-.22-.09-.49 0-.61.22l-2 3.46c-.13.22-.07.49.12.64L4.57 11c-.04.34-.07.67-.07 1 0 .33.03.65.07.97l-2.11 1.66c-.19.15-.25.42-.12.64l2 3.46c.12.22.39.3.61.22l2.49-1.01c.52.4 1.06.74 1.69.99l.37 2.65c.04.24.25.42.5.42h4c.25 0 .46-.18.5-.42l.37-2.65c.63-.26 1.17-.59 1.69-.99l2.49 1.01c.22.08.49 0 .61-.22l2-3.46c.12-.22.07-.49-.12-.64l-2.11-1.66z"/>
                         </svg>
                         <span class="filter-active-dot"></span>
+                    </button>
+                    <button type="button"
+                            id="export-toggle"
+                            class="icon-btn icon-btn-borderless"
+                            aria-label="Open export dialog">
+                        <svg class="icon-btn-svg" viewBox="0 0 448 512" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M246.6 9.4c-12.5-12.5-32.8-12.5-45.3 0l-128 128c-12.5 12.5-12.5 32.8 0 45.3s32.8 12.5 45.3 0L192 109.3 192 320c0 17.7 14.3 32 32 32s32-14.3 32-32l0-210.7 73.4 73.4c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3l-128-128zM64 352c0-17.7-14.3-32-32-32S0 334.3 0 352l0 64c0 53 43 96 96 96l256 0c53 0 96-43 96-96l0-64c0-17.7-14.3-32-32-32s-32 14.3-32 32l0 64c0 17.7-14.3 32-32 32L96 448c-17.7 0-32-14.3-32-32l0-64z"/>
+                        </svg>
                     </button>
                 </div>
             </div>
@@ -298,6 +306,15 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 <input type="checkbox" id="contentious-only">
                 Contentious only
             </label>
+            <button type="button"
+                    id="filter-clear"
+                    class="icon-btn icon-btn-borderless filter-clear-btn"
+                    aria-label="Clear all filters"
+                    hidden>
+                <svg class="icon-btn-svg" viewBox="0 0 576 512" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M32 64C19.1 64 7.4 71.8 2.4 83.8S.2 109.5 9.4 118.6L192 301.3 192 416c0 8.5 3.4 16.6 9.4 22.6l64 64c2.5 2.5 5.3 4.5 8.3 6-21.2-30.9-33.6-68.3-33.6-108.6 0-99.4 75.5-181.1 172.3-191l90.4-90.4c9.2-9.2 11.9-22.9 6.9-34.9S492.9 64 480 64L32 64zM432 544a144 144 0 1 0 0-288 144 144 0 1 0 0 288zm59.3-180.7l-36.7 36.7 36.7 36.7c6.2 6.2 6.2 16.4 0 22.6s-16.4 6.2-22.6 0l-36.7-36.7-36.7 36.7c-6.2 6.2-16.4 6.2-22.6 0s-6.2-16.4 0-22.6l36.7-36.7-36.7-36.7c-6.2-6.2-6.2-16.4 0-22.6s16.4-6.2 22.6 0l36.7 36.7 36.7-36.7c6.2-6.2 16.4-6.2 22.6 0s6.2 16.4 0 22.6z"/>
+                </svg>
+            </button>
         </div>
     </header>
 
@@ -306,10 +323,16 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 {{ pair_cards }}
     </aside>
 
+    <!-- Resizer between sidebar and content -->
+    <div class="col-resizer" id="resizer-left" role="separator" aria-orientation="vertical" aria-label="Resize pair list column" tabindex="0"></div>
+
     <!-- Main Content: Document Accordions -->
     <main id="content">
-        <div class="content-placeholder">Select a pair to view documents</div>
+        <div class="content-placeholder" aria-busy="true">Loading report…</div>
     </main>
+
+    <!-- Resizer between content and rightbar -->
+    <div class="col-resizer" id="resizer-right" role="separator" aria-orientation="vertical" aria-label="Resize reasoning column" tabindex="0"></div>
 
     <!-- Right Sidebar: Reasoning -->
     <aside id="rightbar">
@@ -327,6 +350,58 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     <div id="reasoning-templates" style="display: none;">
 {{ reasoning_templates }}
     </div>
+
+    <!-- Export Dialog -->
+    <dialog id="export-dialog" aria-labelledby="export-dialog-title">
+        <article class="export-modal">
+            <header>
+                <button aria-label="Close" rel="prev"></button>
+                <p><strong id="export-dialog-title">Export</strong></p>
+            </header>
+            <fieldset id="export-mode-fieldset">
+                <legend>Export</legend>
+                <!-- populated at runtime: 'Pairs' + one radio per detected kind -->
+            </fieldset>
+            <fieldset id="export-filters-fieldset">
+                <label>
+                    <input type="checkbox" role="switch" id="export-apply-filters" checked>
+                    Apply current filters
+                </label>
+            </fieldset>
+            <fieldset>
+                <legend>Format</legend>
+                <input type="radio" id="export-fmt-csv" name="export-format" value="csv" checked>
+                <label for="export-fmt-csv">CSV</label>
+                <input type="radio" id="export-fmt-tsv" name="export-format" value="tsv">
+                <label for="export-fmt-tsv">TSV</label>
+                <input type="radio" id="export-fmt-json" name="export-format" value="json">
+                <label for="export-fmt-json">JSON</label>
+            </fieldset>
+            <fieldset id="export-columns-pairs">
+                <legend>Attributes</legend>
+                <div class="export-col-grid" data-section="standard"></div>
+                <small class="export-json-hint">Available when JSON format selected</small>
+                <div class="export-col-grid" data-section="json"></div>
+            </fieldset>
+            <fieldset id="export-columns-entities">
+                <label>
+                    <input type="checkbox" id="export-entity-include-aliases">
+                    Include aliases
+                </label>
+            </fieldset>
+            <div class="export-preview-section">
+                <strong>Preview</strong>
+                <div class="export-preview-wrap">
+                    <table id="export-preview-table"></table>
+                </div>
+                <small id="export-row-count"></small>
+            </div>
+            <footer>
+                <button type="button" class="secondary" id="export-copy-btn">Copy to clipboard</button>
+                <button type="button" id="export-download-btn">Download</button>
+            </footer>
+        </article>
+    </dialog>
 
     <!-- JavaScript (no embedded JSON data) -->
     <script>

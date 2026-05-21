@@ -289,6 +289,16 @@ class ReasoningTemplateRenderer:
             pair["entity2"]["name"],
         )
 
+    def _format_reasoning(self, text: str, *, linkify: bool = False) -> str:
+        """Highlight entities and (optionally) linkify citations in a reasoning
+        string, then preserve source line breaks as ``<br/>`` so per-relation
+        bullets render on their own lines instead of collapsing.
+        """
+        out = self.highlighter.highlight(text)
+        if linkify:
+            out = _linkify_citations(out, self.doc_idx_map, self.doc_labels)
+        return out.replace("\n", "<br/>")
+
     def render_overall_template(self) -> str:
         """Render overall pair reasoning template.
 
@@ -297,11 +307,8 @@ class ReasoningTemplateRenderer:
         """
         pair = self.pair
 
-        # Highlight entities in reasoning text, then linkify document citations
-        highlighted_reasoning = self.highlighter.highlight(pair["reasoning"])
-        highlighted_reasoning = _linkify_citations(
-            highlighted_reasoning, self.doc_idx_map, self.doc_labels
-        )
+        # Highlight entities and linkify citations in the overall reasoning.
+        highlighted_reasoning = self._format_reasoning(pair["reasoning"], linkify=True)
 
         # Build entity aliases sections
         entity1_aliases_html = _render_aliases(pair["entity1"]["aliases"])
@@ -384,7 +391,7 @@ class ReasoningTemplateRenderer:
                 </span>
             </div>
             <div class="assessment-content">
-                {source_line}<p>{self.highlighter.highlight(assess["reasoning"])}</p>
+                {source_line}<p>{self._format_reasoning(assess["reasoning"])}</p>
             </div>
         </div>"""
 
@@ -404,7 +411,7 @@ class ReasoningTemplateRenderer:
                 </span>
             </div>
             <div class="assessment-content">
-                {source_line}<p>{self.highlighter.highlight(assess["reasoning"])}</p>
+                {source_line}<p>{self._format_reasoning(assess["reasoning"])}</p>
             </div>
         </div>"""
 
