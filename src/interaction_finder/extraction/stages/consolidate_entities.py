@@ -611,6 +611,8 @@ The research topic tells you what distinctions matter. Merge entities only if a 
 - **exclude**: One specific member doesn't belong → specify which one to remove (member number or name)
 - **split**: Cluster mixes unrelated entities but can't identify which → system splits at weakest link
 
+Actions on the same group_id combine: when most members of a cluster should merge but one or two outliers don't belong, issue an **exclude** for each outlier *plus* a **merge** for the rest, all sharing the same group_id.
+
 Only return groups that need action (merge/exclude/split). Omit groups that should remain separate.""",
     )
     agent = get_agent(deps.config)
@@ -663,6 +665,9 @@ Examples:
 - Merge: group_id="abc", target="1", reasoning="All are PAH subtypes"
 - Exclude: group_id="def", action="exclude", target="5", reasoning="Member 5 (TAPSE) is a measurement"
 - Split: group_id="ghi", action="split", reasoning="Mixes diseases and measurements"
+- Combined (most members merge but one outlier doesn't belong — return both actions on the same group_id):
+    group_id="jkl", action="exclude", target="5", reasoning="Member 5 (HDL) is a distinct lipoprotein class"
+    group_id="jkl", target="1", reasoning="Remaining members are LDL-C synonyms"
 """
             try:
                 async with deps.agent_semaphore:

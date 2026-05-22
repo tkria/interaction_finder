@@ -45,7 +45,8 @@ Examples:
 
 ## rename (set rename="standard name")
 Replace verbose descriptions with standard names, or normalize overly-specific variants to a topic term
-when the extra specificity doesn't add meaningful distinction for this research.
+when the extra specificity doesn't add meaningful distinction for this research. The candidate parent
+(shown after the arrow) is rejected; the child becomes the rename target instead.
 
 Examples:
 1. [xxxx] 'transforming growth factor beta protein' → 'growth factor' — rename="TGF-β"

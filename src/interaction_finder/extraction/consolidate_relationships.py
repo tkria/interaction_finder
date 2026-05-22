@@ -34,8 +34,8 @@ Your task: For each relationship label, determine:
 
 **Merge synonymous labels:**
 - "linked_to", "connected_to", "related_to" → "associated_with"
-- "upregulates", "increases expression of" → "activates"
-- "downregulates", "decreases expression of" → "inhibits"
+- "upregulates", "increases expression of" → "upregulates"
+- "downregulates", "decreases expression of" → "downregulates"
 - "correlates_with", "co-occurs_with" → "associated_with"
 
 **Preserve distinct biological meanings:**
@@ -43,6 +43,7 @@ Your task: For each relationship label, determine:
 - "regulates" vs "activates" (general vs specific)
 - "binds_to" vs "activates" (physical vs functional)
 - "causes" vs "associated_with" (causal vs correlational)
+- "upregulates" vs "activates" (transcriptional vs post-translational)
 
 **Standardize to common forms:**
 - Prefer active voice: "activates" over "is activated by"
@@ -124,7 +125,7 @@ Identify relationships with **opposite biological effects** from among the provi
 - "increases_risk_of" ↔ "decreases_risk_of" / "protects_against"
 - "promotes" ↔ "prevents"
 - "upregulates" ↔ "downregulates"
-- "causes" ↔ "treats" (in disease context)
+- "causes_disease" ↔ "treats_disease"
 
 **Non-opposites** - Do NOT mark as opposites:
 - Different specificity levels: "regulates" is NOT opposite to "activates" (it's more general)
