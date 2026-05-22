@@ -15,6 +15,7 @@ This approach ensures:
 """
 
 from collections import Counter, defaultdict
+from statistics import median_low
 
 from interaction_finder.agent_config import AGENT_CALL_ERRORS
 from interaction_finder.agent_utils import rename_agent
@@ -230,7 +231,10 @@ def _filter_irrelevant_assessments(state: State, deps: Deps) -> None:
                 spread=spread,
                 accepted=False,
                 evidence=aggregate_evidence(assessments),
-                topic_relevance=max(a.topic_relevance for a in assessments),
+                topic_relevance=median_low(
+                    [a.topic_relevance for a in assessments if a.evidence.overall >= 7]
+                    or [a.topic_relevance for a in assessments]
+                ),
                 decision_confidence=0.95,
                 reasoning=(
                     "All relationship types for this pair were classified as "

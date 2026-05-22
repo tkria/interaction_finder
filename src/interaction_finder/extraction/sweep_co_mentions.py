@@ -537,7 +537,21 @@ Both positive and negative relationships matter - inhibitory effects, contraindi
 - Co-occurrence alone is NOT sufficient - there must be a stated connection
 - The relationship must be about these specific entities, not general statements
 - Provide exact verbatim quotes from the text, not paraphrases
-- If no pairs meet the criteria, return an empty pairs list""",
+- If no pairs meet the criteria, return an empty pairs list
+
+**Topic-relevance assessment (topic_relevance, 1-5):**
+For each confirmed pair, judge how much the *pair* contributes to answering the research
+topic, not whether the entities are individually topic-related. A pair scores high only
+when its relationship advances what the user is asking. A pair where one entity is the
+topic but the relationship goes off-topic scores low. A pair that weakens or contradicts
+the topic (e.g. a candidate marker shown to be non-specific) scores low.
+- 5: Directly answers the topic question.
+- 4: Adds meaningful information toward the answer (mechanism, related finding,
+  recognised subtype).
+- 3: Adjacent to the topic; doesn't itself add toward the answer.
+- 2: Topic-related literature but the pair is off-topic.
+- 1: No meaningful relation to the topic question.
+Evidence strength is NOT an input here — judge only the pair's contribution to the topic.""",
     default_model_settings=ModelSettings(parallel_tool_calls=False),
 )
 

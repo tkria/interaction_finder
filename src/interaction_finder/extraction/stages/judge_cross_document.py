@@ -13,6 +13,7 @@ For each unique entity pair:
 import asyncio
 from collections import Counter, defaultdict
 from itertools import combinations
+from statistics import median_low
 
 from interaction_finder.agent_config import AGENT_CALL_ERRORS
 from interaction_finder.agent_utils import rename_agent
@@ -307,7 +308,14 @@ async def _judge_pair(
             strong = [a for a in assessments if a.evidence.overall >= 7]
             evidence = aggregate_evidence(strong)
             decision_confidence = 0.95 if len(strong) >= 3 else 0.85
-            topic_relevance = max(a.topic_relevance for a in assessments)
+            # Median of strong-evidence assessments (fall back to all) - robust
+            # to a single doc over-rating an off-topic pair.
+            _tr_pool = [
+                a.topic_relevance for a in assessments if a.evidence.overall >= 7
+            ]
+            topic_relevance = median_low(
+                _tr_pool or [a.topic_relevance for a in assessments]
+            )
             judgment = PairJudgment(
                 entity1=SimpleEntity(
                     name=first_assessment.entity1.canonical,
@@ -375,7 +383,14 @@ async def _judge_pair(
             relationship = Counter(a.relationship for a in assessments).most_common(1)[
                 0
             ][0]
-            topic_relevance = max(a.topic_relevance for a in assessments)
+            # Median of strong-evidence assessments (fall back to all) - robust
+            # to a single doc over-rating an off-topic pair.
+            _tr_pool = [
+                a.topic_relevance for a in assessments if a.evidence.overall >= 7
+            ]
+            topic_relevance = median_low(
+                _tr_pool or [a.topic_relevance for a in assessments]
+            )
             decision_confidence = 0.5
             decision_word = "accepted" if accepted else "rejected"
             reasoning = (

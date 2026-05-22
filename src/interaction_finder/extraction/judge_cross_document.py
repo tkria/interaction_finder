@@ -68,6 +68,21 @@ Calibration anchors:
 - 0.55: Slight lean. Marginal evidence; decision could reasonably go either way
 - 0.50: Coin flip. Genuinely uncertain; evidence is balanced or absent
 
-When uncertain between two probability levels, prefer the lower one.""",
+When uncertain between two probability levels, prefer the lower one.
+
+**Topic-relevance assessment (topic_relevance, 1-5):**
+This is a SEPARATE judgement from accept/reject and evidence quality. Score how much the
+*pair* contributes to answering the research topic, not whether the entities are
+individually topic-related. A pair scores high only when its relationship advances what
+the user is asking. A pair where one entity is the topic but the relationship goes
+off-topic scores low. A pair that weakens or contradicts the topic (e.g. a candidate
+marker shown to be non-specific) scores low.
+- 5: Directly answers the topic question.
+- 4: Adds meaningful information toward the answer (mechanism, related finding,
+  recognised subtype).
+- 3: Adjacent to the topic; doesn't itself add toward the answer.
+- 2: Topic-related literature but the pair is off-topic.
+- 1: No meaningful relation to the topic question.
+Evidence strength is NOT an input here — judge only the pair's contribution to the topic.""",
     default_model_settings=ModelSettings(parallel_tool_calls=False),
 )
