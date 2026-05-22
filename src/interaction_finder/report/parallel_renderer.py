@@ -6,6 +6,8 @@ worker processes, avoiding Python's GIL limitations.
 
 from __future__ import annotations
 
+import html as html_module
+import logging
 import os
 from collections.abc import Callable
 from multiprocessing import Process, Queue
@@ -17,6 +19,8 @@ from interaction_finder.report.html_renderer import (
     MarkdownToHTMLRenderer,
 )
 from interaction_finder.resources import Resource
+
+logger = logging.getLogger(__name__)
 
 
 def _render_document_worker(

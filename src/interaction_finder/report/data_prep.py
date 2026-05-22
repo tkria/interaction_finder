@@ -6,7 +6,7 @@ No JSON generation - all data embedded in HTML structure.
 
 from collections import defaultdict
 from datetime import date
-from math import sqrt
+from math import exp, sqrt
 from typing import Any
 
 from rich.progress import (
@@ -44,12 +44,20 @@ def _parse_pub_year(pub_date: str | None) -> int | None:
 
 
 def _attach_rank_sum_score(pairs: list[dict[str, Any]]) -> None:
-    """Compute the within-topic rank-sum ranking score and store it in-place.
+    """Compute the within-topic Borda rank-sum ranking score.
 
-    The score combines the ranks of ``topic_relevance`` (higher = better) and
-    ``age_w`` (higher = better), assigning each pair the average rank among
-    tied values (fractional ranking). Lower score = better. See the
-    supplementary "Default Sort in the Interactive Report".
+    Combines two features:
+      R_pair: substantiated topic relevance. For each supporting assessment i,
+              compute s_i = t_i · (1 − exp(−L_i / 200)) where t_i is the
+              assessment's topic_relevance (1–5) and L_i is the total length
+              of its supporting quotes in characters. Sort assessments by s_i
+              descending and return the mean of the raw t_i of the top 3.
+      A_pair: age-weighted sum over unique supporting documents of
+              1 / sqrt(age + 1), where age is in years.
+
+    Each feature is converted to a within-topic fractional rank (1 = highest)
+    and the two ranks are summed. Lower is better. See the supplementary
+    "Default Sort in the Interactive Report".
     """
 
     def fractional_ranks_descending(values: list[float]) -> list[float]:
@@ -67,12 +75,12 @@ def _attach_rank_sum_score(pairs: list[dict[str, Any]]) -> None:
             i = j + 1
         return ranks
 
-    topic_rel_ranks = fractional_ranks_descending(
-        [float(p["topic_relevance"]) for p in pairs]
+    r_pair_ranks = fractional_ranks_descending(
+        [float(p["substantiated_relevance"]) for p in pairs]
     )
     age_w_ranks = fractional_ranks_descending([float(p["age_w"]) for p in pairs])
-    for pair, r_topic, r_age in zip(pairs, topic_rel_ranks, age_w_ranks):
-        pair["rank_sum_score"] = r_topic + r_age
+    for pair, r_rel, r_age in zip(pairs, r_pair_ranks, age_w_ranks):
+        pair["rank_sum_score"] = r_rel + r_age
 
 
 def _quote_key_for_id(
@@ -147,13 +155,20 @@ def _build_pair_entry(
     polarity_counts = {polarity: 0 for polarity in POLARITY_ORDER}
     polarity_best_level = {polarity: 0 for polarity in POLARITY_ORDER}
     evidence_levels: list[tuple[int, str]] = []  # (level, label) per assessment
+    # Per-assessment (topic_relevance, total_quote_length_chars) tuples, used
+    # to compute the substantiated-relevance ranking feature.
+    assessment_rel_quote: list[tuple[int, int]] = []
     assessments: list[dict[str, Any]] = []
     for assessment, polarity in _iter_assessments_with_polarity(judgment):
         doc_ids.add(assessment.resource_id.id)
+        assessment_quote_chars = sum(len(q.query_text) for q in assessment.quotes)
         total_quotes += len(assessment.quotes)
         polarity_counts[polarity] += 1
         evidence = assessment.evidence
         evidence_levels.append((evidence.overall, evidence.label))
+        assessment_rel_quote.append(
+            (int(assessment.topic_relevance), assessment_quote_chars)
+        )
         resource = resource_pool.get(assessment.resource_id)
         if resource is None:
             continue
@@ -197,6 +212,16 @@ def _build_pair_entry(
         for y in doc_pub_years.values()
         if y is not None
     )
+    # Substantiated relevance: rank assessments by topic_relevance scaled by
+    # quote-length saturation (τ = 200 chars), take the top 3, return the
+    # mean of their raw topic_relevance values.
+    if assessment_rel_quote:
+        scored = [(t, t * (1.0 - exp(-L / 200.0))) for (t, L) in assessment_rel_quote]
+        scored.sort(key=lambda x: -x[1])
+        top = scored[: min(3, len(scored))]
+        substantiated_relevance = sum(t for t, _ in top) / len(top)
+    else:
+        substantiated_relevance = 0.0
     return {
         "entity1": {
             "name": judgment.entity1.name,
@@ -215,6 +240,7 @@ def _build_pair_entry(
         "reasoning": judgment.reasoning,
         "doc_count": len(doc_ids),
         "age_w": age_w,
+        "substantiated_relevance": substantiated_relevance,
         "quote_count": total_quotes,
         "assessments": assessments,
         "polarity_counts": polarity_counts,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from typing import Any, Iterable, List, Mapping, Sequence
@@ -12,6 +13,8 @@ from pydantic import BaseModel
 
 from interaction_finder.resources import Resource, ResourceQuote
 from interaction_finder.text_mapping import TextPositionMapper
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -428,6 +431,11 @@ class HTMLBuilder:
         self.position_offsets: list[tuple[int, int]] = []
         self._last_orig_pos = 0
         self._last_delta: int | None = None
+        # Highest source position seen so far; used to keep position_offsets
+        # monotonic when upstream tokens revisit an earlier source coordinate
+        # (e.g. some table / nested-inline cases).
+        self._max_orig_pos = 0
+        self._ratchet_warned = False
         # Track cursors by line to handle table cells on the same row
         self._line_cursors: dict[tuple[int, int], InlineCursor] = {}
 
@@ -437,6 +445,8 @@ class HTMLBuilder:
         self.position_offsets = []
         self._last_orig_pos = 0
         self._last_delta = None
+        self._max_orig_pos = 0
+        self._ratchet_warned = False
         self._line_cursors = {}
 
     @property
@@ -455,7 +465,26 @@ class HTMLBuilder:
         Delta = target_pos - source_pos (HTML - original).
 
         Offsets are stored as (source_pos, delta) where source=original, target=HTML.
+
+        Source positions are ratcheted to be non-decreasing: if an incoming
+        ``orig_pos`` is smaller than the highest seen so far, it is clamped up
+        and the delta recomputed so the mapper still resolves to the current
+        HTML cursor. This degrades local mapping precision in that small
+        region instead of producing an invalid (unsorted) offset list.
         """
+        if orig_pos < self._max_orig_pos:
+            if not self._ratchet_warned:
+                logger.warning(
+                    "HTMLBuilder position offsets received non-monotonic source "
+                    "position (%d < %d); clamping to preserve mapper invariants. "
+                    "Quote/entity highlights in this region may be slightly off.",
+                    orig_pos,
+                    self._max_orig_pos,
+                )
+                self._ratchet_warned = True
+            orig_pos = self._max_orig_pos
+        else:
+            self._max_orig_pos = orig_pos
         current_delta = self._html_len - orig_pos
         if self._last_delta is None or current_delta != self._last_delta:
             self.position_offsets.append((orig_pos, current_delta))
