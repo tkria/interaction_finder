@@ -10,6 +10,63 @@ from typing import Any
 from interaction_finder.report.assets import get_css, get_js
 from interaction_finder.version import format_version_tooltip
 
+# All inline SVG glyphs used by the report are declared once as <symbol>s in
+# this sheet (injected at the top of <body>). Each usage site renders an outer
+# <svg> with a <use href="#..."/>, so the path geometry is paid for once per
+# report and adding/swapping a glyph only touches the table below.
+#
+# Sources:
+#   icon-doc, icon-quote, icon-upload, icon-filter-clear: Font Awesome Free
+#       v7.2.0 (CC BY 4.0).
+#   icon-gear: Material Design Icons (Apache 2.0).
+ICON_PATHS: dict[str, tuple[str, str]] = {
+    "icon-doc": (
+        "0 0 512 512",
+        "M168 80c-13.3 0-24 10.7-24 24l0 304c0 8.4-1.4 16.5-4.1 24L440 432c13.3 0 24-10.7 24-24l0-304c0-13.3-10.7-24-24-24L168 80zM72 480c-39.8 0-72-32.2-72-72L0 112C0 98.7 10.7 88 24 88s24 10.7 24 24l0 296c0 13.3 10.7 24 24 24s24-10.7 24-24l0-304c0-39.8 32.2-72 72-72l272 0c39.8 0 72 32.2 72 72l0 304c0 39.8-32.2 72-72 72L72 480zM192 152c0-13.3 10.7-24 24-24l48 0c13.3 0 24 10.7 24 24l0 48c0 13.3-10.7 24-24 24l-48 0c-13.3 0-24-10.7-24-24l0-48zm152 24l48 0c13.3 0 24 10.7 24 24s-10.7 24-24 24l-48 0c-13.3 0-24-10.7-24-24s10.7-24 24-24zM216 256l176 0c13.3 0 24 10.7 24 24s-10.7 24-24 24l-176 0c-13.3 0-24-10.7-24-24s10.7-24 24-24zm0 80l176 0c13.3 0 24 10.7 24 24s-10.7 24-24 24l-176 0c-13.3 0-24-10.7-24-24s10.7-24 24-24z",
+    ),
+    "icon-quote": (
+        "0 0 448 512",
+        "M0 216C0 149.7 53.7 96 120 96l8 0c17.7 0 32 14.3 32 32s-14.3 32-32 32l-8 0c-30.9 0-56 25.1-56 56l0 8 64 0c35.3 0 64 28.7 64 64l0 64c0 35.3-28.7 64-64 64l-64 0c-35.3 0-64-28.7-64-64L0 216zm256 0c0-66.3 53.7-120 120-120l8 0c17.7 0 32 14.3 32 32s-14.3 32-32 32l-8 0c-30.9 0-56 25.1-56 56l0 8 64 0c35.3 0 64 28.7 64 64l0 64c0 35.3-28.7 64-64 64l-64 0c-35.3 0-64-28.7-64-64l0-136z",
+    ),
+    "icon-gear": (
+        "0 0 24 24",
+        "M12 15.5A3.5 3.5 0 0 1 8.5 12 3.5 3.5 0 0 1 12 8.5a3.5 3.5 0 0 1 3.5 3.5 3.5 3.5 0 0 1-3.5 3.5m7.43-2.53c.04-.32.07-.64.07-.97 0-.33-.03-.66-.07-1l2.11-1.63c.19-.15.24-.42.12-.64l-2-3.46c-.12-.22-.39-.31-.61-.22l-2.49 1c-.52-.39-1.06-.73-1.69-.98l-.37-2.65A.506.506 0 0 0 14 2h-4c-.25 0-.46.18-.5.42l-.37 2.65c-.63.25-1.17.59-1.69.98l-2.49-1c-.22-.09-.49 0-.61.22l-2 3.46c-.13.22-.07.49.12.64L4.57 11c-.04.34-.07.67-.07 1 0 .33.03.65.07.97l-2.11 1.66c-.19.15-.25.42-.12.64l2 3.46c.12.22.39.3.61.22l2.49-1.01c.52.4 1.06.74 1.69.99l.37 2.65c.04.24.25.42.5.42h4c.25 0 .46-.18.5-.42l.37-2.65c.63-.26 1.17-.59 1.69-.99l2.49 1.01c.22.08.49 0 .61-.22l2-3.46c.12-.22.07-.49-.12-.64l-2.11-1.66z",
+    ),
+    "icon-upload": (
+        "0 0 448 512",
+        "M246.6 9.4c-12.5-12.5-32.8-12.5-45.3 0l-128 128c-12.5 12.5-12.5 32.8 0 45.3s32.8 12.5 45.3 0L192 109.3 192 320c0 17.7 14.3 32 32 32s32-14.3 32-32l0-210.7 73.4 73.4c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3l-128-128zM64 352c0-17.7-14.3-32-32-32S0 334.3 0 352l0 64c0 53 43 96 96 96l256 0c53 0 96-43 96-96l0-64c0-17.7-14.3-32-32-32s-32 14.3-32 32l0 64c0 17.7-14.3 32-32 32L96 448c-17.7 0-32-14.3-32-32l0-64z",
+    ),
+    "icon-filter-clear": (
+        "0 0 576 512",
+        "M32 64C19.1 64 7.4 71.8 2.4 83.8S.2 109.5 9.4 118.6L192 301.3 192 416c0 8.5 3.4 16.6 9.4 22.6l64 64c2.5 2.5 5.3 4.5 8.3 6-21.2-30.9-33.6-68.3-33.6-108.6 0-99.4 75.5-181.1 172.3-191l90.4-90.4c9.2-9.2 11.9-22.9 6.9-34.9S492.9 64 480 64L32 64zM432 544a144 144 0 1 0 0-288 144 144 0 1 0 0 288zm59.3-180.7l-36.7 36.7 36.7 36.7c6.2 6.2 6.2 16.4 0 22.6s-16.4 6.2-22.6 0l-36.7-36.7-36.7 36.7c-6.2 6.2-16.4 6.2-22.6 0s-6.2-16.4 0-22.6l36.7-36.7-36.7-36.7c-6.2-6.2-6.2-16.4 0-22.6s16.4-6.2 22.6 0l36.7 36.7 36.7-36.7c6.2-6.2 16.4-6.2 22.6 0s6.2 16.4 0 22.6z",
+    ),
+}
+
+
+def _build_icon_sheet() -> str:
+    """Build the hidden <svg> declaring every reusable icon as a <symbol>."""
+    symbols = "".join(
+        f'<symbol id="{sid}" viewBox="{viewbox}">'
+        f'<path fill="currentColor" d="{path}"/></symbol>'
+        for sid, (viewbox, path) in ICON_PATHS.items()
+    )
+    return (
+        '<svg xmlns="http://www.w3.org/2000/svg" '
+        'style="display:none" aria-hidden="true" focusable="false">'
+        f"{symbols}</svg>"
+    )
+
+
+ICON_SYMBOL_SHEET = _build_icon_sheet()
+
+
+def _icon(symbol_id: str, css_class: str = "count-icon") -> str:
+    """Render an outer <svg> that references a previously declared symbol."""
+    return (
+        f'<svg class="{css_class}" aria-hidden="true" focusable="false">'
+        f'<use href="#{symbol_id}"/></svg>'
+    )
+
 
 def _render_pair_cards(pairs: list[dict[str, Any]]) -> str:
     """Render pair cards as HTML.
@@ -124,9 +181,19 @@ def _render_pair_cards(pairs: list[dict[str, Any]]) -> str:
             ]
             evidence_tooltip = f' data-tooltip="{_escape_html(", ".join(parts))}"'
 
+        doc_word = "document" if doc_count == 1 else "documents"
+        quote_word = "quote" if quote_count == 1 else "quotes"
+        counts_html = (
+            '<span class="pair-counts">'
+            f'<span class="count-item" data-tooltip="{doc_count} {doc_word}">'
+            f"{_icon('icon-doc')}{doc_count}</span>"
+            f'<span class="count-item" data-tooltip="{quote_count} {quote_word}">'
+            f"{_icon('icon-quote')}{quote_count}</span>"
+            "</span>"
+        )
         summary_html = f"""
             <div class="pair-summary">
-                <span class="pair-counts">{doc_count}d {quote_count}q</span>{polarity_html}<span class="evidence-badge evidence-{overall}"{evidence_tooltip}>{_escape_html(label.upper())}</span>
+                {counts_html}{polarity_html}<span class="evidence-badge evidence-{overall}"{evidence_tooltip}>{_escape_html(label.upper())}</span>
             </div>"""
 
         # Build complete card with minimal data-attributes
@@ -147,12 +214,8 @@ def _render_pair_cards(pairs: list[dict[str, Any]]) -> str:
              data-rank-score="{pair.get("rank_sum_score", 0)}"
              data-doc-groups='{doc_groups_data}'>
             <div class="pair-entities">
-                <span title="{_escape_html(entity1_aliases_display)}" data-kind="{_escape_html(pair["entity1"]["kind"])}">
-                    {_escape_html(pair["entity1"]["name"])}
-                </span>
-                <span title="{_escape_html(entity2_aliases_display)}" data-kind="{_escape_html(pair["entity2"]["kind"])}">
-                    {_escape_html(pair["entity2"]["name"])}
-                </span>
+                <span title="{_escape_html(entity1_aliases_display)}" data-kind="{_escape_html(pair["entity1"]["kind"])}">{_escape_html(pair["entity1"]["name"])}</span>
+                <span title="{_escape_html(entity2_aliases_display)}" data-kind="{_escape_html(pair["entity2"]["kind"])}">{_escape_html(pair["entity2"]["name"])}</span>
             </div>{kinds_html}{summary_html}
         </div>"""
 
@@ -179,6 +242,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     </style>
 </head>
 <body data-topic="{{ metadata.topic }}">
+    {{ icon_sheet }}
     <!-- Header -->
     <header>
         <div class="header-content">
@@ -220,19 +284,19 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                             class="outline secondary icon-btn"
                             aria-expanded="false"
                             aria-controls="filter-panel"
-                            aria-label="Toggle filter options">
-                        <svg class="icon-btn-svg" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                            <path d="M12 15.5A3.5 3.5 0 0 1 8.5 12 3.5 3.5 0 0 1 12 8.5a3.5 3.5 0 0 1 3.5 3.5 3.5 3.5 0 0 1-3.5 3.5m7.43-2.53c.04-.32.07-.64.07-.97 0-.33-.03-.66-.07-1l2.11-1.63c.19-.15.24-.42.12-.64l-2-3.46c-.12-.22-.39-.31-.61-.22l-2.49 1c-.52-.39-1.06-.73-1.69-.98l-.37-2.65A.506.506 0 0 0 14 2h-4c-.25 0-.46.18-.5.42l-.37 2.65c-.63.25-1.17.59-1.69.98l-2.49-1c-.22-.09-.49 0-.61.22l-2 3.46c-.13.22-.07.49.12.64L4.57 11c-.04.34-.07.67-.07 1 0 .33.03.65.07.97l-2.11 1.66c-.19.15-.25.42-.12.64l2 3.46c.12.22.39.3.61.22l2.49-1.01c.52.4 1.06.74 1.69.99l.37 2.65c.04.24.25.42.5.42h4c.25 0 .46-.18.5-.42l.37-2.65c.63-.26 1.17-.59 1.69-.99l2.49 1.01c.22.08.49 0 .61-.22l2-3.46c.12-.22.07-.49-.12-.64l-2.11-1.66z"/>
-                        </svg>
+                            aria-label="Toggle filter options"
+                            data-tooltip="Sort and filter pairs"
+                            data-placement="bottom">
+                        <svg class="icon-btn-svg" aria-hidden="true" focusable="false"><use href="#icon-gear"/></svg>
                         <span class="filter-active-dot"></span>
                     </button>
                     <button type="button"
                             id="export-toggle"
                             class="icon-btn icon-btn-borderless"
-                            aria-label="Open export dialog">
-                        <svg class="icon-btn-svg" viewBox="0 0 448 512" xmlns="http://www.w3.org/2000/svg">
-                            <path d="M246.6 9.4c-12.5-12.5-32.8-12.5-45.3 0l-128 128c-12.5 12.5-12.5 32.8 0 45.3s32.8 12.5 45.3 0L192 109.3 192 320c0 17.7 14.3 32 32 32s32-14.3 32-32l0-210.7 73.4 73.4c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3l-128-128zM64 352c0-17.7-14.3-32-32-32S0 334.3 0 352l0 64c0 53 43 96 96 96l256 0c53 0 96-43 96-96l0-64c0-17.7-14.3-32-32-32s-32 14.3-32 32l0 64c0 17.7-14.3 32-32 32L96 448c-17.7 0-32-14.3-32-32l0-64z"/>
-                        </svg>
+                            aria-label="Open export dialog"
+                            data-tooltip="Export visible pairs as CSV or JSON"
+                            data-placement="bottom">
+                        <svg class="icon-btn-svg" aria-hidden="true" focusable="false"><use href="#icon-upload"/></svg>
                     </button>
                 </div>
             </div>
@@ -311,9 +375,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     class="icon-btn icon-btn-borderless filter-clear-btn"
                     aria-label="Clear all filters"
                     hidden>
-                <svg class="icon-btn-svg" viewBox="0 0 576 512" xmlns="http://www.w3.org/2000/svg">
-                    <path d="M32 64C19.1 64 7.4 71.8 2.4 83.8S.2 109.5 9.4 118.6L192 301.3 192 416c0 8.5 3.4 16.6 9.4 22.6l64 64c2.5 2.5 5.3 4.5 8.3 6-21.2-30.9-33.6-68.3-33.6-108.6 0-99.4 75.5-181.1 172.3-191l90.4-90.4c9.2-9.2 11.9-22.9 6.9-34.9S492.9 64 480 64L32 64zM432 544a144 144 0 1 0 0-288 144 144 0 1 0 0 288zm59.3-180.7l-36.7 36.7 36.7 36.7c6.2 6.2 6.2 16.4 0 22.6s-16.4 6.2-22.6 0l-36.7-36.7-36.7 36.7c-6.2 6.2-16.4 6.2-22.6 0s-6.2-16.4 0-22.6l36.7-36.7-36.7-36.7c-6.2-6.2-6.2-16.4 0-22.6s16.4-6.2 22.6 0l36.7 36.7 36.7-36.7c6.2-6.2 16.4-6.2 22.6 0s6.2 16.4 0 22.6z"/>
-                </svg>
+                <svg class="icon-btn-svg" aria-hidden="true" focusable="false"><use href="#icon-filter-clear"/></svg>
             </button>
         </div>
     </header>
@@ -521,6 +583,7 @@ def render_template(
         "{{ document_templates }}": document_templates_html,
         "{{ reasoning_templates }}": reasoning_templates_html,
         "{{ pair_cards }}": pair_cards_html,
+        "{{ icon_sheet }}": ICON_SYMBOL_SHEET,
     }
 
     for placeholder, value in replacements.items():

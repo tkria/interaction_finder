@@ -657,6 +657,23 @@ header {
 
 .pair-counts {
     color: var(--pico-muted-color);
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5em;
+}
+.pair-counts .count-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25em;
+    white-space: nowrap;
+    /* Suppress Pico's dotted underline on tooltip-bearing inline elements. */
+    border-bottom: none !important;
+}
+.pair-counts .count-icon {
+    width: 0.9em;
+    height: 0.9em;
+    flex: 0 0 auto;
+    fill: currentColor;
 }
 
 /* Content area */
