@@ -1,5 +1,6 @@
 """Tests for extraction progress display."""
 
+from interaction_finder.progress import LiveStatusTable
 from interaction_finder.extraction.progress import (
     DummyProgress,
     create_extraction_progress,
@@ -8,7 +9,7 @@ from interaction_finder.extraction.progress import (
 
 def test_create_extraction_progress():
     """create_extraction_progress returns configured StatusTable."""
-    progress = create_extraction_progress()
+    progress = create_extraction_progress(LiveStatusTable())
     # Check expected counters exist
     assert progress["Processed"] is not None
     assert progress["Entities"] is not None
@@ -24,7 +25,7 @@ def test_create_extraction_progress():
 
 def test_extraction_progress_counters():
     """Extraction counters have correct configuration."""
-    progress = create_extraction_progress()
+    progress = create_extraction_progress(LiveStatusTable())
     # Documents section: Processed is 3-part
     assert progress["Processed"].in_progress == 0
     # Entities, Quotes are 1-part
@@ -44,7 +45,7 @@ def test_extraction_progress_counters():
 
 def test_extraction_progress_categories():
     """Extraction counters have correct categories."""
-    progress = create_extraction_progress()
+    progress = create_extraction_progress(LiveStatusTable())
     # Documents section
     assert progress["Processed"].category == "Documents"
     assert progress["Entities"].category == "Documents"
@@ -62,7 +63,7 @@ def test_extraction_progress_categories():
 
 def test_extraction_progress_context_manager():
     """Extraction progress works as context manager."""
-    progress = create_extraction_progress()
+    progress = create_extraction_progress(LiveStatusTable())
     with progress:
         progress["Processed"].total = 10
         progress["Processed"].activate()
@@ -73,7 +74,7 @@ def test_extraction_progress_context_manager():
 
 def test_extraction_progress_typical_usage():
     """Simulate typical extraction progress updates."""
-    progress = create_extraction_progress()
+    progress = create_extraction_progress(LiveStatusTable())
     # Document processing
     progress["Processed"].total = 10
     progress["Processed"].activate()
@@ -110,7 +111,7 @@ def test_extraction_progress_typical_usage():
 
 def test_extraction_progress_notes():
     """Progress counters can have dynamic notes."""
-    progress = create_extraction_progress()
+    progress = create_extraction_progress(LiveStatusTable())
     progress["Quotes"].completed = 100
     progress["Quotes"].note = "(5 invalid)"
     assert progress["Quotes"].note == "(5 invalid)"

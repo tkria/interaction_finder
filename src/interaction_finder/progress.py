@@ -7,15 +7,36 @@ Counter updates automatically trigger display refreshes via an observer pattern,
 eliminating the need for manual update() calls.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from time import time
-from typing import Literal
+from typing import Any, Literal
 
 from rich.console import Console, Group, RenderableType
 from rich.live import Live
 from rich.spinner import Spinner
 from rich.table import Table
 from rich.text import Text
+
+
+@dataclass(frozen=True)
+class Event:
+    """A single progress event: something the pipeline just did.
+
+    Events form an append-only log on a StatusTable. Their position in that
+    log is their implicit sequence number -- the log is never reordered or
+    trimmed -- so consumers track "last index seen" to resume.
+
+    Fields:
+        scope: Dotted namespace identifying the kind of event, e.g.
+            "search.selected", "keywords.scored", "extraction.pair_judged".
+        description: Short human-readable line for an activity feed.
+        data: JSON-ready projection of the new information, supplied by the
+            emitting site -- self-contained, not a pointer to look up elsewhere.
+    """
+
+    scope: str
+    description: str
+    data: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(init=False)
@@ -124,10 +145,14 @@ class StatusTable:
 
     def __init__(self, *counters: Counter):
         self.status: str = ""
-        self.counters: list[Counter] = list(counters)
-        # Wire up parent references for automatic update notifications
-        for counter in self.counters:
+        self.counters: list[Counter] = []
+        # Append-only event log; an event's index is its sequence number.
+        self.events: list[Event] = []
+        # Wire counters directly here (no notify): subclasses haven't set up
+        # their display yet during construction. add_counters() is for mid-run.
+        for counter in counters:
             counter._parent = self
+            self.counters.append(counter)
 
     def __getitem__(self, name: str) -> Counter:
         """Access counter by name."""
@@ -136,12 +161,56 @@ class StatusTable:
                 return counter
         raise KeyError(name)
 
+    def add_counters(self, *counters: Counter) -> None:
+        """Register counters on a running table, refreshing the display.
+
+        Stages add their own counters when they start, so one table can flow
+        through a multi-stage run rather than being pre-shaped per stage. Unlike
+        the constructor, this notifies -- it is called once the table is live.
+        """
+        for counter in counters:
+            counter._parent = self
+            self.counters.append(counter)
+        self._update()
+
+    def clear_all(self) -> None:
+        """Reset the table for a new stage: drop counters, signal the boundary.
+
+        Counters are dropped so the next stage can register its own. The event
+        log is never truncated (it stays append-only, index == sequence);
+        subclasses that surface events mark the boundary in-stream via
+        ``_on_clear``. The marker just means "the current stage, whatever it
+        was, has ended" -- the next stage is identified by the scope of the
+        first event that follows.
+        """
+        for counter in self.counters:
+            counter._parent = None
+        self.counters = []
+        self._update()
+        self._on_clear()
+
     def set_status(self, message: str) -> None:
         """Set status message."""
         self.status = message
 
+    def emit(self, scope: str, description: str, **data) -> None:
+        """Append an event to the log and notify.
+
+        Called from pipeline nodes where new information becomes available;
+        ``data`` is the JSON-ready projection the node already holds. The
+        event's index in the log is its implicit sequence number.
+        """
+        self.events.append(Event(scope, description, data))
+        self._on_event(self.events[-1])
+
     def _on_counter_changed(self) -> None:
         """Called when any counter's state changes. Override in subclasses."""
+
+    def _on_event(self, event: "Event") -> None:
+        """Called when an event is emitted. Override in subclasses."""
+
+    def _on_clear(self) -> None:
+        """Called at a stage boundary by clear_all. Override in subclasses."""
 
     def _update(self) -> None:
         """Internal method to refresh display. Override in subclasses."""

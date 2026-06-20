@@ -4,6 +4,7 @@ import asyncio
 
 import pytest
 
+from interaction_finder.progress import LiveStatusTable
 from interaction_finder.extraction.progress import create_extraction_progress
 from interaction_finder.widesearch.progress import create_widesearch_progress
 
@@ -11,7 +12,7 @@ from interaction_finder.widesearch.progress import create_widesearch_progress
 @pytest.mark.asyncio
 async def test_extraction_concurrent_document_simulation():
     """Simulate concurrent document processing with progress tracking."""
-    progress = create_extraction_progress()
+    progress = create_extraction_progress(LiveStatusTable())
     num_docs = 10
     # Initialize
     progress["Processed"].total = num_docs
@@ -37,7 +38,7 @@ async def test_extraction_concurrent_document_simulation():
 @pytest.mark.asyncio
 async def test_extraction_concurrent_pairs_simulation():
     """Simulate concurrent pair assessment with progress tracking."""
-    progress = create_extraction_progress()
+    progress = create_extraction_progress(LiveStatusTable())
     num_pairs = 50
     # Initialize
     progress["Pairs assessed"].total = num_pairs
@@ -63,7 +64,7 @@ async def test_extraction_concurrent_pairs_simulation():
 @pytest.mark.asyncio
 async def test_extraction_concurrent_judgments_simulation():
     """Simulate concurrent judgment with progress tracking."""
-    progress = create_extraction_progress()
+    progress = create_extraction_progress(LiveStatusTable())
     num_pairs = 30
     # Initialize
     progress["Unique pairs"].total = num_pairs
@@ -93,7 +94,7 @@ async def test_extraction_concurrent_judgments_simulation():
 @pytest.mark.asyncio
 async def test_widesearch_concurrent_searches_simulation():
     """Simulate concurrent searches with progress tracking."""
-    progress = create_widesearch_progress()
+    progress = create_widesearch_progress(LiveStatusTable())
     num_searches = 8
     # Initialize
     progress["Searches run"].total = num_searches
@@ -125,7 +126,7 @@ async def test_widesearch_concurrent_searches_simulation():
 @pytest.mark.asyncio
 async def test_extraction_multi_stage_pipeline():
     """Simulate multi-stage extraction pipeline with progress tracking."""
-    progress = create_extraction_progress()
+    progress = create_extraction_progress(LiveStatusTable())
     # Stage 1: Process documents
     num_docs = 5
     progress["Processed"].total = num_docs
@@ -172,7 +173,7 @@ def test_progress_counters_in_progress_can_be_negative():
     """Verify in_progress can go negative (due to concurrent over-decrement)."""
     # Note: In the new API, we don't automatically guard against negative.
     # The calling code uses max(0, ...) patterns where needed.
-    progress = create_extraction_progress()
+    progress = create_extraction_progress(LiveStatusTable())
     progress["Processed"].in_progress = 0
     progress["Processed"].done()  # Decrements by 1
     assert progress["Processed"].in_progress == -1
@@ -180,7 +181,7 @@ def test_progress_counters_in_progress_can_be_negative():
 
 def test_widesearch_round_reset():
     """Verify per-round counters reset correctly between rounds."""
-    progress = create_widesearch_progress()
+    progress = create_widesearch_progress(LiveStatusTable())
     # Round 1
     progress["Searches run"].total = 5
     progress["Searches run"].completed = 5

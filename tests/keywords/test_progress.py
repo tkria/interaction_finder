@@ -1,11 +1,12 @@
 """Tests for keywords progress display."""
 
+from interaction_finder.progress import LiveStatusTable
 from interaction_finder.keywords.progress import DummyProgress, create_keywords_progress
 
 
 def test_create_keywords_progress():
     """create_keywords_progress returns configured StatusTable."""
-    progress = create_keywords_progress()
+    progress = create_keywords_progress(LiveStatusTable())
     # Check expected counters exist
     assert progress["Round"] is not None
     assert progress["Searches run"] is not None
@@ -17,7 +18,7 @@ def test_create_keywords_progress():
 
 def test_keywords_progress_counters():
     """Keywords counters have correct configuration."""
-    progress = create_keywords_progress()
+    progress = create_keywords_progress(LiveStatusTable())
     # Round is a 2-part counter (no in_progress tracking)
     assert progress["Round"].in_progress is None
     # Searches run is 1-part
@@ -34,7 +35,7 @@ def test_keywords_progress_counters():
 
 def test_keywords_progress_categories():
     """Keywords counters have correct categories."""
-    progress = create_keywords_progress()
+    progress = create_keywords_progress(LiveStatusTable())
     assert progress["Round"].category == "Search"
     assert progress["Searches run"].category == "Search"
     assert progress["Results found"].category == "Search"
@@ -45,7 +46,7 @@ def test_keywords_progress_categories():
 
 def test_keywords_progress_context_manager():
     """Keywords progress works as context manager."""
-    progress = create_keywords_progress()
+    progress = create_keywords_progress(LiveStatusTable())
     with progress:
         progress["Fetched"].total = 10
         progress["Fetched"].activate()
@@ -56,7 +57,7 @@ def test_keywords_progress_context_manager():
 
 def test_keywords_progress_typical_usage():
     """Simulate typical keywords progress updates."""
-    progress = create_keywords_progress()
+    progress = create_keywords_progress(LiveStatusTable())
     # Start round
     progress["Round"].total = 3
     progress["Round"].completed = 1

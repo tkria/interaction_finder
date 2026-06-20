@@ -6,6 +6,7 @@ from rich.console import Group
 from interaction_finder.progress import (
     Counter,
     DummyProgress,
+    Event,
     LiveStatusTable,
     StatusTable,
 )
@@ -182,6 +183,49 @@ class TestStatusTable:
         with table:
             table["Test"].completed = 42
         assert table["Test"].completed == 42
+
+    def test_add_counters_appends_and_wires_parent(self):
+        """add_counters registers counters and wires change notification."""
+        table = StatusTable(Counter("A"))
+        table.add_counters(Counter("B"), Counter("C"))
+        assert [c.name for c in table.counters] == ["A", "B", "C"]
+        assert table["B"]._parent is table
+
+    def test_clear_all_drops_counters_keeps_events(self):
+        """clear_all removes counters but leaves the append-only log intact.
+
+        On the base table _on_clear is a no-op, so no boundary event is added.
+        """
+        table = StatusTable(Counter("A"))
+        table.emit("test.scope", "did a thing")
+        table.clear_all()
+        assert table.counters == []
+        assert [e.scope for e in table.events] == ["test.scope"]
+
+    def test_emit_appends_event_index_is_sequence(self):
+        """emit appends to an ordered log; index is the implicit sequence."""
+        table = StatusTable()
+        table.emit("search.selected", "picked 3", query="q", picked=[{"title": "t"}])
+        table.emit("search.selected", "picked 1", query="q2")
+        assert len(table.events) == 2
+        first = table.events[0]
+        assert isinstance(first, Event)
+        assert first.scope == "search.selected"
+        assert first.description == "picked 3"
+        assert first.data == {"query": "q", "picked": [{"title": "t"}]}
+        assert table.events[1].data["query"] == "q2"
+
+    def test_on_event_hook_fires(self):
+        """emit invokes the _on_event hook (overridden by subclasses)."""
+        seen = []
+
+        class Recording(StatusTable):
+            def _on_event(self, event):
+                seen.append(event)
+
+        table = Recording()
+        table.emit("x.y", "z")
+        assert len(seen) == 1 and seen[0].scope == "x.y"
 
 
 class TestLiveStatusTable:

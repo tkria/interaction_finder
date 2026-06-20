@@ -1,5 +1,6 @@
 """Tests for widesearch progress display."""
 
+from interaction_finder.progress import LiveStatusTable, StatusTable
 from interaction_finder.widesearch.progress import (
     DummyProgress,
     create_widesearch_progress,
@@ -7,8 +8,8 @@ from interaction_finder.widesearch.progress import (
 
 
 def test_create_widesearch_progress():
-    """create_widesearch_progress returns configured StatusTable."""
-    progress = create_widesearch_progress()
+    """create_widesearch_progress populates the given table's counters."""
+    progress = create_widesearch_progress(LiveStatusTable())
     # Check expected counters exist
     assert progress["Round"] is not None
     assert progress["Searches run"] is not None
@@ -16,9 +17,22 @@ def test_create_widesearch_progress():
     assert progress["Results selected"] is not None
 
 
+def test_create_widesearch_progress_populates_and_returns_given_table():
+    """The stage counters land on the passed-in table, which is returned."""
+    table = StatusTable()
+    returned = create_widesearch_progress(table)
+    assert returned is table
+    assert [c.name for c in table.counters] == [
+        "Round",
+        "Searches run",
+        "Results found",
+        "Results selected",
+    ]
+
+
 def test_widesearch_progress_counters():
     """Widesearch counters have correct configuration."""
-    progress = create_widesearch_progress()
+    progress = create_widesearch_progress(LiveStatusTable())
     # Round is a 2-part counter (no in_progress tracking)
     assert progress["Round"].in_progress is None
     # Searches run is a 3-part counter
@@ -31,7 +45,7 @@ def test_widesearch_progress_counters():
 
 def test_widesearch_progress_categories():
     """Widesearch counters have correct categories."""
-    progress = create_widesearch_progress()
+    progress = create_widesearch_progress(LiveStatusTable())
     assert progress["Round"].category == "Search"
     assert progress["Searches run"].category == "Search"
     assert progress["Results found"].category == "Search"
@@ -40,7 +54,7 @@ def test_widesearch_progress_categories():
 
 def test_widesearch_progress_context_manager():
     """Widesearch progress works as context manager."""
-    progress = create_widesearch_progress()
+    progress = create_widesearch_progress(LiveStatusTable())
     with progress:
         progress["Searches run"].total = 10
         progress["Searches run"].activate()
@@ -50,7 +64,7 @@ def test_widesearch_progress_context_manager():
 
 def test_widesearch_progress_typical_usage():
     """Simulate typical widesearch progress updates."""
-    progress = create_widesearch_progress()
+    progress = create_widesearch_progress(LiveStatusTable())
     # Start round
     progress["Round"].total = 3
     progress["Round"].completed = 1

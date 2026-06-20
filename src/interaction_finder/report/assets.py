@@ -4,8 +4,9 @@ Contains inline CSS and JS code as Python strings for embedding
 in self-contained HTML reports.
 """
 
-REPORT_CSS = """
-/* Report-specific styling using Pico CSS as base */
+THEME_CSS = """
+/* Shared theme tokens (Pico CSS palette mappings). Used by the report and the
+   web UI so both surfaces share one colour/spacing system. */
 
 :root {
     --spacing-compact: 0.5rem;
@@ -165,7 +166,13 @@ REPORT_CSS = """
     --polarity-neutral-text: var(--pico-color-slate-200);
     --doc-link-hover-bg: var(--pico-color-azure-750);
 }
+"""
 
+
+# Report layout and component styling, built on the shared theme tokens above.
+REPORT_CSS = (
+    THEME_CSS
+    + """
 body {
     margin: 0;
     padding: 0;
@@ -1158,6 +1165,16 @@ header {
     display: flex;
     gap: 0.5rem;
     justify-content: flex-end;
+    /* Pico's default footer band is oversized for a utility dialog: trim the
+       vertical padding and the gap it leaves above the content. */
+    padding: 0.75rem var(--pico-block-spacing-horizontal);
+    margin-top: 1rem;
+}
+.export-modal > footer button {
+    width: auto;
+    margin: 0;
+    padding: 0.4rem 1rem;
+    font-size: 0.9rem;
 }
 .export-modal fieldset {
     margin-bottom: 1rem;
@@ -1170,6 +1187,12 @@ header {
     margin: 0.5rem 0 0.35rem;
     color: var(--pico-muted-color);
     font-style: italic;
+}
+.export-filters-summary {
+    margin-left: 0.4rem;
+    color: var(--pico-muted-color);
+    font-style: italic;
+    font-weight: normal;
 }
 .export-col-grid {
     display: grid;
@@ -1204,15 +1227,36 @@ header {
     margin: 0;
     font-size: 0.8rem;
     white-space: nowrap;
+    border-collapse: separate;
+    border-spacing: 0;
 }
 #export-preview-table th,
 #export-preview-table td {
     padding: 0.3rem 0.5rem;
 }
+/* Keep column labels visible while scrolling the full row set. */
+#export-preview-table thead th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: var(--pico-card-background-color, var(--pico-background-color));
+    box-shadow: inset 0 -1px var(--pico-muted-border-color);
+}
 #export-row-count {
     display: block;
     margin-top: 0.4rem;
     color: var(--pico-muted-color);
+}
+/* Entity sort: keep the label and select on one line below the switches. */
+#export-columns-entities label[for="export-entity-sort"] {
+    display: inline-block;
+    margin: 0.5rem 0.5rem 0 0;
+}
+#export-columns-entities #export-entity-sort {
+    display: inline-block;
+    width: auto;
+    margin: 0;
+    vertical-align: middle;
 }
 .export-toast {
     position: fixed;
@@ -1252,6 +1296,7 @@ header {
     background: var(--pico-muted-color);
 }
 """
+)
 
 REPORT_JS = """
 // Report interactivity
@@ -1274,6 +1319,10 @@ const state = {
     relevanceMin: 0,          // 0 = any, 1-5 = specific
     relevanceMax: 6,          // 6 = any, 1-5 = specific
     showContentious: false,
+    // Strict-by-default: hide pairs whose subject-side entity failed the
+    // taxonomic check. They are kept and scored, just collapsed until expanded.
+    // 'na' pairs (gate did not run) are never hidden by this.
+    strictOnTopic: true,
 };
 
 // URL state management
@@ -1302,6 +1351,7 @@ function getStateFromURL() {
         relevanceMin: params.has('rmin') ? parseInt(params.get('rmin'), 10) : 0,
         relevanceMax: params.has('rmax') ? parseInt(params.get('rmax'), 10) : 6,
         contentious: params.get('contentious') === '1',
+        strictOnTopic: params.get('alltopics') !== '1',
     };
 }
 
@@ -1351,6 +1401,9 @@ function updateURL(usePushState = false, outgoingScroll = null) {
     }
     if (state.showContentious) {
         params.set('contentious', '1');
+    }
+    if (!state.strictOnTopic) {
+        params.set('alltopics', '1');
     }
     // Include scroll positions
     const scroll = getScrollPositions();
@@ -1428,6 +1481,7 @@ function restoreStateFromURL(scrollOverride) {
     state.relevanceMin = urlState.relevanceMin;
     state.relevanceMax = urlState.relevanceMax;
     state.showContentious = urlState.contentious;
+    state.strictOnTopic = urlState.strictOnTopic;
     // Update UI controls to match
     document.getElementById('search-input').value = urlState.search;
     document.getElementById('show-rejected').checked = urlState.rejected;
@@ -1438,6 +1492,7 @@ function restoreStateFromURL(scrollOverride) {
     document.getElementById('relevance-min').value = urlState.relevanceMin;
     document.getElementById('relevance-max').value = urlState.relevanceMax;
     document.getElementById('contentious-only').checked = urlState.contentious;
+    document.getElementById('on-topic-only').checked = urlState.strictOnTopic;
     // Update filter UI state
     updateFilterActiveIndicator();
     updateRangeFilterOptions();
@@ -1548,6 +1603,7 @@ function initReport() {
     document.getElementById('relevance-min').addEventListener('change', handleRelevanceMinChange);
     document.getElementById('relevance-max').addEventListener('change', handleRelevanceMaxChange);
     document.getElementById('contentious-only').addEventListener('change', handleToggleContentious);
+    document.getElementById('on-topic-only').addEventListener('change', handleToggleOnTopicOnly);
     document.getElementById('filter-clear').addEventListener('click', clearAllFilters);
 
     // Add click handlers to pre-rendered pair cards
@@ -1698,6 +1754,12 @@ function handleToggleRejected(e) {
     applyFiltersAndSort();
 }
 
+// Toggle the on-topic-only filter (hide pairs that failed the subject check)
+function handleToggleOnTopicOnly(e) {
+    state.strictOnTopic = e.target.checked;
+    applyFiltersAndSort();
+}
+
 // Toggle filter panel visibility
 function toggleFilterPanel() {
     const panel = document.getElementById('filter-panel');
@@ -1717,7 +1779,8 @@ function hasNonDefaultFilters() {
         state.relevanceMin > 0 ||
         state.relevanceMax < 6 ||
         state.showRejected ||
-        state.showContentious
+        state.showContentious ||
+        !state.strictOnTopic
     );
 }
 
@@ -1734,6 +1797,7 @@ function clearAllFilters() {
     state.searchQuery = '';
     state.showRejected = false;
     state.showContentious = false;
+    state.strictOnTopic = true;
     state.sortField = 'default';
     state.sortDir = 'desc';
     state.evidenceMin = 0;
@@ -1744,6 +1808,7 @@ function clearAllFilters() {
     document.getElementById('search-input').value = '';
     document.getElementById('show-rejected').checked = false;
     document.getElementById('contentious-only').checked = false;
+    document.getElementById('on-topic-only').checked = true;
     document.getElementById('sort-field').value = 'default';
     document.getElementById('sort-dir-toggle').dataset.dir = 'desc';
     document.getElementById('evidence-min').value = '0';
@@ -1879,6 +1944,12 @@ function getFilteredPairs() {
     let filtered = Array.from(allPairs).filter(card => {
         // Filter rejected
         if (!state.showRejected && card.dataset.accepted === 'false') {
+            return false;
+        }
+        // Subject-trust gate (strict by default): hide pairs whose subject-side
+        // entity failed the same-kind taxonomic check. 'pass' and 'na' (gate did
+        // not run on this pair) are always shown.
+        if (state.strictOnTopic && card.dataset.subjectTrust === 'fail') {
             return false;
         }
         // Evidence range filter
@@ -2609,6 +2680,8 @@ const EXPORT_PAIR_COLUMNS = [
     { id: 'evidence', label: 'Evidence', get: (p) => p.overall },
     { id: 'evidence_label', label: 'Evidence label', get: (p) => p.evidenceLabel },
     { id: 'topic_relevance', label: 'Topic relevance', default: true, get: (p) => p.relevance },
+    { id: 'on_topic', label: 'On-topic',
+      get: (p) => ({ pass: 'yes', fail: 'no', na: '' }[p.subjectTrust] ?? '') },
     { id: 'doc_count', label: 'Document count', default: true, get: (p) => p.docCount },
     { id: 'quote_count', label: 'Quote count', default: true, get: (p) => p.quoteCount },
     { id: 'polarity_counts', label: 'Polarity counts', get: (p) => p.polarityCounts },
@@ -2695,6 +2768,7 @@ function readPairFromCard(card) {
         overall: Number(card.dataset.overall) || 0,
         evidenceLabel: card.querySelector('.evidence-badge')?.textContent.trim() || '',
         relevance: Number(card.dataset.relevance) || 0,
+        subjectTrust: card.dataset.subjectTrust || '',
         docCount: Number(card.dataset.docCount) || 0,
         quoteCount: Number(card.dataset.quoteCount) || 0,
         polarityCounts: formatPolarityCounts(card),
@@ -2854,7 +2928,10 @@ function rebuildModeControls(ctx) {
 }
 
 
-// Are any filters narrowing the visible set (excluding sort order)?
+// Are any filters narrowing the visible set (excluding sort order)? Unlike
+// hasNonDefaultFilters (which tracks non-default *configuration*), this asks
+// whether the export set is actually being reduced -- so the default-on
+// on-topic-only switch counts as narrowing whenever it is engaged.
 function hasActiveExportFilters() {
     return (
         state.searchQuery.length > 0 ||
@@ -2863,8 +2940,34 @@ function hasActiveExportFilters() {
         state.relevanceMin > 0 ||
         state.relevanceMax < 6 ||
         state.showRejected ||
-        state.showContentious
+        state.showContentious ||
+        state.strictOnTopic
     );
+}
+
+// Render a min/max selection as "≥ N", "≤ N", or "N–M" (any-bound omitted).
+function describeRange(label, min, max, minAny, maxAny) {
+    const hasMin = min > minAny;
+    const hasMax = max < maxAny;
+    if (hasMin && hasMax) return `${label} ${min}–${max}`;
+    if (hasMin) return `${label} ≥ ${min}`;
+    if (hasMax) return `${label} ≤ ${max}`;
+    return null;
+}
+
+// Human-readable phrases for each filter currently narrowing the export set,
+// in the order they appear in the filter panel. Empty when nothing is active.
+function describeActiveExportFilters() {
+    const parts = [];
+    if (state.strictOnTopic) parts.push('on topic');
+    if (state.searchQuery.length > 0) parts.push(`“${state.searchQuery}”`);
+    const evidence = describeRange('evidence', state.evidenceMin, state.evidenceMax, 0, 10);
+    if (evidence) parts.push(evidence);
+    const relevance = describeRange('relevance', state.relevanceMin, state.relevanceMax, 0, 6);
+    if (relevance) parts.push(relevance);
+    if (state.showContentious) parts.push('contentious');
+    if (state.showRejected) parts.push('including rejected');
+    return parts;
 }
 
 function updateScopeCount() {
@@ -2878,6 +2981,9 @@ function updateScopeCount() {
         return;
     }
     fieldset.style.display = '';
+    const summary = describeActiveExportFilters().join(', ');
+    document.getElementById('export-filters-summary').textContent =
+        summary ? `(${summary})` : '';
 }
 
 // Build the array of row objects to be exported, given the current settings.
@@ -2949,11 +3055,30 @@ function buildPairRows(cards, ctx) {
     return { headers, rows, sidecar: { jsonRows, documents, aliases } };
 }
 
+// Order entity records per the entity-sort select. `default` preserves
+// first-encountered order (the Map's insertion order, i.e. reading down the
+// association list); `occurrences` is descending count, name-breaking ties.
+function sortEntityRecords(records, mode) {
+    if (mode === 'alphabetic') {
+        return [...records].sort((a, b) => a.name.localeCompare(b.name));
+    }
+    if (mode === 'occurrences') {
+        return [...records].sort(
+            (a, b) => b.occurrences - a.occurrences || a.name.localeCompare(b.name)
+        );
+    }
+    return [...records];  // default: first-seen order, already insertion-ordered
+}
+
 function buildEntityRows(cards) {
     const selectedKind = getSelectedEntityKind();
     if (!selectedKind) return { headers: [], rows: [], sidecar: null };
     const includeAliases = document.getElementById('export-entity-include-aliases')?.checked;
-    const seen = new Map();  // canonical name -> { name, aliases }
+    const includeOccurrences = document.getElementById('export-entity-include-occurrences')?.checked;
+    const sortMode = document.getElementById('export-entity-sort')?.value || 'default';
+    // First-seen order with a per-entity occurrence count (number of cards the
+    // entity appears in). Map insertion order == reading down the pair list.
+    const seen = new Map();  // canonical name -> { name, aliases, occurrences }
     for (const card of cards) {
         const span1 = card.querySelector('.pair-entities > span:first-child');
         const span2 = card.querySelector('.pair-entities > span:last-child');
@@ -2963,27 +3088,41 @@ function buildEntityRows(cards) {
             { name: card.dataset.e2, kind: span2?.dataset.kind || '',
               aliases: (card.dataset.e2a || '').split(',').filter((s) => s) },
         ];
+        // Count each entity at most once per card, even if it is both sides.
+        const countedInCard = new Set();
         for (const c of candidates) {
-            if (c.kind !== selectedKind || !c.name || seen.has(c.name)) continue;
-            seen.set(c.name, c);
+            if (c.kind !== selectedKind || !c.name) continue;
+            const record = seen.get(c.name)
+                || (seen.set(c.name, { name: c.name, aliases: c.aliases, occurrences: 0 }),
+                    seen.get(c.name));
+            if (!countedInCard.has(c.name)) {
+                record.occurrences += 1;
+                countedInCard.add(c.name);
+            }
         }
     }
     const kindLabel = formatKindForHeader(selectedKind);
-    const sorted = [...seen.values()].sort((a, b) => a.name.localeCompare(b.name));
-    // Delimited rows: name (+ pipe-joined aliases column if requested).
-    const headers = includeAliases ? [kindLabel, 'Aliases'] : [kindLabel];
-    const rows = sorted.map((e) => includeAliases
-        ? { [kindLabel]: e.name, Aliases: e.aliases }
-        : { [kindLabel]: e.name });
-    // JSON sidecar: top-level aliases map (only when requested) plus rows of names.
+    const ordered = sortEntityRecords([...seen.values()], sortMode);
+    // Delimited rows: name, optional occurrence count, optional pipe-joined aliases.
+    const headers = [kindLabel];
+    if (includeOccurrences) headers.push('Occurrences');
+    if (includeAliases) headers.push('Aliases');
+    const rows = ordered.map((e) => {
+        const row = { [kindLabel]: e.name };
+        if (includeOccurrences) row.Occurrences = e.occurrences;
+        if (includeAliases) row.Aliases = e.aliases;
+        return row;
+    });
+    // JSON sidecar: top-level aliases map (only when requested). Rows are bare
+    // names, or {name, occurrences} objects when the count column is on.
     const aliases = {};
     if (includeAliases) {
-        for (const e of sorted) {
+        for (const e of ordered) {
             if (e.aliases.length) aliases[e.name] = e.aliases;
         }
     }
-    // JSON `rows` is a bare list of names for entity-only exports.
-    const jsonRows = sorted.map((e) => e.name);
+    const jsonRows = ordered.map((e) =>
+        includeOccurrences ? { name: e.name, occurrences: e.occurrences } : e.name);
     return { headers, rows, sidecar: { jsonRows, documents: [], aliases } };
 }
 
@@ -3051,19 +3190,19 @@ function renderExportPreview() {
     updateScopeCount();
     const data = buildExportRows(cards, ctx);
     const table = document.getElementById('export-preview-table');
-    const previewLimit = 5;
-    const preview = { headers: data.headers, rows: data.rows.slice(0, previewLimit) };
+    // Render every row -- the preview wrap scrolls (max-height + sticky header),
+    // so the table mirrors exactly what will be exported, not a truncated sample.
     let html = '<thead><tr>';
-    for (const h of preview.headers) {
+    for (const h of data.headers) {
         html += `<th scope="col">${escapeHtml(h)}</th>`;
     }
     html += '</tr></thead><tbody>';
-    if (!preview.rows.length) {
-        html += `<tr><td colspan="${Math.max(1, preview.headers.length)}" style="text-align:center; color:var(--pico-muted-color);">No rows match the current settings</td></tr>`;
+    if (!data.rows.length) {
+        html += `<tr><td colspan="${Math.max(1, data.headers.length)}" style="text-align:center; color:var(--pico-muted-color);">No rows match the current settings</td></tr>`;
     } else {
-        for (const row of preview.rows) {
+        for (const row of data.rows) {
             html += '<tr>';
-            for (const h of preview.headers) {
+            for (const h of data.headers) {
                 const cell = flattenCellForCsv(row[h]);
                 html += `<td>${escapeHtml(String(cell))}</td>`;
             }

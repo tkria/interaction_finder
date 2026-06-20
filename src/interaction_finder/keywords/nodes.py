@@ -787,6 +787,16 @@ class FinalizeNode(BaseNode[State, Deps, BridgingTermsOut]):
                     (t, f"{s:.3f}") for t, s in zip(final_terms[:5], final_scores[:5])
                 ],
             )
+            if ctx.deps.progress:
+                ctx.deps.progress.emit(
+                    "keywords.scored",
+                    f"Identified {len(final_terms)} bridging terms",
+                    terms=[
+                        {"term": t, "score": s}
+                        for t, s in zip(final_terms, final_scores)
+                    ],
+                    coverage_assessment=assessment,
+                )
             # Return final result
             return End(
                 BridgingTermsOut(
