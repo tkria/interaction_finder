@@ -118,6 +118,57 @@ async def test_full_pipeline_single_round():
 
 
 @pytest.mark.asyncio
+async def test_pipeline_emits_search_events():
+    """Running the search graph with a progress table emits watchable events."""
+    from interaction_finder.progress import StatusTable
+    from interaction_finder.widesearch.progress import create_widesearch_progress
+
+    mock_results = [
+        SearchResult(
+            title="Diabetes Review", url="https://example.com/1", snippet="A review"
+        ),
+        SearchResult(
+            title="Insulin Study", url="https://example.com/2", snippet="A study"
+        ),
+    ]
+    progress = create_widesearch_progress(StatusTable())
+    test_model = TestModel()
+    config = IfetcherConfig()
+    with (
+        get_goal_planner_agent(config).override(model=test_model),
+        get_query_generator_agent(config, "mock").override(model=test_model),
+        get_result_selector_agent(config).override(model=test_model),
+        get_reflector_agent(config).override(model=test_model),
+    ):
+        async with httpx.AsyncClient() as client:
+            deps = Deps(
+                http_client=client,
+                search_backend=MockSearchBackend(results=mock_results),
+                reranker=MockReranker(),
+                resource_pool=ResourcePool(),
+                config=config,
+                progress=progress,
+            )
+            state = State(
+                topic="diabetes treatment",
+                keyphrases=["insulin", "glucose"],
+                max_rounds=3,
+            )
+            await graph.run(PlanGoalsNode(), state=state, deps=deps)
+
+    scopes = {e.scope for e in progress.events}
+    assert "search.queries" in scopes
+    assert "search.results" in scopes
+    # Each query event carries the round and the generated query list.
+    q_event = next(e for e in progress.events if e.scope == "search.queries")
+    assert q_event.data["round"] >= 1
+    assert isinstance(q_event.data["queries"], list)
+    # A results event reports the round's totals.
+    r_event = next(e for e in progress.events if e.scope == "search.results")
+    assert r_event.data["total"] >= 0
+
+
+@pytest.mark.asyncio
 async def test_pipeline_reaches_max_rounds():
     """Test pipeline stops at max_rounds limit."""
     mock_results = [

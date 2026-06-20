@@ -4,11 +4,39 @@ Regression test for bug where ReflectNode was creating new SearchResult
 objects with empty titles instead of retrieving the stored objects.
 """
 
+import contextlib
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock
+from pydantic_ai.models.test import TestModel
 
 from interaction_finder.search.models import SearchQuery, SearchResult, SearchBackend
+from interaction_finder.settings import IfetcherConfig
 from interaction_finder.widesearch import run_widesearch
+from interaction_finder.widesearch.agents import (
+    get_goal_planner_agent,
+    get_query_generator_agent,
+    get_reflector_agent,
+    get_result_selector_agent,
+)
+
+
+@contextlib.contextmanager
+def mock_widesearch_agents():
+    """Override every widesearch LLM agent with TestModel.
+
+    run_widesearch builds the graph with real agents; without this the run
+    makes live OpenAI calls. The agents are cached by config signature, so
+    overriding those fetched from the default config applies to the run.
+    """
+    config = IfetcherConfig()
+    model = TestModel()
+    with (
+        get_goal_planner_agent(config).override(model=model),
+        get_query_generator_agent(config, "mock").override(model=model),
+        get_result_selector_agent(config).override(model=model),
+        get_reflector_agent(config).override(model=model),
+    ):
+        yield
 
 
 class MockSearchBackend(SearchBackend):
@@ -48,12 +76,13 @@ async def test_search_result_metadata_preserved():
     """Test that titles, snippets, and relevance are preserved in final results."""
     backend = MockSearchBackend(results_per_query=3)
 
-    results = await run_widesearch(
-        topic="test topic",
-        keyphrases=["keyword1", "keyword2"],
-        search_backend=backend,
-        max_rounds=1,  # Single round to simplify
-    )
+    with mock_widesearch_agents():
+        results = await run_widesearch(
+            topic="test topic",
+            keyphrases=["keyword1", "keyword2"],
+            search_backend=backend,
+            max_rounds=1,  # Single round to simplify
+        )
 
     # Should have at least some results
     assert len(results) > 0, "Expected some results from widesearch"
@@ -77,12 +106,13 @@ async def test_max_rounds_metadata_preserved():
     """Test metadata preservation when max_rounds is reached."""
     backend = MockSearchBackend(results_per_query=2)
 
-    results = await run_widesearch(
-        topic="test topic",
-        keyphrases=["keyword1"],
-        search_backend=backend,
-        max_rounds=2,  # Force max_rounds termination
-    )
+    with mock_widesearch_agents():
+        results = await run_widesearch(
+            topic="test topic",
+            keyphrases=["keyword1"],
+            search_backend=backend,
+            max_rounds=2,  # Force max_rounds termination
+        )
 
     assert len(results) > 0
 
@@ -115,11 +145,12 @@ async def test_checkpoint_metadata_preserved():
         ),
     )
 
-    checkpoint = await run_widesearch_with_checkpoint(
-        input_checkpoint=input_checkpoint,
-        search_backend=backend,
-        max_rounds=1,
-    )
+    with mock_widesearch_agents():
+        checkpoint = await run_widesearch_with_checkpoint(
+            input_checkpoint=input_checkpoint,
+            search_backend=backend,
+            max_rounds=1,
+        )
 
     # Check results in checkpoint (nested in search stage data)
     assert len(checkpoint.search.results) > 0

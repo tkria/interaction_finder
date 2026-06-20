@@ -26,6 +26,17 @@ from interaction_finder.widesearch.deps import Deps
 from interaction_finder.widesearch.state import State
 
 
+def _result_info(index: int, result: SearchResult) -> dict:
+    """Serialise a result for the search.selected event, including its snippet."""
+    return {
+        "index": index,
+        "title": result.title,
+        "url": result.url,
+        "snippet": result.snippet,
+        "relevance": result.relevance,
+    }
+
+
 @dataclass
 class PlanGoalsNode(BaseNode[State, Deps, list[SearchResult]]):
     """Initial planning node: identifies subject goals to cover.
@@ -104,6 +115,14 @@ Generate search queries that target unsatisfied subject goals and incorporate th
         # Store queries in state
         ctx.state.current_queries = result.output.queries
         ctx.state.all_queries.extend(result.output.queries)
+        if ctx.deps.progress:
+            ctx.deps.progress.emit(
+                "search.queries",
+                f"Generated {len(result.output.queries)} queries "
+                f"for round {ctx.state.current_round}",
+                round=ctx.state.current_round,
+                queries=list(result.output.queries),
+            )
         logger.info(
             f"Generated {len(result.output.queries)} queries "
             f"(broad={len(result.output.broad_queries)}, "
@@ -176,6 +195,15 @@ class SearchNode(BaseNode[State, Deps, list[SearchResult]]):
             # Count unique URLs
             unique_urls = len(set(r.url for r in all_results))
 
+            if ctx.deps.progress:
+                ctx.deps.progress.emit(
+                    "search.results",
+                    f"Fetched {len(all_results)} results "
+                    f"({unique_urls} unique) for round {ctx.state.current_round}",
+                    round=ctx.state.current_round,
+                    total=len(all_results),
+                    unique=unique_urls,
+                )
             logger.info(
                 f"Fetched {len(all_results)} results ({unique_urls} unique)",
                 total_results=len(all_results),
@@ -364,14 +392,22 @@ Select the most relevant results and summarize what subject areas they cover."""
         rejected_indices = sorted(all_indices - selected_indices_set)
         # Build selected and rejected result info for logging
         selected_results_info = [
-            {"index": idx, "title": batch[idx].title, "url": batch[idx].url}
+            _result_info(idx, batch[idx])
             for idx in result.output.selected_indices
             if 0 <= idx < len(batch)
         ]
         rejected_results_info = [
-            {"index": idx, "title": batch[idx].title, "url": batch[idx].url}
-            for idx in rejected_indices
+            _result_info(idx, batch[idx]) for idx in rejected_indices
         ]
+        if ctx.deps.progress:
+            ctx.deps.progress.emit(
+                "search.selected",
+                f"Selected {len(selected_results_info)} of {len(batch)} results",
+                round=ctx.state.current_round,
+                picked=selected_results_info,
+                rejected=rejected_results_info,
+                covered_topics=result.output.covered_topics_summary,
+            )
         logger.info(
             f"Batch processed: selected {len(result.output.selected_indices)} results ({registered_count} new URLs registered)",
             batch_size=len(batch),
