@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, List, Optional
 
@@ -492,6 +493,7 @@ def load_config(
     config_path: Optional[str] = None,
     overrides: Optional[List[str]] = None,
     mode: Optional[str] = None,
+    fallback_config: Optional[dict] = None,
 ) -> IfetcherConfig:
     """
     Load configuration from file or use defaults.
@@ -500,6 +502,9 @@ def load_config(
         config_path: Path to config file (searches standard locations if None)
         overrides: List of override strings
         mode: Configuration mode to apply
+        fallback_config: Config dict used as the base when no config file is
+            found (e.g. a checkpoint's embedded config). Falls back to bare
+            spec defaults when None. Ignored when a config file is loaded.
 
     Returns:
         Loaded IfetcherConfig instance
@@ -515,7 +520,7 @@ def load_config(
             if path.exists():
                 config_path = str(path)
                 break
-    # Load config or create default
+    # Load config or use the fallback/default base
     if config_path and Path(config_path).exists():
         override_dict = {}
         if overrides:
@@ -526,15 +531,18 @@ def load_config(
             config_path, overrides=override_dict, mode=mode
         )
     else:
-        # No config file found, use defaults
-        config = IfetcherConfig()
+        # No config file found: start from the fallback config dict (e.g. a
+        # checkpoint's embedded config) when provided, else bare defaults.
+        config_dict = (
+            deepcopy(fallback_config)
+            if fallback_config is not None
+            else IfetcherConfig().model_dump()
+        )
         if overrides:
-            # Apply overrides to default config
-            config_dict = config.model_dump()
             for override_str in overrides:
                 key, value = parse_config_override(override_str)
                 config_dict = IfetcherConfig.apply_overrides(config_dict, {key: value})
-            config = IfetcherConfig.model_validate(config_dict)
+        config = IfetcherConfig.model_validate(config_dict)
     return config
 
 
@@ -892,13 +900,14 @@ def keywords(
         # Import keywords pipeline
         from interaction_finder.keywords import run_keyword_research
         from interaction_finder.keywords.progress import create_keywords_progress
+        from interaction_finder.progress import LiveStatusTable
         from interaction_finder.fetcher import ensure_playwright_installed
 
         # Ensure Playwright is installed before showing progress table
         asyncio.run(ensure_playwright_installed())
         # Run keywords stage with progress display
         console.print(f"[bold]Extracting bridging terms for:[/bold] {topic}\n")
-        progress_counter = create_keywords_progress()
+        progress_counter = create_keywords_progress(LiveStatusTable())
         with progress_counter:
             result_checkpoint = asyncio.run(
                 run_keyword_research(
@@ -1046,14 +1055,16 @@ def search(
 
         # Ensure Playwright is installed before showing progress tables
         from interaction_finder.fetcher import ensure_playwright_installed
+        from interaction_finder.progress import LiveStatusTable
 
         asyncio.run(ensure_playwright_installed())
-        # Run pipeline (ensure_search manages progress internally for each stage)
+        # One terminal table threaded through every stage ensure_search runs.
         checkpoint = asyncio.run(
             ensure_search(
                 checkpoint,
                 search_backend,
                 cfg,
+                LiveStatusTable(),
                 console=console,
                 checkpoint_path=checkpoint_path,
                 force=force,
@@ -1165,13 +1176,16 @@ def extract(
         else:
             checkpoint_path = None
 
-        # Run pipeline (ensure_extraction manages progress internally for each stage)
+        # One terminal table threaded through every stage ensure_extraction runs.
+        from interaction_finder.progress import LiveStatusTable
+
         checkpoint = asyncio.run(
             ensure_extraction(
                 checkpoint,
                 entity_types,
                 search_backend,
                 cfg,
+                LiveStatusTable(),
                 console=console,
                 checkpoint_path=checkpoint_path,
                 force=force,
@@ -1242,6 +1256,8 @@ def report(
     Apply filters with --filter:
       - accepted:yes|no|any - filter by acceptance status
       - evidence:N or evidence:N+ - minimum evidence level (1-9)
+      - on_topic:yes|no|unjudged|any - subject-trust gate verdict
+        (yes = the on-subject answer set, matching the report's strict default)
       - KIND:VALUE - filter by entity (e.g., gene:BRCA1, cellmarker:SOX9)
 
     Example:
@@ -1333,6 +1349,44 @@ def report(
         raise
     except Exception as e:
         _handle_exception(e, None, verbose)
+
+
+def _serve_ui(host: str, port: int, open_browser: bool) -> None:
+    """Start the local web server (shared by the `serve` / `ui` commands)."""
+    from interaction_finder.web import run_ui_server
+
+    # 0.0.0.0 isn't a connectable address; show a usable 127.0.0.1 URL instead.
+    shown_host = "127.0.0.1" if host == "0.0.0.0" else host
+    console.print(f"[green]→[/green] serving on http://{shown_host}:{port}")
+    run_ui_server(host=host, port=port, open_browser=open_browser)
+
+
+@app.command(
+    help="""Serve the browser UI for running and viewing extractions.
+
+Starts a local web server bound to all interfaces (reachable from the
+network, firewall permitting) but does not open a browser -- use `ui` for
+a local-only, browser-opening session. The UI has no authentication.
+"""
+)
+def serve(
+    host: str = typer.Option("0.0.0.0", help="Interface to bind"),
+    port: int = typer.Option(8765, help="Port to listen on"),
+):
+    _serve_ui(host, port, open_browser=False)
+
+
+@app.command(
+    name="ui",
+    hidden=True,
+    help="Launch the browser UI locally and open it in the default browser.",
+)
+def ui(
+    host: str = typer.Option("127.0.0.1", help="Interface to bind"),
+    port: int = typer.Option(8765, help="Port to listen on"),
+):
+    # The convenience entry point: local-only bind, opens the browser.
+    _serve_ui(host, port, open_browser=True)
 
 
 def main():
