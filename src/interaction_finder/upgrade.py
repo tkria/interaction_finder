@@ -20,6 +20,7 @@ from rich.console import Console
 
 from interaction_finder.checkpoint import PipelineCheckpoint
 from interaction_finder.fetcher import ensure_playwright_installed
+from interaction_finder.progress import StatusTable
 from interaction_finder.resources import ResourcePool
 from interaction_finder.search.models import SearchBackend
 from interaction_finder.settings import IfetcherConfig
@@ -51,6 +52,7 @@ def checkpoint_stage(checkpoint: PipelineCheckpoint) -> StageLevel:
 async def ensure_keywords(
     checkpoint: PipelineCheckpoint,
     config: IfetcherConfig,
+    progress: StatusTable,
     search_backend: SearchBackend | None = None,
     console: Console | None = None,
     checkpoint_path: str | None = None,
@@ -61,6 +63,8 @@ async def ensure_keywords(
     Parameters:
         checkpoint: Checkpoint at any stage
         config: Configuration
+        progress: Progress table to populate for this stage and stream to (a
+            terminal LiveStatusTable for the CLI, a WebStatusTable for the UI)
         search_backend: Search backend for keyword extraction (defaults to PubMed)
         console: Optional console for status messages
         checkpoint_path: Optional path to save checkpoint after completion
@@ -85,14 +89,16 @@ async def ensure_keywords(
 
         # Ensure Playwright is installed before showing progress table
         await ensure_playwright_installed()
-        keywords_progress = create_keywords_progress()
-        with keywords_progress:
+        # Reset the shared table to this stage's counters, then run within it.
+        progress.clear_all()
+        create_keywords_progress(progress)
+        with progress:
             checkpoint = await run_keyword_research(
                 topic=checkpoint.topic,
                 config=config,
                 search_backend=search_backend,
                 verbose=False,
-                progress=keywords_progress,
+                progress=progress,
             )
 
         # Save checkpoint if path provided (only after running the stage)
@@ -110,6 +116,7 @@ async def ensure_search(
     checkpoint: PipelineCheckpoint,
     search_backend: SearchBackend,
     config: IfetcherConfig,
+    progress: StatusTable,
     keywords_backend: SearchBackend | None = None,
     console: Console | None = None,
     checkpoint_path: str | None = None,
@@ -121,6 +128,8 @@ async def ensure_search(
         checkpoint: Checkpoint at any stage
         search_backend: Search backend for widesearch
         config: Configuration
+        progress: Progress table to populate per stage and stream to; the same
+            table is threaded into the keywords prerequisite
         keywords_backend: Search backend for keywords stage (defaults to same as search_backend)
         console: Optional console for status messages
         checkpoint_path: Optional path to save checkpoint after completion
@@ -142,6 +151,7 @@ async def ensure_search(
         checkpoint = await ensure_keywords(
             checkpoint,
             config,
+            progress,
             search_backend=kw_backend,
             console=console,
             checkpoint_path=checkpoint_path,
@@ -154,20 +164,21 @@ async def ensure_search(
                 f"[bold]Running widesearch stage for:[/bold] {checkpoint.topic}\n"
             )
 
-        # Run search with dedicated widesearch progress counter
+        # Run search within the shared progress table (reset to its counters).
         from interaction_finder.widesearch import run_widesearch_with_checkpoint
         from interaction_finder.widesearch.progress import create_widesearch_progress
 
         # Ensure Playwright is installed before showing progress table
         await ensure_playwright_installed()
-        widesearch_progress = create_widesearch_progress()
-        widesearch_progress.set_status("Planning goals")
-        with widesearch_progress:
+        progress.clear_all()
+        create_widesearch_progress(progress)
+        progress.set_status("Planning goals")
+        with progress:
             checkpoint = await run_widesearch_with_checkpoint(
                 input_checkpoint=checkpoint,
                 search_backend=search_backend,
                 config=config,
-                progress=widesearch_progress,
+                progress=progress,
             )
 
         # Save checkpoint if path provided (only after running the stage)
@@ -186,6 +197,7 @@ async def ensure_extraction(
     target_entity_types: list[str],
     search_backend: SearchBackend,
     config: IfetcherConfig,
+    progress: StatusTable,
     console: Console | None = None,
     checkpoint_path: str | None = None,
     force: bool = False,
@@ -197,6 +209,8 @@ async def ensure_extraction(
         target_entity_types: Entity types to extract
         search_backend: Search backend (if search needed)
         config: Configuration
+        progress: Progress table to populate per stage and stream to; the same
+            table is threaded into the search/keywords prerequisites
         console: Optional console for status messages
         checkpoint_path: Optional path to save checkpoint after completion
         force: Replace existing extraction results if present (does NOT propagate to search/keywords)
@@ -217,6 +231,7 @@ async def ensure_extraction(
         checkpoint,
         search_backend,
         config,
+        progress,
         console=console,
         checkpoint_path=checkpoint_path,
         force=False,  # Never propagate force to prerequisites
@@ -227,19 +242,20 @@ async def ensure_extraction(
             f"[bold]Running extraction stage for:[/bold] {checkpoint.topic} "
             f"(types: {', '.join(target_entity_types)})\n"
         )
-    # Fetch content and run extraction with dedicated extraction progress counter
+    # Fetch content and run extraction within the shared progress table.
     from interaction_finder.extraction import run_extraction
     from interaction_finder.extraction.progress import create_extraction_progress
     from interaction_finder.widesearch import fetch_and_populate_results
 
     await fetch_and_populate_results(checkpoint, config)
-    extraction_progress = create_extraction_progress()
-    with extraction_progress:
+    progress.clear_all()
+    create_extraction_progress(progress)
+    with progress:
         checkpoint = await run_extraction(
             input_checkpoint=checkpoint,
             target_entity_types=target_entity_types,
             config=config,
-            progress=extraction_progress,
+            progress=progress,
             checkpoint_path=checkpoint_path,
         )
     # Save checkpoint if path provided (only after running the stage)

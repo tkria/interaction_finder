@@ -444,7 +444,7 @@ class TestResource:
         assert resource.title == title
         assert resource.text == text
         assert resource.normalized_text == "this is a test paper about brca1 protein"
-        assert resource._position_mapper is not None
+        assert resource.position_mapper is not None
 
     def test_normalized_text_generation(self):
         """Test that normalized text is correctly generated."""
@@ -464,12 +464,12 @@ class TestResource:
         resource = Resource(id=resource_id, title="Test", text=text)
 
         # Should have position mapper initialized
-        assert resource._position_mapper is not None
+        assert resource.position_mapper is not None
         # Test that mapping works: start of normalized text maps to start of original text
-        assert resource._position_mapper.targetpos(0) == 0
+        assert resource.position_mapper.targetpos(0) == 0
         # End of normalized text should map to end of original text
         normalized_len = len(resource.normalized_text)
-        mapped_end = resource._position_mapper.targetpos(normalized_len)
+        mapped_end = resource.position_mapper.targetpos(normalized_len)
         assert mapped_end == len(text)
 
     def test_complex_text_normalization(self):
@@ -496,11 +496,11 @@ class TestResource:
         resource = Resource(id=resource_id, title="Test", text=text)
 
         # Test finding position at start
-        original_pos = resource._position_mapper.targetpos(0)
+        original_pos = resource.position_mapper.targetpos(0)
         assert original_pos == 0
 
         # Test finding position in middle
-        original_pos = resource._position_mapper.targetpos(
+        original_pos = resource.position_mapper.targetpos(
             5
         )  # Should map to somewhere in original
         assert original_pos is not None
@@ -508,7 +508,7 @@ class TestResource:
 
         # Test finding position at end of normalized text
         end_normalized = len(resource.normalized_text)
-        original_pos = resource._position_mapper.targetpos(end_normalized)
+        original_pos = resource.position_mapper.targetpos(end_normalized)
         # Position should be valid (normalized text is shorter due to punctuation removal)
         assert original_pos is not None
         assert 0 <= original_pos <= len(text)

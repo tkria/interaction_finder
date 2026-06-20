@@ -314,6 +314,20 @@ class ExtractionStageData(BaseModel):
     permitted_pairs: dict[str, list[str]] = Field(
         description="Permitted entity kind pairs for filtering"
     )
+    subject_kind: str | None = Field(
+        default=None,
+        description=(
+            "Entity kind that is the topic's subject/anchor side; drives the "
+            "subject-trust gate. None for runs predating the gate."
+        ),
+    )
+    subject_anchor: str | None = Field(
+        default=None,
+        description=(
+            "The topic's subject/anchor entity; each subject_kind candidate is "
+            "judged against it by the subject-trust gate. None predates the gate."
+        ),
+    )
     judgments: list["PairJudgment"] = Field(
         description="All pair judgments (accepted and rejected)"
     )

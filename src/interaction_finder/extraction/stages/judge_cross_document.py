@@ -420,6 +420,17 @@ async def _judge_pair(
             decision_confidence=decision_confidence,
             reasoning=reasoning,
         )
+        if deps.progress:
+            verdict = "accepted" if accepted else "rejected"
+            deps.progress.emit(
+                "extraction.pair_judged",
+                f"{judgment.entity1.name} – {judgment.entity2.name}: {verdict}",
+                entity1=judgment.entity1.name,
+                entity2=judgment.entity2.name,
+                relationship=relationship,
+                accepted=accepted,
+                evidence=evidence.overall,
+            )
         return (pair_key, judgment)
     finally:
         if deps.progress:

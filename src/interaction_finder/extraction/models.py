@@ -784,6 +784,39 @@ class PairSpread(BaseModel):
     irrelevant: list[PairAssessment] = Field(default_factory=list)
 
 
+class GateReviewVerdict(BaseModel):
+    """LLM output for the subject-trust taxonomic check (gate_review v3).
+
+    Decides whether a candidate belongs in the answer set PURELY from its
+    same-kind taxonomic relation to the topic's subject -- never reasoning
+    about which genes, markers, or other associated entities either has.
+    """
+
+    reasoning: str = Field(
+        description="Short reason naming the taxonomic relationship to the subject"
+    )
+    belongs: bool = Field(
+        description="True if the candidate belongs in the answer set"
+    )
+
+
+class SubjectTrustVerdict(BaseModel):
+    """Stored subject-side trust verdict for a pair (gate_review v3).
+
+    Marks -- never removes -- a pair: whether the pair's subject-side entity is
+    taxonomically on-subject for the topic. A missing verdict (gate not run, or
+    no subject-kind entity in the pair) is represented by
+    ``PairJudgment.subject_trust is None``, not by a stored value.
+    """
+
+    belongs: bool = Field(
+        description="Whether the subject-side entity belongs in the answer set"
+    )
+    reasoning: str = Field(description="Short taxonomic reason for the verdict")
+    subject_name: str = Field(description="The subject-side entity that was judged")
+    subject_kind: str = Field(description="The subject kind it was judged against")
+
+
 class PairJudgment(BaseModel):
     """Final cross-document judgment on an entity pair.
 
@@ -814,6 +847,14 @@ class PairJudgment(BaseModel):
         description="Probability that this accept/reject decision is correct (0.0-1.0)",
     )
     reasoning: str = Field(description="Explanation of final decision")
+    subject_trust: "SubjectTrustVerdict | None" = Field(
+        default=None,
+        description=(
+            "Subject-side taxonomic trust verdict (gate_review v3). None when "
+            "the gate did not run or the pair has no subject-kind entity. Marks "
+            "the pair; never removes it."
+        ),
+    )
 
     def iter_assessments(self) -> Iterable[PairAssessment]:
         """Iterate over all assessments regardless of polarity.

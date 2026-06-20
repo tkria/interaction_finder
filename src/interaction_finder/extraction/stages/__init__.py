@@ -23,6 +23,9 @@ from interaction_finder.extraction.stages.consolidate_by_neighbours import (
 from interaction_finder.extraction.stages.judge_cross_document import (
     judge_cross_document,
 )
+from interaction_finder.extraction.stages.judge_subject_trust import (
+    judge_subject_trust,
+)
 from interaction_finder.extraction.stages.finalize import finalize
 
 __all__ = [
@@ -33,5 +36,6 @@ __all__ = [
     "consolidate_new_relationships",
     "consolidate_by_neighbours",
     "judge_cross_document",
+    "judge_subject_trust",
     "finalize",
 ]

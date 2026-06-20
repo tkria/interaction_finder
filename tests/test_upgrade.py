@@ -10,6 +10,7 @@ Tests follow the pattern of database migration testing:
 import pytest
 
 from interaction_finder.checkpoint import PipelineCheckpoint
+from interaction_finder.progress import StatusTable
 from interaction_finder.resources import ResourcePool
 from interaction_finder.settings import IfetcherConfig
 from interaction_finder.upgrade import (
@@ -176,7 +177,7 @@ class TestEnsureFunctions:
         config = IfetcherConfig()
 
         # Should return same checkpoint without running stage
-        result = await ensure_keywords(checkpoint, config)
+        result = await ensure_keywords(checkpoint, config, StatusTable())
         assert checkpoint_stage(result) == "keywords"
         assert result.topic == checkpoint.topic
 
@@ -216,7 +217,7 @@ class TestEnsureFunctions:
         from interaction_finder.search.backends.pubmed import PubMedBackend
 
         # Should return same checkpoint without running stage
-        result = await ensure_search(checkpoint, PubMedBackend(), config)
+        result = await ensure_search(checkpoint, PubMedBackend(), config, StatusTable())
         assert checkpoint_stage(result) == "search"
 
 
@@ -295,7 +296,7 @@ class TestCheckpointSaving:
 
         # Run ensure_keywords (should be idempotent, no save since stage already complete)
         result = await ensure_keywords(
-            checkpoint, config, checkpoint_path=checkpoint_path
+            checkpoint, config, StatusTable(), checkpoint_path=checkpoint_path
         )
 
         # Verify checkpoint was NOT saved (idempotent case doesn't write)
@@ -326,7 +327,7 @@ class TestCheckpointSaving:
         config = IfetcherConfig()
 
         # Run without checkpoint_path
-        result = await ensure_keywords(checkpoint, config)
+        result = await ensure_keywords(checkpoint, config, StatusTable())
 
         # No file should be created (we don't know where it would be)
         assert not (tmp_path / "checkpoint.json").exists()
@@ -369,7 +370,11 @@ class TestCheckpointSaving:
 
         # Run ensure_search (idempotent, no save since stage already complete)
         result = await ensure_search(
-            checkpoint, PubMedBackend(), config, checkpoint_path=checkpoint_path
+            checkpoint,
+            PubMedBackend(),
+            config,
+            StatusTable(),
+            checkpoint_path=checkpoint_path,
         )
 
         # Verify checkpoint was NOT saved (idempotent case doesn't write)

@@ -199,6 +199,14 @@ class State:
     # A kind must appear twice in target_entity_types to allow self-pairs
     permitted_pairs: dict[str, set[str]]
 
+    # The single entity kind that is the topic's subject/anchor side (e.g.
+    # "disease", "celltype", "ligand"). Declared once per run. Drives the
+    # subject-trust gate; None disables it.
+    subject_kind: str | None = None
+    # The topic's subject/anchor entity itself (e.g. "ADAM2", "parkinsonism").
+    # Each candidate of subject_kind is judged against this. None disables the gate.
+    subject_anchor: str | None = None
+
     # === Stage 1: Entity Extraction ===
     # Raw entities per resource (before validation/merging)
     entities_by_resource: dict[ResourceId, dict[str, EntityMention]] = field(
@@ -371,6 +379,8 @@ class State:
         target_entity_types: list[str],
         permitted_pairs: dict[str, set[str]],
         resource_pool: "ResourcePool",
+        subject_kind: str | None = None,
+        subject_anchor: str | None = None,
     ) -> "State":
         """Deserialize from dict using handler registry.
 
@@ -386,6 +396,8 @@ class State:
             topic=topic,
             target_entity_types=target_entity_types,
             permitted_pairs=permitted_pairs,
+            subject_kind=subject_kind,
+            subject_anchor=subject_anchor,
         )
 
         def get_rid(url: str) -> "ResourceId":
@@ -397,7 +409,13 @@ class State:
 
         for fld in fields(state):
             # Skip constructor args or missing fields
-            if fld.name in ("topic", "target_entity_types", "permitted_pairs"):
+            if fld.name in (
+                "topic",
+                "target_entity_types",
+                "permitted_pairs",
+                "subject_kind",
+                "subject_anchor",
+            ):
                 continue
             if fld.name not in data:
                 continue

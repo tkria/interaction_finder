@@ -810,9 +810,6 @@ class Resource(BaseModel):
     id: ResourceId = Field(description="Resource identifier")
     title: str = Field(description="Human-readable document title")
     text: str = Field(description="Full document text content")
-    normalized_text: str = Field(
-        description="Precomputed normalized text for quote matching"
-    )
     chunks: List[Tuple[int, int]] = Field(
         default_factory=list,
         description="List of (start, end) character positions for document chunks",
@@ -824,7 +821,11 @@ class Resource(BaseModel):
         default=None, description="Publication date (YYYY-MM-DD) if available"
     )
 
-    # Private attribute for position mapping with normalization
+    # Lazily-derived from `text` (see the normalized_text / position_mapper
+    # properties). Building these scans the text char-by-char, which dominates
+    # load time on large documents, so they are deferred until first use --
+    # nothing in a checkpoint load or back-fill needs them.
+    _normalized_text: Optional[str] = PrivateAttr(default=None)
     _position_mapper: Optional[NormalizedTextMapper] = PrivateAttr(default=None)
 
     def __init__(
@@ -849,28 +850,26 @@ class Resource(BaseModel):
             doi: Optional Digital Object Identifier
             publication_date: Optional publication date (YYYY-MM-DD)
         """
-        # Create normalized text mapper (handles Greek letters automatically)
-        mapper = NormalizedTextMapper.from_text(text)
-
         # Default chunks to entire document if not provided
         if chunks is None:
             chunks = [(0, len(text))]
 
-        # Remove normalized_text from data if present (will be computed from text)
-        data.pop("normalized_text", None)
+        # normalized_text is derived lazily from `text` (see the property), so
+        # it is neither stored nor computed here. Accept and seed a precomputed
+        # value if a caller passes one, but never compute on construction.
+        precomputed_normalized = data.pop("normalized_text", None)
 
         super().__init__(
             id=id,
             title=title,
             text=text,
-            normalized_text=mapper.source,  # Get normalized text from mapper
             chunks=chunks,
             doi=doi,
             publication_date=publication_date,
             **data,
         )
-        # Store the mapper
-        self._position_mapper = mapper
+        if precomputed_normalized is not None:
+            self._normalized_text = precomputed_normalized
 
     def quote(self, text: str, similarity_threshold: float = 0.8) -> "ResourceQuote":
         """
@@ -900,6 +899,34 @@ class Resource(BaseModel):
             f"text='{text_preview}', {len(self.text)} chars)"
         )
 
+    @property
+    def normalized_text(self) -> str:
+        """Normalized text for quote matching, derived from `text` on first use.
+
+        Lazy and cached: deriving it scans the document character-by-character
+        (Greek-word aware), so it is deferred until something actually needs it
+        rather than computed on construction/load.
+        """
+        if self._normalized_text is None:
+            # Build via the mapper so the (more expensive) position mapper, if
+            # also needed, reuses this same scan rather than repeating it.
+            self._normalized_text = self.position_mapper.source
+        return self._normalized_text
+
+    @property
+    def position_mapper(self) -> NormalizedTextMapper:
+        """The normalized-text position mapper, built lazily on first use.
+
+        Building it scans the document character-by-character (Greek-word
+        aware), which is the dominant cost of loading a large checkpoint. Only
+        code that maps or searches positions (quote validation, report entity
+        highlighting) needs it, so it is deferred until first access and cached.
+        """
+        if self._position_mapper is None:
+            self._position_mapper = NormalizedTextMapper.from_text(self.text)
+            self._normalized_text = self._position_mapper.source
+        return self._position_mapper
+
     def map_normalized_to_original_position(
         self, norm_start: int, norm_length: int
     ) -> Tuple[int, int]:
@@ -915,9 +942,7 @@ class Resource(BaseModel):
         Returns:
             Tuple of (original_start, original_end)
         """
-        if self._position_mapper is None:
-            raise RuntimeError("Position mapper not initialized")
-        return self._position_mapper.targetspan(norm_start, norm_start + norm_length)
+        return self.position_mapper.targetspan(norm_start, norm_start + norm_length)
 
     def get_chunk_for_position(self, pos: int) -> Optional[int]:
         """
@@ -1000,7 +1025,8 @@ def _validate_resource_pool(obj):
             # Reconstruct ResourceId
             resource_id = ResourceId(url=entry["url"], counter=counter)
 
-            # Add to map
+            # Add to map. normalized_text is derived lazily from text, so it is
+            # neither stored nor reconstructed here -- loading stays cheap.
             if "text" in entry and "title" in entry:
                 resource = Resource(
                     id=resource_id,

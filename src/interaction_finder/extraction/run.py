@@ -23,6 +23,7 @@ from interaction_finder.extraction.stages import (
     consolidate_relationships,
     finalize,
     judge_cross_document,
+    judge_subject_trust,
     process_documents,
     sweep_co_mentions,
 )
@@ -42,6 +43,7 @@ STAGES: list[StageFunc] = [
     consolidate_new_relationships,
     consolidate_by_neighbours,
     judge_cross_document,
+    judge_subject_trust,
 ]
 STAGE_NAMES = [fn.__name__ for fn in STAGES]
 
@@ -61,6 +63,8 @@ async def run_extraction(
     logger: logging.Logger | None = None,
     progress=None,
     checkpoint_path: str | None = None,
+    subject_kind: str | None = None,
+    subject_anchor: str | None = None,
 ) -> PipelineCheckpoint:
     """Run the association extraction pipeline preserving all prior data.
 
@@ -119,6 +123,8 @@ async def run_extraction(
                 target_entity_types=target_entity_types,
                 permitted_pairs=permitted_pairs,
                 resource_pool=resource_pool,
+                subject_kind=subject_kind,
+                subject_anchor=subject_anchor,
             )
             start_stage_idx = get_resume_stage_index(meta.resume_from)
         else:
@@ -126,6 +132,8 @@ async def run_extraction(
                 topic=topic,
                 target_entity_types=target_entity_types,
                 permitted_pairs=permitted_pairs,
+                subject_kind=subject_kind,
+                subject_anchor=subject_anchor,
             )
         # Initialize usage from input checkpoint (deep copy to avoid mutation)
         input_usage = input_checkpoint.usage
@@ -164,6 +172,8 @@ async def run_extraction(
             extraction=ExtractionStageData(
                 target_entity_types=target_entity_types,
                 permitted_pairs=permitted_pairs,
+                subject_kind=subject_kind,
+                subject_anchor=subject_anchor,
                 judgments=result.judgments,
                 metadata=result.metadata,
                 consolidated=result.consolidated,

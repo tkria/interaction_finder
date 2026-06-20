@@ -13,6 +13,7 @@ from interaction_finder.extraction.models import (
     PairEvidenceJudgment,
 )
 from interaction_finder.extraction.progress import create_extraction_progress
+from interaction_finder.progress import LiveStatusTable
 from interaction_finder.resources import ResourcePool, ResourceQuote
 
 
@@ -252,7 +253,7 @@ class TestAssessDocumentPairsProgress:
             ("Cancer", "BRCA1", {"associated_with"}, [quote2]),  # Duplicate (reversed)
         ]
         # Set up progress tracking
-        progress = create_extraction_progress()
+        progress = create_extraction_progress(LiveStatusTable())
         mock_deps.progress = progress
         initial_total = progress["Pairs assessed"].total
         judgment = PairEvidenceJudgment(
