@@ -1,0 +1,538 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Interaction Finder</title>
+    <!-- Favicon: the same diagram-project glyph as the heading. Uses Pico's
+         brighter dark-theme primary (#01aaff) so it reads on both light and
+         dark browser tabs. Inline SVG data-URI; %23 is the encoded '#'. -->
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'><path fill='%2301aaff' d='M0 80C0 53.5 21.5 32 48 32l96 0c26.5 0 48 21.5 48 48l0 16 128 0 0-16c0-26.5 21.5-48 48-48l96 0c26.5 0 48 21.5 48 48l0 96c0 26.5-21.5 48-48 48l-96 0c-26.5 0-48-21.5-48-48l0-16-128 0 0 16c0 7.3-1.7 14.3-4.6 20.5l68.6 91.5 80 0c26.5 0 48 21.5 48 48l0 96c0 26.5-21.5 48-48 48l-96 0c-26.5 0-48-21.5-48-48l0-96c0-7.3 1.7-14.3 4.6-20.5L128 224 48 224c-26.5 0-48-21.5-48-48L0 80z'/></svg>">
+    <link rel="stylesheet" href="/static/pico.min.css">
+    <link rel="stylesheet" href="/static/pico.colors.min.css">
+    <link rel="stylesheet" href="/theme.css">
+    <style>
+        /* Custom rules only where Pico has no built-in: stage tabs, status dots,
+           entity chips, and the per-stage data lists. Everything else (cards,
+           forms, <details> accordions, <small>, the aria-busy spinner, buttons)
+           is Pico's own styling, used as-is. */
+        main.container { max-width: 920px; }
+        .app-bar { text-align: center; margin-bottom: calc(var(--pico-spacing) * 1.5); }
+        .app-bar h1 { margin: 0; }
+        /* Configuration button (in the New-run form): centred on its own row,
+           icon + label, with a badge of how many fields differ from defaults. */
+        .config-row { display: flex; justify-content: center; gap: 0.5rem; flex-wrap: wrap; }
+        .config-btn { display: inline-flex; align-items: center; gap: 0.5rem; }
+        .heading-icon { margin-right: 0.4em; color: var(--pico-primary); }
+
+        /* Sections toggled by JS via a data flag. The [data-active] rules use
+           ID/attr specificity so they win over the .between flex helper. */
+        .run-summary, #activity, #stages { display: none; }
+        #run-summary[data-active="1"] { display: flex; }
+        #activity[data-active="1"], #stages[data-active="1"] { display: block; }
+        #activity-done:not([hidden]), #report-card:not([hidden]) { display: flex; }
+        #new-run[data-running="1"] { display: none; }
+
+        /* Entity chips (no Pico equivalent). */
+        .entity-chips { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+        /* Space below the chips only when some are present (the container is
+           always in the DOM; :not(:empty) avoids a gap when there are none). */
+        .entity-chips:not(:empty) { margin-bottom: var(--pico-spacing); }
+        /* Styled like a Pico contrast-outline button: transparent fill,
+           contrast border + text, with a trailing × to remove. */
+        .entity-chip {
+            display: inline-flex; align-items: center; gap: 0.6rem;
+            padding: 0.45rem 0.9rem; font-size: 1rem; line-height: 1.4;
+            border: var(--pico-border-width) solid var(--pico-contrast);
+            border-radius: var(--pico-border-radius);
+            background: transparent; color: var(--pico-contrast);
+        }
+        .entity-chip button {
+            all: unset; cursor: pointer; line-height: 1; font-size: 1.15em;
+            color: var(--pico-contrast); transition: color var(--pico-transition);
+        }
+        .entity-chip button:hover, .entity-chip button:focus-visible { color: var(--pico-del-color); }
+
+        /* Run summary + done row: flush layout, Pico colours/buttons.
+           No `display` here -- it would override the section show/hide toggles;
+           the visible rules below set `display: flex` themselves. */
+        .between { align-items: center; justify-content: space-between; gap: 1rem; }
+        .between > * { margin: 0; }
+        button.auto { width: auto; }
+        /* Start run: alone on its own row, horizontally centred. */
+        .start-row { display: flex; justify-content: center; margin-top: var(--pico-spacing); }
+        .start-row button { display: inline-flex; align-items: center; gap: 0.5em; }
+        #done-label { font-weight: 600; }
+        .ok { color: var(--pico-color-jade-450); }
+        .err { color: var(--pico-del-color); }
+        .cancelled { color: var(--pico-muted-color); }
+        /* Cancel button: small, right-flushed in the activity head, danger hue. */
+        .cancel-btn { margin-left: auto; align-self: center; padding: 0.25rem 0.75rem; font-size: 0.85rem;
+            display: inline-flex; align-items: center; gap: 0.4rem; }
+        .cancel-btn { --pico-color: var(--pico-del-color); --pico-border-color: var(--pico-del-color); }
+        .cancel-btn:hover { --pico-background-color: var(--pico-del-color); --pico-color: var(--pico-primary-inverse); }
+
+        /* Report card: status (summary or live progress) left, action right,
+           both vertically centred. */
+        #report-card { align-items: center; }
+        #report-status, .report-actions { display: inline-flex; align-items: center; }
+        .report-actions button { margin: 0; }
+
+        /* Activity feed: newest brightest, older fading. */
+        .activity-head { display: flex; align-items: baseline; gap: 0.5rem; }
+        .feed { list-style: none; padding: 0; margin: 0.6rem 0 0; }
+        .feed li { transition: opacity 0.3s; line-height: 1.7; }
+        .feed li:nth-child(1) { opacity: 1; }
+        .feed li:nth-child(2) { opacity: 0.5; }
+        .feed li:nth-child(3) { opacity: 0.28; }
+
+        /* Stage tabs (Pico has no tab component). Buttons are reset to inherit
+           Pico's typography/colours/transitions -- not `all: unset`, which
+           strips them and breaks the Pico feel -- with only the tab affordances
+           added on top. */
+        .tabs { display: flex; gap: 0.5rem; border-bottom: 1px solid var(--pico-muted-border-color); margin-bottom: var(--pico-spacing); }
+        .tabs button {
+            margin: 0; width: auto; background: none; border: none; box-shadow: none;
+            border-radius: 0; border-bottom: 2px solid transparent;
+            padding: 0.5rem 0.75rem; font-weight: 500;
+            color: var(--pico-secondary);
+            display: inline-flex; align-items: center; gap: 0.45rem;
+            transition: color var(--pico-transition), border-color var(--pico-transition);
+        }
+        .tabs button:hover:not([disabled]) { color: var(--pico-primary); }
+        .tabs button[aria-selected="true"] { border-bottom-color: var(--pico-primary); color: var(--pico-primary); }
+        .tabs button[disabled] { color: var(--pico-muted-color); opacity: 0.6; }
+        /* Leading stage glyph: inherits the tab's colour. Active stages show
+           Pico's aria-busy spinner instead; pending stages are disabled, so
+           the whole tab (glyph included) renders faint via the [disabled] rule
+           above. Slightly smaller than the label. */
+        .tab-stage-icon { width: 0.95em; height: 0.95em; }
+
+        /* Per-stage data lists. Rows separated by Pico's own border colour. */
+        .data-list { list-style: none; padding: 0; margin: 0; }
+        .data-list > li {
+            display: flex; gap: 0.55rem; align-items: baseline; padding: 0.3rem 0;
+            border-bottom: 1px solid var(--pico-muted-border-color);
+        }
+        .data-list > li:last-child { border-bottom: none; }
+        .data-list .grow { flex: 1; }
+        .data-list .num { margin-left: auto; font-variant-numeric: tabular-nums; }
+        .result-list { padding: 0 0 0.4rem; margin: 0; }
+        /* Pico's `ul li{list-style:square}` outranks list-style on the <ul>,
+           so clear the marker on the <li> directly. */
+        .result-list li { list-style: none; padding: 0.45rem 0; }
+        .result-list li + li { border-top: 1px solid var(--pico-muted-border-color); }
+        .result-list li.rejected { opacity: 0.55; }
+        /* Result title: foreground-coloured (not Pico's link blue), underlined. */
+        .res-title {
+            font-size: 1.05rem; color: inherit;
+            text-decoration: underline; --pico-text-decoration: underline;
+        }
+        a.res-title:hover { color: var(--pico-primary); }
+        /* Breadcrumb URL: muted; the domain (a <strong>) stays foreground. */
+        .res-url { font-size: 0.8rem; color: var(--pico-muted-color); margin: 0.1rem 0; overflow-wrap: anywhere; }
+        .res-url strong { color: var(--pico-color); }
+        .res-snippet { font-size: 0.85rem; color: var(--pico-muted-color); }
+        /* Query accordion: icon + term left, count right-justified. */
+        .search-q > summary { display: flex; align-items: center; gap: 0.5rem; cursor: pointer; }
+        /* Drop Pico's disclosure chevron (its summary::after); the search icon
+           is the affordance. */
+        .search-q > summary::after { display: none; }
+        .search-q > summary .grow { flex: 1; min-width: 0; }
+        .search-q > summary .num { margin-left: auto; flex: none; font-variant-numeric: tabular-nums; }
+        .verdict-dot { width: 0.5rem; height: 0.5rem; border-radius: 50%; flex: none; align-self: center; }
+        .verdict-dot.yes { background: var(--pico-color-jade-450); }
+        .verdict-dot.no { background: var(--pico-muted-border-color); }
+
+        /* Recent history list. Rows open the checkpoint; the × removes one. */
+        #recent-card header { display: flex; margin-bottom: 0.5rem; }
+        /* Understated "Clear all" -- a muted text link, right of the header.
+           Drop Pico's link underline/colour so hover reads as a plain action. */
+        .recent-clear {
+            font-size: 0.85rem; cursor: pointer;
+            color: var(--pico-muted-color);
+            text-decoration: none; --pico-text-decoration: none;
+        }
+        .recent-clear:hover, .recent-clear:focus {
+            color: var(--pico-del-color); text-decoration: none;
+        }
+        #recent-list .recent-open {
+            all: unset; cursor: pointer; flex: 1; min-width: 0;
+            display: flex; align-items: baseline; gap: 0.5rem;
+        }
+        #recent-list .recent-open:hover .recent-topic { color: var(--pico-primary); }
+        #recent-list .recent-topic { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        #recent-list .recent-meta { color: var(--pico-muted-color); font-size: 0.8rem; flex: none; }
+        /* Fixed-width leading slot so titles align whether or not a row has a
+           report; small gap to the title. */
+        #recent-list > li { gap: 0.35rem; }
+        #recent-list .recent-report-slot {
+            flex: none; width: 1.4rem; display: inline-flex; justify-content: center;
+        }
+        #recent-list .recent-report {
+            all: unset; cursor: pointer; opacity: 0.7; font-size: 0.95rem;
+            /* all:unset resets position to static, which breaks Pico's tooltip
+               anchoring ([data-tooltip] relies on position:relative). */
+            position: relative;
+        }
+        #recent-list .recent-report:hover { opacity: 1; }
+        /* Partial-run marker: muted, non-interactive; position:relative anchors
+           its [data-tooltip]. */
+        #recent-list .recent-partial {
+            display: inline-flex; color: var(--pico-muted-color);
+            font-size: 0.95rem; position: relative;
+        }
+        #recent-list .recent-remove {
+            all: unset; cursor: pointer; flex: none; padding: 0 0.3rem;
+            color: var(--pico-muted-color); font-weight: bold;
+        }
+        #recent-list .recent-remove:hover { color: var(--pico-del-color); }
+        /* Confirm dialog: compact, buttons right-aligned. */
+        #confirm-clear-dialog article { width: min(420px, 92vw); }
+        #confirm-clear-dialog footer { display: flex; justify-content: flex-end; gap: 0.5rem; }
+        #confirm-clear-dialog footer button { margin: 0; }
+
+        /* File-picker modal (lifecycle mirrors the report's export modal). */
+        .browse-modal { width: min(640px, 92vw); }
+        #browse-path {
+            display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.25rem;
+            /* Pack crumbs left (ragged-right); override Pico's nav space-between. */
+            justify-content: flex-start;
+            margin: 0 0 0.6rem; font-size: 0.85rem; overflow-wrap: anywhere;
+        }
+        #browse-path a { text-decoration: none; }
+        #browse-path .crumb-sep { color: var(--pico-muted-color); }
+        #browse-path strong { color: var(--pico-contrast); }
+        #browse-entries { max-height: 50vh; overflow-y: auto; }
+        /* Keep the Save button on one line so it doesn't wrap and grow taller
+           than the filename input beside it in the role="group" fieldset. */
+        #browse-save-confirm { white-space: nowrap; }
+        #browse-entries li { cursor: pointer; }
+        #browse-entries li:hover { color: var(--pico-primary); }
+        .browse-icon { flex: none; width: 1.2rem; color: var(--pico-muted-color); }
+
+        /* Config editor: a large modal of per-section accordions. */
+        .config-modal { width: min(880px, 94vw); max-height: 92vh; display: flex; flex-direction: column; }
+        .config-modal header small { display: block; color: var(--pico-muted-color); }
+        .config-intro { margin: 0 0 var(--pico-spacing); }
+        #config-form { overflow-y: auto; flex: 1 1 auto; padding-right: 0.5rem; }
+        .cfg-section { border: var(--pico-border-width) solid var(--pico-muted-border-color);
+            border-radius: var(--pico-border-radius); margin-bottom: 0.6rem; padding: 0 0.75rem; }
+        .cfg-section > summary { font-weight: 600; padding: 0.6rem 0; }
+        .cfg-section .cfg-body { padding-bottom: 0.5rem; }
+        /* Nested sections sit indented with a lighter weight. */
+        .cfg-section .cfg-section { margin: 0.4rem 0; }
+        .cfg-section .cfg-section > summary { font-weight: 500; }
+        /* Count of non-default fields within a (collapsed or open) section. */
+        .cfg-count { margin-left: 0.5rem; font-size: 0.75rem; font-weight: 500;
+            color: var(--pico-primary-inverse); background: var(--pico-primary);
+            border-radius: 1rem; padding: 0.05rem 0.45rem; }
+        .cfg-field { display: block; margin-bottom: 0.75rem; }
+        .cfg-field.cfg-bool { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+        .cfg-field .cfg-desc { display: block; color: var(--pico-muted-color); margin: 0 0 0.2rem; font-weight: 400; }
+        .cfg-bool .cfg-desc { flex-basis: 100%; }
+        .cfg-field input { margin-bottom: 0; }
+        /* At-default fields recede: grey value text, and an at-default switch
+           that is ON shows a solid mid-grey track (not primary) -- bright
+           enough to clearly read as on, just not "changed". An off switch
+           keeps Pico's default empty track. Only changed switches read as
+           primary. Non-default fields keep the normal contrast colour + an
+           accent border/left rule so they stand out. */
+        #config-form .cfg-field:not(.non-default) > input { color: var(--pico-muted-color); }
+        #config-form .cfg-field.cfg-bool:not(.non-default) input[type=checkbox]:checked {
+            background-color: var(--pico-muted-color);
+            border-color: var(--pico-muted-color);
+        }
+        /* Non-default fields: tint the label primary (the box-shadow approach
+           clipped against the tight field padding). The description and input
+           keep their own colours, so only the label name changes. */
+        .cfg-field.non-default { color: var(--pico-primary); font-weight: 600; }
+        .cfg-field.non-default .cfg-desc { color: var(--pico-muted-color); font-weight: 400; }
+        .cfg-field.non-default > input { color: var(--pico-color); font-weight: 400; }
+        /* A non-default agent llm: tint its name (the label) primary. */
+        .agent-head.non-default .agent-name { color: var(--pico-primary); font-weight: 600; }
+        /* Small inline "reset to defaults" link, right-aligned above the form. */
+        .config-pre { display: flex; justify-content: flex-end; margin-bottom: var(--pico-spacing); }
+        .config-reset { display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.85rem; padding: 0; }
+        /* Footer: Save as default (left), Apply (right). */
+        .config-actions { display: flex; justify-content: space-between; gap: 0.5rem; }
+        .config-actions button { margin: 0; display: inline-flex; align-items: center; gap: 0.5rem; }
+        /* API-keys modal: subheads inside the LLM-inference accordion, and the
+           provider rows (status dot + label + input). */
+        .cfg-subhead { display: block; margin-top: 0.5rem; }
+        .key-row { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.6rem; }
+        .key-row .key-label { flex: none; width: 8rem; display: inline-flex; align-items: center; gap: 0.4rem; }
+        .key-row input { flex: 1 1 auto; margin: 0; }
+        .key-dot { width: 0.6rem; height: 0.6rem; border-radius: 50%; flex: none;
+            border: 1.5px solid var(--pico-muted-border-color); }
+        .key-row.is-set .key-dot { background: var(--pico-color-jade-450); border-color: var(--pico-color-jade-450); }
+        #keys-dialog .config-actions { justify-content: flex-end; }
+        /* Top-level config section icon, before the section title. */
+        .cfg-section-icon { margin-right: 0.5rem; color: var(--pico-muted-color); }
+        /* Agent rows: name + llm input on one line, advanced fields collapsed. */
+        .agent-row { padding: 0.4rem 0; border-bottom: 1px solid var(--pico-muted-border-color); }
+        .agent-row:last-child { border-bottom: none; }
+        .agent-head { display: flex; align-items: center; gap: 0.6rem; }
+        .agent-head .agent-name { flex: none; width: 10rem; font-weight: 500; }
+        .agent-head .agent-llm { flex: 1 1 auto; margin: 0; }
+        .agent-advanced { margin: 0.3rem 0 0 10.6rem; }
+        .agent-advanced > summary { font-size: 0.8rem; color: var(--pico-muted-color); }
+
+        /* Inline SVG glyphs (same approach as the generated report): a hidden
+           symbol sheet declares the path once, each use site is a tiny <svg>
+           <use>. currentColor lets the icon inherit its parent's text colour. */
+        .ui-icon {
+            display: inline-block; width: 1em; height: 1em;
+            vertical-align: -0.125em; fill: currentColor; flex: none;
+        }
+        /* Borderless icon-only button (e.g. download report). */
+        .icon-link {
+            all: unset; cursor: pointer; padding: 0 0.2rem;
+            color: var(--pico-muted-color); font-size: 1.05rem;
+            line-height: 1; position: relative;  /* anchor [data-tooltip] */
+        }
+        .icon-link:hover, .icon-link:focus-visible { color: var(--pico-primary); }
+        /* Download buttons: a touch larger, with breathing room before View. */
+        #report-download .ui-icon, #download-report .ui-icon { width: 1.3em; height: 1.3em; }
+        #report-download, #download-report { margin-right: 0.5em; }
+    </style>
+</head>
+<body>
+    <!-- Reusable icon symbols. Font Awesome Free v7.2.0 (CC BY 4.0):
+         icon-open = "arrow-up-right-from-square", icon-download = "download",
+         icon-diagram = "diagram-project", icon-pin = "location-dot",
+         icon-add = "circle-plus", icon-keywords = "tag",
+         icon-search = "binoculars", icon-extraction = "crosshairs",
+         icon-start = "wand-magic-sparkles", icon-folder = "folder",
+         icon-json = "file-code", icon-home = "house",
+         icon-drive = "hard-drive", icon-config = "sliders",
+         icon-reset = "arrow-rotate-left", icon-save = "floppy-disk",
+         icon-apply = "check", icon-cancel = "circle-xmark",
+         icon-partial = "circle-half-stroke", icon-key = "key",
+         icon-robot = "robot", icon-tools = "screwdriver-wrench",
+         icon-stages = "bars-staggered", icon-output = "right-from-bracket",
+         icon-find = "magnifying-glass". -->
+    <svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true" focusable="false">
+        <symbol id="icon-partial" viewBox="0 0 512 512"><path fill="currentColor" d="M448 256c0-106-86-192-192-192l0 384c106 0 192-86 192-192zM0 256a256 256 0 1 1 512 0 256 256 0 1 1 -512 0z"/></symbol>
+        <symbol id="icon-key" viewBox="0 0 512 512"><path fill="currentColor" d="M336 352c97.2 0 176-78.8 176-176S433.2 0 336 0 160 78.8 160 176c0 18.7 2.9 36.8 8.3 53.7L7 391c-4.5 4.5-7 10.6-7 17l0 80c0 13.3 10.7 24 24 24l80 0c13.3 0 24-10.7 24-24l0-40 40 0c13.3 0 24-10.7 24-24l0-40 40 0c6.4 0 12.5-2.5 17-7l33.3-33.3c16.9 5.4 35 8.3 53.7 8.3zM376 96a40 40 0 1 1 0 80 40 40 0 1 1 0-80z"/></symbol>
+        <symbol id="icon-robot" viewBox="0 0 640 512"><path fill="currentColor" d="M352 0c0-17.7-14.3-32-32-32S288-17.7 288 0l0 64-96 0c-53 0-96 43-96 96l0 224c0 53 43 96 96 96l256 0c53 0 96-43 96-96l0-224c0-53-43-96-96-96l-96 0 0-64zM160 368c0-13.3 10.7-24 24-24l32 0c13.3 0 24 10.7 24 24s-10.7 24-24 24l-32 0c-13.3 0-24-10.7-24-24zm120 0c0-13.3 10.7-24 24-24l32 0c13.3 0 24 10.7 24 24s-10.7 24-24 24l-32 0c-13.3 0-24-10.7-24-24zm120 0c0-13.3 10.7-24 24-24l32 0c13.3 0 24 10.7 24 24s-10.7 24-24 24l-32 0c-13.3 0-24-10.7-24-24zM224 176a48 48 0 1 1 0 96 48 48 0 1 1 0-96zm144 48a48 48 0 1 1 96 0 48 48 0 1 1 -96 0zM64 224c0-17.7-14.3-32-32-32S0 206.3 0 224l0 96c0 17.7 14.3 32 32 32s32-14.3 32-32l0-96zm544-32c-17.7 0-32 14.3-32 32l0 96c0 17.7 14.3 32 32 32s32-14.3 32-32l0-96c0-17.7-14.3-32-32-32z"/></symbol>
+        <symbol id="icon-tools" viewBox="0 0 576 512"><path fill="currentColor" d="M70.8-6.7c5.4-5.4 13.8-6.2 20.2-2L209.9 70.5c8.9 5.9 14.2 15.9 14.2 26.6l0 49.6 90.8 90.8c33.3-15 73.9-8.9 101.2 18.5L542.2 382.1c18.7 18.7 18.7 49.1 0 67.9l-60.1 60.1c-18.7 18.7-49.1 18.7-67.9 0L288.1 384c-27.4-27.4-33.5-67.9-18.5-101.2l-90.8-90.8-49.6 0c-10.7 0-20.7-5.3-26.6-14.2L23.4 58.9c-4.2-6.3-3.4-14.8 2-20.2L70.8-6.7zm145 303.5c-6.3 36.9 2.3 75.9 26.2 107.2l-94.9 95c-28.1 28.1-73.7 28.1-101.8 0s-28.1-73.7 0-101.8l135.4-135.5 35.2 35.1zM384.1 0c20.1 0 39.4 3.7 57.1 10.5 10 3.8 11.8 16.5 4.3 24.1L388.8 91.3c-3 3-4.7 7.1-4.7 11.3l0 41.4c0 8.8 7.2 16 16 16l41.4 0c4.2 0 8.3-1.7 11.3-4.7l56.7-56.7c7.6-7.5 20.3-5.7 24.1 4.3 6.8 17.7 10.5 37 10.5 57.1 0 43.2-17.2 82.3-45 111.1l-49.1-49.1c-33.1-33-78.5-45.7-121.1-38.4l-56.8-56.8 0-29.7-.2-5c-.8-12.4-4.4-24.3-10.5-34.9 29.4-35 73.4-57.2 122.7-57.3z"/></symbol>
+        <symbol id="icon-stages" viewBox="0 0 512 512"><path fill="currentColor" d="M0 96C0 78.3 14.3 64 32 64l384 0c17.7 0 32 14.3 32 32s-14.3 32-32 32L32 128C14.3 128 0 113.7 0 96zM64 256c0-17.7 14.3-32 32-32l384 0c17.7 0 32 14.3 32 32s-14.3 32-32 32L96 288c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32L32 448c-17.7 0-32-14.3-32-32s14.3-32 32-32l384 0c17.7 0 32 14.3 32 32z"/></symbol>
+        <symbol id="icon-output" viewBox="0 0 512 512"><path fill="currentColor" d="M505 273c9.4-9.4 9.4-24.6 0-33.9L361 95c-6.9-6.9-17.2-8.9-26.2-5.2S320 102.3 320 112l0 80-112 0c-26.5 0-48 21.5-48 48l0 32c0 26.5 21.5 48 48 48l112 0 0 80c0 9.7 5.8 18.5 14.8 22.2s19.3 1.7 26.2-5.2L505 273zM160 96c17.7 0 32-14.3 32-32s-14.3-32-32-32L96 32C43 32 0 75 0 128L0 384c0 53 43 96 96 96l64 0c17.7 0 32-14.3 32-32s-14.3-32-32-32l-64 0c-17.7 0-32-14.3-32-32l0-256c0-17.7 14.3-32 32-32l64 0z"/></symbol>
+        <symbol id="icon-cancel" viewBox="0 0 512 512"><path fill="currentColor" d="M256 512a256 256 0 1 0 0-512 256 256 0 1 0 0 512zM167 167c9.4-9.4 24.6-9.4 33.9 0l55 55 55-55c9.4-9.4 24.6-9.4 33.9 0s9.4 24.6 0 33.9l-55 55 55 55c9.4 9.4 9.4 24.6 0 33.9s-24.6 9.4-33.9 0l-55-55-55 55c-9.4 9.4-24.6 9.4-33.9 0s-9.4-24.6 0-33.9l55-55-55-55c-9.4-9.4-9.4-24.6 0-33.9z"/></symbol>
+        <symbol id="icon-reset" viewBox="0 0 512 512"><path fill="currentColor" d="M256 64c-56.8 0-107.9 24.7-143.1 64l47.1 0c17.7 0 32 14.3 32 32s-14.3 32-32 32L32 192c-17.7 0-32-14.3-32-32L0 32C0 14.3 14.3 0 32 0S64 14.3 64 32l0 54.7C110.9 33.6 179.5 0 256 0 397.4 0 512 114.6 512 256S397.4 512 256 512c-87 0-163.9-43.4-210.1-109.7-10.1-14.5-6.6-34.4 7.9-44.6s34.4-6.6 44.6 7.9c34.8 49.8 92.4 82.3 157.6 82.3 106 0 192-86 192-192S362 64 256 64z"/></symbol>
+        <symbol id="icon-save" viewBox="0 0 448 512"><path fill="currentColor" d="M64 32C28.7 32 0 60.7 0 96L0 416c0 35.3 28.7 64 64 64l320 0c35.3 0 64-28.7 64-64l0-242.7c0-17-6.7-33.3-18.7-45.3L352 50.7C340 38.7 323.7 32 306.7 32L64 32zm32 96c0-17.7 14.3-32 32-32l160 0c17.7 0 32 14.3 32 32l0 64c0 17.7-14.3 32-32 32l-160 0c-17.7 0-32-14.3-32-32l0-64zM224 288a64 64 0 1 1 0 128 64 64 0 1 1 0-128z"/></symbol>
+        <symbol id="icon-apply" viewBox="0 0 448 512"><path fill="currentColor" d="M434.8 70.1c14.3 10.4 17.5 30.4 7.1 44.7l-256 352c-5.5 7.6-14 12.3-23.4 13.1s-18.5-2.7-25.1-9.3l-128-128c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l101.5 101.5 234-321.7c10.4-14.3 30.4-17.5 44.7-7.1z"/></symbol>
+        <symbol id="icon-config" viewBox="0 0 512 512"><path fill="currentColor" d="M32 64C14.3 64 0 78.3 0 96s14.3 32 32 32l86.7 0c12.3 28.3 40.5 48 73.3 48s61-19.7 73.3-48L480 128c17.7 0 32-14.3 32-32s-14.3-32-32-32L265.3 64C253 35.7 224.8 16 192 16s-61 19.7-73.3 48L32 64zm0 160c-17.7 0-32 14.3-32 32s14.3 32 32 32l246.7 0c12.3 28.3 40.5 48 73.3 48s61-19.7 73.3-48l54.7 0c17.7 0 32-14.3 32-32s-14.3-32-32-32l-54.7 0c-12.3-28.3-40.5-48-73.3-48s-61 19.7-73.3 48L32 224zm0 160c-17.7 0-32 14.3-32 32s14.3 32 32 32l54.7 0c12.3 28.3 40.5 48 73.3 48s61-19.7 73.3-48L480 448c17.7 0 32-14.3 32-32s-14.3-32-32-32l-246.7 0c-12.3-28.3-40.5-48-73.3-48s-61 19.7-73.3 48L32 384z"/></symbol>
+        <symbol id="icon-drive" viewBox="0 0 448 512"><path fill="currentColor" d="M64 32C28.7 32 0 60.7 0 96L0 260.1C18.1 247.4 40.2 240 64 240l320 0c23.8 0 45.9 7.4 64 20.1L448 96c0-35.3-28.7-64-64-64L64 32zM448 352c0-35.3-28.7-64-64-64L64 288c-35.3 0-64 28.7-64 64l0 64c0 35.3 28.7 64 64 64l320 0c35.3 0 64-28.7 64-64l0-64zM224 384a32 32 0 1 1 64 0 32 32 0 1 1 -64 0zm128-32a32 32 0 1 1 0 64 32 32 0 1 1 0-64z"/></symbol>
+        <symbol id="icon-home" viewBox="0 0 512 512"><path fill="currentColor" d="M277.8 8.6c-12.3-11.4-31.3-11.4-43.5 0l-224 208c-9.6 9-12.8 22.9-8 35.1S18.8 272 32 272l16 0 0 176c0 35.3 28.7 64 64 64l288 0c35.3 0 64-28.7 64-64l0-176 16 0c13.2 0 25-8.1 29.8-20.3s1.6-26.2-8-35.1l-224-208zM200 256a56 56 0 1 1 112 0 56 56 0 1 1 -112 0zM144 432c0-44.2 35.8-80 80-80l64 0c44.2 0 80 35.8 80 80 0 8.8-7.2 16-16 16l-192 0c-8.8 0-16-7.2-16-16z"/></symbol>
+        <symbol id="icon-folder" viewBox="0 0 576 512"><path fill="currentColor" d="M56 225.6L32.4 296.2 32.4 96c0-35.3 28.7-64 64-64l138.7 0c13.8 0 27.3 4.5 38.4 12.8l38.4 28.8c5.5 4.2 12.3 6.4 19.2 6.4l117.3 0c35.3 0 64 28.7 64 64l0 16-365.4 0c-41.3 0-78 26.4-91.1 65.6zM477.8 448L99 448c-32.8 0-55.9-32.1-45.5-63.2l48-144C108 221.2 126.4 208 147 208l378.8 0c32.8 0 55.9 32.1 45.5 63.2l-48 144c-6.5 19.6-24.9 32.8-45.5 32.8z"/></symbol>
+        <symbol id="icon-json" viewBox="0 0 384 512"><path fill="currentColor" d="M64 48l112 0 0 88c0 39.8 32.2 72 72 72l88 0 0 240c0 8.8-7.2 16-16 16L64 464c-8.8 0-16-7.2-16-16L48 64c0-8.8 7.2-16 16-16zM224 67.9l92.1 92.1-68.1 0c-13.3 0-24-10.7-24-24l0-68.1zM64 0C28.7 0 0 28.7 0 64L0 448c0 35.3 28.7 64 64 64l256 0c35.3 0 64-28.7 64-64l0-261.5c0-17-6.7-33.3-18.7-45.3L242.7 18.7C230.7 6.7 214.5 0 197.5 0L64 0zM170.2 295.6c8.6-10.1 7.5-25.2-2.6-33.8s-25.2-7.5-33.8 2.6l-48 56c-7.7 9-7.7 22.2 0 31.2l48 56c8.6 10.1 23.8 11.2 33.8 2.6s11.2-23.8 2.6-33.8l-34.6-40.4 34.6-40.4zm80-31.2c-8.6-10.1-23.8-11.2-33.8-2.6s-11.2 23.8-2.6 33.8l34.6 40.4-34.6 40.4c-8.6 10.1-7.5 25.2 2.6 33.8s25.2 7.5 33.8-2.6l48-56c7.7-9 7.7-22.2 0-31.2l-48-56z"/></symbol>
+        <symbol id="icon-start" viewBox="0 0 576 512"><path fill="currentColor" d="M263.4-27L278.2 9.8 315 24.6c3 1.2 5 4.2 5 7.4s-2 6.2-5 7.4L278.2 54.2 263.4 91c-1.2 3-4.2 5-7.4 5s-6.2-2-7.4-5L233.8 54.2 197 39.4c-3-1.2-5-4.2-5-7.4s2-6.2 5-7.4L233.8 9.8 248.6-27c1.2-3 4.2-5 7.4-5s6.2 2 7.4 5zM110.7 41.7l21.5 50.1 50.1 21.5c5.9 2.5 9.7 8.3 9.7 14.7s-3.8 12.2-9.7 14.7l-50.1 21.5-21.5 50.1c-2.5 5.9-8.3 9.7-14.7 9.7s-12.2-3.8-14.7-9.7L59.8 164.2 9.7 142.7C3.8 140.2 0 134.4 0 128s3.8-12.2 9.7-14.7L59.8 91.8 81.3 41.7C83.8 35.8 89.6 32 96 32s12.2 3.8 14.7 9.7zM464 304c6.4 0 12.2 3.8 14.7 9.7l21.5 50.1 50.1 21.5c5.9 2.5 9.7 8.3 9.7 14.7s-3.8 12.2-9.7 14.7l-50.1 21.5-21.5 50.1c-2.5 5.9-8.3 9.7-14.7 9.7s-12.2-3.8-14.7-9.7l-21.5-50.1-50.1-21.5c-5.9-2.5-9.7-8.3-9.7-14.7s3.8-12.2 9.7-14.7l50.1-21.5 21.5-50.1c2.5-5.9 8.3-9.7 14.7-9.7zM460 0c11 0 21.6 4.4 29.5 12.2l42.3 42.3C539.6 62.4 544 73 544 84s-4.4 21.6-12.2 29.5l-88.2 88.2-101.3-101.3 88.2-88.2C438.4 4.4 449 0 460 0zM44.2 398.5L308.4 134.3 409.7 235.6 145.5 499.8C137.6 507.6 127 512 116 512s-21.6-4.4-29.5-12.2L44.2 457.5C36.4 449.6 32 439 32 428s4.4-21.6 12.2-29.5z"/></symbol>
+        <symbol id="icon-keywords" viewBox="0 0 576 512"><path fill="currentColor" d="M401.2 39.1L549.4 189.4c27.7 28.1 27.7 73.1 0 101.2L393 448.9c-9.3 9.4-24.5 9.5-33.9 .2s-9.5-24.5-.2-33.9L515.3 256.8c9.2-9.3 9.2-24.4 0-33.7L367 72.9c-9.3-9.4-9.2-24.6 .2-33.9s24.6-9.2 33.9 .2zM32.1 229.5L32.1 96c0-35.3 28.7-64 64-64l133.5 0c17 0 33.3 6.7 45.3 18.7l144 144c25 25 25 65.5 0 90.5L285.4 418.7c-25 25-65.5 25-90.5 0l-144-144c-12-12-18.7-28.3-18.7-45.3zm144-85.5a32 32 0 1 0 -64 0 32 32 0 1 0 64 0z"/></symbol>
+        <symbol id="icon-search" viewBox="0 0 512 512"><path fill="currentColor" d="M128 32l32 0c17.7 0 32 14.3 32 32l0 32-96 0 0-32c0-17.7 14.3-32 32-32zm64 96l0 320c0 17.7-14.3 32-32 32L32 480c-17.7 0-32-14.3-32-32l0-59.1c0-34.6 9.4-68.6 27.2-98.3 13.7-22.8 22.5-48.2 25.8-74.6L60.5 156c2-16 15.6-28 31.8-28l99.8 0zm227.8 0c16.1 0 29.8 12 31.8 28L459 216c3.3 26.4 12.1 51.8 25.8 74.6 17.8 29.7 27.2 63.7 27.2 98.3l0 59.1c0 17.7-14.3 32-32 32l-128 0c-17.7 0-32-14.3-32-32l0-320 99.8 0zM320 64c0-17.7 14.3-32 32-32l32 0c17.7 0 32 14.3 32 32l0 32-96 0 0-32zm-32 64l0 160-64 0 0-160 64 0z"/></symbol>
+        <symbol id="icon-find" viewBox="0 0 512 512"><path fill="currentColor" d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376C296.3 401.1 253.9 416 208 416 93.1 416 0 322.9 0 208S93.1 0 208 0 416 93.1 416 208zM208 352a144 144 0 1 0 0-288 144 144 0 1 0 0 288z"/></symbol>
+        <symbol id="icon-extraction" viewBox="0 0 576 512"><path fill="currentColor" d="M288-16c17.7 0 32 14.3 32 32l0 18.3c98.1 14 175.7 91.6 189.7 189.7l18.3 0c17.7 0 32 14.3 32 32s-14.3 32-32 32l-18.3 0c-14 98.1-91.6 175.7-189.7 189.7l0 18.3c0 17.7-14.3 32-32 32s-32-14.3-32-32l0-18.3C157.9 463.7 80.3 386.1 66.3 288L48 288c-17.7 0-32-14.3-32-32s14.3-32 32-32l18.3 0C80.3 125.9 157.9 48.3 256 34.3L256 16c0-17.7 14.3-32 32-32zM131.2 288c12.7 62.7 62.1 112.1 124.8 124.8l0-12.8c0-17.7 14.3-32 32-32s32 14.3 32 32l0 12.8c62.7-12.7 112.1-62.1 124.8-124.8L432 288c-17.7 0-32-14.3-32-32s14.3-32 32-32l12.8 0C432.1 161.3 382.7 111.9 320 99.2l0 12.8c0 17.7-14.3 32-32 32s-32-14.3-32-32l0-12.8C193.3 111.9 143.9 161.3 131.2 224l12.8 0c17.7 0 32 14.3 32 32s-14.3 32-32 32l-12.8 0zM288 208a48 48 0 1 1 0 96 48 48 0 1 1 0-96z"/></symbol>
+        <symbol id="icon-diagram" viewBox="0 0 512 512"><path fill="currentColor" d="M0 80C0 53.5 21.5 32 48 32l96 0c26.5 0 48 21.5 48 48l0 16 128 0 0-16c0-26.5 21.5-48 48-48l96 0c26.5 0 48 21.5 48 48l0 96c0 26.5-21.5 48-48 48l-96 0c-26.5 0-48-21.5-48-48l0-16-128 0 0 16c0 7.3-1.7 14.3-4.6 20.5l68.6 91.5 80 0c26.5 0 48 21.5 48 48l0 96c0 26.5-21.5 48-48 48l-96 0c-26.5 0-48-21.5-48-48l0-96c0-7.3 1.7-14.3 4.6-20.5L128 224 48 224c-26.5 0-48-21.5-48-48L0 80z"/></symbol>
+        <symbol id="icon-pin" viewBox="0 0 320 512"><path fill="currentColor" d="M192 284.4C256.1 269.9 304 212.5 304 144 304 64.5 239.5 0 160 0S16 64.5 16 144c0 68.5 47.9 125.9 112 140.4L128 480c0 17.7 14.3 32 32 32s32-14.3 32-32l0-195.6zM168 96c-30.9 0-56 25.1-56 56 0 13.3-10.7 24-24 24s-24-10.7-24-24c0-57.4 46.6-104 104-104 13.3 0 24 10.7 24 24s-10.7 24-24 24z"/></symbol>
+        <symbol id="icon-add" viewBox="0 0 512 512"><path fill="currentColor" d="M256 512a256 256 0 1 0 0-512 256 256 0 1 0 0 512zM232 344l0-64-64 0c-13.3 0-24-10.7-24-24s10.7-24 24-24l64 0 0-64c0-13.3 10.7-24 24-24s24 10.7 24 24l0 64 64 0c13.3 0 24 10.7 24 24s-10.7 24-24 24l-64 0 0 64c0 13.3-10.7 24-24 24s-24-10.7-24-24z"/></symbol>
+        <symbol id="icon-open" viewBox="0 0 512 512"><path fill="currentColor" d="M320 0c-17.7 0-32 14.3-32 32s14.3 32 32 32l82.7 0-201.4 201.4c-12.5 12.5-12.5 32.8 0 45.3s32.8 12.5 45.3 0L448 109.3 448 192c0 17.7 14.3 32 32 32s32-14.3 32-32l0-160c0-17.7-14.3-32-32-32L320 0zM80 96C35.8 96 0 131.8 0 176L0 432c0 44.2 35.8 80 80 80l256 0c44.2 0 80-35.8 80-80l0-80c0-17.7-14.3-32-32-32s-32 14.3-32 32l0 80c0 8.8-7.2 16-16 16L80 448c-8.8 0-16-7.2-16-16l0-256c0-8.8 7.2-16 16-16l80 0c17.7 0 32-14.3 32-32s-14.3-32-32-32L80 96z"/></symbol>
+        <symbol id="icon-download" viewBox="0 0 448 512"><path fill="currentColor" d="M256 32c0-17.7-14.3-32-32-32s-32 14.3-32 32l0 210.7-41.4-41.4c-12.5-12.5-32.8-12.5-45.3 0s-12.5 32.8 0 45.3l96 96c12.5 12.5 32.8 12.5 45.3 0l96-96c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0L256 242.7 256 32zM64 320c-35.3 0-64 28.7-64 64l0 32c0 35.3 28.7 64 64 64l320 0c35.3 0 64-28.7 64-64l0-32c0-35.3-28.7-64-64-64l-46.9 0-56.6 56.6c-31.2 31.2-81.9 31.2-113.1 0L110.9 320 64 320zm304 56a24 24 0 1 1 0 48 24 24 0 1 1 0-48z"/></symbol>
+    </svg>
+    <main class="container">
+        <header class="app-bar">
+            <h1><svg class="ui-icon heading-icon" aria-hidden="true" focusable="false"><use href="#icon-diagram"/></svg>Interaction Finder</h1>
+        </header>
+        <article id="new-run">
+            <nav class="tabs" id="entry-tabs">
+                <button data-entry="new" aria-selected="true"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-add"/></svg>New run</button>
+                <button data-entry="existing"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-pin"/></svg>Existing checkpoint</button>
+            </nav>
+
+            <div id="entry-new">
+                <label>Topic
+                    <input type="text" id="topic" placeholder="e.g. pulmonary arterial hypertension">
+                </label>
+                <label>Entity kinds</label>
+                <div class="entity-chips" id="entity-chips"></div>
+                <fieldset role="group">
+                    <input type="text" id="kind-input" placeholder="add a kind (e.g. gene)">
+                    <button class="secondary" id="add-kind" type="button">Add</button>
+                </fieldset>
+                <label><input type="checkbox" role="switch" id="same-kind"> Allow same-kind pairs</label>
+                <label for="output">Save to</label>
+                <fieldset role="group">
+                    <input type="text" id="output" placeholder="results.json" autocomplete="off">
+                    <button class="secondary" id="browse-save" type="button">Browse&hellip;</button>
+                </fieldset>
+                <div class="config-row">
+                    <button id="open-keys" type="button" class="secondary outline auto config-btn">
+                        <svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-key"/></svg>
+                        API keys
+                    </button>
+                    <button id="open-config" type="button" class="secondary outline auto config-btn">
+                        <svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-config"/></svg>
+                        Configuration<span id="config-changed-badge" class="cfg-count" hidden></span>
+                    </button>
+                </div>
+                <small>&#9432; Running from a topic searches the literature and calls AI models &mdash; this can take several minutes and use API credits.</small>
+                <small id="form-error" class="err" hidden></small>
+                <div class="start-row">
+                    <button id="start" type="button" class="auto" disabled><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-start"/></svg>Start run</button>
+                </div>
+            </div>
+
+            <div id="entry-existing" hidden>
+                <label for="checkpoint-path">Checkpoint file</label>
+                <fieldset role="group">
+                    <input type="text" id="checkpoint-path" placeholder="/path/to/results.json" autocomplete="off">
+                    <button class="secondary" id="browse" type="button">Browse&hellip;</button>
+                </fieldset>
+                <small id="load-error" class="err" hidden></small>
+                <p id="load-busy" aria-busy="true" hidden>Reading checkpoint&hellip;</p>
+                <!-- After an incomplete checkpoint loads: resume fields + Continue. -->
+                <div id="continue-panel" hidden>
+                    <div id="continue-fields" hidden>
+                        <label>Entity kinds</label>
+                        <div class="entity-chips" id="resume-chips"></div>
+                        <fieldset role="group">
+                            <input type="text" id="resume-kind-input" placeholder="add a kind (e.g. gene)">
+                            <button class="secondary" id="resume-add-kind" type="button">Add</button>
+                        </fieldset>
+                    </div>
+                    <button id="continue" type="button">Continue</button>
+                </div>
+            </div>
+        </article>
+
+        <!-- Recent history: previously opened checkpoints / generated reports.
+             Shown on either entry tab while nothing is currently loaded. -->
+        <article id="recent-card" hidden>
+            <header class="between">
+                <strong>Recent</strong>
+                <a href="#" id="recent-clear" class="recent-clear">Clear all</a>
+            </header>
+            <ul class="data-list" id="recent-list"></ul>
+        </article>
+
+        <!-- Report card: shown for a loaded checkpoint, between the run form
+             and the stage info. View when a cached report exists, else Generate
+             (which renders with progress, then becomes View). -->
+        <article id="report-card" class="between" hidden>
+            <span id="report-status">
+                <span id="report-summary"></span>
+                <span id="report-busy" aria-busy="true" hidden>Generating report&hellip;</span>
+            </span>
+            <span class="report-actions">
+                <button id="report-generate" type="button" class="auto secondary" hidden>Generate report</button>
+                <button id="report-download" type="button" class="icon-link" hidden data-tooltip="Download report" data-placement="top" aria-label="Download report"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-download"/></svg></button>
+                <button id="report-view" type="button" class="auto" hidden>View report <svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-open"/></svg></button>
+            </span>
+        </article>
+
+        <article class="run-summary between" id="run-summary">
+            <strong id="summary-text"></strong>
+            <button class="secondary outline" id="new-run-again" hidden>New run</button>
+        </article>
+
+        <article id="activity">
+            <div id="activity-running">
+                <div class="activity-head">
+                    <strong id="activity-status" aria-busy="true">Starting&hellip;</strong>
+                    <small id="activity-elapsed"></small>
+                    <button id="cancel-run" type="button" class="secondary outline auto cancel-btn"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-cancel"/></svg>Cancel</button>
+                </div>
+                <ul class="feed" id="activity-feed"></ul>
+            </div>
+            <div id="activity-done" class="between" hidden>
+                <span id="done-label"></span>
+                <span class="report-actions">
+                    <button id="download-report" type="button" class="icon-link" hidden data-tooltip="Download report" data-placement="top" aria-label="Download report"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-download"/></svg></button>
+                    <button id="view-report" type="button" class="auto">View report <svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-open"/></svg></button>
+                </span>
+            </div>
+        </article>
+
+        <article id="stages">
+            <nav class="tabs" id="tab-bar"></nav>
+            <div id="tab-panels"></div>
+        </article>
+    </main>
+
+    <dialog id="browse-dialog">
+        <article class="browse-modal">
+            <header>
+                <button aria-label="Close" rel="prev"></button>
+                <strong id="browse-title">Choose a checkpoint</strong>
+            </header>
+            <nav id="browse-path" aria-label="Breadcrumb"></nav>
+            <ul class="data-list" id="browse-entries"></ul>
+            <p id="browse-error" class="err" hidden></p>
+            <footer id="browse-save-footer" hidden>
+                <fieldset role="group">
+                    <input type="text" id="browse-filename" placeholder="filename.json" autocomplete="off">
+                    <button id="browse-save-confirm" type="button">Save here</button>
+                </fieldset>
+            </footer>
+        </article>
+    </dialog>
+
+    <dialog id="confirm-clear-dialog">
+        <article>
+            <header>
+                <button aria-label="Close" rel="prev"></button>
+                <strong>Clear recent history?</strong>
+            </header>
+            <p>This removes every entry from the recent list. It does not delete
+               any checkpoint or report files.</p>
+            <footer>
+                <button id="confirm-clear-cancel" type="button" class="secondary auto">Cancel</button>
+                <button id="confirm-clear-ok" type="button" class="auto">Clear all</button>
+            </footer>
+        </article>
+    </dialog>
+
+    <dialog id="keys-dialog">
+        <article class="config-modal">
+            <header>
+                <button aria-label="Close" rel="prev"></button>
+                <strong>API keys</strong>
+                <small id="keys-summary"></small>
+            </header>
+            <p class="config-intro"><small>Keys are held in the running server for this session only &mdash; never
+               written to disk. Set keys here when they are not already in your environment. Choose
+               which model each agent uses in <strong>Configuration</strong>.</small></p>
+            <form id="keys-form">
+                <div id="keys-providers"></div>
+            </form>
+            <footer class="config-actions">
+                <button id="keys-apply" type="button" class="auto"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-apply"/></svg>Apply</button>
+            </footer>
+        </article>
+    </dialog>
+
+    <dialog id="config-dialog">
+        <article class="config-modal">
+            <header>
+                <button aria-label="Close" rel="prev"></button>
+                <strong>Configuration</strong>
+                <small id="config-summary"></small>
+            </header>
+            <p class="config-intro"><small>Edit the configuration used for runs. Highlighted fields differ from the
+               built-in defaults, and are embedded in each run's checkpoint.</small></p>
+            <div class="config-pre">
+                <button id="config-reset" type="button" class="icon-link config-reset">
+                    <svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-reset"/></svg>
+                    Reset to defaults
+                </button>
+            </div>
+            <form id="config-form">{{ config_form }}</form>
+            <footer class="config-actions">
+                <button id="config-save" type="button" class="secondary outline auto"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-save"/></svg>Save as default</button>
+                <button id="config-apply" type="button" class="auto"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-apply"/></svg>Apply</button>
+            </footer>
+        </article>
+    </dialog>
+    <script src="/static/ui.js"></script>
+</body>
+</html>
