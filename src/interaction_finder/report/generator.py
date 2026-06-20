@@ -7,7 +7,7 @@ to produce self-contained reports from ExtractionResult data.
 from collections import Counter
 from pathlib import Path
 import sys
-from typing import Any, Literal
+from typing import Any, Callable, Literal
 
 from interaction_finder.checkpoint import ExtractionStageData, PipelineCheckpoint
 from interaction_finder.extraction.models import ExtractionMetadata, PairJudgment
@@ -34,11 +34,46 @@ def _normalize_filters(
         - <entity_kind>: entity name to match (e.g., gene:BRCA1)
     """
     normalized: dict[str, Any] = {}
-    reserved_keys = {"accepted", "evidence"}
+    reserved_keys = {
+        "accepted",
+        "evidence",
+        "on_topic",
+        "on-topic",
+        "on_subject",
+        "on-subject",
+        "subject_trust",
+        "subject",
+    }
     for key, raw_value in filter_spec.items():
         key_lower = key.lower()
         value = raw_value.strip()
-        if key_lower == "accepted":
+        if key_lower in (
+            "on_topic",
+            "on-topic",
+            "on_subject",
+            "on-subject",
+            "subject_trust",
+            "subject",
+        ):
+            aliases = {
+                "yes": "pass",
+                "on": "pass",
+                "pass": "pass",
+                "no": "fail",
+                "off": "fail",
+                "fail": "fail",
+                "unjudged": "unjudged",
+                "na": "unjudged",
+                "none": "unjudged",
+                "any": "any",
+            }
+            val = aliases.get(value.lower())
+            if val is None:
+                raise ValueError(
+                    "Invalid on_topic filter. Use 'yes', 'no', 'unjudged', or 'any'."
+                )
+            normalized["subject_trust"] = val
+        elif key_lower == "accepted":
             val = value.lower()
             mapping = {
                 "yes": "yes",
@@ -172,6 +207,7 @@ def _filter_judgments(
     accepted_filter = filters.get("accepted")
     evidence_min: int | None = filters.get("evidence_min")
     entity_filters: list[tuple[str, str]] = filters.get("entities", [])
+    subject_trust_filter = filters.get("subject_trust")
     filtered: list[PairJudgment] = []
     for judgment in judgments:
         if accepted_filter == "yes" and not judgment.accepted:
@@ -180,6 +216,16 @@ def _filter_judgments(
             continue
         if evidence_min and judgment.evidence.overall < evidence_min:
             continue
+        # Subject-trust gate verdict (None == unjudged). Mirrors the report's
+        # strict-by-default toggle: `pass` is the on-subject answer set.
+        if subject_trust_filter and subject_trust_filter != "any":
+            st = judgment.subject_trust
+            if subject_trust_filter == "pass" and not (st and st.belongs):
+                continue
+            if subject_trust_filter == "fail" and not (st and not st.belongs):
+                continue
+            if subject_trust_filter == "unjudged" and st is not None:
+                continue
         # Entity filters: pair must have at least one entity matching each filter
         if entity_filters:
             match = True
@@ -246,6 +292,8 @@ def filter_checkpoint(
     new_extraction = ExtractionStageData(
         target_entity_types=checkpoint.extraction.target_entity_types,
         permitted_pairs=checkpoint.extraction.permitted_pairs,
+        subject_kind=checkpoint.extraction.subject_kind,
+        subject_anchor=checkpoint.extraction.subject_anchor,
         judgments=filtered_judgments,
         metadata=new_metadata,
         consolidated=checkpoint.extraction.consolidated,
@@ -418,6 +466,7 @@ def generate_report(
     title: str | None = None,
     format: Literal["html", "plain", "stats"] | str = "html",
     filters: dict[str, str] | None = None,
+    progress_callback: Callable[[int, int], None] | None = None,
 ) -> Path:
     """Generate report artifacts from extraction results.
 
@@ -521,6 +570,7 @@ def generate_report(
     pairs, document_html, reasoning_templates, indexed_docs = prepare_report_data(
         checkpoint,
         show_progress=not write_to_stdout,
+        progress_callback=progress_callback,
     )
     html = render_template(
         pairs,

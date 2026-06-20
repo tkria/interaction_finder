@@ -175,9 +175,7 @@ class TestDocumentAnnotator:
             fuzzy_corrected=False,
         )
 
-        result = annotator.annotate(
-            0, [quote_entry(quote1), quote_entry(quote2)], {}
-        )
+        result = annotator.annotate(0, [quote_entry(quote1), quote_entry(quote2)], {})
 
         assert len(result.quote_map) == 2
 
@@ -351,3 +349,45 @@ class TestDocumentAnnotator:
         # The HTML should contain an entity span for TGF-α
         assert "entity-span" in result.html
         assert "TGF-" in result.html  # The actual matched text should be preserved
+
+    def test_short_entity_not_matched_inside_words(self):
+        """A short entity (TH) must not highlight substrings of larger words."""
+        # "TH" appears once as a standalone token; the surrounding words "the",
+        # "within", and "month" all contain the substring "th"/"TH".
+        text = "Within the brain, TH expression rose this month."
+        resource = Resource(
+            id=ResourceId(url="http://example.com/doc-th", counter=7),
+            title="Test TH",
+            text=text,
+        )
+
+        renderer = MarkdownToHTMLRenderer(text)
+        renderer.render()
+
+        annotator = DocumentAnnotator(resource, renderer)
+
+        quote = ResourceQuote(
+            resource=resource,
+            query_text=text,
+            spans=[(0, len(text))],
+            resource_id=resource.id,
+            fuzzy_corrected=False,
+        )
+
+        entities = {
+            0: {
+                "entity1": {"name": "TH", "kind": "gene", "aliases": []},
+                "entity2": {"name": "brain", "kind": "tissue", "aliases": []},
+            }
+        }
+
+        result = annotator.annotate(0, [quote_entry(quote)], entities)
+
+        # Exactly one TH highlight -- the standalone token, not the substrings
+        # inside "the"/"within"/"month".
+        th_entities = [e for e in result.entity_map.values() if e.name == "TH"]
+        assert len(th_entities) == 1
+        # The standalone "TH" is wrapped; the "th"/"TH" inside surrounding words
+        # is left untouched in the rendered HTML.
+        assert ">TH<" in result.html
+        assert ">the<" not in result.html

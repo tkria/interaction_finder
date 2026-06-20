@@ -730,6 +730,21 @@ def _escape_html_attr(value: str) -> str:
         .replace(">", "&gt;")
     )
 
+
+def _is_whole_token(text: str, start: int, end: int) -> bool:
+    """Return True if text[start:end] is not embedded inside a larger word.
+
+    A match is rejected when an alphanumeric character immediately abuts it on
+    either side -- this is what stops a short entity like "th" matching inside
+    "the". The flanking character is judged, never the matched content, so an
+    entity that itself begins or ends with punctuation/digits (p53, IL-1, α-SMA)
+    is unaffected. ``str.isalnum`` treats Unicode letters and digits (Greek
+    included) as word characters, matching the normalized search space.
+    """
+    before = text[start - 1] if start > 0 else ""
+    after = text[end] if end < len(text) else ""
+    return not (before.isalnum() or after.isalnum())
+
     def map_original_to_html_position(self, original_pos: int) -> int:
         """Map position in original markdown to position in rendered HTML.
 
@@ -924,9 +939,15 @@ class DocumentAnnotator:
                     # Use Resource's NormalizedTextMapper to search
                     # Automatically normalizes search term (Greek letters, punctuation, etc.)
                     # Returns positions in original text coordinates
-                    matches = self.resource._position_mapper.findall(term)
+                    matches = self.resource.position_mapper.findall(term)
 
                     for orig_start, orig_end in matches:
+                        # Reject substring hits inside larger words (e.g. "th"
+                        # within "the"); findall does raw substring matching.
+                        if not _is_whole_token(
+                            self.resource.text, orig_start, orig_end
+                        ):
+                            continue
                         # Check if this position is within any quote span (in original coordinates)
                         in_quote = False
                         containing_quote_ids = []

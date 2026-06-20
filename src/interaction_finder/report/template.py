@@ -196,6 +196,13 @@ def _render_pair_cards(pairs: list[dict[str, Any]]) -> str:
                 {counts_html}{polarity_html}<span class="evidence-badge evidence-{overall}"{evidence_tooltip}>{_escape_html(label.upper())}</span>
             </div>"""
 
+        # Subject-trust gate verdict: "pass"/"fail" when the gate ran on this
+        # pair, "na" when it did not (gate disabled, or no subject-kind entity).
+        _st = pair.get("subject_trust")
+        subject_trust_attr = (
+            "na" if _st is None else ("pass" if _st["belongs"] else "fail")
+        )
+
         # Build complete card with minimal data-attributes
         card_html = f"""
         <div id="pair-{idx}" class="{" ".join(card_classes)}"
@@ -212,6 +219,7 @@ def _render_pair_cards(pairs: list[dict[str, Any]]) -> str:
              data-quote-count="{pair["quote_count"]}"
              data-relevance="{pair.get("topic_relevance", 3)}"
              data-rank-score="{pair.get("rank_sum_score", 0)}"
+             data-subject-trust="{subject_trust_attr}"
              data-doc-groups='{doc_groups_data}'>
             <div class="pair-entities">
                 <span title="{_escape_html(entity1_aliases_display)}" data-kind="{_escape_html(pair["entity1"]["kind"])}">{_escape_html(pair["entity1"]["name"])}</span>
@@ -363,11 +371,15 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 </select>
             </div>
             <label class="filter-checkbox">
-                <input type="checkbox" id="show-rejected">
+                <input type="checkbox" role="switch" id="show-rejected">
                 Show rejected
             </label>
+            <label class="filter-checkbox" title="Show only pairs whose subject is on-topic (passed the subject-trust check). Off-topic pairs are kept and scored, just hidden until you turn this off. On by default.">
+                <input type="checkbox" role="switch" id="on-topic-only" checked>
+                On-topic only
+            </label>
             <label class="filter-checkbox">
-                <input type="checkbox" id="contentious-only">
+                <input type="checkbox" role="switch" id="contentious-only">
                 Contentious only
             </label>
             <button type="button"
@@ -428,6 +440,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 <label>
                     <input type="checkbox" role="switch" id="export-apply-filters" checked>
                     Apply current filters
+                    <small id="export-filters-summary" class="export-filters-summary"></small>
                 </label>
             </fieldset>
             <fieldset>
@@ -447,9 +460,19 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             </fieldset>
             <fieldset id="export-columns-entities">
                 <label>
-                    <input type="checkbox" id="export-entity-include-aliases">
+                    <input type="checkbox" role="switch" id="export-entity-include-aliases">
                     Include aliases
                 </label>
+                <label>
+                    <input type="checkbox" role="switch" id="export-entity-include-occurrences">
+                    Occurrence count
+                </label>
+                <label for="export-entity-sort">Sort</label>
+                <select id="export-entity-sort">
+                    <option value="default" selected>Default (first seen)</option>
+                    <option value="alphabetic">Alphabetic</option>
+                    <option value="occurrences">Occurrences</option>
+                </select>
             </fieldset>
             <div class="export-preview-section">
                 <strong>Preview</strong>

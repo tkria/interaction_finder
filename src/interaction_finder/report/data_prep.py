@@ -7,7 +7,7 @@ No JSON generation - all data embedded in HTML structure.
 from collections import defaultdict
 from datetime import date
 from math import exp, sqrt
-from typing import Any
+from typing import Any, Callable
 
 from rich.progress import (
     Progress,
@@ -254,6 +254,17 @@ def _build_pair_entry(
         "evidence_levels": evidence_levels,
         "contentious": _has_opposing_relationships(assessments, opposition_map),
         "topic_relevance": judgment.topic_relevance,
+        # Subject-trust gate (gate_review v3): None if the gate did not run or
+        # the pair has no subject-kind entity; otherwise the taxonomic verdict.
+        "subject_trust": (
+            None
+            if judgment.subject_trust is None
+            else {
+                "belongs": judgment.subject_trust.belongs,
+                "reasoning": judgment.subject_trust.reasoning,
+                "subject_name": judgment.subject_trust.subject_name,
+            }
+        ),
     }
 
 
@@ -350,6 +361,7 @@ def prepare_report_data(
     checkpoint: PipelineCheckpoint,
     show_progress: bool = True,
     judgments_override: list | None = None,
+    progress_callback: "Callable[[int, int], None] | None" = None,
 ) -> tuple[
     list[dict[str, Any]],
     dict[int, str],
@@ -505,8 +517,27 @@ def prepare_report_data(
                     "entity2": pair_entities["entity2"],
                 }
 
-    # Pre-render documents in parallel using multiprocessing
-    if show_progress and indexed_docs:
+    # Pre-render documents in parallel using multiprocessing.
+    total_docs = len(indexed_docs)
+    if progress_callback is not None and indexed_docs:
+        # Caller-supplied (done, total) sink, e.g. the web UI's progress table.
+        # Report the total up front so the UI shows "0/N" immediately, before
+        # the first document completes.
+        progress_callback(0, total_docs)
+        done = 0
+
+        def update_progress():
+            nonlocal done
+            done += 1
+            progress_callback(done, total_docs)
+
+        document_html = render_documents_parallel(
+            indexed_docs,
+            doc_to_quotes,
+            doc_to_entities,
+            progress_callback=update_progress,
+        )
+    elif show_progress and indexed_docs:
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
@@ -515,8 +546,7 @@ def prepare_report_data(
             TimeElapsedColumn(),
         ) as progress:
             task = progress.add_task(
-                f"Rendering {len(indexed_docs)} documents...",
-                total=len(indexed_docs),
+                f"Rendering {total_docs} documents...", total=total_docs
             )
 
             def update_progress():
