@@ -2007,10 +2007,9 @@ function getFilteredPairs() {
         let comparison = 0;
         switch (state.sortField) {
             case 'default':
-                // Rank-sum fusion of pair_topic_rel and age_w: lower = better.
-                // Invert the subtraction so the direction toggle works the
-                // same way as the other (higher = better) fields.
-                comparison = parseFloat(b.dataset.rankScore) - parseFloat(a.dataset.rankScore);
+                // Recency-weighted document sum (age_w): higher = better, so it
+                // sorts like the other higher-is-better fields (evidence, docs).
+                comparison = parseFloat(a.dataset.rankScore) - parseFloat(b.dataset.rankScore);
                 break;
             case 'evidence':
                 comparison = parseInt(a.dataset.overall, 10) - parseInt(b.dataset.overall, 10);
