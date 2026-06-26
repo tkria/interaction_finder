@@ -78,13 +78,40 @@
         #report-status, .report-actions { display: inline-flex; align-items: center; }
         .report-actions button { margin: 0; }
 
+        /* Active-run card: one row per in-progress run, pinned under the header. */
+        #active-runs header { margin-bottom: 0.5rem; }
+        #active-runs-list { list-style: none; padding: 0; margin: 0; }
+        #active-runs-list > li {
+            display: flex; align-items: center; gap: 0.6rem; padding: 0.45rem 0;
+            border-bottom: 1px solid var(--pico-muted-border-color);
+        }
+        #active-runs-list > li:last-child { border-bottom: none; }
+        #active-runs-list li { list-style: none; }
+        .arun-spinner { flex: none; }
+        .arun-main { flex: 1; min-width: 0; }
+        .arun-topic { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .arun-status { color: var(--pico-muted-color); font-size: 0.85rem; }
+        .arun-elapsed { flex: none; color: var(--pico-muted-color); font-size: 0.85rem; font-variant-numeric: tabular-nums; }
+        .arun-actions { flex: none; display: inline-flex; align-items: center; gap: 0.4rem; }
+        .arun-actions button { margin: 0; padding: 0.25rem 0.7rem; font-size: 0.85rem;
+            display: inline-flex; align-items: center; gap: 0.35rem; width: auto; }
+        .arun-cancel { --pico-color: var(--pico-del-color); --pico-border-color: var(--pico-del-color); }
+        .arun-cancel:hover { --pico-background-color: var(--pico-del-color); --pico-color: var(--pico-primary-inverse); }
+
         /* Activity feed: newest brightest, older fading. */
-        .activity-head { display: flex; align-items: baseline; gap: 0.5rem; }
+        .activity-head { display: flex; align-items: center; gap: 0.5rem; }
         .feed { list-style: none; padding: 0; margin: 0.6rem 0 0; }
-        .feed li { transition: opacity 0.3s; line-height: 1.7; }
+        /* Pico's `ul li{list-style:square}` outranks list-style on the <ul>,
+           so clear the marker on the <li> directly. */
+        .feed li { list-style: none; transition: opacity 0.3s; line-height: 1.7; }
         .feed li:nth-child(1) { opacity: 1; }
         .feed li:nth-child(2) { opacity: 0.5; }
         .feed li:nth-child(3) { opacity: 0.28; }
+        /* Forwarded log warnings/errors keep full opacity and a severity hue so
+           they stand out from ordinary progress lines as they scroll. */
+        .feed li.feed-warn, .feed li.feed-err { opacity: 1; }
+        .feed li.feed-warn { color: var(--pico-color-amber-450, #d97706); }
+        .feed li.feed-err { color: var(--pico-del-color); }
 
         /* Stage tabs (Pico has no tab component). Buttons are reset to inherit
            Pico's typography/colours/transitions -- not `all: unset`, which
@@ -102,6 +129,10 @@
         .tabs button:hover:not([disabled]) { color: var(--pico-primary); }
         .tabs button[aria-selected="true"] { border-bottom-color: var(--pico-primary); color: var(--pico-primary); }
         .tabs button[disabled] { color: var(--pico-muted-color); opacity: 0.6; }
+        /* The active tab carries aria-busy for its spinner, but Pico disables
+           pointer events on busy buttons; the spinner is decorative here, so
+           keep the tab clickable. */
+        .tabs button[aria-busy="true"] { pointer-events: auto; cursor: pointer; }
         /* Leading stage glyph: inherits the tab's colour. Active stages show
            Pico's aria-busy spinner instead; pending stages are disabled, so
            the whole tab (glyph included) renders faint via the [disabled] rule
@@ -187,10 +218,12 @@
             color: var(--pico-muted-color); font-weight: bold;
         }
         #recent-list .recent-remove:hover { color: var(--pico-del-color); }
-        /* Confirm dialog: compact, buttons right-aligned. */
-        #confirm-clear-dialog article { width: min(420px, 92vw); }
-        #confirm-clear-dialog footer { display: flex; justify-content: flex-end; gap: 0.5rem; }
-        #confirm-clear-dialog footer button { margin: 0; }
+        /* Confirm dialogs: compact, buttons right-aligned. */
+        #confirm-clear-dialog article, #confirm-cancel-dialog article { width: min(420px, 92vw); }
+        #confirm-clear-dialog footer, #confirm-cancel-dialog footer { display: flex; justify-content: flex-end; gap: 0.5rem; }
+        #confirm-clear-dialog footer button, #confirm-cancel-dialog footer button { margin: 0; }
+        /* The destructive confirm action reads as danger. */
+        #confirm-cancel-ok { --pico-background-color: var(--pico-del-color); --pico-border-color: var(--pico-del-color); }
 
         /* File-picker modal (lifecycle mirrors the report's export modal). */
         .browse-modal { width: min(640px, 92vw); }
@@ -338,11 +371,20 @@
         <symbol id="icon-add" viewBox="0 0 512 512"><path fill="currentColor" d="M256 512a256 256 0 1 0 0-512 256 256 0 1 0 0 512zM232 344l0-64-64 0c-13.3 0-24-10.7-24-24s10.7-24 24-24l64 0 0-64c0-13.3 10.7-24 24-24s24 10.7 24 24l0 64 64 0c13.3 0 24 10.7 24 24s-10.7 24-24 24l-64 0 0 64c0 13.3-10.7 24-24 24s-24-10.7-24-24z"/></symbol>
         <symbol id="icon-open" viewBox="0 0 512 512"><path fill="currentColor" d="M320 0c-17.7 0-32 14.3-32 32s14.3 32 32 32l82.7 0-201.4 201.4c-12.5 12.5-12.5 32.8 0 45.3s32.8 12.5 45.3 0L448 109.3 448 192c0 17.7 14.3 32 32 32s32-14.3 32-32l0-160c0-17.7-14.3-32-32-32L320 0zM80 96C35.8 96 0 131.8 0 176L0 432c0 44.2 35.8 80 80 80l256 0c44.2 0 80-35.8 80-80l0-80c0-17.7-14.3-32-32-32s-32 14.3-32 32l0 80c0 8.8-7.2 16-16 16L80 448c-8.8 0-16-7.2-16-16l0-256c0-8.8 7.2-16 16-16l80 0c17.7 0 32-14.3 32-32s-14.3-32-32-32L80 96z"/></symbol>
         <symbol id="icon-download" viewBox="0 0 448 512"><path fill="currentColor" d="M256 32c0-17.7-14.3-32-32-32s-32 14.3-32 32l0 210.7-41.4-41.4c-12.5-12.5-32.8-12.5-45.3 0s-12.5 32.8 0 45.3l96 96c12.5 12.5 32.8 12.5 45.3 0l96-96c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0L256 242.7 256 32zM64 320c-35.3 0-64 28.7-64 64l0 32c0 35.3 28.7 64 64 64l320 0c35.3 0 64-28.7 64-64l0-32c0-35.3-28.7-64-64-64l-46.9 0-56.6 56.6c-31.2 31.2-81.9 31.2-113.1 0L110.9 320 64 320zm304 56a24 24 0 1 1 0 48 24 24 0 1 1 0-48z"/></symbol>
+        <symbol id="icon-continue" viewBox="0 0 512 512"><path fill="currentColor" d="M464 256a208 208 0 1 1 -416 0 208 208 0 1 1 416 0zM0 256a256 256 0 1 0 512 0 256 256 0 1 0 -512 0zm387.3 11.3c6.2-6.2 6.2-16.4 0-22.6l-104-104c-4.6-4.6-11.5-5.9-17.4-3.5S256 145.5 256 152l0 72-104 0c-13.3 0-24 10.7-24 24l0 16c0 13.3 10.7 24 24 24l104 0 0 72c0 6.5 3.9 12.3 9.9 14.8s12.9 1.1 17.4-3.5l104-104z"/></symbol>
+        <symbol id="icon-eye" viewBox="0 0 576 512"><path fill="currentColor" d="M288 80C222.8 80 169.2 109.6 128.1 147.7 89.6 183.5 63 226 49.4 256 63 286 89.6 328.5 128.1 364.3 169.2 402.4 222.8 432 288 432s118.8-29.6 159.9-67.7C486.4 328.5 513 286 526.6 256 513 226 486.4 183.5 447.9 147.7 406.8 109.6 353.2 80 288 80zM95.4 112.6C142.5 68.8 207.2 32 288 32s145.5 36.8 192.6 80.6c46.8 43.5 78.1 95.4 93 131.1 3.3 7.9 3.3 16.7 0 24.6-14.9 35.7-46.2 87.7-93 131.1-47.1 43.7-111.8 80.6-192.6 80.6S142.5 443.2 95.4 399.4c-46.8-43.5-78.1-95.4-93-131.1-3.3-7.9-3.3-16.7 0-24.6 14.9-35.7 46.2-87.7 93-131.1zM288 336c44.2 0 80-35.8 80-80 0-29.6-16.1-55.5-40-69.3-1.4 59.7-49.6 107.9-109.3 109.3 13.8 23.9 39.7 40 69.3 40zm-79.6-88.4c2.5 .3 5 .4 7.6 .4 35.3 0 64-28.7 64-64 0-2.6-.2-5.1-.4-7.6-37.4 3.9-67.2 33.7-71.1 71.1zm45.6-115c10.8-3 22.2-4.5 33.9-4.5 8.8 0 17.5 .9 25.8 2.6 .3 .1 .5 .1 .8 .2 57.9 12.2 101.4 63.7 101.4 125.2 0 70.7-57.3 128-128 128-61.6 0-113-43.5-125.2-101.4-1.8-8.6-2.8-17.5-2.8-26.6 0-11 1.4-21.8 4-32 .2-.7 .3-1.3 .5-1.9 11.9-43.4 46.1-77.6 89.5-89.5z"/></symbol>
     </svg>
     <main class="container">
         <header class="app-bar">
             <h1><svg class="ui-icon heading-icon" aria-hidden="true" focusable="false"><use href="#icon-diagram"/></svg>Interaction Finder</h1>
         </header>
+        <!-- Active run(s): pinned first under the header whenever >=1 run is in
+             progress. One row per run: status/activity, runtime, View + Cancel. -->
+        <article id="active-runs" hidden>
+            <header><strong>Active run<span id="active-runs-plural"></span></strong></header>
+            <ul id="active-runs-list"></ul>
+        </article>
+
         <article id="new-run">
             <nav class="tabs" id="entry-tabs">
                 <button data-entry="new" aria-selected="true"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-add"/></svg>New run</button>
@@ -400,7 +442,9 @@
                             <button class="secondary" id="resume-add-kind" type="button">Add</button>
                         </fieldset>
                     </div>
-                    <button id="continue" type="button">Continue</button>
+                    <div class="start-row">
+                        <button id="continue" type="button" class="auto"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-continue"/></svg>Continue</button>
+                    </div>
                 </div>
             </div>
         </article>
@@ -432,7 +476,7 @@
 
         <article class="run-summary between" id="run-summary">
             <strong id="summary-text"></strong>
-            <button class="secondary outline" id="new-run-again" hidden>New run</button>
+            <button class="secondary outline" id="new-run-again" hidden>Back</button>
         </article>
 
         <article id="activity">
@@ -447,8 +491,9 @@
             <div id="activity-done" class="between" hidden>
                 <span id="done-label"></span>
                 <span class="report-actions">
+                    <button id="resume-run" type="button" class="auto secondary" hidden><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-start"/></svg>Resume run</button>
                     <button id="download-report" type="button" class="icon-link" hidden data-tooltip="Download report" data-placement="top" aria-label="Download report"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-download"/></svg></button>
-                    <button id="view-report" type="button" class="auto">View report <svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-open"/></svg></button>
+                    <button id="view-report" type="button" class="auto" hidden>View report <svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-open"/></svg></button>
                 </span>
             </div>
         </article>
@@ -473,6 +518,21 @@
                     <input type="text" id="browse-filename" placeholder="filename.json" autocomplete="off">
                     <button id="browse-save-confirm" type="button">Save here</button>
                 </fieldset>
+            </footer>
+        </article>
+    </dialog>
+
+    <dialog id="confirm-cancel-dialog">
+        <article>
+            <header>
+                <button aria-label="Close" rel="prev"></button>
+                <strong>Cancel this run?</strong>
+            </header>
+            <p>Progress from completed stages is saved to the checkpoint and the
+               run can be resumed later.</p>
+            <footer>
+                <button id="confirm-cancel-keep" type="button" class="secondary auto">Keep running</button>
+                <button id="confirm-cancel-ok" type="button" class="auto">Cancel run</button>
             </footer>
         </article>
     </dialog>

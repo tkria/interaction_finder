@@ -35,6 +35,7 @@ from interaction_finder.web.run_manager import (
     RunRecord,
     RunSpec,
     checkpoint_status,
+    has_report,
 )
 
 _WEB_DIR = Path(__file__).parent
@@ -49,6 +50,9 @@ _REPORT_POLL_SECONDS = 0.1
 
 def create_app() -> Starlette:
     """Build the Starlette app with a fresh in-process RunManager."""
+    from interaction_finder.web.log_forward import install_log_forwarding
+
+    install_log_forwarding()
     manager = RunManager()
 
     async def index(request: Request) -> HTMLResponse:
@@ -74,13 +78,29 @@ def create_app() -> Starlette:
             record = manager.start(spec)
         except (FileNotFoundError, ValueError) as exc:
             return JSONResponse({"error": str(exc)}, 400)
-        return JSONResponse({"run_id": record.id, "topic": record.topic})
+        return JSONResponse(_run_started_payload(record))
 
     async def cancel_run(request: Request) -> JSONResponse:
         ok = manager.cancel(request.path_params["run_id"])
         if not ok:
             return JSONResponse({"error": "No running run with that id."}, 404)
         return JSONResponse({"ok": True})
+
+    async def active_runs(request: Request) -> JSONResponse:
+        # Lets the client rebuild the active-run card after a page reload.
+        return JSONResponse(
+            {
+                "runs": [
+                    {
+                        "run_id": r.id,
+                        "topic": r.topic,
+                        "status": r.table.status,
+                        "started_at": r.started_at,
+                    }
+                    for r in manager.active_runs()
+                ]
+            }
+        )
 
     async def run_events(request: Request) -> Response:
         record = manager.get(request.path_params["run_id"])
@@ -122,7 +142,7 @@ def create_app() -> Starlette:
         except (FileNotFoundError, ValueError) as exc:
             return JSONResponse({"error": str(exc)}, 400)
         manager.spawn(record)
-        return JSONResponse({"run_id": record.id, "topic": record.topic})
+        return JSONResponse(_run_started_payload(record))
 
     async def browse_dir(request: Request) -> JSONResponse:
         # Read-only directory listing for the in-page file picker. Lists
@@ -177,6 +197,10 @@ def create_app() -> Starlette:
         record = manager.get(request.path_params["run_id"])
         if record is None or record.checkpoint is None:
             return JSONResponse({"error": "No report available."}, 404)
+        if not has_report(record.checkpoint):
+            return JSONResponse(
+                {"error": "This run produced no associations to report."}, 422
+            )
         if manager.report_cached(record):
             return JSONResponse({"ok": True})  # nothing to render
 
@@ -247,7 +271,10 @@ def create_app() -> Starlette:
         record = manager.get(request.path_params["run_id"])
         if record is None or record.checkpoint is None:
             return JSONResponse({"error": "No report available."}, 404)
-        path = await run_in_threadpool(manager.generate_report, record)
+        try:
+            path = await run_in_threadpool(manager.generate_report, record)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, 422)
         # ?download=1 -> attachment with a topic-derived filename; otherwise
         # serve inline so a new browser tab renders it.
         if request.query_params.get("download"):
@@ -260,6 +287,7 @@ def create_app() -> Starlette:
         Route("/", index),
         Route("/theme.css", theme_css),
         Route("/runs", start_run, methods=["POST"]),
+        Route("/runs/active", active_runs),
         Route("/load", load_checkpoint, methods=["POST"]),
         Route("/resume", resume_run, methods=["POST"]),
         Route("/browse", browse_dir),
@@ -277,6 +305,16 @@ def create_app() -> Starlette:
         Mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static"),
     ]
     return Starlette(routes=routes)
+
+
+def _run_started_payload(record: RunRecord) -> dict:
+    """Fields the client needs to track a freshly started/resumed run."""
+    return {
+        "run_id": record.id,
+        "topic": record.topic,
+        "started_at": record.started_at,
+        "checkpoint_path": record.checkpoint_path,
+    }
 
 
 def _spec_from_body(body: dict) -> RunSpec:
@@ -302,7 +340,15 @@ def _sse_response(record: RunRecord, since: int) -> Response:
         yield _sse(table.status_snapshot())
         # If the run already finished before we attached, emit the terminal msg.
         if record.status != "running":
-            yield _sse({"type": "done", "result": record.status, "error": record.error})
+            yield _sse(
+                {
+                    "type": "done",
+                    "result": record.status,
+                    "error": record.error,
+                    "has_report": record.checkpoint is not None
+                    and has_report(record.checkpoint),
+                }
+            )
             return
         # 2. Live: forward messages as they are published.
         queue = table.subscribe()

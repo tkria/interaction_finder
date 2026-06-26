@@ -247,9 +247,12 @@ async def ensure_extraction(
     from interaction_finder.extraction.progress import create_extraction_progress
     from interaction_finder.widesearch import fetch_and_populate_results
 
-    await fetch_and_populate_results(checkpoint, config)
+    # Reset to the extraction stage up front so document fetching (which runs
+    # before the extraction graph) is visible as the stage's first activity.
     progress.clear_all()
     create_extraction_progress(progress)
+    progress.set_status("Fetching documents")
+    await fetch_and_populate_results(checkpoint, config)
     with progress:
         checkpoint = await run_extraction(
             input_checkpoint=checkpoint,

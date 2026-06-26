@@ -272,3 +272,95 @@ def test_report_unavailable_before_completion(client):
         "/runs", json={"checkpoint_or_topic": "cancer", "entity_kinds": ["gene"]}
     ).json()["run_id"]
     assert client.get(f"/report/{run_id}").status_code == 404
+
+
+def _empty_extraction_checkpoint():
+    """A checkpoint whose extraction completed but found no associations."""
+    from interaction_finder.checkpoint import (
+        ExtractionStageData,
+        PipelineCheckpoint,
+    )
+    from interaction_finder.extraction.models import ExtractionMetadata
+    from interaction_finder.resources import ResourcePool
+
+    return PipelineCheckpoint(
+        topic="empty topic",
+        resources=ResourcePool(),
+        extraction=ExtractionStageData(
+            target_entity_types=["gene"],
+            permitted_pairs={"gene": ["gene"]},
+            judgments=[],
+            metadata=ExtractionMetadata(
+                topic="empty topic",
+                resource_count=2,
+                total_entities_found=0,
+                entities_after_validation=0,
+                entities_merged=0,
+                merge_cache_hits=0,
+                merge_cache_misses=0,
+                proximal_sets_found=0,
+                total_pairs_found=0,
+                pairs_accepted=0,
+                pairs_rejected=0,
+                quotes_validated=0,
+                quotes_failed=0,
+            ),
+        ),
+    )
+
+
+def test_has_report_false_for_complete_but_empty_extraction():
+    from interaction_finder.web.run_manager import has_report
+
+    assert has_report(_empty_extraction_checkpoint()) is False
+
+
+def test_load_reports_no_report_for_empty_extraction(tmp_path):
+    path = tmp_path / "empty.json"
+    path.write_text(_empty_extraction_checkpoint().model_dump_json())
+    client = TestClient(app_module.create_app())
+    status = client.post("/load", json={"path": str(path)}).json()
+    assert status["complete"] is True
+    assert status["has_report"] is False
+
+
+def test_active_runs_filters_by_status_and_orders_by_start():
+    from interaction_finder.web.run_manager import RunManager
+
+    manager = RunManager()
+    for run_id, status, started in [
+        ("r1", "running", 100.0),
+        ("r2", "success", 50.0),
+        ("r3", "running", 75.0),
+    ]:
+        rec = RunRecord(
+            id=run_id,
+            topic=run_id,
+            spec=RunSpec(checkpoint_or_topic="t", entity_kinds=["gene"]),
+            table=WebStatusTable(),
+            checkpoint_path=None,
+            status=status,
+            started_at=started,
+        )
+        manager._runs[run_id] = rec
+    # Only running runs, oldest-started first.
+    assert [r.id for r in manager.active_runs()] == ["r3", "r1"]
+
+
+def test_active_runs_route_shape():
+    from interaction_finder.web.run_manager import RunManager
+
+    app = app_module.create_app()
+    # Reach the manager the routes close over via a registered running record.
+    client = TestClient(app)
+    assert client.get("/runs/active").json() == {"runs": []}
+
+
+def test_report_route_422_not_500_for_empty_extraction(tmp_path):
+    # A completed-but-empty run must not crash report generation with a 500.
+    path = tmp_path / "empty.json"
+    path.write_text(_empty_extraction_checkpoint().model_dump_json())
+    client = TestClient(app_module.create_app())
+    run_id = client.post("/load", json={"path": str(path)}).json()["run_id"]
+    assert client.get(f"/report/{run_id}").status_code == 422
+    assert client.get(f"/report/{run_id}/events").status_code == 422

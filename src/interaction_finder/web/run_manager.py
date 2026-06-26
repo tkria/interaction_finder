@@ -12,6 +12,7 @@ import asyncio
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
+from time import time
 from typing import Literal
 
 from interaction_finder.checkpoint import PipelineCheckpoint
@@ -52,6 +53,9 @@ class RunRecord:
     error: str | None = None
     task: asyncio.Task | None = None
     checkpoint: PipelineCheckpoint | None = None
+    # Wall-clock start (epoch seconds), set when the pipeline task is spawned.
+    # Seeds the client-side elapsed timer so it survives a page reload.
+    started_at: float | None = None
     # Drive args for a prepared-but-not-started resume (set by prepare_resume,
     # consumed by spawn); None once the task is running.
     pending_drive: tuple | None = None
@@ -232,6 +236,7 @@ class RunManager:
             checkpoint_path=checkpoint_path,
         )
         self._runs[record.id] = record
+        record.started_at = time()
         record.task = asyncio.ensure_future(
             self._drive(record, checkpoint, search_backend, config)
         )
@@ -283,9 +288,16 @@ class RunManager:
         """Start a prepared run's pipeline task (call from the event loop)."""
         checkpoint, search_backend, config = record.pending_drive
         record.pending_drive = None
+        record.started_at = time()
         record.task = asyncio.ensure_future(
             self._drive(record, checkpoint, search_backend, config)
         )
+
+    def active_runs(self) -> list[RunRecord]:
+        """Records for runs currently in progress (oldest first)."""
+        running = [r for r in self._runs.values() if r.status == "running"]
+        running.sort(key=lambda r: r.started_at or 0)
+        return running
 
     def cancel(self, run_id: str) -> bool:
         """Request cancellation of a running run. Returns True if it was running.
@@ -310,23 +322,25 @@ class RunManager:
     ) -> None:
         """Run ensure_extraction to completion, updating the record + table."""
         from interaction_finder.upgrade import ensure_extraction
+        from interaction_finder.web.log_forward import run_log_context
 
         record.table.start()
         try:
-            result = await ensure_extraction(
-                checkpoint,
-                record.spec.entity_kinds,
-                search_backend,
-                config,
-                record.table,
-                console=None,
-                checkpoint_path=record.checkpoint_path,
-                force=record.spec.force,
-            )
-            record.checkpoint = result
-            record.status = "success"
-            record.table.succeed()
-            self._record_recent(record)
+            with run_log_context(record.table):
+                result = await ensure_extraction(
+                    checkpoint,
+                    record.spec.entity_kinds,
+                    search_backend,
+                    config,
+                    record.table,
+                    console=None,
+                    checkpoint_path=record.checkpoint_path,
+                    force=record.spec.force,
+                )
+                record.checkpoint = result
+                record.status = "success"
+                record.table.succeed(has_report=has_report(result))
+                self._record_recent(record)
         except asyncio.CancelledError:
             # User-requested cancel: report it as a terminal state rather than
             # letting it propagate as an error. Partial checkpoints survive, so
@@ -394,9 +408,25 @@ def checkpoint_status(checkpoint: PipelineCheckpoint) -> dict:
         "stage": stage,
         "complete": complete,
         "resumable": not complete,
+        "has_report": has_report(checkpoint),
         "needs_entity_kinds": not has_extraction,
         "entity_kinds": list(extraction.target_entity_types) if has_extraction else [],
     }
+
+
+def has_report(checkpoint: PipelineCheckpoint) -> bool:
+    """True when a report can be generated: extraction is complete with results.
+
+    A completed extraction that found no associations (empty judgments) is a
+    valid terminal state, but the report generator has nothing to render -- so
+    the UI must not offer a report for it (and generation would raise).
+    """
+    extraction = checkpoint.extraction
+    return (
+        extraction is not None
+        and extraction.metadata.is_complete
+        and len(extraction.judgments) > 0
+    )
 
 
 def _as_override_list(overrides: dict[str, str]):

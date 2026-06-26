@@ -29,7 +29,18 @@ from interaction_finder.keywords.normalization import normalize_term_for_dedupli
 from interaction_finder.keywords.state import State
 from interaction_finder.logging import logfire
 from interaction_finder.resources import compute_chunk_spans
-from interaction_finder.search.models import SearchQuery
+from interaction_finder.search.models import SearchQuery, SearchResult
+
+
+def _result_info(index: int, result: SearchResult) -> dict:
+    """Serialise a result for a keywords.search.* event (matches widesearch)."""
+    return {
+        "index": index,
+        "title": result.title,
+        "url": result.url,
+        "snippet": result.snippet,
+        "relevance": result.relevance,
+    }
 
 
 def _clean_and_rerank_keywords_for_display(
@@ -111,6 +122,12 @@ class ExpandQueryNode(BaseNode[State, Deps, BridgingTermsOut]):
             ctx.deps.progress["Round"].total = ctx.state.max_rounds
             ctx.deps.progress["Round"].completed = ctx.state.current_round
             ctx.deps.progress["Round"].activate()
+            ctx.deps.progress.set_status("Generating search queries")
+            if ctx.state.current_round == 1:
+                # Mark the keywords stage active in the UI from its first node,
+                # so status/counters show during the (slow) search phase rather
+                # than only at the end when bridging terms are scored.
+                ctx.deps.progress.emit("keywords.started", "Finding review articles")
         # Use query expander agent with backend-specific prompt
         backend_name = ctx.deps.search_backend.name
         agent = get_query_expander_agent(ctx.deps.config, backend_name)
@@ -176,6 +193,13 @@ class SearchNode(BaseNode[State, Deps, BridgingTermsOut]):
             # Count unique URLs
             unique_urls = len(set(r.url for r in all_results))
 
+            if ctx.deps.progress:
+                ctx.deps.progress.emit(
+                    "keywords.search.queries",
+                    f"Searched {len(ctx.state.search_queries)} queries "
+                    f"({unique_urls} unique results)",
+                    queries=list(ctx.state.search_queries),
+                )
             logger.info(
                 f"Fetched {len(all_results)} results ({unique_urls} unique)",
                 queries=ctx.state.search_queries,
@@ -285,6 +309,24 @@ Select the indices of results that are most likely to be valuable review article
         if ctx.deps.progress:
             ctx.deps.progress["Fetched"].total = len(ctx.state.selected_results)
             ctx.deps.progress["Fetched"].activate()
+            selected_set = set(selected_indices)
+            picked = [
+                _result_info(i, r)
+                for i, r in enumerate(ctx.state.all_search_results)
+                if i in selected_set
+            ]
+            rejected = [
+                _result_info(i, r)
+                for i, r in enumerate(ctx.state.all_search_results)
+                if i not in selected_set
+            ]
+            ctx.deps.progress.emit(
+                "keywords.search.selected",
+                f"Selected {len(picked)} of {len(ctx.state.all_search_results)} results",
+                query=f"Review-article search: {ctx.state.topic}",
+                picked=picked,
+                rejected=rejected,
+            )
         logger.info(
             f"Selected {len(ctx.state.selected_results)} results from {len(ctx.state.all_search_results)} available",
             selected_titles=[r.title[:60] for r in ctx.state.selected_results],
@@ -374,6 +416,11 @@ class FetchDocumentsNode(BaseNode[State, Deps, BridgingTermsOut]):
             if ctx.deps.progress:
                 ctx.deps.progress["Fetched"].completed = cached_count + fetched_count
                 ctx.deps.progress["Fetched"].complete()
+                ctx.deps.progress.emit(
+                    "keywords.fetched",
+                    f"Fetched {fetched_count} documents "
+                    f"({cached_count} cached, {failed_count} failed)",
+                )
             logger.info(
                 f"Fetched {fetched_count}/{len(urls_to_fetch)} new documents ({cached_count} from cache, {failed_count} failed)"
             )

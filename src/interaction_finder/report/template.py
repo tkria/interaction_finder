@@ -218,7 +218,8 @@ def _render_pair_cards(pairs: list[dict[str, Any]]) -> str:
              data-doc-count="{pair["doc_count"]}"
              data-quote-count="{pair["quote_count"]}"
              data-relevance="{pair.get("topic_relevance", 3)}"
-             data-rank-score="{pair.get("rank_sum_score", 0)}"
+             data-rank-score="{pair.get("age_w", 0)}"
+             data-rank-sum="{pair.get("rank_sum_score", 0)}"
              data-subject-trust="{subject_trust_attr}"
              data-doc-groups='{doc_groups_data}'>
             <div class="pair-entities">

@@ -12,17 +12,30 @@ const STAGE_ICON = {
     search: "icon-search",
     extraction: "icon-extraction",
 };
-// Which stage a given event scope belongs to.
+// Which stage owns the run while a given scope is streaming -- this drives the
+// active tab and stage status. The keyword stage's own literature searches
+// (keywords.search.*) surface in the Search panel but keep Keywords active, so
+// they are deliberately absent here (see PANEL_STAGE).
 const SCOPE_STAGE = {
+    "keywords.started": "keywords",
     "keywords.scored": "keywords",
     "search.queries": "search",
     "search.results": "search",
     "search.selected": "search",
+    "extraction.started": "extraction",
+    "extraction.pair_judged": "extraction",
+};
+// Which panel a scope's data populates (independent of the active stage).
+const PANEL_STAGE = {
+    "keywords.scored": "keywords",
+    "keywords.search.queries": "search",
+    "keywords.search.selected": "search",
+    "search.queries": "search",
+    "search.selected": "search",
     "extraction.pair_judged": "extraction",
 };
 
-let evtSource = null;
-let model = null;   // per-run accumulated state
+let model = null;   // the focused run's accumulated state (see `runs` registry)
 
 // === Entity-kind chips ===
 // Two independent chip editors (new-run form, resume panel), each a {kinds,
@@ -247,6 +260,17 @@ function renderReportCard(status) {
     card.hidden = false;
     $("report-busy").hidden = true;
     const cached = status.report_cached;
+    // No report is available either because the run is incomplete (resume it)
+    // or it completed without finding any associations.
+    if (status.has_report === false) {
+        $("report-summary").textContent = status.complete
+            ? "No associations found — nothing to report."
+            : "Run incomplete — no report yet.";
+        $("report-view").hidden = true;
+        $("report-download").hidden = true;
+        $("report-generate").hidden = true;
+        return;
+    }
     $("report-summary").textContent = cached
         ? "Report ready."
         : "No report generated yet.";
@@ -338,7 +362,14 @@ function showError(id, msg) {
 // and forget the loaded checkpoint. Called when a *new* path is loaded, so a
 // fresh load never shows stale data -- not on a mere tab switch (that stashes).
 function clearLoadedView() {
-    if (evtSource) { evtSource.close(); evtSource = null; }
+    // Drop the previously-focused non-running run's stream, if any (a loaded
+    // checkpoint is registered as a run that is never "running").
+    const prev = focusedRunId && runs.get(focusedRunId);
+    if (prev && prev.status !== "running") {
+        if (prev.evtSource) prev.evtSource.close();
+        runs.delete(prev.runId);
+        focusedRunId = null;
+    }
     model = null;
     loadedPath = "";
     loadedStatus = null;
@@ -372,177 +403,375 @@ function selectEntry(which) {
 }
 
 // === Run / stage view ===
-function initModel(runId) {
-    model = { stages: {}, activeStage: null, feed: [], lastIndex: -1, runId };
+// Multiple runs can be in progress at once. Each lives in `runs` with its own
+// accumulated model, EventSource, and status line, so every active-run card row
+// stays live concurrently. The stages/activity DOM renders whichever run is
+// `focusedRunId`; `model` always points at that run's model so the render
+// helpers below need no per-run plumbing.
+const runs = new Map();
+let focusedRunId = null;
+
+function newModel(runId, startedAt) {
+    const m = { stages: {}, activeStage: null, feed: [], lastIndex: -1, runId, startedAt };
     for (const s of STAGES) {
-        model.stages[s] = { status: "pending", terms: [], queries: {}, pairs: [], summary: "" };
+        m.stages[s] = { status: "pending", hasData: false, terms: [], queries: {}, pairs: [], summary: "" };
     }
+    return m;
 }
 
-// Start a live run: hide the form, show the activity card + stage tabs, stream.
+function formatElapsed(ms) {
+    const total = Math.floor(ms / 1000);
+    const mins = Math.floor(total / 60), secs = total % 60;
+    return mins ? `${mins}m ${secs}s` : `${secs}s`;
+}
+
+// Start (or resume) a live run: register it, focus it, and stream its events.
 function beginRun(info) {
-    initModel(info.run_id);
+    const startedAt = info.started_at ? info.started_at * 1000 : Date.now();
+    const run = {
+        runId: info.run_id, topic: info.topic, statusLine: "Starting pipeline…",
+        startedAt, status: "running", model: newModel(info.run_id, startedAt),
+        evtSource: null, checkpointPath: info.checkpoint_path || null,
+    };
+    runs.set(run.runId, run);
+    connect(run);
+    renderActiveRuns();
+    focusRun(run.runId);
+}
+
+// Bind the stages/activity view to a run and render its accumulated state.
+function focusRun(runId) {
+    const run = runs.get(runId);
+    if (!run) return;
+    focusedRunId = runId;
+    model = run.model;
     $("new-run").dataset.running = "1";
     $("report-card").hidden = true;
+    $("recent-card").hidden = true;
     $("run-summary").dataset.active = "1";
+    $("summary-text").textContent = run.topic;
     $("activity").dataset.active = "1";
     $("stages").dataset.active = "1";
-    $("summary-text").textContent = info.topic;
-    // Reset the activity card to its running state (spinner + feed).
-    $("activity-done").hidden = true;
-    $("activity-running").hidden = false;
-    $("activity-status").setAttribute("aria-busy", "true");
-    $("activity-status").textContent = "Starting…";
-    $("activity-feed").innerHTML = "";
-    const cancel = $("cancel-run");
-    cancel.hidden = false;
-    cancel.disabled = false;
-    cancel.removeAttribute("aria-busy");
+    if (run.status === "running") {
+        $("activity-done").hidden = true;
+        $("activity-running").hidden = false;
+        $("activity-status").setAttribute("aria-busy", "true");
+        $("activity-status").textContent = run.statusLine || "";
+        const cancel = $("cancel-run");
+        cancel.hidden = false;
+        cancel.disabled = false;
+        cancel.removeAttribute("aria-busy");
+    } else {
+        renderDone(run);
+    }
+    renderFeed();
     renderTabs();
-    selectTab(STAGES[0]);
-    connect(info.run_id);
+    selectTab(model.activeStage || currentTab || STAGES[0]);
+    renderActiveRuns();   // focus changed: recompute which rows the card shows
+    syncFocusedElapsed();
 }
 
-// Show a loaded checkpoint: keep the form, render its back-filled stage info
-// (no activity card), and surface the report card. The SSE stream replays the
-// back-filled events into the stage tabs, then immediately reports done.
+// Show a loaded checkpoint: a finished, read-only view (no active-run row).
 function showLoaded(info) {
-    initModel(info.run_id);
+    const run = {
+        runId: info.run_id, topic: info.topic, statusLine: "", startedAt: Date.now(),
+        status: "loaded", model: newModel(info.run_id, Date.now()), evtSource: null,
+    };
+    runs.set(run.runId, run);
+    focusedRunId = run.runId;
+    model = run.model;
     $("stages").dataset.active = "1";
     $("activity").dataset.active = "";     // no live activity for a loaded file
-    $("run-summary").dataset.active = "";
     renderTabs();
     selectTab(STAGES[0]);
-    connect(info.run_id);
+    connect(run);
     renderReportCard(info);
 }
 
-function connect(runId) {
-    if (evtSource) evtSource.close();
-    evtSource = new EventSource(`/runs/${runId}/events?since=${model.lastIndex + 1}`);
-    evtSource.onmessage = (e) => handleMessage(JSON.parse(e.data));
-    evtSource.onerror = () => { /* browser auto-reconnects; since= resumes */ };
+function connect(run) {
+    if (run.evtSource) run.evtSource.close();
+    run.evtSource = new EventSource(
+        `/runs/${run.runId}/events?since=${run.model.lastIndex + 1}`
+    );
+    run.evtSource.onmessage = (e) => handleMessage(run, JSON.parse(e.data));
+    run.evtSource.onerror = () => { /* browser auto-reconnects; since= resumes */ };
 }
 
-function handleMessage(msg) {
+function handleMessage(run, msg) {
+    const focused = run.runId === focusedRunId;
     if (msg.type === "event") {
-        model.lastIndex = Math.max(model.lastIndex, msg.index);
-        applyEvent(msg);
+        run.model.lastIndex = Math.max(run.model.lastIndex, msg.index);
+        applyEvent(run, msg, focused);
     } else if (msg.type === "status") {
-        $("activity-status").textContent = msg.status || "";
-        $("activity-elapsed").textContent = msg.elapsed || "";
+        // Ignore empty status snapshots (e.g. the initial catch-up before any
+        // stage has set one) so they don't blank the "Starting…" line.
+        if (msg.status) {
+            run.statusLine = msg.status;
+            if (focused) $("activity-status").textContent = run.statusLine;
+            renderActiveRuns();
+        }
     } else if (msg.type === "counters") {
-        applyCounters(msg.counters);
+        applyCounters(run, msg.counters, focused);
     } else if (msg.type === "done") {
-        finishRun(msg);
+        finishRun(run, msg);
     }
 }
 
-function applyEvent(msg) {
-    pushFeed(msg.description);
+function applyEvent(run, msg, focused) {
+    const m = run.model;
+    // Forwarded log warnings/errors carry a severity so the feed can flag them.
+    const level = msg.scope === "meta.error" ? "err"
+        : msg.scope === "meta.warning" ? "warn" : "";
+    pushFeed(m, msg.description, level);
+    if (focused) renderFeed();
     if (msg.scope === "meta.cleared") {
-        // Current stage ended; finalize it. Next stage is identified by the
-        // next non-meta event's scope.
-        if (model.activeStage) { model.stages[model.activeStage].status = "done"; }
-        model.activeStage = null;
-        renderTabs();
+        if (m.activeStage) m.stages[m.activeStage].status = "done";
+        m.activeStage = null;
+        if (focused) renderTabs();
         return;
     }
-    const stage = SCOPE_STAGE[msg.scope];
-    if (!stage) return;
-    if (model.activeStage !== stage) {
-        model.activeStage = stage;
-        model.stages[stage].status = "active";
-        selectTab(stage);
-        renderTabs();
+    // Active-stage changes (tab switch, status) follow the run's owning stage.
+    const owner = SCOPE_STAGE[msg.scope];
+    if (owner && m.activeStage !== owner) {
+        m.activeStage = owner;
+        m.stages[owner].status = "active";
+        if (focused) selectTab(owner);
     }
-    const st = model.stages[stage];
+    // Data routes to its panel regardless of the active stage -- so the keyword
+    // stage's literature searches fill the Search panel while Keywords is active.
+    const panel = PANEL_STAGE[msg.scope];
+    if (!panel) { if (focused) renderTabs(); return; }
+    const st = m.stages[panel];
     if (msg.scope === "keywords.scored") {
         st.terms = msg.data.terms || [];
-    } else if (msg.scope === "search.selected") {
+    } else if (msg.scope === "keywords.search.queries" || msg.scope === "search.queries") {
+        st.searchedQueries = (st.searchedQueries || []).concat(msg.data.queries || []);
+    } else if (msg.scope === "search.selected" || msg.scope === "keywords.search.selected") {
         st.queries[msg.data.query] = msg.data;
     } else if (msg.scope === "extraction.pair_judged") {
         st.pairs.push(msg.data);
     }
-    if (stage === currentTab) renderPanel(stage);
+    st.hasData = true;
+    if (focused) {
+        renderTabs();
+        if (panel === currentTab) renderPanel(panel);
+    }
 }
 
-function applyCounters(counters) {
-    // Summarise the active stage's counters as a one-line header.
-    if (!model.activeStage) return;
+function applyCounters(run, counters, focused) {
+    const m = run.model;
+    if (!m.activeStage) return;
     const line = counters
         .filter((c) => c.status !== "unstarted")
         .map((c) => `${c.name} ${c.completed}${c.total ? "/" + c.total : ""}`)
         .join(" · ");
-    model.stages[model.activeStage].summary = line;
-    if (model.activeStage === currentTab) renderPanel(model.activeStage);
+    m.stages[m.activeStage].summary = line;
+    if (focused && m.activeStage === currentTab) renderPanel(m.activeStage);
 }
 
-function pushFeed(text) {
+function pushFeed(m, text, level) {
     if (!text) return;
-    model.feed.unshift(text);
-    model.feed = model.feed.slice(0, 3);
+    m.feed.unshift({ text, level: level || "" });
+    m.feed = m.feed.slice(0, 3);
+}
+
+function renderFeed() {
     const ul = $("activity-feed");
     ul.innerHTML = "";
-    for (const line of model.feed) {
+    for (const line of (model ? model.feed : [])) {
         const li = document.createElement("li");
-        li.textContent = line;
+        li.textContent = line.text;
+        if (line.level) li.className = `feed-${line.level}`;
         ul.appendChild(li);
     }
 }
 
-// Ask the server to cancel the in-flight run. The terminal "done" (result
-// "cancelled") arrives over the SSE stream and is handled by finishRun.
-async function cancelRun() {
-    if (!model || !model.runId) return;
-    const btn = $("cancel-run");
-    btn.disabled = true;
-    btn.setAttribute("aria-busy", "true");
+// On load, re-attach to any runs still in progress server-side (e.g. after a
+// page reload) so their card rows reappear and keep streaming.
+async function rebuildActiveRuns() {
+    let entries = [];
     try {
-        await fetch(`/runs/${model.runId}/cancel`, { method: "POST" });
-    } catch (e) {
-        btn.disabled = false;
-        btn.removeAttribute("aria-busy");
+        entries = (await (await fetch("/runs/active")).json()).runs || [];
+    } catch (e) { return; }
+    for (const info of entries) {
+        if (runs.has(info.run_id)) continue;
+        const startedAt = info.started_at ? info.started_at * 1000 : Date.now();
+        const run = {
+            runId: info.run_id, topic: info.topic, statusLine: info.status || "Working…",
+            startedAt, status: "running", model: newModel(info.run_id, startedAt),
+            evtSource: null, checkpointPath: null,
+        };
+        runs.set(run.runId, run);
+        connect(run);
+    }
+    renderActiveRuns();
+}
+
+// === Active-run card ===
+let activeRunsTimer = null;
+
+// Render the pinned active-run card. The focused run is driven by the activity
+// panel instead, so the card only earns its place when *other* runs exist: it
+// is hidden when the only running run is the one on screen. When shown, the
+// focused run still appears (so the count is honest) but without the redundant
+// timer + View/Cancel -- those belong to the activity panel it already owns.
+function renderActiveRuns() {
+    const running = [...runs.values()].filter((r) => r.status === "running");
+    running.sort((a, b) => a.startedAt - b.startedAt);
+    const others = running.filter((r) => r.runId !== focusedRunId);
+    const card = $("active-runs"), list = $("active-runs-list");
+    card.hidden = others.length === 0;
+    $("active-runs-plural").textContent = running.length > 1 ? "s" : "";
+    list.innerHTML = "";
+    if (!card.hidden) {
+        for (const run of running) {
+            list.appendChild(activeRunRow(run, run.runId === focusedRunId));
+        }
+    }
+    // A single shared ticker advances every row's elapsed (and the focused view).
+    if (running.length && !activeRunsTimer) {
+        activeRunsTimer = setInterval(tickActiveElapsed, 1000);
+    } else if (!running.length && activeRunsTimer) {
+        clearInterval(activeRunsTimer); activeRunsTimer = null;
+    }
+    tickActiveElapsed();
+}
+
+// One active-run row. The focused run shows status only (it is being viewed);
+// other runs add an elapsed timer and View/Cancel actions.
+function activeRunRow(run, isFocused) {
+    const li = document.createElement("li");
+    li.dataset.runId = run.runId;
+    const spinner = `<span class="arun-spinner" aria-busy="true"></span>`;
+    const main = `<span class="arun-main"><span class="arun-topic">${escapeHtml(run.topic)}</span>` +
+        `<span class="arun-status"> · ${escapeHtml(run.statusLine || "Working…")}</span></span>`;
+    li.innerHTML = spinner + main;
+    if (isFocused) return li;
+    li.insertAdjacentHTML("beforeend",
+        `<span class="arun-elapsed"></span>` +
+        `<span class="arun-actions">` +
+        `<button class="secondary outline arun-view" type="button">` +
+        `<svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-eye"/></svg>View</button>` +
+        `<button class="secondary outline arun-cancel" type="button">` +
+        `<svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-cancel"/></svg>Cancel</button>` +
+        `</span>`);
+    li.querySelector(".arun-view").onclick = () => focusRun(run.runId);
+    li.querySelector(".arun-cancel").onclick = () => promptCancel(run.runId);
+    return li;
+}
+
+function tickActiveElapsed() {
+    const now = Date.now();
+    for (const li of $("active-runs-list").children) {
+        const run = runs.get(li.dataset.runId);
+        const el = li.querySelector(".arun-elapsed");
+        if (run && el) el.textContent = formatElapsed(now - run.startedAt);
+    }
+    syncFocusedElapsed();
+}
+
+// Keep the focused run's activity-card elapsed in step with the same clock.
+function syncFocusedElapsed() {
+    const run = focusedRunId && runs.get(focusedRunId);
+    if (run && run.status === "running") {
+        $("activity-elapsed").textContent = formatElapsed(Date.now() - run.startedAt);
     }
 }
 
-function finishRun(msg) {
-    if (evtSource) { evtSource.close(); evtSource = null; }
-    // Any still-active stage is complete now.
-    for (const s of STAGES) {
-        if (model.stages[s].status === "active") model.stages[s].status = "done";
+// Open the cancel-confirmation dialog for a specific run.
+let pendingCancelRunId = null;
+function promptCancel(runId) {
+    pendingCancelRunId = runId;
+    openModal("confirm-cancel-dialog");
+}
+
+async function cancelRun(runId) {
+    if (!runId) return;
+    if (runId === focusedRunId) {
+        const btn = $("cancel-run");
+        btn.disabled = true;
+        btn.setAttribute("aria-busy", "true");
     }
-    model.activeStage = null;
-    renderTabs();
-    // A loaded checkpoint renders its stage info with no activity card and no
-    // run chrome -- the back-filled stream just ends; nothing more to collapse.
+    try {
+        await fetch(`/runs/${runId}/cancel`, { method: "POST" });
+    } catch (e) { /* the terminal done still arrives over SSE */ }
+}
+
+// Resume an incomplete run from its saved checkpoint, re-entering the live view.
+async function resumeRunFromCard(run) {
+    const btn = $("resume-run");
+    btn.setAttribute("aria-busy", "true");
+    let resp, data;
+    try {
+        resp = await fetch("/resume", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ path: run.checkpointPath, entity_kinds: [] }),
+        });
+        data = await resp.json();
+    } catch (e) {
+        btn.removeAttribute("aria-busy");
+        return;
+    }
+    btn.removeAttribute("aria-busy");
+    if (resp.ok) beginRun(data);
+}
+
+function finishRun(run, msg) {
+    if (run.evtSource) { run.evtSource.close(); run.evtSource = null; }
+    run.status = "finished";
+    run.result = msg;
+    const m = run.model;
+    for (const s of STAGES) {
+        if (m.stages[s].status === "active") m.stages[s].status = "done";
+    }
+    m.activeStage = null;
+    renderActiveRuns();          // drop this run's row from the pinned card
+    if (run.runId === focusedRunId) {
+        renderTabs();
+        renderDone(run);
+    }
+}
+
+// Paint the focused run's collapsed "done" block from its terminal result.
+function renderDone(run) {
+    const msg = run.result || {};
+    // A back-filled loaded checkpoint has no live activity block to collapse.
     if ($("activity").dataset.active !== "1") return;
-    // Collapse the live progress block; the card becomes a single flush row.
     $("activity-status").removeAttribute("aria-busy");
     $("activity-running").hidden = true;
-    const done = $("activity-done");
+    $("activity-done").hidden = false;
     const label = $("done-label");
-    const btn = $("view-report");
-    done.hidden = false;
-    if (msg.result === "success") {
+    const view = $("view-report"), dl = $("download-report"), resume = $("resume-run");
+    view.hidden = true; dl.hidden = true; resume.hidden = true;
+    if (msg.result === "success" && msg.has_report !== false) {
         label.textContent = "Completed";
         label.className = "ok";
-        btn.hidden = false;
-        btn.onclick = () => window.open(`/report/${model.runId}`, "_blank");
-        const dl = $("download-report");
+        view.hidden = false;
+        view.onclick = () => window.open(`/report/${run.runId}`, "_blank");
         dl.hidden = false;
-        dl.onclick = () => downloadReport(model.runId);
+        dl.onclick = () => downloadReport(run.runId);
+    } else if (msg.result === "success") {
+        label.textContent = "Completed — no associations found";
+        label.className = "ok";
     } else if (msg.result === "cancelled") {
-        // Stages already finished keep a partial, resumable checkpoint on disk.
+        // Completed stages leave a partial, resumable checkpoint on disk.
         label.textContent = "Cancelled — partial progress saved";
         label.className = "cancelled";
-        btn.hidden = true;
+        showResume(run, resume);
     } else {
         label.textContent = "Failed" + (msg.error ? ` — ${msg.error}` : "");
         label.className = "err";
-        btn.hidden = true;
+        showResume(run, resume);
     }
     $("new-run-again").hidden = false;
+}
+
+// Offer Resume for an incomplete run whose checkpoint was saved to a path.
+function showResume(run, btn) {
+    if (!run.checkpointPath) return;
+    btn.hidden = false;
+    btn.onclick = () => resumeRunFromCard(run);
 }
 
 // === Tabs & panels ===
@@ -552,11 +781,14 @@ function renderTabs() {
     const bar = $("tab-bar");
     bar.innerHTML = "";
     for (const s of STAGES) {
-        const status = model.stages[s].status;
+        const st = model.stages[s];
+        const status = st.status;
         const btn = document.createElement("button");
         btn.dataset.status = status;
         btn.setAttribute("aria-selected", s === currentTab ? "true" : "false");
-        if (status === "pending") btn.disabled = true;
+        // A pending stage is reachable once it has any data (e.g. the Search
+        // panel populated by the keyword stage's own literature searches).
+        if (status === "pending" && !st.hasData) btn.disabled = true;
         // Active stage shows Pico's aria-busy spinner in place of its icon;
         // pending/done stages show the stage glyph (colour conveys the state).
         if (status === "active") btn.setAttribute("aria-busy", "true");
@@ -586,14 +818,35 @@ function renderPanel(stage) {
         html += rows ? `<ul class="data-list">${rows}</ul>` : emptyNote("No bridging terms yet.");
     } else if (stage === "search") {
         const items = Object.values(st.queries).map(renderSearchQuery).join("");
-        html += items || emptyNote("No search selections yet.");
+        const queries = st.searchedQueries || [];
+        if (items) {
+            // Once results are selected, show those accordions (the queries are
+            // noted as a one-line summary above them).
+            if (queries.length) {
+                html += `<p><small>Ran ${queries.length} ` +
+                    `${queries.length === 1 ? "query" : "queries"}</small></p>`;
+            }
+            html += items;
+        } else if (queries.length) {
+            // Searching is underway but nothing is selected yet: list the
+            // queries so the panel is not empty.
+            const qs = queries.map((q) => `<li>${escapeHtml(q)}</li>`).join("");
+            html += `<p><small>Searching…</small></p><ul class="data-list">${qs}</ul>`;
+        } else {
+            html += emptyNote("No searches yet.");
+        }
     } else if (stage === "extraction") {
         const rows = st.pairs.map((p) =>
             `<li><span class="verdict-dot ${p.accepted ? "yes" : "no"}"></span>` +
             `<span class="grow"><strong>${escapeHtml(p.entity1)}</strong> ${escapeHtml(p.relationship || "")} <strong>${escapeHtml(p.entity2)}</strong></span>` +
             `<small class="num">ev ${p.evidence ?? "?"}</small></li>`
         ).join("");
-        html += rows ? `<ul class="data-list">${rows}</ul>` : emptyNote("No judged pairs yet.");
+        // A finished extraction with no pairs found nothing; before then it is
+        // still pending results.
+        const empty = st.status === "done"
+            ? emptyNote("No associations found in the fetched documents.")
+            : emptyNote("No judged pairs yet.");
+        html += rows ? `<ul class="data-list">${rows}</ul>` : empty;
     }
     panels.innerHTML = html;
 }
@@ -610,8 +863,9 @@ function renderSearchQuery(q) {
     const icon = `<svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-find"/></svg>`;
     const rows = picked.map((r) => searchResult(r, true)).join("")
         + rejected.map((r) => searchResult(r, false)).join("");
-    return `<details class="search-q"><summary>${icon}`
-        + `<span class="grow">${escapeHtml(q.query)}</span>`
+    const title = q.query || "Selected results";
+    return `<details class="search-q" open><summary>${icon}`
+        + `<span class="grow">${escapeHtml(title)}</span>`
         + `<small class="num">${count}</small></summary>`
         + `<ul class="result-list">${rows}</ul></details>`;
 }
@@ -965,13 +1219,28 @@ function init() {
     $("add-kind").onclick = () => addKind(newRunKinds, "kind-input");
     $("kind-input").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); addKind(newRunKinds, "kind-input"); } });
     $("start").onclick = startRun;
-    $("cancel-run").onclick = cancelRun;
+    // Cancel goes through a confirmation dialog, both from the activity panel
+    // (focused run) and from each active-run row.
+    $("cancel-run").onclick = () => { if (focusedRunId) promptCancel(focusedRunId); };
+    const cancelDlg = $("confirm-cancel-dialog");
+    $("confirm-cancel-ok").onclick = () => {
+        closeModal("confirm-cancel-dialog");
+        cancelRun(pendingCancelRunId);
+        pendingCancelRunId = null;
+    };
+    $("confirm-cancel-keep").onclick = () => closeModal("confirm-cancel-dialog");
+    cancelDlg.querySelector('button[rel="prev"]').onclick = () => closeModal("confirm-cancel-dialog");
+    cancelDlg.addEventListener("click", (e) => { if (e.target === cancelDlg) closeModal("confirm-cancel-dialog"); });
+    cancelDlg.addEventListener("cancel", (e) => { e.preventDefault(); closeModal("confirm-cancel-dialog"); });
     $("new-run-again").onclick = () => {
         $("new-run").dataset.running = "";
         $("run-summary").dataset.active = "";
         $("activity").dataset.active = "";
         $("stages").dataset.active = "";
+        focusedRunId = null;
+        refreshRecent();
     };
+    rebuildActiveRuns();
     // Resume panel chip editor.
     $("resume-add-kind").onclick = () => addKind(resumeKinds, "resume-kind-input");
     $("resume-kind-input").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); addKind(resumeKinds, "resume-kind-input"); } });

@@ -431,6 +431,65 @@ class TestSearchNodeResilience:
         assert ctx.state.all_search_results == []
 
 
+class TestKeywordSearchEvents:
+    """The keyword stage surfaces its literature searches as keywords.search.*
+    events so the web UI can show them in the Search panel."""
+
+    @pytest.fixture
+    def web_deps(self, mock_deps):
+        from interaction_finder.keywords.progress import create_keywords_progress
+        from interaction_finder.web.table import WebStatusTable
+
+        mock_deps.progress = create_keywords_progress(WebStatusTable())
+        return mock_deps
+
+    @pytest.mark.asyncio
+    async def test_search_node_emits_search_queries(self, web_deps):
+        from unittest.mock import AsyncMock
+        from interaction_finder.search.models import SearchResult
+
+        web_deps.search_backend.search = AsyncMock(
+            return_value=[SearchResult(title="A", url="http://x/a", snippet="s")]
+        )
+        state = State(topic="pah", max_rounds=1)
+        state.search_queries = ["q1", "q2"]
+        ctx = GraphRunContext(state=state, deps=web_deps)
+        await SearchNode().run(ctx)
+        events = {e.scope: e for e in web_deps.progress.events}
+        assert "keywords.search.queries" in events
+        assert events["keywords.search.queries"].data["queries"] == ["q1", "q2"]
+
+    @pytest.mark.asyncio
+    async def test_select_results_node_emits_search_selected(
+        self, web_deps, monkeypatch
+    ):
+        from unittest.mock import AsyncMock, Mock
+        from interaction_finder.search.models import SearchResult
+        import interaction_finder.keywords.nodes as nodes
+
+        results = [
+            SearchResult(title="A", url="http://x/a", snippet="sa"),
+            SearchResult(title="B", url="http://x/b", snippet="sb"),
+        ]
+        state = State(topic="pah", max_rounds=1)
+        state.all_search_results = results
+        # Stub the LLM selector to pick index 0 only.
+        agent = Mock()
+        agent.run = AsyncMock(
+            return_value=Mock(output=Mock(selected_indices=[0], reasoning="r"))
+        )
+        monkeypatch.setattr(nodes, "get_result_selector_agent", lambda config: agent)
+        monkeypatch.setattr(nodes, "record_usage", lambda *a, **k: None)
+        ctx = GraphRunContext(state=state, deps=web_deps)
+        await SelectResultsNode().run(ctx)
+        events = {e.scope: e for e in web_deps.progress.events}
+        assert "keywords.search.selected" in events
+        data = events["keywords.search.selected"].data
+        assert [r["url"] for r in data["picked"]] == ["http://x/a"]
+        assert [r["url"] for r in data["rejected"]] == ["http://x/b"]
+        assert data["query"].startswith("Review-article search")
+
+
 class TestConcurrentExtraction:
     """Test concurrent keyword extraction with multiple resources and extractors."""
 

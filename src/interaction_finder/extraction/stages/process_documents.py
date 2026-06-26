@@ -42,6 +42,12 @@ async def process_documents(state: State, deps: Deps) -> bool:
             deps.progress["Processed"].total = len(resources)
             deps.progress["Processed"].activate()
             deps.progress.set_status("Extracting entities")
+            # Mark the extraction stage active in the UI even before any pair is
+            # judged, so the tab is reachable (and a no-results run can explain).
+            deps.progress.emit(
+                "extraction.started",
+                f"Extracting from {len(resources)} documents",
+            )
         # Process all documents in parallel, tracking progress as they complete
         tasks = [_process_document(resource, state, deps) for resource in resources]
         for coro in asyncio.as_completed(tasks):

@@ -76,11 +76,29 @@ class WebStatusTable(StatusTable):
     def stop(self) -> None:
         """No persistent display to tear down."""
 
-    def succeed(self) -> None:
-        """Mark the run successful and publish a terminal message."""
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        # Stages run inside `with progress:`; the base __exit__ would publish a
+        # terminal `done` per stage. The run's terminal state spans the whole
+        # ensure_extraction chain and is published by RunManager._drive, so a
+        # per-stage exit must stay quiet.
+        self.stop()
+
+    def succeed(self, has_report: bool = True) -> None:
+        """Mark the run successful and publish a terminal message.
+
+        ``has_report`` is False when extraction completed but found nothing to
+        report, so the UI suppresses the View-report action.
+        """
         self._result = "success"
         self.status = f"✓ Completed in {self._elapsed()}"
-        self._publish({"type": "done", "result": "success", "status": self.status})
+        self._publish(
+            {
+                "type": "done",
+                "result": "success",
+                "status": self.status,
+                "has_report": has_report,
+            }
+        )
 
     def fail(self) -> None:
         """Mark the run failed and publish a terminal message."""

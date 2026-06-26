@@ -110,6 +110,27 @@ class TestLifecycle:
         done = [m for m in drain(q) if m["type"] == "done"]
         assert done and done[0]["result"] == "failure"
 
+    def test_per_stage_context_exit_does_not_publish_done(self):
+        # Each pipeline stage runs inside `with progress:`. A stage finishing
+        # must NOT publish a terminal `done` -- that belongs to the whole run
+        # (RunManager._drive), else the UI "completes" after the first stage.
+        table = WebStatusTable()
+        q = table.subscribe()
+        with table:
+            table.emit("keywords.scored", "done keywords")
+        # The stage block exited cleanly, but no `done` should have been sent.
+        assert [m for m in drain(q) if m["type"] == "done"] == []
+
+    def test_context_exit_with_exception_does_not_publish_done(self):
+        # Even a stage that raises leaves the terminal state to _drive's
+        # except-handler (which calls fail()); the context exit stays quiet.
+        table = WebStatusTable()
+        q = table.subscribe()
+        with pytest.raises(RuntimeError):
+            with table:
+                raise RuntimeError("stage blew up")
+        assert [m for m in drain(q) if m["type"] == "done"] == []
+
     def test_full_queue_drops_oldest_not_newest(self):
         # Overflow sheds the oldest queued message; the log stays complete.
         from interaction_finder.web import table as table_mod
