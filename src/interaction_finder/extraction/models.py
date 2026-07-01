@@ -175,11 +175,12 @@ class EntityInfo(BaseModel):
     )
     name: str = Field(description="Canonical name of the entity")
     aliases: list[str] = Field(
+        default_factory=list,
         description=(
             "Lexical variants, acronyms, and synonyms as they appear verbatim in text. "
-            "Include only names that refer to THIS entity, not related subtypes or complications."
+            "Include only names that refer to THIS entity, not related subtypes or complications. "
+            "May be empty when the entity has a single surface form."
         ),
-        min_length=1,
     )
     quotes: list[str] = Field(
         description="Direct quotes from text supporting this entity", min_length=1
@@ -795,9 +796,7 @@ class GateReviewVerdict(BaseModel):
     reasoning: str = Field(
         description="Short reason naming the taxonomic relationship to the subject"
     )
-    belongs: bool = Field(
-        description="True if the candidate belongs in the answer set"
-    )
+    belongs: bool = Field(description="True if the candidate belongs in the answer set")
 
 
 class SubjectTrustVerdict(BaseModel):

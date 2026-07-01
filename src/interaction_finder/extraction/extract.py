@@ -11,20 +11,30 @@ from interaction_finder.extraction.deps import Deps
 from interaction_finder.extraction.models import DocumentAnalysisOut
 
 _ENTITY_EXTRACTION_RULES = """
+**Each entity names a single, specific instance of the requested type, by its
+standard identifier.**
+
+- The `name` is the entity's standard identifier, not a descriptive phrase.
+  When the text gives only a long form, supply the identifier it denotes and
+  keep the long form as an alias.
+- A name denotes exactly one instance — never a group, category, or list. When
+  the text refers to several, extract each one you can identify; extract none if
+  no specific instance is named.
+- It is an instance of the requested type itself, not something that merely
+  relates to one.
+
 **Extraction rules:**
 1. Extract only entities of the requested types (gene, disease, protein, etc.)
-2. Use canonical names (e.g., "BRCA1" not "BRCA-1")
-3. Include all verbatim names as they appear in the text
-4. Provide exact quotes supporting each entity
-5. Only extract entities clearly relevant to the topic
-6. Require clear textual support for every entity
-7. Explain your reasoning for each entity extraction
+2. Provide exact quotes supporting each entity
+3. Only extract entities clearly relevant to the topic
+4. Require clear textual support for every entity
+5. Explain your reasoning for each entity extraction
 
 **Alias handling:**
-- Aliases must be alternative names for the SAME entity
-- Include acronyms, abbreviations, and lexical variants
-- If a name includes the base entity PLUS additional qualifiers that significantly
-  narrow or change the meaning, extract it as a separate entity instead
+- Aliases are alternative names for the SAME entity: acronyms, abbreviations,
+  long forms, and lexical variants.
+- If a name adds qualifiers that make it a genuinely different entity of the
+  requested type, extract that as its own entity instead.
 
 **If no entities are found:** Return an empty entities list."""
 
