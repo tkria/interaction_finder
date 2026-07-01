@@ -38,26 +38,51 @@ AGENT_CALL_ERRORS: tuple[type[Exception], ...] = (
 )
 
 
-def _resolve_gpt5_model(
+def _resolve_model(
     model_string: str,
-) -> tuple[OpenAIResponsesModel | str, OpenAIResponsesModelSettings | None]:
-    """Resolve GPT-5 model strings with optional reasoning effort and service tier.
+) -> tuple[Any, OpenAIResponsesModelSettings | None]:
+    """Resolve a provider:model string to a pydantic-ai model (or pass-through string).
 
-    Handles model strings like:
-    - "openai:gpt-5" -> OpenAIResponsesModel with default profile
-    - "openai:gpt-5-mini" -> OpenAIResponsesModel with default profile
-    - "openai:gpt-5/low" -> OpenAIResponsesModel with low reasoning effort
-    - "openai:gpt-5-mini/medium" -> OpenAIResponsesModel with medium reasoning effort
-    - "openai:gpt-5/high+flex" -> GPT-5 with high effort and flex service tier
-    - "openai:gpt-5-mini+flex" -> GPT-5 mini with flex service tier (no effort specified)
+    Two providers need explicit construction; every other string is returned
+    unchanged for pydantic-ai's built-in inference.
+
+    GPT-5 (reasoning effort + service tier):
+    - "openai:gpt-5", "openai:gpt-5-mini"           -> OpenAIResponsesModel
+    - "openai:gpt-5/low", "openai:gpt-5-mini/medium" -> + reasoning effort
+    - "openai:gpt-5/high+flex", "openai:gpt-5-mini+flex" -> + service tier
+
+    Bedrock (Claude and other models via AWS, auth from the standard AWS env
+    chain — including AWS_BEARER_TOKEN_BEDROCK / AWS_DEFAULT_REGION):
+    - "bedrock:anthropic.claude-haiku-4-5" -> BedrockConverseModel
 
     Parameters:
-        model_string: Model string in format "openai:gpt-5[-variant][/effort][+tier]"
+        model_string: a "provider:model[...]" string.
 
     Returns:
-        Tuple of (model, model_settings) where model_settings contains reasoning effort and/or service tier
+        Tuple of (model, model_settings); model_settings is None except for GPT-5.
     """
-    # Check if this is a GPT-5 model string
+    # Bedrock: build a BedrockConverseModel. Region must be explicit (the provider
+    # does not default it); credentials come from the standard AWS env chain
+    # (incl. AWS_BEARER_TOKEN_BEDROCK). Set AWS_REGION / AWS_DEFAULT_REGION.
+    if model_string.startswith("bedrock:"):
+        import os
+
+        from pydantic_ai.models.bedrock import BedrockConverseModel
+        from pydantic_ai.providers.bedrock import BedrockProvider
+
+        region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
+        if not region:
+            raise ValueError(
+                "Bedrock model requires AWS_REGION or AWS_DEFAULT_REGION to be set"
+            )
+        provider = BedrockProvider(region_name=region)
+        return (
+            BedrockConverseModel(
+                model_string.removeprefix("bedrock:"), provider=provider
+            ),
+            None,
+        )
+    # Everything below is the GPT-5 path; other strings pass through unchanged.
     if not model_string.startswith("openai:gpt-5"):
         return model_string, None
     # Parse: openai:gpt-5[-variant][/effort][+tier]
@@ -206,7 +231,7 @@ def get_agent(
     effective_system_prompt = agent_spec.system_prompt or system_prompt
 
     # Resolve GPT-5 models with optional reasoning effort
-    model, gpt5_settings = _resolve_gpt5_model(model_string)
+    model, gpt5_settings = _resolve_model(model_string)
 
     # Handle ModelSettings (merge GPT-5 settings with config/default settings)
     model_settings = default_model_settings

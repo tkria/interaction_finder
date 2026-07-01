@@ -299,6 +299,14 @@
         .key-dot { width: 0.6rem; height: 0.6rem; border-radius: 50%; flex: none;
             border: 1.5px solid var(--pico-muted-border-color); }
         .key-row.is-set .key-dot { background: var(--pico-color-jade-450); border-color: var(--pico-color-jade-450); }
+        /* A set secret is masked + disabled; its trailing clear button re-enables
+           the field for a fresh value (it does not delete the stored key). */
+        .key-field { flex: 1 1 auto; display: flex; align-items: center; gap: 0.4rem; margin: 0; }
+        .key-field input { flex: 1 1 auto; margin: 0; }
+        .key-clear { flex: none; width: auto; margin: 0; padding: 0.2rem 0.5rem; }
+        .key-add { display: flex; gap: 0.6rem; margin-top: 0.4rem; }
+        .key-add select { flex: 1 1 auto; margin: 0; }
+        .key-add button { flex: none; width: auto; margin: 0; }
         #keys-dialog .config-actions { justify-content: flex-end; }
         /* Top-level config section icon, before the section title. */
         .cfg-section-icon { margin-right: 0.5rem; color: var(--pico-muted-color); }
@@ -309,6 +317,12 @@
         .agent-head .agent-name { flex: none; width: 10rem; font-weight: 500; }
         .agent-head .agent-llm { flex: 1 1 auto; margin: 0; }
         .agent-advanced { margin: 0.3rem 0 0 10.6rem; }
+        /* A configured model whose provider has no API key set: an amber warning
+           icon (title carries the missing env var). Hidden until flagged. */
+        .agent-head .agent-nokey { flex: none; width: 1rem; height: 1rem; color: var(--pico-color-amber-500); position: relative; cursor: help; }
+        .agent-head .agent-nokey svg { width: 100%; height: 100%; fill: currentColor; display: block; pointer-events: none; }
+        .agent-head:not(.no-key) .agent-nokey { display: none; }
+        .cfg-count.cfg-nokey { color: #fff; background: var(--pico-color-amber-500); }
         .agent-advanced > summary { font-size: 0.8rem; color: var(--pico-muted-color); }
 
         /* Inline SVG glyphs (same approach as the generated report): a hidden
@@ -414,7 +428,7 @@
                     </button>
                     <button id="open-config" type="button" class="secondary outline auto config-btn">
                         <svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-config"/></svg>
-                        Configuration<span id="config-changed-badge" class="cfg-count" hidden></span>
+                        Configuration<span id="config-changed-badge" class="cfg-count" hidden></span><span id="config-nokey-badge" class="cfg-count cfg-nokey" hidden></span>
                     </button>
                 </div>
                 <small>&#9432; Running from a topic searches the literature and calls AI models &mdash; this can take several minutes and use API credits.</small>
@@ -564,6 +578,10 @@
                which model each agent uses in <strong>Configuration</strong>.</small></p>
             <form id="keys-form">
                 <div id="keys-providers"></div>
+                <div class="key-add">
+                    <select id="keys-add-select" aria-label="Add another provider"></select>
+                    <button id="keys-add" type="button" class="auto secondary">Add</button>
+                </div>
             </form>
             <footer class="config-actions">
                 <button id="keys-apply" type="button" class="auto"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-apply"/></svg>Apply</button>

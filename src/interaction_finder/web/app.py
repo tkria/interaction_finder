@@ -237,18 +237,22 @@ def create_app() -> Starlette:
         )
 
     async def keys_status(request: Request) -> JSONResponse:
+        # The client posts its current config overrides so we can surface the
+        # providers those configured models implicate, alongside the ones set.
         from interaction_finder.web.api_keys import key_status
 
-        return JSONResponse({"providers": key_status()})
+        overrides = dict((await _json_body(request)).get("overrides", {}))
+        return JSONResponse(key_status(_config_from_overrides(overrides)))
 
     async def keys_set(request: Request) -> JSONResponse:
-        # Set provider keys on the server process env for this session only;
-        # values are never persisted or echoed back.
+        # Set provider values on the server process env for this session only;
+        # secrets are never persisted or echoed back.
         from interaction_finder.web.api_keys import key_status, set_keys
 
-        values = dict((await request.json()).get("keys", {}))
-        set_keys(values)
-        return JSONResponse({"providers": key_status()})
+        body = await _json_body(request)
+        set_keys(dict(body.get("keys", {})))
+        overrides = dict(body.get("overrides", {}))
+        return JSONResponse(key_status(_config_from_overrides(overrides)))
 
     async def config_default(request: Request) -> JSONResponse:
         # Persist the edited config as the user's default. The body carries only
@@ -292,7 +296,7 @@ def create_app() -> Starlette:
         Route("/resume", resume_run, methods=["POST"]),
         Route("/browse", browse_dir),
         Route("/config/default", config_default, methods=["POST"]),
-        Route("/keys", keys_status),
+        Route("/keys/status", keys_status, methods=["POST"]),
         Route("/keys", keys_set, methods=["POST"]),
         Route("/recent", recent_list),
         Route("/recent", recent_clear, methods=["DELETE"]),
@@ -315,6 +319,31 @@ def _run_started_payload(record: RunRecord) -> dict:
         "started_at": record.started_at,
         "checkpoint_path": record.checkpoint_path,
     }
+
+
+async def _json_body(request: Request) -> dict:
+    """Parse the request's JSON body, tolerating an empty or absent one."""
+    try:
+        return await request.json()
+    except (json.JSONDecodeError, ValueError):
+        return {}
+
+
+def _config_from_overrides(overrides: dict):
+    """Build the effective config: dotted-key overrides onto a fresh default.
+
+    Invalid overrides fall back to the default config rather than raising -- key
+    status is advisory, so a malformed edit should still yield a usable modal.
+    """
+    from interaction_finder.settings import IfetcherConfig
+
+    base = IfetcherConfig().model_dump()
+    try:
+        return IfetcherConfig.model_validate(
+            IfetcherConfig.apply_overrides(base, overrides)
+        )
+    except (ValueError, TypeError):
+        return IfetcherConfig()
 
 
 def _spec_from_body(body: dict) -> RunSpec:

@@ -911,6 +911,12 @@ function escapeAttr(s) {
     return escapeHtml(s).replace(/"/g, "&quot;");
 }
 
+// Rate-limit the key-status re-fetch while a model string is being typed.
+function debounce(fn, ms) {
+    let timer;
+    return (...args) => { clearTimeout(timer); timer = setTimeout(() => fn(...args), ms); };
+}
+
 // === Config editor ===
 // The form is generated server-side from the spec; every control carries its
 // dotted config path (name) and the spec default (data-default). The client
@@ -926,8 +932,39 @@ function isNonDefault(input) {
     return configFieldValue(input) !== input.dataset.default;
 }
 
-// Refresh the .non-default marks and per-section count badges. Called on load
-// and on any input within the form.
+// The env var a "provider:model" needs, or null if no single-key row matches
+// its prefix. Read from the key-status rows, which carry prefix->env.
+function providerEnvForModel(model) {
+    const prefix = (model || "").split(":", 1)[0];
+    if (!prefix) return null;
+    const row = keyStatus.shown.find((r) => r.prefix === prefix);
+    return row ? row.env : null;
+}
+
+// The missing env var for an agent llm field whose model can't run, else null.
+// Only explicitly-typed models are judged, plus agents._.llm (which every unset
+// agent inherits).
+function modelKeyMissing(input) {
+    const model = input.value.trim();
+    if (!model && input.name !== "agents._.llm") return null;
+    const effective = model || input.dataset.default || "openai:gpt-4o-mini";
+    const env = providerEnvForModel(effective);
+    if (!env) return null;
+    const set = keySetByEnv();
+    // A custom endpoint means a local server ignoring OPENAI_API_KEY.
+    if (env === "OPENAI_API_KEY" && set["OPENAI_BASE_URL"]) return null;
+    return set[env] ? null : env;
+}
+
+// Font Awesome triangle-exclamation; fill via currentColor so CSS tints it.
+const NOKEY_ICON =
+    '<span class="agent-nokey"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">' +
+    '<path d="M256 0c14.7 0 28.2 8.1 35.2 21l216 400c6.7 12.4 6.4 27.4-.8 39.5S486.1 480 472 480L40 480' +
+    'c-14.1 0-27.2-7.4-34.4-19.5s-7.5-27.1-.8-39.5l216-400c7-12.9 20.5-21 35.2-21zm0 352a32 32 0 1 0 0 64' +
+    ' 32 32 0 1 0 0-64zm0-192c-18.2 0-32.7 15.5-31.4 33.7l7.4 104c.9 12.5 11.4 22.3 23.9 22.3 12.6 0 23-9.7' +
+    ' 23.9-22.3l7.4-104c1.3-18.2-13.1-33.7-31.4-33.7z"/></svg></span>';
+
+// Refresh the non-default marks, missing-key warnings, and count badges.
 function refreshConfigHighlights() {
     const inputs = $("config-form").querySelectorAll("input[name]");
     inputs.forEach((inp) => {
@@ -936,22 +973,44 @@ function refreshConfigHighlights() {
         const wrap = inp.closest(".cfg-field, .agent-head");
         if (wrap) wrap.classList.toggle("non-default", isNonDefault(inp));
     });
-    // Each section's badge counts non-default fields anywhere beneath it.
+    $("config-form").querySelectorAll("input.agent-llm").forEach((inp) => {
+        const head = inp.closest(".agent-head");
+        let icon = head.querySelector(".agent-nokey");
+        if (!icon) { head.insertAdjacentHTML("beforeend", NOKEY_ICON); icon = head.querySelector(".agent-nokey"); }
+        const missing = modelKeyMissing(inp);
+        head.classList.toggle("no-key", Boolean(missing));
+        if (missing) {
+            icon.setAttribute("data-tooltip", `${missing} is not set`);
+            icon.setAttribute("data-placement", "left");
+        } else {
+            icon.removeAttribute("data-tooltip");
+        }
+    });
     $("config-form").querySelectorAll(".cfg-section").forEach((sec) => {
         const n = [...sec.querySelectorAll("input[name]")].filter(isNonDefault).length;
         const badge = sec.querySelector(":scope > summary > .cfg-count");
         badge.textContent = n;
         badge.hidden = n === 0;
+        const nokey = [...sec.querySelectorAll("input.agent-llm")].filter(modelKeyMissing).length;
+        let amber = sec.querySelector(":scope > summary > .cfg-nokey");
+        if (!amber && nokey) {
+            badge.insertAdjacentHTML("afterend", '<span class="cfg-count cfg-nokey"></span>');
+            amber = sec.querySelector(":scope > summary > .cfg-nokey");
+        }
+        if (amber) { amber.textContent = `⚠ ${nokey}`; amber.hidden = nokey === 0; }
     });
     const total = [...inputs].filter(isNonDefault).length;
     $("config-summary").textContent = total
         ? `${total} field${total === 1 ? "" : "s"} changed from defaults`
         : "All defaults";
-    // Mirror the count on the form's Configuration button so divergence from
-    // defaults is visible without opening the modal.
+    // Mirror both counts on the Configuration button, visible without opening it.
     const badge = $("config-changed-badge");
     badge.textContent = total;
     badge.hidden = total === 0;
+    const nokeyTotal = [...$("config-form").querySelectorAll("input.agent-llm")].filter(modelKeyMissing).length;
+    const nokeyBadge = $("config-nokey-badge");
+    nokeyBadge.textContent = `⚠ ${nokeyTotal}`;
+    nokeyBadge.hidden = nokeyTotal === 0;
 }
 
 // Restore every control to its spec default.
@@ -1031,46 +1090,105 @@ async function saveConfigDefault() {
 }
 
 // === API keys ===
-// Provider keys live in the server process for the session only. We fetch
-// set/unset status (never the value) to render the rows, and POST any typed
-// values. A set provider shows a jade dot; its input stays empty (typing a
-// new value replaces it, leaving it blank keeps the existing key).
+// Provider values live in the server process for the session only. The modal
+// shows the providers that are set, that the current config's models implicate,
+// and NCBI (always); a picker adds the rest. Secrets report only set/unset and
+// are masked once set; a plain value (a custom endpoint) is shown and editable.
+
+// Last /keys/status response ({shown, available}), shared by the modal and the
+// config form's missing-key badge. Refreshed against the live config overrides.
+let keyStatus = { shown: [], available: [] };
+
+async function refreshKeyStatus() {
+    try {
+        const resp = await fetch("/keys/status", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ overrides: collectConfigOverrides() }),
+        });
+        keyStatus = await resp.json();
+    } catch (e) { /* keep the previous status on failure */ }
+    return keyStatus;
+}
+
+function keySetByEnv() {
+    const map = {};
+    for (const r of keyStatus.shown) map[r.env] = r.set;
+    return map;
+}
+
 async function openKeys() {
-    await renderProviderRows();
+    await refreshKeyStatus();
+    renderProviderRows();
     openModal("keys-dialog");
 }
 
-async function renderProviderRows() {
+// Clear on a set secret only re-enables the field; blank on save keeps the
+// stored key (whereas a blank plain value clears it).
+function providerRow(p) {
+    const row = document.createElement("div");
+    row.className = "key-row" + (p.set ? " is-set" : "");
+    const label =
+        `<span class="key-label"><span class="key-dot"></span>${escapeHtml(p.label)}</span>`;
+    if (!p.secret) {
+        row.innerHTML = label +
+            `<label class="key-field"><input type="text" autocomplete="off" ` +
+            `data-env="${p.env}" value="${escapeAttr(p.value || "")}" ` +
+            `placeholder="${escapeAttr(p.env)}"></label>`;
+        return row;
+    }
+    if (p.set) {
+        row.innerHTML = label +
+            `<label class="key-field"><input type="password" autocomplete="off" ` +
+            `data-env="${p.env}" value="••••••••" disabled>` +
+            `<button type="button" class="key-clear secondary outline">Clear</button></label>`;
+        const [input, clear] = [row.querySelector("input"), row.querySelector(".key-clear")];
+        clear.onclick = () => { input.value = ""; input.disabled = false; clear.remove(); input.focus(); };
+        return row;
+    }
+    row.innerHTML = label +
+        `<label class="key-field"><input type="password" autocomplete="off" ` +
+        `data-env="${p.env}" placeholder="${escapeHtml(p.env)}"></label>`;
+    return row;
+}
+
+function renderProviderRows() {
     const box = $("keys-providers");
     box.innerHTML = "";
-    let providers = [];
-    try {
-        providers = (await (await fetch("/keys")).json()).providers || [];
-    } catch (e) { /* leave empty on failure */ }
-    for (const p of providers) {
-        const row = document.createElement("div");
-        row.className = "key-row" + (p.set ? " is-set" : "");
-        row.innerHTML =
-            `<span class="key-label"><span class="key-dot"></span>${escapeHtml(p.label)}</span>` +
-            `<input type="password" autocomplete="off" data-env="${p.env}" ` +
-            `placeholder="${p.set ? "set — type to replace" : "not set"}">`;
-        box.appendChild(row);
-    }
+    for (const p of keyStatus.shown) box.appendChild(providerRow(p));
+    const select = $("keys-add-select");
+    select.innerHTML = keyStatus.available
+        .map((p) => `<option value="${p.env}">${escapeHtml(p.label)}</option>`)
+        .join("");
+    $("keys-add").disabled = keyStatus.available.length === 0;
+}
+
+function addProviderRow() {
+    const env = $("keys-add-select").value;
+    const idx = keyStatus.available.findIndex((p) => p.env === env);
+    if (idx < 0) return;
+    const [picked] = keyStatus.available.splice(idx, 1);
+    const full = { ...picked, set: false, secret: !env.endsWith("_BASE_URL") };
+    keyStatus.shown.push(full);
+    renderProviderRows();
 }
 
 async function applyKeys() {
+    // Skip disabled inputs so an untouched masked secret is left as-is.
     const keys = {};
-    $("keys-providers").querySelectorAll("input[data-env]").forEach((inp) => {
-        if (inp.value.trim()) keys[inp.dataset.env] = inp.value.trim();
+    $("keys-providers").querySelectorAll("input[data-env]:not([disabled])").forEach((inp) => {
+        keys[inp.dataset.env] = inp.value.trim();
     });
     const btn = $("keys-apply");
     btn.setAttribute("aria-busy", "true");
     try {
-        await fetch("/keys", {
+        const resp = await fetch("/keys", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ keys }),
+            body: JSON.stringify({ keys, overrides: collectConfigOverrides() }),
         });
+        keyStatus = await resp.json();
+        refreshConfigHighlights();
         closeModal("keys-dialog");
     } catch (e) {
         $("keys-summary").textContent = "Could not set keys.";
@@ -1295,8 +1413,16 @@ function init() {
     const cfgDialog = $("config-dialog");
     // The server-rendered form is the initial committed state.
     appliedConfig = snapshotConfigForm();
-    $("open-config").onclick = () => { refreshConfigHighlights(); openModal("config-dialog"); };
-    $("config-form").addEventListener("input", refreshConfigHighlights);
+    // Re-fetch key status on open and (debounced) on input, since typing a
+    // model changes which providers the config implicates.
+    $("open-config").onclick = async () => {
+        openModal("config-dialog");
+        refreshConfigHighlights();
+        await refreshKeyStatus();
+        refreshConfigHighlights();
+    };
+    const refetchKeys = debounce(async () => { await refreshKeyStatus(); refreshConfigHighlights(); }, 400);
+    $("config-form").addEventListener("input", () => { refreshConfigHighlights(); refetchKeys(); });
     $("config-reset").onclick = resetConfigToDefaults;
     $("config-save").onclick = saveConfigDefault;
     // Apply commits the edits; dismissing (×, backdrop, Esc) reverts to the
@@ -1306,10 +1432,13 @@ function init() {
     cfgDialog.addEventListener("click", (e) => { if (e.target === cfgDialog) dismissConfig(); });
     cfgDialog.addEventListener("cancel", (e) => { e.preventDefault(); dismissConfig(); });
     refreshConfigHighlights();
+    // Warm the status so the button's badge is correct before any open.
+    refreshKeyStatus().then(refreshConfigHighlights);
     // API-keys modal.
     const keysDialog = $("keys-dialog");
     $("open-keys").onclick = openKeys;
     $("keys-apply").onclick = applyKeys;
+    $("keys-add").onclick = addProviderRow;
     keysDialog.querySelector('button[rel="prev"]').onclick = () => closeModal("keys-dialog");
     keysDialog.addEventListener("click", (e) => { if (e.target === keysDialog) closeModal("keys-dialog"); });
     keysDialog.addEventListener("cancel", (e) => { e.preventDefault(); closeModal("keys-dialog"); });
