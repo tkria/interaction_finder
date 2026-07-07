@@ -2,12 +2,14 @@
 
 Automated discovery of biological associations from scientific literature using AI-driven pipelines.
 
+![](screenshot.png)
+
 ## Installation
 
-Requires Python 3.13+. Run directly with [uv](https://docs.astral.sh/uv/) (requires SSH access to the repository):
+Requires Python 3.13+. Run directly with [uv](https://docs.astral.sh/uv/):
 
 ```bash
-uvx --from "git+ssh://git@github.com/tecosaur/interaction_finder.git" interaction-finder --help
+uvx --from "git+https://github.com/tecosaur/interaction_finder.git" interaction-finder --help
 ```
 
 Or clone and install locally:
@@ -24,7 +26,17 @@ Set your OpenAI API key (or other LLM provider):
 export OPENAI_API_KEY=your-key
 ```
 
-## Usage
+## The browser UI
+
+The quickest way in is the browser UI. Launch it locally and it opens in your default browser:
+
+```bash
+uv run interaction-finder ui
+```
+
+Start a run from a topic and set of entity kinds, watch progress (and any warnings, such as a PubMed rate limit) stream in live, then read the result as an extraction report: each entity pair carries a trust badge, the source text with mentions and evidence quotes highlighted, and the reasoning behind every quality assessment. You can also open an existing checkpoint, edit the config, and set API keys without leaving the page.
+
+## Command-line usage
 
 The pipeline has three stages: **keywords** (find bridging terms from reviews), **search** (query literature databases), and **extract** (identify entity pairs with evidence). Running a later stage automatically executes preceding ones.
 
