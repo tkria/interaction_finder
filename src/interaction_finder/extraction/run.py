@@ -27,6 +27,7 @@ from interaction_finder.extraction.stages import (
     process_documents,
     sweep_co_mentions,
 )
+from interaction_finder.extraction.resolve_subject import resolve_subject
 from interaction_finder.extraction.state import State
 from interaction_finder.extraction.utils import build_permitted_pairs
 from interaction_finder.logging import get_logger, logfire
@@ -108,6 +109,35 @@ async def run_extraction(
             config.stage.extraction.agent_concurrency_limit
         )
         permitted_pairs = build_permitted_pairs(target_entity_types)
+        # Deps are built before the resume/fresh branch so the subject resolver
+        # (which runs an agent) can use them ahead of State construction.
+        input_usage = input_checkpoint.usage
+        stage_usage = (
+            {k: v.copy_deep() for k, v in input_usage.extraction.items()}
+            if input_usage
+            else {}
+        )
+        deps = Deps(
+            resource_pool=resource_pool,
+            config=config,
+            logger=logger,
+            progress=progress,
+            agent_semaphore=agent_semaphore,
+            checkpoint_path=checkpoint_path,
+            input_checkpoint=input_checkpoint,
+            usage=stage_usage,
+        )
+        # Resolve the topic's subject/anchor for the trust gate. Explicit caller
+        # values win; a resumed run reuses the anchor already on the checkpoint;
+        # otherwise resolve it once from the topic (empty on open-discovery runs).
+        prior = input_checkpoint.extraction
+        if subject_kind is None and subject_anchor is None:
+            if prior is not None and (prior.subject_kind or prior.subject_anchor):
+                subject_kind, subject_anchor = prior.subject_kind, prior.subject_anchor
+            else:
+                subject_kind, subject_anchor = await resolve_subject(
+                    topic, target_entity_types, deps
+                )
         # Determine starting stage index (0 for fresh start, or index after last completed)
         start_stage_idx = 0
         if (
@@ -135,23 +165,6 @@ async def run_extraction(
                 subject_kind=subject_kind,
                 subject_anchor=subject_anchor,
             )
-        # Initialize usage from input checkpoint (deep copy to avoid mutation)
-        input_usage = input_checkpoint.usage
-        stage_usage = (
-            {k: v.copy_deep() for k, v in input_usage.extraction.items()}
-            if input_usage
-            else {}
-        )
-        deps = Deps(
-            resource_pool=resource_pool,
-            config=config,
-            logger=logger,
-            progress=progress,
-            agent_semaphore=agent_semaphore,
-            checkpoint_path=checkpoint_path,
-            input_checkpoint=input_checkpoint,
-            usage=stage_usage,
-        )
         # Run pipeline stages
         result = await _run_pipeline(state, deps, start_stage_idx)
         # Build usage preserving other stages

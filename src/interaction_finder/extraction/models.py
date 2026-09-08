@@ -785,6 +785,49 @@ class PairSpread(BaseModel):
     irrelevant: list[PairAssessment] = Field(default_factory=list)
 
 
+class InterestEntity(BaseModel):
+    """One topic-named subject entity together with its aliases.
+
+    ``reasoning`` is informational only; it is NOT used as gate policy.
+    """
+
+    name: str = Field(description="The anchor entity's canonical name.")
+    reasoning: str = Field(
+        description="One short sentence on why this is the topic subject."
+    )
+    aliases: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Strictly equivalent surface forms of the SAME entity "
+            "(alternative spellings, abbreviations, eponyms, standard "
+            "synonyms). Aim for 3-6 when the entity has them; do not "
+            "list broader categories, narrower kinds, or related-but-"
+            "distinct entities."
+        ),
+    )
+
+
+class TopicPolicy(BaseModel):
+    """Resolver output for one (topic, kind) pair.
+
+    ``entities`` is empty when the topic does not name an entity of this kind
+    (e.g. asking about cellmarker for a celltype topic). The subject-trust gate
+    reads only ``entities[].name`` (the anchor); the scope booleans and aliases
+    are part of the fuller resolver policy and are not yet consumed downstream.
+
+    ``associated_in_scope``: True when the research question explicitly or
+    implicitly asks about non-taxonomic links (causes, mechanisms, prodromal
+    signs, characteristic features). False when the topic asks for a specific
+    kind of taxonomic match only (e.g. "markers for cell type X" -- niche cells
+    and daughter lineages aren't markers even though discussed alongside X).
+    """
+
+    entities: list[InterestEntity]
+    subtypes_in_scope: bool
+    supertypes_in_scope: bool
+    associated_in_scope: bool
+
+
 class GateReviewVerdict(BaseModel):
     """LLM output for the subject-trust taxonomic check (gate_review v3).
 
@@ -904,6 +947,7 @@ class ExtractionMetadata(BaseModel):
             "sweep_co_mentions",
             "consolidate_new_relationships",
             "consolidate_by_neighbours",
+            "judge_cross_document",
         ]
         | None
     ) = Field(None, description="Last completed stage (None if complete)")
