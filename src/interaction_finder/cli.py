@@ -1376,6 +1376,154 @@ def serve(
     _serve_ui(host, port, open_browser=False)
 
 
+@app.command()
+def redact(
+    checkpoint_file: Path = typer.Argument(help="Checkpoint JSON file to redact"),
+    output: Optional[Path] = typer.Option(
+        None, "-o", "--output", help="Where to write the redacted copy"
+    ),
+    check: bool = typer.Option(
+        False,
+        "--check",
+        help="Report what the file contains and stop, without writing anything",
+    ),
+    everything: bool = typer.Option(
+        False,
+        "--everything",
+        help="Redact every article, ignoring licences, for a single clear basis",
+    ),
+    no_share_alike: bool = typer.Option(
+        False,
+        "--no-share-alike",
+        help="Redact NC/ND/SA text too, keeping only freely licensed articles",
+    ),
+    verbose: bool = typer.Option(False, "-v", "--verbose", help="List every article"),
+):
+    """
+    Prepare a checkpoint for sharing by removing article text you cannot pass on.
+
+    Retrieving articles for your own analysis is ordinary use of your own
+    access. Sending someone a checkpoint or report redistributes whatever
+    article text it holds, which most publisher licences do not permit. This
+    command resolves each article's licence (via OpenAlex) and keeps the text it
+    may redistribute, recording the licence with it. Records holding only an
+    abstract are kept as they are, since abstracts are distributed openly.
+    Everything else becomes a quote skeleton: the passages your results actually
+    quote, under their section headings, with omitted gaps marked by size.
+    Quotes stay highlighted and every identifier, DOI, and offset is kept, so the
+    evidence remains checkable against a re-fetched source. Regenerating the
+    report from the redacted checkpoint shows the skeletons in place of the
+    withheld text.
+
+    Examples:
+        interaction-finder redact results.json --check
+
+        interaction-finder redact results.json -o results-shareable.json
+
+        interaction-finder redact results.json -o out.json --everything
+    """
+    try:
+        from interaction_finder.licences import Verdict, resolve_licences, summarise
+        from interaction_finder.redact_checkpoint import (
+            RedactionPolicy,
+            redact_checkpoint_data,
+        )
+
+        if not checkpoint_file.exists():
+            raise FileNotFoundError(f"Checkpoint not found: {checkpoint_file}")
+        # OpenAlex serves anonymous callers, and identifying yourself opts into
+        # its faster "polite pool"; honour OPENALEX_EMAIL if it happens to be set.
+        contact = os.environ.get("OPENALEX_EMAIL")
+        if not check and output is None:
+            raise typer.BadParameter(
+                "Pass -o/--output to write the redacted copy, or --check to see "
+                "what the file contains without writing. The input is never "
+                "modified in place.",
+                param_hint="--output",
+            )
+
+        console.print(f"[dim]Loading {checkpoint_file}...[/dim]")
+        data = json.loads(checkpoint_file.read_text())
+        articles = {
+            resource.get("url", ""): resource
+            for resource in (data.get("resources") or [])
+            if isinstance(resource, dict)
+        }
+        with_text = sum(
+            1
+            for resource in articles.values()
+            if isinstance(resource.get("text"), str)
+            and resource["text"]
+            and not resource.get("text_redacted")
+        )
+        console.print(
+            f"{len(articles)} article(s); {with_text} still carrying full text"
+        )
+
+        cache = checkpoint_file.parent / ".licence-cache.json"
+        console.print("[dim]Resolving licences via OpenAlex...[/dim]")
+        licences = resolve_licences(articles, email=contact, cache_path=cache)
+        counts = summarise(licences.values())
+
+        table = Table(title="Redistribution licences")
+        table.add_column("Verdict")
+        table.add_column("Articles", justify="right")
+        table.add_column("Means")
+        for verdict, means in (
+            (Verdict.REDISTRIBUTABLE, "an open licence permits sharing the text"),
+            (Verdict.SHARE_ALIKE, "sharing permitted only under the licence's terms"),
+            (Verdict.RESTRICTED, "no licence permits sharing the text"),
+            (Verdict.UNKNOWN, "licence could not be determined"),
+        ):
+            table.add_row(verdict.value, str(counts[verdict.value]), means)
+        console.print(table)
+
+        if verbose:
+            for url, licence in sorted(licences.items()):
+                console.print(
+                    f"  [dim]{url}[/dim] {licence.verdict.value}: {licence.reason}"
+                )
+
+        if check:
+            shareable = counts[Verdict.REDISTRIBUTABLE.value]
+            console.print(
+                f"\n[bold]{with_text} article(s) hold full text[/bold]; "
+                f"{shareable} of them are openly licensed. Re-run with "
+                "-o FILE to write a shareable copy."
+            )
+            return
+
+        policy = RedactionPolicy(
+            keep_redistributable=not everything,
+            keep_share_alike=not no_share_alike and not everything,
+        )
+        data, summary = redact_checkpoint_data(data, licences, policy)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(json.dumps(data))
+
+        console.print(
+            f"\n[green]Wrote {output}[/green]\n"
+            f"  reduced to a quote skeleton : {summary.redacted}\n"
+            f"  full text kept, licensed    : {summary.kept}\n"
+            f"  abstracts kept as they are  : {summary.abstracts_kept}\n"
+            f"  already redacted            : {summary.already_redacted}\n"
+            f"  article text removed        : {summary.chars_removed / 1e6:.1f} MB"
+        )
+        if summary.kept_by_licence:
+            breakdown = ", ".join(
+                f"{count}× {name}"
+                for name, count in sorted(summary.kept_by_licence.items())
+            )
+            console.print(
+                f"[dim]Text kept under: {breakdown}. Each article's licence is "
+                "recorded in its resource and shown beside the source link in "
+                "reports; attribution and any non-commercial or no-derivatives "
+                "terms travel with it.[/dim]"
+            )
+    except Exception as e:
+        _handle_exception(e, None, verbose)
+
+
 @app.command(
     name="ui",
     hidden=True,

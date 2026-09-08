@@ -11,6 +11,11 @@ from markdown_it import MarkdownIt
 from markdown_it.token import Token
 from pydantic import BaseModel
 
+from interaction_finder.report.licence_badge import (
+    licence_badge_html,
+    redaction_notice_html,
+)
+
 from interaction_finder.resources import Resource, ResourceQuote
 from interaction_finder.text_mapping import TextPositionMapper
 
@@ -1260,12 +1265,23 @@ class DocumentAnnotator:
                     DOI: {escaped_doi}
                 </a>"""
 
+        licence_badge = licence_badge_html(getattr(self.resource, "licence", None))
+
         # Prepend links if present
         links_html = ""
-        if url_badge or doi_link:
+        if url_badge or doi_link or licence_badge:
             links_html = f"""
-            <div class="document-links">{url_badge}{doi_link}
+            <div class="document-links">{url_badge}{doi_link}{licence_badge}
             </div>"""
+
+        # A redacted document opens with an explanation: otherwise a reader meets
+        # a page of extracts and gap markers with no reason given for either.
+        notice_html = ""
+        if getattr(self.resource, "text_redacted", False):
+            notice_html = redaction_notice_html(
+                text_length=getattr(self.resource, "text_length", None),
+                licence=getattr(self.resource, "licence", None),
+            )
 
         # Build list of all pairs that reference this document
         all_pair_indices = set()
@@ -1276,6 +1292,7 @@ class DocumentAnnotator:
         # Wrap document text in container with doc_idx and pair indices
         full_html = (
             f"{links_html}"
+            f"{notice_html}"
             f'<div id="doc-{doc_idx}" class="document-text" data-pairs="{pairs_attr}">'
             f"{annotated_html}"
             f"</div>"

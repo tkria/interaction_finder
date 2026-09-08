@@ -748,6 +748,50 @@ header {
     opacity: 0.7;
 }
 
+/* Redistribution licence of the source article, shown among its provenance
+   links. Styled as a badge rather than a link, though it carries one: the
+   licence is a property of the source, not a navigation target. */
+.document-licence {
+    font-size: 0.72rem;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: var(--pico-muted-color);
+    border: 1px solid var(--pico-muted-border-color);
+    border-radius: 0.25rem;
+    padding: 0.1rem 0.4rem;
+    white-space: nowrap;
+    text-decoration: none;
+}
+
+.document-licence:hover {
+    color: var(--pico-primary);
+    border-color: var(--pico-primary);
+    text-decoration: none;
+}
+
+/* Shown above a document whose text was withheld, so a reader meeting extracts
+   and gap markers knows why they are looking at them. */
+.document-redaction-notice {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    margin: 0 0 1rem 0;
+    padding: 0.7rem 0.9rem;
+    border-left: 3px solid var(--pico-muted-border-color);
+    border-radius: 0.25rem;
+    background: var(--pico-code-background-color, rgba(128, 128, 128, 0.08));
+    font-size: 0.85rem;
+    line-height: 1.5;
+    color: var(--pico-muted-color);
+}
+
+.document-redaction-icon {
+    flex: 0 0 auto;
+    font-size: 1rem;
+    line-height: 1.3;
+}
+
 .document-stats {
     display: flex;
     gap: 1rem;

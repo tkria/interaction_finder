@@ -820,6 +820,33 @@ class Resource(BaseModel):
     publication_date: Optional[str] = Field(
         default=None, description="Publication date (YYYY-MM-DD) if available"
     )
+    text_redacted: bool = Field(
+        default=False,
+        description=(
+            "True when `text` holds a quote skeleton rather than the article, "
+            "because the article's licence did not permit redistributing it"
+        ),
+    )
+    text_length: Optional[int] = Field(
+        default=None,
+        description=(
+            "Character length of the article text withheld, when redacted; "
+            "with `text_sha256` this describes what a re-fetch should yield"
+        ),
+    )
+    text_sha256: Optional[str] = Field(
+        default=None,
+        description="SHA-256 of the withheld article text, when redacted",
+    )
+    licence: Optional[str] = Field(
+        default=None,
+        description=(
+            "Redistribution licence of the source article (e.g. 'cc-by', "
+            "'cc-by-nc-nd'), when known. Resolved from OpenAlex; governs whether "
+            "this document's text may be passed on to others, and is displayed "
+            "beside the source link in reports"
+        ),
+    )
 
     # Lazily-derived from `text` (see the normalized_text / position_mapper
     # properties). Building these scans the text char-by-char, which dominates
@@ -836,6 +863,10 @@ class Resource(BaseModel):
         chunks: Optional[List[Tuple[int, int]]] = None,
         doi: Optional[str] = None,
         publication_date: Optional[str] = None,
+        licence: Optional[str] = None,
+        text_redacted: bool = False,
+        text_length: Optional[int] = None,
+        text_sha256: Optional[str] = None,
         **data,
     ):
         """
@@ -849,6 +880,7 @@ class Resource(BaseModel):
                    Defaults to single chunk spanning entire document.
             doi: Optional Digital Object Identifier
             publication_date: Optional publication date (YYYY-MM-DD)
+            licence: Optional redistribution licence of the source article
         """
         # Default chunks to entire document if not provided
         if chunks is None:
@@ -866,6 +898,10 @@ class Resource(BaseModel):
             chunks=chunks,
             doi=doi,
             publication_date=publication_date,
+            licence=licence,
+            text_redacted=text_redacted,
+            text_length=text_length,
+            text_sha256=text_sha256,
             **data,
         )
         if precomputed_normalized is not None:
@@ -1035,6 +1071,10 @@ def _validate_resource_pool(obj):
                     chunks=entry.get("chunks", []),
                     doi=entry.get("doi"),
                     publication_date=entry.get("publication_date"),
+                    licence=entry.get("licence"),
+                    text_redacted=bool(entry.get("text_redacted", False)),
+                    text_length=entry.get("text_length"),
+                    text_sha256=entry.get("text_sha256"),
                 )
                 pool.resource_map[resource_id] = resource
             else:
@@ -1285,6 +1325,16 @@ class ResourcePool(BaseModel):
                     # Only include publication_date if present
                     if resource.publication_date is not None:
                         entry["publication_date"] = resource.publication_date
+                    # Redaction markers must survive a save: without them a
+                    # skeleton would be re-saved as if it were the article text.
+                    if resource.licence is not None:
+                        entry["licence"] = resource.licence
+                    if resource.text_redacted:
+                        entry["text_redacted"] = True
+                    if resource.text_length is not None:
+                        entry["text_length"] = resource.text_length
+                    if resource.text_sha256 is not None:
+                        entry["text_sha256"] = resource.text_sha256
 
                 # Only include id if it doesn't match expected pattern
                 # Expected pattern: "{counter}_{hash}" where counter = idx
