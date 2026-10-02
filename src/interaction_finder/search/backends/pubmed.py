@@ -59,7 +59,11 @@ class PubMedBackend(SearchBackend):
 
         self.base_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
         self.email = config.get("email")
-        self.api_key = config.get("api_key") or os.environ.get("NCBI_API_KEY")
+        self.api_key = (
+            config.get("api_key")
+            or os.environ.get("NCBI_API_KEY")
+            or os.environ.get("NCBI_KEY")
+        )
         self.rate_limit = config.get("rate_limit", 3.0)
         self.timeout = config.get("timeout", 30)
         self.retmode = config.get("retmode", "xml")
